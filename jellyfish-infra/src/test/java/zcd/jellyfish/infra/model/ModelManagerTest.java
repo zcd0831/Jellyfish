@@ -14,6 +14,7 @@ import zcd.jellyfish.infra.llm.LlmClientFactory;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -108,6 +109,15 @@ class ModelManagerTest {
     void resolve_should_throw_when_model_not_found() {
         // Given
         when(modelRegistry.findProvider(PROVIDER)).thenReturn(provider());
+        ModelManager manager = newModelManager();
+
+        // When / Then
+        assertThrows(JellyfishException.class, () -> manager.resolve(PROVIDER, MODEL));
+    }
+
+    @Test
+    void resolve_should_throw_when_provider_not_found() {
+        // Given
         ModelManager manager = newModelManager();
 
         // When / Then
@@ -221,6 +231,94 @@ class ModelManagerTest {
         when(runtimeConfig.getDefaultProvider()).thenReturn(PROVIDER);
         when(runtimeConfig.getDefaultModel()).thenReturn(MODEL);
         when(modelRegistry.findProvider(PROVIDER)).thenReturn(provider());
+        ModelManager manager = newModelManager();
+
+        // When / Then
+        assertThrows(JellyfishException.class, manager::resolveDefault);
+    }
+
+    @Test
+    void resolveDefault_should_throw_when_no_provider_provides_default_model() {
+        // Given
+        when(runtimeConfig.getDefaultModel()).thenReturn(MODEL);
+        when(modelRegistry.findProvidersByModelName(MODEL)).thenReturn(Collections.<String, Model>emptyMap());
+        ModelManager manager = newModelManager();
+
+        // When / Then
+        assertThrows(JellyfishException.class, manager::resolveDefault);
+    }
+
+    @Test
+    void resolveDefault_should_throw_when_matched_provider_not_found() {
+        // Given
+        Map<String, Model> matches = new LinkedHashMap<>();
+        matches.put("ghost", provider().getModels().get(0));
+        when(runtimeConfig.getDefaultModel()).thenReturn(MODEL);
+        when(modelRegistry.findProvidersByModelName(MODEL)).thenReturn(matches);
+        ModelManager manager = newModelManager();
+
+        // When / Then
+        assertThrows(JellyfishException.class, manager::resolveDefault);
+    }
+
+    @Test
+    void resolveDefault_should_throw_when_default_provider_has_no_model() {
+        // Given
+        when(runtimeConfig.getDefaultProvider()).thenReturn(PROVIDER);
+        when(modelRegistry.findProvider(PROVIDER)).thenReturn(provider());
+        ModelManager manager = newModelManager();
+
+        // When / Then
+        assertThrows(JellyfishException.class, manager::resolveDefault);
+    }
+
+    @Test
+    void resolveDefault_should_skip_provider_without_model_when_no_defaults() {
+        // Given
+        Provider withoutModel = new Provider("azure", "openai", "api-key", "https://api.example.com",
+                Collections.<Model>emptyList());
+        Provider provider = provider();
+        Model model = provider.getModels().get(0);
+        when(modelRegistry.getProviders()).thenReturn(Arrays.<Provider>asList(null, withoutModel, provider));
+        when(modelRegistry.firstModel(PROVIDER)).thenReturn(model);
+        ModelManager manager = newModelManager();
+
+        // When
+        ResolvedModel resolved = manager.resolveDefault();
+
+        // Then
+        assertSame(provider, resolved.getProvider());
+        assertSame(model, resolved.getModel());
+    }
+
+    @Test
+    void resolveDefault_should_skip_provider_returning_null_models_when_no_defaults() {
+        // Given：Provider 约定 models 为空列表而非 null，这里覆写以验证选择逻辑的容错
+        Provider nullModels = new Provider("azure", "openai", "api-key", "https://api.example.com", null) {
+            @Override
+            public List<Model> getModels() {
+                return null;
+            }
+        };
+        Provider provider = provider();
+        Model model = provider.getModels().get(0);
+        when(modelRegistry.getProviders()).thenReturn(Arrays.<Provider>asList(nullModels, provider));
+        when(modelRegistry.firstModel(PROVIDER)).thenReturn(model);
+        ModelManager manager = newModelManager();
+
+        // When
+        ResolvedModel resolved = manager.resolveDefault();
+
+        // Then
+        assertSame(model, resolved.getModel());
+    }
+
+    @Test
+    void resolveDefault_should_throw_when_all_providers_lack_model() {
+        // Given
+        Provider withoutModel = new Provider("azure", "openai", "api-key", "https://api.example.com",
+                Collections.<Model>emptyList());
+        when(modelRegistry.getProviders()).thenReturn(Arrays.<Provider>asList(null, withoutModel));
         ModelManager manager = newModelManager();
 
         // When / Then

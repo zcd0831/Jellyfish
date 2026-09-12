@@ -68,8 +68,20 @@ class ResolvedModelTest {
         assertFalse(left.equals("openai/gpt-4o"));
     }
 
+    @Test
+    void equals_should_return_false_when_provider_name_differs() {
+        // Given
+        Provider openai = provider("openai", "gpt-4o");
+        Provider anthropic = provider("anthropic", "gpt-4o");
+        ResolvedModel left = new ResolvedModel(openai, openai.getModels().get(0));
+        ResolvedModel otherProvider = new ResolvedModel(anthropic, anthropic.getModels().get(0));
+
+        // When / Then
+        assertNotEquals(left, otherProvider);
+        assertNotEquals(left.hashCode(), otherProvider.hashCode());
+    }
+
     /**
-     * 构造带单个模型的 provider。
      *
      * @param providerName provider 名
      * @param modelName    model 名

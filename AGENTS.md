@@ -33,7 +33,7 @@ flowchart TB
             direction LR
 
             subgraph CoreInfra["核心基础设施"]
-                EventBus["EventBus<br>异步事件 + 同步命令调度"]
+                EventBus["JellyfishEventBus<br>双通道：同步命令 + 异步通知<br>Level1 Guava 派发 + Level2 细粒度注册表"]
                 SessionMgr["SessionManager<br>会话隔离 / 消息列表<br>当前 agentId / 当前模型 / 会话级切换"]
                 AgentMgr["AgentManager<br>Agent 定义注册表<br>按 agentId 提供系统提示词 / 权限策略"]
                 ModelMgr["ModelManager<br>Provider/Model 注册/解析/路由<br>不持有全局当前态"]
@@ -127,7 +127,7 @@ jellyfish-api/src/main/java/zcd/jellyfish/api/
 └── plugin/                        # 插件 SPI：插件总入口、工具/记忆/横切三类插件接口与能力上下文，面向仓库外插件作者的唯一稳定契约
 
 jellyfish-infra/src/main/java/zcd/jellyfish/infra/
-├── event/          # 事件总线：异步事件广播与同步命令调度
+├── event/          # 双通道事件总线：同步命令通道 + 异步通知通道，Level1 Guava 派发 + Level2 细粒度注册表
 ├── command/        # 工具调用的同步请求-响应命令模型
 ├── session/        # 会话运行态：会话隔离、消息列表，以及会话内当前 agentId 与当前模型（仅内存态）
 ├── agent/          # Agent 定义注册表：从配置装载定义，按 agentId 提供提示词与权限策略
@@ -207,3 +207,7 @@ src/main/resources/config.json     # 应用配置（进程名 + 各配置段的�
 ## 语言
 
 - 使用中文沟通
+
+## 行为准则
+
+- 开发时必须严格按与用户确认的方案执行，如果开发过程中发现方案有问题，先征求用户意见，禁止私自变更方案。

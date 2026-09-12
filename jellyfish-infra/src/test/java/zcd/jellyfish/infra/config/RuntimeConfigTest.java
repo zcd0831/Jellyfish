@@ -6,8 +6,9 @@ import org.junit.jupiter.api.io.TempDir;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import zcd.jellyfish.api.JellyfishException;
-import zcd.jellyfish.infra.event.ConfigWarningEvent;
-import zcd.jellyfish.infra.event.EventBus;
+import zcd.jellyfish.api.event.EventPublisher;
+import zcd.jellyfish.api.event.JellyfishEvent;
+import zcd.jellyfish.api.event.notification.ConfigWarningEvent;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -32,6 +33,7 @@ import static org.mockito.Mockito.when;
 /**
  * {@link RuntimeConfig} 的单元测试：验证双源读取、合并规则、快照读取与参数校验。
  * <p>
+ * 配置不再由构造器加载，因此每个用例在构造后显式调用 {@link RuntimeConfig#refresh()}；
  * 通过 {@link TempDir} 构造真实的全局级/项目级文件，仅 mock 提供路径的 {@link AppConfig}。
  *
  * @author zcd
@@ -48,7 +50,7 @@ class RuntimeConfigTest {
     AppConfig appConfig;
 
     @Test
-    void constructor_should_merge_global_and_project_when_both_exist() throws IOException {
+    void refresh_should_merge_global_and_project_when_both_exist() throws IOException {
         // Given
         Path global = writeFile("global.json",
                 "{\"defaultProvider\":\"global-provider\",\"defaultModel\":\"global-model\","
@@ -73,7 +75,7 @@ class RuntimeConfigTest {
     }
 
     @Test
-    void constructor_should_backfill_provider_name_from_map_key() throws IOException {
+    void refresh_should_backfill_provider_name_from_map_key() throws IOException {
         // Given
         Path global = writeFile("global.json",
                 "{\"providers\":{\"my-provider\":{\"type\":\"openai\"}}}");
@@ -86,7 +88,7 @@ class RuntimeConfigTest {
     }
 
     @Test
-    void constructor_should_fall_back_to_global_when_project_value_is_blank() throws IOException {
+    void refresh_should_fall_back_to_global_when_project_value_is_blank() throws IOException {
         // Given
         Path global = writeFile("global.json",
                 "{\"defaultProvider\":\"global-provider\",\"defaultModel\":\"global-model\"}");
@@ -102,7 +104,7 @@ class RuntimeConfigTest {
     }
 
     @Test
-    void constructor_should_return_empty_providers_when_files_missing() {
+    void refresh_should_return_empty_providers_when_files_missing() {
         // Given
         ConfigPaths paths = pathsTo(tempDir.resolve("missing-global.json"), tempDir.resolve("missing-project.json"));
 
@@ -117,7 +119,7 @@ class RuntimeConfigTest {
     }
 
     @Test
-    void constructor_should_skip_null_provider_when_map_value_is_null() throws IOException {
+    void refresh_should_skip_null_provider_when_map_value_is_null() throws IOException {
         // Given
         Path global = writeFile("global.json", "{\"providers\":{\"openai\":null}}");
 
@@ -222,28 +224,28 @@ class RuntimeConfigTest {
                 .thenReturn(new ModelSettings(null, null, null));
 
         // When
-        new RuntimeConfig(appConfig, configLoader, new EventBus(Runnable::run));
+        RuntimeConfig runtimeConfig = new RuntimeConfig(appConfig, configLoader, new RecordingPublisher());
+        runtimeConfig.refresh();
 
         // Then：同一路径只读取一次
         verify(configLoader, times(1)).read(shared.toString(), ModelSettings.class);
     }
 
     @Test
-    void constructor_should_publish_warning_when_file_missing() {
+    void refresh_should_publish_warning_when_file_missing() {
         // Given
         Path missing = tempDir.resolve("missing.json");
-        List<ConfigWarningEvent> warnings = new ArrayList<>();
-        EventBus eventBus = new EventBus(Runnable::run);
-        eventBus.subscribe(ConfigWarningEvent.class, warnings::add);
         ConfigPaths paths = pathsTo(missing, null);
         when(appConfig.getModel()).thenReturn(paths);
+        RecordingPublisher publisher = new RecordingPublisher();
 
         // When
-        new RuntimeConfig(appConfig,
-                new ConfigLoader(new SettingsReader(), new SettingsBinder()), eventBus);
+        RuntimeConfig runtimeConfig = new RuntimeConfig(appConfig,
+                new ConfigLoader(new SettingsReader(), new SettingsBinder()), publisher);
+        runtimeConfig.refresh();
 
         // Then
-        assertTrue(warnings.stream().anyMatch(warning -> missing.toString().equals(warning.getSource())));
+        assertTrue(publisher.warnings().stream().anyMatch(warning -> missing.toString().equals(warning.getSource())));
     }
 
     @Test
@@ -298,10 +300,42 @@ class RuntimeConfigTest {
      */
     private RuntimeConfig newRuntimeConfig(ConfigPaths paths) {
         when(appConfig.getModel()).thenReturn(paths);
-        EventBus eventBus = new EventBus(Runnable::run);
-        return new RuntimeConfig(appConfig,
+        RuntimeConfig runtimeConfig = new RuntimeConfig(appConfig,
                 new ConfigLoader(new SettingsReader(), new SettingsBinder()),
-                eventBus);
+                new RecordingPublisher());
+        runtimeConfig.refresh();
+        return runtimeConfig;
+    }
+
+    /**
+     * 录制型通知发布入口：把发布的通知收集到内存，供「refresh 时发告警」这类断言使用。
+     *
+     * @author zcd
+     */
+    private static final class RecordingPublisher implements EventPublisher {
+
+        /** 已发布的通知。 */
+        private final List<JellyfishEvent> events = new ArrayList<>();
+
+        @Override
+        public void publish(JellyfishEvent event) {
+            events.add(event);
+        }
+
+        /**
+         * 获取收集到的配置告警。
+         *
+         * @return 配置告警列表
+         */
+        private List<ConfigWarningEvent> warnings() {
+            List<ConfigWarningEvent> warnings = new ArrayList<>();
+            for (JellyfishEvent event : events) {
+                if (event instanceof ConfigWarningEvent) {
+                    warnings.add((ConfigWarningEvent) event);
+                }
+            }
+            return warnings;
+        }
     }
 
     /**

@@ -2,8 +2,8 @@ package zcd.jellyfish.infra.config;
 
 import org.apache.commons.lang3.StringUtils;
 import zcd.jellyfish.api.JellyfishException;
-import zcd.jellyfish.infra.event.ConfigWarningEvent;
-import zcd.jellyfish.infra.event.EventBus;
+import zcd.jellyfish.api.event.EventPublisher;
+import zcd.jellyfish.api.event.notification.ConfigWarningEvent;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
@@ -27,6 +27,12 @@ import java.util.function.Function;
  * <p>
  * 新增配置段时：声明字段 → 在 {@link #refresh()} 中用 {@link #load} 读取并合并 → 放入 {@link RuntimeSnapshot}，
  * 复用同一套双源机制。配置好坏的判定只发 {@link ConfigWarningEvent}、不抛错，启动期缺配置不会直接失败。
+ * <p>
+ * 依赖的是窄接口 {@link EventPublisher}，不感知具体事件总线实现。
+ * <p>
+ * <b>构造器不读取配置</b>：构造时只注入依赖，真正加载由装配根在 {@code AgentHarness.bootstrap()} 中、
+ * 事件总线 {@code start()} 之后调用 {@link #refresh()} 触发。这样既去掉了「构造器里做 IO」的味道，
+ * 也保证启动期告警一定发生在总线启动之后，不会因订阅者尚未注册而丢失。
  *
  * @author zcd
  */
@@ -37,28 +43,32 @@ public class RuntimeConfig {
 
     private final ConfigLoader configLoader;
 
-    private final EventBus eventBus;
+    private final EventPublisher eventPublisher;
 
     /** 当前配置快照，整体替换保证读取一致性。 */
     private volatile RuntimeSnapshot snapshot = RuntimeSnapshot.empty();
 
     /**
-     * 构造时立即加载一次配置。
+     * 构造运行时配置门面。
+     * <p>
+     * 构造器只保存依赖，不读取任何配置文件；配置由装配根在事件总线启动后调用 {@link #refresh()} 加载。
      *
-     * @param appConfig    应用级配置，提供各配置段的双源路径
-     * @param configLoader 配置文件读取门面
-     * @param eventBus     事件总线，用于广播配置告警
+     * @param appConfig      应用级配置，提供各配置段的双源路径
+     * @param configLoader   配置文件读取门面
+     * @param eventPublisher 通知发布入口，用于广播配置告警
      */
     @Inject
-    public RuntimeConfig(AppConfig appConfig, ConfigLoader configLoader, EventBus eventBus) {
+    public RuntimeConfig(AppConfig appConfig, ConfigLoader configLoader, EventPublisher eventPublisher) {
         this.appConfig = appConfig;
         this.configLoader = configLoader;
-        this.eventBus = eventBus;
-        refresh();
+        this.eventPublisher = eventPublisher;
     }
 
     /**
-     * 重新加载并合并全部配置段。配置热更新后由上层调用。
+     * 重新加载并合并全部配置段。
+     * <p>
+     * 首次加载由装配根在事件总线 {@code start()} 之后显式调用（见 {@code AgentHarness.bootstrap()}）；
+     * 配置热更新时由上层再次调用。
      */
     public synchronized void refresh() {
         ModelSettings merged = load(appConfig.getModel(), ModelSettings.class, RuntimeConfig::mergeModelSettings);
@@ -146,7 +156,7 @@ public class RuntimeConfig {
     private <T> T read(String path, Class<T> type) {
         T value = configLoader.read(path, type);
         if (value == null && StringUtils.isNotBlank(path)) {
-            eventBus.publish(new ConfigWarningEvent(path, "配置段文件缺失或为空，将按未配置处理"));
+            eventPublisher.publish(new ConfigWarningEvent(path, "配置段文件缺失或为空，将按未配置处理"));
         }
         return value;
     }
@@ -225,24 +235,24 @@ public class RuntimeConfig {
     private void notifyIfInvalid(ModelSettings merged) {
         Map<String, Provider> providers = merged.getProviders();
         if (providers.isEmpty()) {
-            eventBus.publish(new ConfigWarningEvent("model", "模型配置未包含任何 provider"));
+            eventPublisher.publish(new ConfigWarningEvent("model", "模型配置未包含任何 provider"));
             return;
         }
         for (Provider provider : providers.values()) {
             if (StringUtils.isBlank(provider.getType())) {
-                eventBus.publish(new ConfigWarningEvent(provider.getName(),
+                eventPublisher.publish(new ConfigWarningEvent(provider.getName(),
                         "provider 缺少 type，无法路由到具体客户端"));
             }
         }
         String defaultProvider = merged.getDefaultProvider();
         String defaultModel = merged.getDefaultModel();
         if (StringUtils.isNotBlank(defaultProvider) && !providers.containsKey(defaultProvider)) {
-            eventBus.publish(new ConfigWarningEvent("model",
+            eventPublisher.publish(new ConfigWarningEvent("model",
                     "默认 provider [" + defaultProvider + "] 不存在于 providers 中"));
             return;
         }
         if (StringUtils.isNotBlank(defaultModel) && !hasModel(providers, defaultProvider, defaultModel)) {
-            eventBus.publish(new ConfigWarningEvent("model",
+            eventPublisher.publish(new ConfigWarningEvent("model",
                     "默认 model [" + defaultModel + "] 未在任何 provider 中定义"));
         }
     }

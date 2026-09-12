@@ -1,6 +1,7 @@
 package zcd.jellyfish.cli.di;
 
 import dagger.Component;
+import zcd.jellyfish.core.AgentHarness;
 import zcd.jellyfish.infra.config.RuntimeConfig;
 import zcd.jellyfish.infra.llm.LlmClientFactory;
 import zcd.jellyfish.infra.model.ModelManager;
@@ -14,7 +15,7 @@ import javax.inject.Singleton;
  * @author zcd
  */
 @Singleton
-@Component(modules = {ConfigModule.class, LlmModule.class})
+@Component(modules = {ConfigModule.class, LlmModule.class, EventModule.class})
 public interface JellyfishComponent {
 
     /**
@@ -37,4 +38,11 @@ public interface JellyfishComponent {
      * @return RuntimeConfig
      */
     RuntimeConfig runtimeConfig();
+
+    /**
+     * 获取 Agent 运行时宿主，由外壳调用 {@code bootstrap()} 启动。
+     *
+     * @return AgentHarness
+     */
+    AgentHarness agentHarness();
 }

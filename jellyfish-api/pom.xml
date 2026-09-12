@@ -14,4 +14,13 @@
     <artifactId>jellyfish-api</artifactId>
     <name>Jellyfish API</name>
     <description>插件 SPI 与统一异常，面向仓库外插件作者的稳定契约。不依赖任何内部模块，也不应引入第三方实现依赖。</description>
+
+    <dependencies>
+        <!-- 单元测试：仅验证契约行为，版本由父 POM 的 BOM 统一管理 -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
 </project>

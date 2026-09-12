@@ -18,7 +18,7 @@
 |------|------|
 | **极致轻量** | 核心依赖 < 15MB，启动 < 2s，适合微服务和 Serverless |
 | **Java 8 兼容** | 面向金融、政务、制造等大量存量 Java 8 系统 |
-| **事件驱动** | Guava AsyncEventBus 异步解耦所有组件，**包括插件** |
+| **事件驱动** | 事件总线双通道（同步命令 + 异步通知）解耦所有组件，**包括插件** |
 | **插件化** | PF4J 热加载，插件通过订阅事件与核心交互，无需直接依赖 |
 | **跨语言** | Python/TypeScript 通过 Stdio 协议贡献插件（同样通过事件调度） |
 | **双协议** | Web 使用 SSE，TUI/CLI 使用 NDJSON 或直接控制台输出 |
@@ -44,7 +44,7 @@
 |------|------|------|------|
 | Web 服务器 | Undertow | 2.2.24.Final | 轻量 1.5MB，原生 SSE，Java 8 兼容 |
 | LLM 客户端 | llm-client | 0.8.58+ | 轻量，SSE 流式原生支持，Builder 模式 |
-| 事件总线 | Guava AsyncEventBus | 33.0.0-jre | 成熟，异步，~2MB，Java 8 兼容 |
+| 事件总线 | Guava EventBus（自建双通道门面） | 33.0.0-jre | 成熟，~2MB，Java 8 兼容；同步命令内联、异步通知自管线程池 |
 | 插件框架 | PF4J | 3.10.0 | 轻量 ~200KB，类隔离，热加载 |
 | 命令执行 | Apache Commons Exec | 1.3 | 安全执行跨语言脚本 |
 | JSON | Jackson (databind) | 2.14.2 | 行业标准，用于配置解析 |
@@ -71,7 +71,7 @@ flowchart TB
             direction LR
 
             subgraph CoreInfra["核心基础设施"]
-                EventBus["EventBus<br>异步事件 + 同步命令调度"]
+                EventBus["JellyfishEventBus<br>双通道：同步命令 + 异步通知"]
                 SessionMgr["SessionManager<br>会话隔离 / 消息列表<br>当前 agentId / 当前模型 / 会话级切换"]
                 AgentMgr["AgentManager<br>Agent 定义注册表<br>按 agentId 提供系统提示词 / 权限策略"]
                 ModelMgr["ModelManager<br>Provider/Model 注册/解析/路由<br>不持有全局当前态"]
@@ -154,7 +154,7 @@ flowchart TB
         direction LR
         subgraph CoreInfra["核心基础设施"]
             direction TB
-            EventBus["event/ EventBus<br>异步事件广播"]
+            EventBus["event/ JellyfishEventBus<br>双通道 + 两层注册表"]
             SessionMgr["session/ SessionManager<br>会话隔离 / 消息列表<br>当前 agentId / 当前模型 / 会话级切换"]
             AgentMgr["agent/ AgentManager<br>Agent 定义注册表 / 按 agentId 提供提示词 / 权限"]
             ModelMgr["model/ ModelManager<br>Provider/Model 注册/解析/路由"]

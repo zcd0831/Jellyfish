@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+         http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>zcd</groupId>
+        <artifactId>jellyfish</artifactId>
+        <version>0.0.1-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>jellyfish-api</artifactId>
+    <name>Jellyfish API</name>
+    <description>插件 SPI 与统一异常，面向仓库外插件作者的稳定契约。不依赖任何内部模块，也不应引入第三方实现依赖。</description>
+</project>

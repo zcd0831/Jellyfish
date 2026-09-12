@@ -1,0 +1,344 @@
+package zcd.jellyfish.infra.config;
+
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.api.io.TempDir;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import zcd.jellyfish.api.JellyfishException;
+import zcd.jellyfish.infra.event.ConfigWarningEvent;
+import zcd.jellyfish.infra.event.EventBus;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Collectors;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+/**
+ * {@link RuntimeConfig} 的单元测试：验证双源读取、合并规则、快照读取与参数校验。
+ * <p>
+ * 通过 {@link TempDir} 构造真实的全局级/项目级文件，仅 mock 提供路径的 {@link AppConfig}。
+ *
+ * @author zcd
+ */
+@ExtendWith(MockitoExtension.class)
+class RuntimeConfigTest {
+
+    /** 临时目录，用于构造真实的本地配置文件。 */
+    @TempDir
+    Path tempDir;
+
+    /** 只 mock 提供双源路径的应用级配置。 */
+    @Mock
+    AppConfig appConfig;
+
+    @Test
+    void constructor_should_merge_global_and_project_when_both_exist() throws IOException {
+        // Given
+        Path global = writeFile("global.json",
+                "{\"defaultProvider\":\"global-provider\",\"defaultModel\":\"global-model\","
+                        + "\"providers\":{"
+                        + "\"openai\":{\"type\":\"openai\",\"baseUrl\":\"https://global\"},"
+                        + "\"azure\":{\"type\":\"azure\"}}}");
+        Path project = writeFile("project.json",
+                "{\"defaultProvider\":\"project-provider\","
+                        + "\"providers\":{"
+                        + "\"openai\":{\"type\":\"openai\",\"baseUrl\":\"https://project\"},"
+                        + "\"ollama\":{\"type\":\"ollama\"}}}");
+
+        // When
+        RuntimeConfig runtimeConfig = newRuntimeConfig(pathsTo(global, project));
+
+        // Then：默认值项目级覆盖、缺省项回退全局级
+        assertEquals("project-provider", runtimeConfig.getDefaultProvider());
+        assertEquals("global-model", runtimeConfig.getDefaultModel());
+        // Then：同名 provider 整对象替换，顺序保留全局级位置，新 provider 追加在后
+        assertEquals(Arrays.asList("openai", "azure", "ollama"), providerNames(runtimeConfig.getProviders()));
+        assertEquals("https://project", runtimeConfig.getProviders().get(0).getBaseUrl());
+    }
+
+    @Test
+    void constructor_should_backfill_provider_name_from_map_key() throws IOException {
+        // Given
+        Path global = writeFile("global.json",
+                "{\"providers\":{\"my-provider\":{\"type\":\"openai\"}}}");
+
+        // When
+        RuntimeConfig runtimeConfig = newRuntimeConfig(pathsTo(global, null));
+
+        // Then
+        assertEquals("my-provider", runtimeConfig.getProviders().get(0).getName());
+    }
+
+    @Test
+    void constructor_should_fall_back_to_global_when_project_value_is_blank() throws IOException {
+        // Given
+        Path global = writeFile("global.json",
+                "{\"defaultProvider\":\"global-provider\",\"defaultModel\":\"global-model\"}");
+        Path project = writeFile("project.json",
+                "{\"defaultProvider\":\"\",\"defaultModel\":\"project-model\"}");
+
+        // When
+        RuntimeConfig runtimeConfig = newRuntimeConfig(pathsTo(global, project));
+
+        // Then
+        assertEquals("global-provider", runtimeConfig.getDefaultProvider());
+        assertEquals("project-model", runtimeConfig.getDefaultModel());
+    }
+
+    @Test
+    void constructor_should_return_empty_providers_when_files_missing() {
+        // Given
+        ConfigPaths paths = pathsTo(tempDir.resolve("missing-global.json"), tempDir.resolve("missing-project.json"));
+
+        // When
+        RuntimeConfig runtimeConfig = newRuntimeConfig(paths);
+
+        // Then
+        assertNotNull(runtimeConfig.getModelSettings());
+        assertTrue(runtimeConfig.getProviders().isEmpty());
+        assertNull(runtimeConfig.getDefaultProvider());
+        assertNull(runtimeConfig.getDefaultModel());
+    }
+
+    @Test
+    void constructor_should_skip_null_provider_when_map_value_is_null() throws IOException {
+        // Given
+        Path global = writeFile("global.json", "{\"providers\":{\"openai\":null}}");
+
+        // When
+        RuntimeConfig runtimeConfig = newRuntimeConfig(pathsTo(global, null));
+
+        // Then
+        assertTrue(runtimeConfig.getProviders().isEmpty());
+    }
+
+    @Test
+    void getProviders_should_return_unmodifiable_list() throws IOException {
+        // Given
+        Path global = writeFile("global.json", "{\"providers\":{\"openai\":{\"type\":\"openai\"}}}");
+        RuntimeConfig runtimeConfig = newRuntimeConfig(pathsTo(global, null));
+
+        // When / Then
+        List<Provider> providers = runtimeConfig.getProviders();
+        Provider added = new Provider("other", "openai", null, null, null);
+        assertThrows(UnsupportedOperationException.class, () -> providers.add(added));
+    }
+
+    @Test
+    void refresh_should_reload_when_file_changed() throws IOException {
+        // Given
+        Path global = writeFile("global.json", "{\"providers\":{\"first\":{\"type\":\"openai\"}}}");
+        RuntimeConfig runtimeConfig = newRuntimeConfig(pathsTo(global, null));
+        assertEquals(Arrays.asList("first"), providerNames(runtimeConfig.getProviders()));
+
+        // When
+        Files.write(global, "{\"providers\":{\"second\":{\"type\":\"openai\"}}}".getBytes(StandardCharsets.UTF_8));
+        runtimeConfig.refresh();
+
+        // Then
+        assertEquals(Arrays.asList("second"), providerNames(runtimeConfig.getProviders()));
+    }
+
+    @Test
+    void load_should_pass_null_for_missing_side_and_project_for_existing() throws IOException {
+        // Given
+        Path project = writeFile("project.json", "{\"defaultProvider\":\"project-provider\"}");
+        RuntimeConfig runtimeConfig = newRuntimeConfig(pathsTo(null, project));
+        AtomicReference<ModelSettings> globalRef = new AtomicReference<>();
+        AtomicReference<ModelSettings> projectRef = new AtomicReference<>();
+
+        // When
+        ModelSettings merged = runtimeConfig.load(pathsTo(null, project), ModelSettings.class, (global, proj) -> {
+            globalRef.set(global);
+            projectRef.set(proj);
+            return new ModelSettings(null, null, null);
+        });
+
+        // Then
+        assertNotNull(merged);
+        assertNull(globalRef.get());
+        assertNotNull(projectRef.get());
+        assertEquals("project-provider", projectRef.get().getDefaultProvider());
+    }
+
+    @Test
+    void load_should_pass_null_for_both_sides_when_paths_is_null() {
+        // Given
+        RuntimeConfig runtimeConfig = newRuntimeConfig(pathsTo(null, null));
+        AtomicReference<ModelSettings> globalRef = new AtomicReference<>();
+        AtomicReference<ModelSettings> projectRef = new AtomicReference<>();
+
+        // When
+        ModelSettings merged = runtimeConfig.load(null, ModelSettings.class, (global, project) -> {
+            globalRef.set(global);
+            projectRef.set(project);
+            return new ModelSettings(null, null, null);
+        });
+
+        // Then
+        assertNotNull(merged);
+        assertNull(globalRef.get());
+        assertNull(projectRef.get());
+    }
+
+    @Test
+    void load_should_return_merger_result_when_paths_are_blank() {
+        // Given
+        ConfigPaths blankPaths = new ConfigPaths();
+        RuntimeConfig runtimeConfig = newRuntimeConfig(blankPaths);
+        ModelSettings expected = new ModelSettings(null, null, null);
+
+        // When
+        ModelSettings merged = runtimeConfig.load(blankPaths, ModelSettings.class, (global, project) -> expected);
+
+        // Then
+        assertEquals(expected, merged);
+    }
+
+    @Test
+    void load_should_read_once_when_global_and_project_paths_are_same() throws IOException {
+        // Given
+        Path shared = writeFile("shared.json", "{\"defaultProvider\":\"provider\"}");
+        ConfigPaths paths = pathsTo(shared, shared);
+        when(appConfig.getModel()).thenReturn(paths);
+        ConfigLoader configLoader = mock(ConfigLoader.class);
+        when(configLoader.read(shared.toString(), ModelSettings.class))
+                .thenReturn(new ModelSettings(null, null, null));
+
+        // When
+        new RuntimeConfig(appConfig, configLoader, new EventBus(Runnable::run));
+
+        // Then：同一路径只读取一次
+        verify(configLoader, times(1)).read(shared.toString(), ModelSettings.class);
+    }
+
+    @Test
+    void constructor_should_publish_warning_when_file_missing() {
+        // Given
+        Path missing = tempDir.resolve("missing.json");
+        List<ConfigWarningEvent> warnings = new ArrayList<>();
+        EventBus eventBus = new EventBus(Runnable::run);
+        eventBus.subscribe(ConfigWarningEvent.class, warnings::add);
+        ConfigPaths paths = pathsTo(missing, null);
+        when(appConfig.getModel()).thenReturn(paths);
+
+        // When
+        new RuntimeConfig(appConfig,
+                new ConfigLoader(new SettingsReader(), new SettingsBinder()), eventBus);
+
+        // Then
+        assertTrue(warnings.stream().anyMatch(warning -> missing.toString().equals(warning.getSource())));
+    }
+
+    @Test
+    void load_should_throw_when_merger_returns_null() {
+        // Given
+        ConfigPaths paths = pathsTo(null, null);
+        RuntimeConfig runtimeConfig = newRuntimeConfig(paths);
+
+        // When / Then
+        assertThrows(JellyfishException.class,
+                () -> runtimeConfig.load(paths, ModelSettings.class, RuntimeConfigTest::noMerge));
+    }
+
+    @Test
+    void load_should_throw_when_type_is_null() {
+        // Given
+        ConfigPaths paths = pathsTo(null, null);
+        RuntimeConfig runtimeConfig = newRuntimeConfig(paths);
+
+        // When / Then
+        assertThrows(NullPointerException.class,
+                () -> runtimeConfig.load(paths, null, RuntimeConfigTest::noMerge));
+    }
+
+    @Test
+    void load_should_throw_when_merger_is_null() {
+        // Given
+        ConfigPaths paths = pathsTo(null, null);
+        RuntimeConfig runtimeConfig = newRuntimeConfig(paths);
+
+        // When / Then
+        assertThrows(NullPointerException.class,
+                () -> runtimeConfig.load(paths, ModelSettings.class, null));
+    }
+
+    /**
+     * 用于验证 merger 返回 {@code null} 的场景。
+     *
+     * @param global  全局级配置
+     * @param project 项目级配置
+     * @return 恒为 {@code null}
+     */
+    private static ModelSettings noMerge(ModelSettings global, ModelSettings project) {
+        return null;
+    }
+
+    /**
+     * 构造被测对象，并让 {@link AppConfig} 返回给定双源路径。
+     *
+     * @param paths 模型配置段的双源路径
+     * @return 已加载一次配置的 {@link RuntimeConfig}
+     */
+    private RuntimeConfig newRuntimeConfig(ConfigPaths paths) {
+        when(appConfig.getModel()).thenReturn(paths);
+        EventBus eventBus = new EventBus(Runnable::run);
+        return new RuntimeConfig(appConfig,
+                new ConfigLoader(new SettingsReader(), new SettingsBinder()),
+                eventBus);
+    }
+
+    /**
+     * 构造双源路径，{@code null} 表示该侧不配置。
+     *
+     * @param global  全局级文件路径，可为 {@code null}
+     * @param project 项目级文件路径，可为 {@code null}
+     * @return 双源路径对象
+     */
+    private static ConfigPaths pathsTo(Path global, Path project) {
+        ConfigPaths paths = new ConfigPaths();
+        paths.setGlobalPath(global == null ? "" : global.toString());
+        paths.setProjectPath(project == null ? "" : project.toString());
+        return paths;
+    }
+
+    /**
+     * 在临时目录写入一个配置文件。
+     *
+     * @param name 文件名
+     * @param json 文件内容
+     * @return 写入后的文件路径
+     * @throws IOException 写文件失败
+     */
+    private Path writeFile(String name, String json) throws IOException {
+        Path file = tempDir.resolve(name);
+        Files.write(file, json.getBytes(StandardCharsets.UTF_8));
+        return file;
+    }
+
+    /**
+     * 提取 provider 列表中的名称，用于断言顺序。
+     *
+     * @param providers provider 列表
+     * @return provider 名称列表
+     */
+    private static List<String> providerNames(List<Provider> providers) {
+        return providers.stream().map(Provider::getName).collect(Collectors.toList());
+    }
+}

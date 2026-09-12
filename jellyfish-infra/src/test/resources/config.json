@@ -1,0 +1,7 @@
+{
+  "processName": "Jellyfish",
+  "model": {
+    "globalPath": "/etc/jellyfish/jellyfish.json",
+    "projectPath": "./jellyfish.json"
+  }
+}

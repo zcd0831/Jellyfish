@@ -6,6 +6,8 @@ import zcd.jellyfish.api.event.JellyfishEvent;
 import zcd.jellyfish.api.event.RegisterOptions;
 import zcd.jellyfish.api.event.callback.CallbackHandler;
 import zcd.jellyfish.api.event.callback.PluginRequest;
+import zcd.jellyfish.api.event.callback.ToolCallRequest;
+import zcd.jellyfish.api.event.callback.ToolCallResult;
 import zcd.jellyfish.api.event.notification.ConfigWarningEvent;
 import zcd.jellyfish.infra.event.callback.CallbackRegistry;
 import zcd.jellyfish.infra.event.callback.ExtensionPointRegistry;
@@ -13,6 +15,7 @@ import zcd.jellyfish.infra.event.notification.EventDispatchResult;
 import zcd.jellyfish.infra.event.notification.EventRegistry;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -20,7 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * {@link PluginContextImpl} 的单元测试：验证能力入口与注册委托都绑定 pluginId。
+ * {@link PluginContextImpl} 的单元测试：验证按扩展点暴露的注册入口与能力入口都绑定 pluginId。
  * <p>
  * 这里使用真实注册表而非 mock，因为 {@link CallbackRegistry} 与 {@link EventRegistry} 均为 final，
  * 且本类的职责只是把 {@code pluginId} 作为 owner 透传下去。
@@ -46,9 +49,10 @@ class PluginContextImplTest {
             publisher);
 
     @Test
-    void callbacks_and_events_should_return_self_and_publisher_should_return_injected() {
+    void registrars_and_events_should_return_self_and_publisher_should_return_injected() {
         // Then
-        assertSame(context, context.callbacks());
+        assertSame(context, context.tools());
+        assertSame(context, context.commands());
         assertSame(context, context.events());
         assertSame(publisher, context.publisher());
         assertEquals("plugin-a", context.getPluginId());
@@ -59,7 +63,7 @@ class PluginContextImplTest {
     void register_named_request_should_register_under_plugin_owner() throws Exception {
         // Given
         List<String> handled = new ArrayList<>();
-        context.register("calculator", callback -> {
+        context.commands().register("calculator", callback -> {
             handled.add(callback.getName());
             return "42";
         }, RegisterOptions.DEFAULT);
@@ -76,15 +80,16 @@ class PluginContextImplTest {
     }
 
     @Test
-    void register_typed_request_should_register_under_plugin_owner() {
+    void register_tool_should_register_under_plugin_owner() {
         // Given
-        CallbackHandler<PluginRequest, Object> handler = callback -> "typed";
-        context.register(PluginRequest.class, "calc", handler, RegisterOptions.DEFAULT);
+        CallbackHandler<ToolCallRequest, ToolCallResult> handler = callback -> new ToolCallResult("calculator", 42);
 
         // When
-        CallbackHandler<?, ?> resolved = callbackRegistry.resolveUnique(new PluginRequest("calc", Object.class, null));
+        context.tools().register("calculator", handler);
 
         // Then
+        CallbackHandler<?, ?> resolved = callbackRegistry.resolveUnique(new ToolCallRequest("calculator",
+                Collections.<String, Object>emptyMap(), null, 0L));
         assertSame(handler, resolved);
     }
 

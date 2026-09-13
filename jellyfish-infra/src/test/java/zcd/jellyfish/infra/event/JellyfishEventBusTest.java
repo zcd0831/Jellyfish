@@ -8,11 +8,10 @@ import zcd.jellyfish.api.event.RegisterOptions;
 import zcd.jellyfish.api.event.Subscription;
 import zcd.jellyfish.api.event.callback.Callback;
 import zcd.jellyfish.api.event.callback.CallbackException;
-import zcd.jellyfish.api.event.callback.PermissionCheckRequest;
-import zcd.jellyfish.api.event.callback.PermissionDecision;
 import zcd.jellyfish.api.event.callback.PluginRequest;
+import zcd.jellyfish.api.event.callback.ToolCallRequest;
+import zcd.jellyfish.api.event.callback.ToolCallResult;
 import zcd.jellyfish.api.event.notification.ConfigWarningEvent;
-import zcd.jellyfish.api.plugin.PluginContext;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -56,7 +55,7 @@ class JellyfishEventBusTest {
         // Given
         JellyfishEventBus bus = newBus();
         bus.start();
-        bus.pluginContext("plugin-a").callbacks().register("calculator", callback -> "42", RegisterOptions.DEFAULT);
+        bus.pluginContext("plugin-a").commands().register("calculator", callback -> "42", RegisterOptions.DEFAULT);
 
         // When
         Object result = bus.invoke(new PluginRequest("calculator", Object.class, null));
@@ -71,7 +70,7 @@ class JellyfishEventBusTest {
         // Given
         JellyfishEventBus bus = newBus();
         bus.start();
-        bus.pluginContext("plugin-a").callbacks().register("calculator", callback -> "42", RegisterOptions.DEFAULT);
+        bus.pluginContext("plugin-a").commands().register("calculator", callback -> "42", RegisterOptions.DEFAULT);
 
         // When
         List<Object> results = bus.invokeAll(new PluginRequest("calculator", Object.class, null));
@@ -108,20 +107,20 @@ class JellyfishEventBusTest {
     }
 
     @Test
-    void invoke_should_throw_ambiguous_when_multiple_handlers_match() {
+    void tools_should_register_tool_handler_bound_to_plugin_owner() {
         // Given
         JellyfishEventBus bus = newBus();
         bus.start();
-        PluginContext context = bus.pluginContext("plugin-a");
-        context.callbacks().register(PluginRequest.class, null, callback -> "any", RegisterOptions.DEFAULT);
-        context.callbacks().register("calculator", callback -> "one", RegisterOptions.DEFAULT);
+        bus.pluginContext("plugin-a").tools().register("calculator",
+                callback -> new ToolCallResult("calculator", 42));
 
         // When
-        PluginRequest callback = new PluginRequest("calculator", Object.class, null);
-        CallbackException exception = assertThrows(CallbackException.class, () -> bus.invoke(callback));
+        ToolCallResult result = bus.invoke(new ToolCallRequest("calculator",
+                Collections.<String, Object>emptyMap(), null, 0L));
 
         // Then
-        assertEquals(CallbackException.Code.AMBIGUOUS_HANDLER, exception.getCode());
+        assertEquals(42, result.getOutput());
+        assertTrue(bus.snapshot().render().contains("plugin-a"));
     }
 
     @Test
@@ -129,7 +128,7 @@ class JellyfishEventBusTest {
         // Given
         JellyfishEventBus bus = newBus();
         bus.start();
-        bus.pluginContext("plugin-a").callbacks().register("calculator", callback -> {
+        bus.pluginContext("plugin-a").commands().register("calculator", callback -> {
             throw new IllegalStateException("boom");
         }, RegisterOptions.DEFAULT);
 
@@ -144,7 +143,7 @@ class JellyfishEventBusTest {
         // Given
         JellyfishEventBus bus = newBus();
         bus.start();
-        bus.pluginContext("plugin-a").callbacks().register("calculator", callback -> {
+        bus.pluginContext("plugin-a").commands().register("calculator", callback -> {
             throw new Exception("checked");
         }, RegisterOptions.DEFAULT);
 
@@ -172,7 +171,7 @@ class JellyfishEventBusTest {
         EventBusOptions options = EventBusOptions.builder().maxCallbackDepth(1).build();
         JellyfishEventBus bus = new JellyfishEventBus(options, Runnable::run);
         bus.start();
-        bus.pluginContext("plugin-a").callbacks().register("outer",
+        bus.pluginContext("plugin-a").commands().register("outer",
                 callback -> bus.invoke(new PluginRequest("inner", Object.class, null)), RegisterOptions.DEFAULT);
 
         // When
@@ -344,24 +343,13 @@ class JellyfishEventBusTest {
     }
 
     @Test
-    void pluginContext_should_reject_non_extensible_command_type() {
-        // Given
-        JellyfishEventBus bus = newBus();
-        PluginContext context = bus.pluginContext("plugin-a");
-
-        // When / Then
-        assertThrows(JellyfishException.class, () -> context.callbacks().register(PermissionCheckRequest.class, null,
-                callback -> PermissionDecision.allow("ok"), RegisterOptions.DEFAULT));
-    }
-
-    @Test
     void plugin_override_should_be_visible_in_snapshot() {
         // Given
         JellyfishEventBus bus = newBus();
-        bus.pluginContext("plugin-a").callbacks().register("calculator", callback -> "one", RegisterOptions.DEFAULT);
+        bus.pluginContext("plugin-a").commands().register("calculator", callback -> "one", RegisterOptions.DEFAULT);
 
         // When
-        bus.pluginContext("plugin-b").callbacks().register("calculator", callback -> "two",
+        bus.pluginContext("plugin-b").commands().register("calculator", callback -> "two",
                 RegisterOptions.override(true));
 
         // Then
@@ -374,7 +362,7 @@ class JellyfishEventBusTest {
         // Given
         JellyfishEventBus bus = newBus();
         bus.start();
-        bus.pluginContext("plugin-a").callbacks().register("calculator", callback -> "one", RegisterOptions.DEFAULT);
+        bus.pluginContext("plugin-a").commands().register("calculator", callback -> "one", RegisterOptions.DEFAULT);
 
         // When
         bus.close();

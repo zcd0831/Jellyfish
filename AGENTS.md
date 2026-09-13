@@ -140,7 +140,7 @@ jellyfish-api/src/main/java/zcd/jellyfish/api/
 └── plugin/                        # 插件 SPI：插件总入口、工具/记忆/横切三类插件接口与能力上下文，面向仓库外插件作者的唯一稳定契约
 
 jellyfish-infra/src/main/java/zcd/jellyfish/infra/
-├── event/          # 内核与插件交互枢纽：回调通道（有返回值，0..N，命令是 unique 退化特例）+ 事件通道（无返回值，0..N），Level1 Guava 派发 + Level2 细粒度注册表
+├── event/          # 内核与插件交互枢纽：回调通道（有返回值，0..N，命令是 unique 退化特例）+ 事件通道（无返回值，0..N），含 ISOLATED 执行器；Level1 Guava 派发 + Level2 细粒度注册表
 ├── callback/       # 回调通道的同步请求-响应模型：Callback / CallbackHandler / XxxRequest
 ├── session/        # 会话运行态：会话隔离、消息列表，以及会话内当前 agentId 与当前模型（仅内存态）
 ├── agent/          # Agent 定义注册表：从配置装载定义，按 agentId 提供提示词与权限策略
@@ -208,6 +208,8 @@ src/main/resources/config.json     # 应用配置（进程名 + 各配置段的�
 - **序列化与反序列化**: 读写统一走 `ObjectMapperWrapper`，不要直接 new `ObjectMapper`。
 - **请求/消息模型**：`LlmRequest`、`LlmMessage`、`LlmTool` 是与厂商无关的统一模型，`LlmRequest` 用 builder 构建。
 - **配置类型**：应用内部配置类（即项目代码里的配置，不会暴露给用户）用`Config`结尾，提供用用户的配置类用`Settings`结尾。
+- **交互枢纽双通道**：`JellyfishEventBus` 是内核与插件的唯一交互枢纽，回调通道负责「有返回值的调用」（`invoke` 取单个 / `invokeAll` 收集），事件通道负责「无返回值的广播」；回调的唯一性、顺序、空表策略、结果数量、执行模式与失败语义均由其扩展点定义（`@ExtensionPoint` + `ExtensionPointRegistry`）驱动，而非按类型硬编码。
+- **两种回调执行模式**：`INLINE` 在调用线程内联执行（B 提供）；`ISOLATED` 提交到独立有界线程池（核心 4 / 最大 32 / 队列 256）并逐个施加 per-handler 超时（默认 2000ms），超时即 `cancel(true)` 并丢该结果；拒绝即降级不阻塞调用线程，因此处理器不得依赖 `ThreadLocal`。
 - **插件模型**：Java 插件与跨语言桥接插件在 `PF4JPluginManager` 眼里完全同构，都只经 `PluginContext`（回调注册入口 / `events()` / `publisher()`）与内核交互；脚本进程只是桥接插件背后的一台「无状态计算器」。
 - **跨语言通信**：JSON-RPC 2.0 over Stdio，每行一个 JSON；每种语言最多一个常驻进程（单进程多路复用），请求统一经 `ScriptGateway` 路由，脚本不直接管理进程。
 - **跨语言事件桥接**：内核通知经 `EventBridge` 推给脚本，脚本 `emit_event` 反向回总线；脚本来源事件带来源标记避免回推，事件类型走白名单、负载限 1MB、队列有界。

@@ -78,6 +78,9 @@ public final class JellyfishEventBus implements EventPublisher, AutoCloseable {
     /** 回调应答槽。 */
     private final CallbackReplies callbackReplies = new CallbackReplies();
 
+    /** ISOLATED 回调执行器。 */
+    private final CallbackExecutor callbackExecutor;
+
     /** 细粒度通知注册表。 */
     private final EventRegistry eventRegistry = new EventRegistry();
 
@@ -142,8 +145,9 @@ public final class JellyfishEventBus implements EventPublisher, AutoCloseable {
             stats.bindExecutor((ThreadPoolExecutor) this.notifier);
         }
         this.callbackRegistry = new CallbackRegistry(extensionPointRegistry);
+        this.callbackExecutor = new CallbackExecutor(this.options, stats);
         this.dispatchContext = new DispatchContext(options.getMaxCallbackDepth(), stats);
-        this.callbackDispatcher = new CallbackDispatcher(callbackRegistry, callbackReplies, stats);
+        this.callbackDispatcher = new CallbackDispatcher(callbackRegistry, callbackReplies, callbackExecutor, stats);
         this.eventDispatcher = new EventDispatcher(eventRegistry, stats);
         this.delegate = new EventBus(new EventDispatchExceptionHandler(dispatchContext, callbackReplies));
         this.delegate.register(callbackDispatcher);
@@ -291,6 +295,7 @@ public final class JellyfishEventBus implements EventPublisher, AutoCloseable {
             pending.clear();
         }
         shutdownNotifier();
+        callbackExecutor.close();
         callbackRegistry.clear();
         eventRegistry.clear();
         extensionPointRegistry.clear();

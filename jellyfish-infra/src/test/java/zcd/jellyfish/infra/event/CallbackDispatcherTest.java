@@ -1,5 +1,6 @@
 package zcd.jellyfish.infra.event;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import zcd.jellyfish.api.event.RegisterOptions;
 import zcd.jellyfish.api.event.callback.Callback;
@@ -15,30 +16,42 @@ import zcd.jellyfish.api.event.callback.ToolCallResult;
 import zcd.jellyfish.infra.event.callback.CallbackRegistry;
 import zcd.jellyfish.infra.event.callback.ExtensionPointRegistry;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * {@link CallbackDispatcher} 的单元测试：验证三类核心命令的注册表派发与失败记账。
+ * {@link CallbackDispatcher} 的单元测试：验证三类核心回调的注册表派发、单/多结果分叉、失败语义与失败记账。
  *
  * @author zcd
  */
 class CallbackDispatcherTest {
 
-    /** 命令注册表。 */
+    /** 回调注册表。 */
     private final CallbackRegistry registry = new CallbackRegistry(ExtensionPointRegistry.withBuiltIns());
 
-    /** 命令应答槽。 */
+    /** 回调应答槽。 */
     private final CallbackReplies replies = new CallbackReplies();
 
     /** 指标。 */
     private final EventBusStats stats = new EventBusStats();
 
-    /** 被测命令分发器。 */
-    private final CallbackDispatcher dispatcher = new CallbackDispatcher(registry, replies, stats);
+    /** ISOLATED 执行器。 */
+    private final CallbackExecutor executor = new CallbackExecutor(EventBusOptions.defaults(), stats);
+
+    /** 被测回调分发器。 */
+    private final CallbackDispatcher dispatcher = new CallbackDispatcher(registry, replies, executor, stats);
+
+    @AfterEach
+    void tearDown() {
+        executor.close();
+    }
 
     @Test
     void onToolCall_should_complete_result_and_count_dispatched() {
@@ -162,7 +175,7 @@ class CallbackDispatcherTest {
     void dispatchCallback_should_collect_all_results_in_order_when_shape_is_contribute() {
         // Given
         CallbackRegistry nonUnique = registryWith(ContributionRequest.class);
-        CallbackDispatcher manyDispatcher = new CallbackDispatcher(nonUnique, replies, stats);
+        CallbackDispatcher manyDispatcher = new CallbackDispatcher(nonUnique, replies, executor, stats);
         nonUnique.register("late", false, ContributionRequest.class, null, callback -> "late",
                 RegisterOptions.order(2));
         nonUnique.register("early", false, ContributionRequest.class, null, callback -> "early",
@@ -182,7 +195,7 @@ class CallbackDispatcherTest {
     void dispatchCallback_should_drop_failing_handler_when_fail_open() {
         // Given：A 贡献为 fail-open，单个处理器异常只丢弃该结果
         CallbackRegistry nonUnique = registryWith(ContributionRequest.class);
-        CallbackDispatcher manyDispatcher = new CallbackDispatcher(nonUnique, replies, stats);
+        CallbackDispatcher manyDispatcher = new CallbackDispatcher(nonUnique, replies, executor, stats);
         nonUnique.register("broken", false, ContributionRequest.class, null, callback -> {
             throw new IllegalStateException("boom");
         }, RegisterOptions.order(1));
@@ -203,7 +216,7 @@ class CallbackDispatcherTest {
     void dispatchCallback_should_fail_whole_when_fail_closed() {
         // Given：E 策略为 fail-closed，单个处理器异常即整次失败
         CallbackRegistry nonUnique = registryWith(PolicyRequest.class);
-        CallbackDispatcher manyDispatcher = new CallbackDispatcher(nonUnique, replies, stats);
+        CallbackDispatcher manyDispatcher = new CallbackDispatcher(nonUnique, replies, executor, stats);
         nonUnique.register("broken", false, PolicyRequest.class, null, callback -> {
             throw new IllegalStateException("boom");
         }, RegisterOptions.order(1));
@@ -225,7 +238,7 @@ class CallbackDispatcherTest {
     void dispatchCallback_should_complete_null_when_optional_and_no_handler() {
         // Given：空表策略 OPTIONAL，单结果形状以 null 区分于「未应答」
         CallbackRegistry optional = registryWith(OptionalSingleRequest.class);
-        CallbackDispatcher optionalDispatcher = new CallbackDispatcher(optional, replies, stats);
+        CallbackDispatcher optionalDispatcher = new CallbackDispatcher(optional, replies, executor, stats);
         OptionalSingleRequest callback = new OptionalSingleRequest();
         replies.open(callback);
 
@@ -236,6 +249,30 @@ class CallbackDispatcherTest {
         assertEquals(null, replies.await(callback));
         assertEquals(1L, stats.getNoHandlerCallbacks());
         assertEquals(0L, stats.getFailedCallbacks());
+    }
+
+    @Test
+    void dispatchCallback_should_run_handler_on_isolated_thread_when_execution_is_isolated() {
+        // Given
+        CallbackRegistry nonUnique = registryWith(ContributionRequest.class);
+        CallbackDispatcher manyDispatcher = new CallbackDispatcher(nonUnique, replies, executor, stats);
+        String callerThread = Thread.currentThread().getName();
+        List<String> handlerThreads = new ArrayList<>();
+        nonUnique.register("isolated", false, ContributionRequest.class, null, callback -> {
+            handlerThreads.add(Thread.currentThread().getName());
+            return "ok";
+        }, RegisterOptions.DEFAULT);
+        ContributionRequest callback = new ContributionRequest();
+        replies.open(callback);
+
+        // When
+        manyDispatcher.dispatchCallback(callback);
+
+        // Then
+        assertEquals(Collections.singletonList("ok"), replies.awaitAll(callback));
+        assertEquals(1, handlerThreads.size());
+        assertNotEquals(callerThread, handlerThreads.get(0));
+        assertTrue(handlerThreads.get(0).startsWith(EventThreadFactory.CALLBACK_PREFIX));
     }
 
     /**

@@ -32,6 +32,9 @@ final class CallbackDispatcher {
     /** 回调应答槽。 */
     private final CallbackReplies callbackReplies;
 
+    /** ISOLATED 执行器。 */
+    private final CallbackExecutor callbackExecutor;
+
     /** 指标。 */
     private final EventBusStats stats;
 
@@ -40,11 +43,14 @@ final class CallbackDispatcher {
      *
      * @param callbackRegistry 细粒度回调注册表
      * @param callbackReplies  回调应答槽
+     * @param callbackExecutor ISOLATED 执行器
      * @param stats            指标
      */
-    CallbackDispatcher(CallbackRegistry callbackRegistry, CallbackReplies callbackReplies, EventBusStats stats) {
+    CallbackDispatcher(CallbackRegistry callbackRegistry, CallbackReplies callbackReplies,
+                       CallbackExecutor callbackExecutor, EventBusStats stats) {
         this.callbackRegistry = callbackRegistry;
         this.callbackReplies = callbackReplies;
+        this.callbackExecutor = callbackExecutor;
         this.stats = stats;
     }
 
@@ -106,7 +112,7 @@ final class CallbackDispatcher {
             return;
         }
         try {
-            Object result = handler.handle(callback);
+            Object result = call(callback, handler, definition);
             callbackReplies.complete(callback, result);
             stats.dispatchedCallbacks.increment();
         } catch (Exception e) {
@@ -132,7 +138,7 @@ final class CallbackDispatcher {
         }
         boolean failClosed = definition.getFailurePolicy() == ExtensionPoint.FailurePolicy.FAIL_CLOSED;
         for (CallbackHandler<?, ?> raw : handlers) {
-            if (!callOne(callback, raw, failClosed)) {
+            if (!callOne(callback, raw, failClosed, definition)) {
                 return;
             }
         }
@@ -144,14 +150,14 @@ final class CallbackDispatcher {
      * @param callback   回调对象
      * @param raw        处理器
      * @param failClosed 失败是否让整次调用失败
+     * @param definition 扩展点定义
      * @param <R>        结果类型
      * @return 是否应继续调用后续处理器
      */
-    @SuppressWarnings("unchecked")
-    private <R> boolean callOne(Callback<R> callback, CallbackHandler<?, ?> raw, boolean failClosed) {
-        CallbackHandler<Callback<R>, R> handler = (CallbackHandler<Callback<R>, R>) raw;
+    private <R> boolean callOne(Callback<R> callback, CallbackHandler<?, ?> raw, boolean failClosed,
+                                ExtensionPointDefinition definition) {
         try {
-            Object result = handler.handle(callback);
+            Object result = call(callback, raw, definition);
             callbackReplies.complete(callback, result);
             stats.dispatchedCallbacks.increment();
             return true;
@@ -163,6 +169,28 @@ final class CallbackDispatcher {
             }
             return true;
         }
+    }
+
+    /**
+     * 按扩展点定义选择执行模式执行单个处理器。
+     * <p>
+     * INLINE 在调用线程内联执行（B 提供）；ISOLATED 提交到专用线程池并施加逐处理器超时（A 贡献 / D 拦截 / E 策略）。
+     *
+     * @param callback   回调对象
+     * @param raw        处理器
+     * @param definition 扩展点定义
+     * @param <R>        结果类型
+     * @return 处理器结果
+     * @throws Exception 处理器抛出的原始异常或 ISOLATED 执行失败
+     */
+    @SuppressWarnings("unchecked")
+    private <R> Object call(Callback<R> callback, CallbackHandler<?, ?> raw, ExtensionPointDefinition definition)
+            throws Exception {
+        CallbackHandler<Callback<R>, R> handler = (CallbackHandler<Callback<R>, R>) raw;
+        if (definition.getExecution() == ExtensionPoint.Execution.ISOLATED) {
+            return callbackExecutor.execute(callback, handler);
+        }
+        return handler.handle(callback);
     }
 
     /**

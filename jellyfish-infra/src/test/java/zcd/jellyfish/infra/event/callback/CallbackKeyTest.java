@@ -1,8 +1,8 @@
-package zcd.jellyfish.infra.event.command;
+package zcd.jellyfish.infra.event.callback;
 
 import org.junit.jupiter.api.Test;
-import zcd.jellyfish.api.event.command.Command;
-import zcd.jellyfish.api.event.command.PluginCommand;
+import zcd.jellyfish.api.event.callback.Callback;
+import zcd.jellyfish.api.event.callback.PluginRequest;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -12,32 +12,32 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * {@link CommandKey} 的单元测试：验证空值校验、相等性与诊断文本。
+ * {@link CallbackKey} 的单元测试：验证空值校验、相等性与诊断文本。
  *
  * @author zcd
  */
-class CommandKeyTest {
+class CallbackKeyTest {
 
     @Test
     void of_should_throw_when_command_type_is_null() {
         // When / Then
-        assertThrows(NullPointerException.class, () -> CommandKey.of(null, "calc"));
+        assertThrows(NullPointerException.class, () -> CallbackKey.of(null, "calc"));
     }
 
     @Test
     void getters_should_return_constructed_values() {
         // When
-        CommandKey key = CommandKey.of(PluginCommand.class, "calc");
+        CallbackKey key = CallbackKey.of(PluginRequest.class, "calc");
 
         // Then
-        assertEquals(PluginCommand.class, key.getCommandType());
+        assertEquals(PluginRequest.class, key.getCallbackType());
         assertEquals("calc", key.getRouteKey());
     }
 
     @Test
     void getRouteKey_should_return_null_when_type_unique() {
         // When
-        CommandKey key = CommandKey.of(PluginCommand.class, null);
+        CallbackKey key = CallbackKey.of(PluginRequest.class, null);
 
         // Then
         assertNull(key.getRouteKey());
@@ -46,8 +46,8 @@ class CommandKeyTest {
     @Test
     void equals_and_hashCode_should_match_when_same_type_and_route_key() {
         // Given
-        CommandKey key = CommandKey.of(PluginCommand.class, "calc");
-        CommandKey same = CommandKey.of(PluginCommand.class, "calc");
+        CallbackKey key = CallbackKey.of(PluginRequest.class, "calc");
+        CallbackKey same = CallbackKey.of(PluginRequest.class, "calc");
 
         // Then
         assertEquals(key, same);
@@ -57,8 +57,8 @@ class CommandKeyTest {
     @Test
     void equals_should_differ_when_route_key_differs() {
         // Given
-        CommandKey key = CommandKey.of(PluginCommand.class, "calc");
-        CommandKey other = CommandKey.of(PluginCommand.class, "other");
+        CallbackKey key = CallbackKey.of(PluginRequest.class, "calc");
+        CallbackKey other = CallbackKey.of(PluginRequest.class, "other");
 
         // Then
         assertNotEquals(key, other);
@@ -67,8 +67,8 @@ class CommandKeyTest {
     @Test
     void equals_should_differ_when_command_type_differs() {
         // Given
-        CommandKey key = CommandKey.of(PluginCommand.class, null);
-        CommandKey other = CommandKey.of(OtherCommand.class, null);
+        CallbackKey key = CallbackKey.of(PluginRequest.class, null);
+        CallbackKey other = CallbackKey.of(OtherCallback.class, null);
 
         // Then
         assertNotEquals(key, other);
@@ -77,7 +77,7 @@ class CommandKeyTest {
     @Test
     void equals_should_return_false_for_other_types() {
         // Given
-        CommandKey key = CommandKey.of(PluginCommand.class, "calc");
+        CallbackKey key = CallbackKey.of(PluginRequest.class, "calc");
 
         // Then
         assertFalse(key.equals("calc"));
@@ -87,8 +87,8 @@ class CommandKeyTest {
     @Test
     void toString_should_render_route_key_and_type_unique_marker() {
         // When / Then
-        assertEquals("PluginCommand#calc", CommandKey.of(PluginCommand.class, "calc").toString());
-        assertEquals("PluginCommand#<type-unique>", CommandKey.of(PluginCommand.class, null).toString());
+        assertEquals("PluginRequest#calc", CallbackKey.of(PluginRequest.class, "calc").toString());
+        assertEquals("PluginRequest#<type-unique>", CallbackKey.of(PluginRequest.class, null).toString());
     }
 
     /**
@@ -96,12 +96,12 @@ class CommandKeyTest {
      *
      * @author zcd
      */
-    private static final class OtherCommand extends Command<String> {
+    private static final class OtherCallback extends Callback<String> {
 
         /**
          * 构造测试命令。
          */
-        private OtherCommand() {
+        private OtherCallback() {
             super(String.class, null, 0L);
         }
 

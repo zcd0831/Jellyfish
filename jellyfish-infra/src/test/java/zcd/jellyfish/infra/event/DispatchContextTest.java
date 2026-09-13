@@ -1,8 +1,8 @@
 package zcd.jellyfish.infra.event;
 
 import org.junit.jupiter.api.Test;
-import zcd.jellyfish.api.event.command.CommandException;
-import zcd.jellyfish.api.event.command.PluginCommand;
+import zcd.jellyfish.api.event.callback.CallbackException;
+import zcd.jellyfish.api.event.callback.PluginRequest;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -35,13 +35,13 @@ class DispatchContextTest {
     void enter_and_exit_should_track_current_command() {
         // Given
         DispatchContext context = new DispatchContext(2, stats);
-        PluginCommand command = command("calc");
+        PluginRequest callback = callback("calc");
 
         // When
-        context.enter(command);
+        context.enter(callback);
 
         // Then
-        assertSame(command, context.current());
+        assertSame(callback, context.current());
 
         // When
         context.exit();
@@ -54,8 +54,8 @@ class DispatchContextTest {
     void exit_should_restore_outer_command_when_nested() {
         // Given
         DispatchContext context = new DispatchContext(2, stats);
-        PluginCommand outer = command("outer");
-        PluginCommand inner = command("inner");
+        PluginRequest outer = callback("outer");
+        PluginRequest inner = callback("inner");
         context.enter(outer);
         context.enter(inner);
 
@@ -70,15 +70,15 @@ class DispatchContextTest {
     void enter_should_reject_when_depth_exceeded() {
         // Given
         DispatchContext context = new DispatchContext(1, stats);
-        PluginCommand outer = command("outer");
+        PluginRequest outer = callback("outer");
         context.enter(outer);
 
         // When
-        CommandException exception = assertThrows(CommandException.class, () -> context.enter(command("inner")));
+        CallbackException exception = assertThrows(CallbackException.class, () -> context.enter(callback("inner")));
 
         // Then
-        assertEquals(CommandException.Code.NESTING_TOO_DEEP, exception.getCode());
-        assertEquals(1L, stats.getNestingRejectedCommands());
+        assertEquals(CallbackException.Code.NESTING_TOO_DEEP, exception.getCode());
+        assertEquals(1L, stats.getNestingRejectedCallbacks());
         assertSame(outer, context.current());
     }
 
@@ -97,7 +97,7 @@ class DispatchContextTest {
      * @param name 命令名
      * @return 插件命令
      */
-    private static PluginCommand command(String name) {
-        return new PluginCommand(name, Object.class, null);
+    private static PluginRequest callback(String name) {
+        return new PluginRequest(name, Object.class, null);
     }
 }

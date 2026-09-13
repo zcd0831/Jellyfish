@@ -39,11 +39,11 @@ class EventBusStatsTest {
         assertEquals(0L, stats.getDeadEventTypes());
         assertEquals(0L, stats.getUnmatchedNotifications());
         assertEquals(0L, stats.getSubscriberErrors());
-        assertEquals(0L, stats.getDispatchedCommands());
-        assertEquals(0L, stats.getFailedCommands());
-        assertEquals(0L, stats.getNoHandlerCommands());
-        assertEquals(0L, stats.getAmbiguousHandlerCommands());
-        assertEquals(0L, stats.getNestingRejectedCommands());
+        assertEquals(0L, stats.getDispatchedCallbacks());
+        assertEquals(0L, stats.getFailedCallbacks());
+        assertEquals(0L, stats.getNoHandlerCallbacks());
+        assertEquals(0L, stats.getAmbiguousHandlerCallbacks());
+        assertEquals(0L, stats.getNestingRejectedCallbacks());
         assertEquals(0L, stats.getPendingReplayed());
         assertEquals(0L, stats.getPendingOverflow());
     }
@@ -66,7 +66,7 @@ class EventBusStatsTest {
     void render_should_include_counter_values() {
         // Given
         stats.publishedEvents.add(7L);
-        stats.failedCommands.add(2L);
+        stats.failedCallbacks.add(2L);
 
         // When
         String rendered = stats.render();
@@ -74,7 +74,7 @@ class EventBusStatsTest {
         // Then
         assertTrue(rendered.startsWith("eventBusStats{"));
         assertTrue(rendered.contains("publishedEvents=7"));
-        assertTrue(rendered.contains("failedCommands=2"));
+        assertTrue(rendered.contains("failedCallbacks=2"));
     }
 
     @Test

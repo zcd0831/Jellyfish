@@ -2,7 +2,7 @@ package zcd.jellyfish.api.plugin;
 
 import zcd.jellyfish.api.event.EventPublisher;
 import zcd.jellyfish.api.event.EventRegistrar;
-import zcd.jellyfish.api.event.command.CommandRegistrar;
+import zcd.jellyfish.api.event.callback.CallbackRegistrar;
 
 /**
  * 插件能力上下文：插件与核心交互的唯一入口。
@@ -14,11 +14,11 @@ import zcd.jellyfish.api.event.command.CommandRegistrar;
 public interface PluginContext {
 
     /**
-     * 获取命令注册入口。
+     * 获取回调注册入口。
      *
-     * @return 命令注册入口
+     * @return 回调注册入口
      */
-    CommandRegistrar commands();
+    CallbackRegistrar callbacks();
 
     /**
      * 获取通知订阅入口。

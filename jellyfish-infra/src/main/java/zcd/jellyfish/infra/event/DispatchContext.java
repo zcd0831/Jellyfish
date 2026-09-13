@@ -1,26 +1,26 @@
 package zcd.jellyfish.infra.event;
 
-import zcd.jellyfish.api.event.command.Command;
-import zcd.jellyfish.api.event.command.CommandException;
+import zcd.jellyfish.api.event.callback.Callback;
+import zcd.jellyfish.api.event.callback.CallbackException;
 
 import java.util.ArrayDeque;
 import java.util.Deque;
 
 /**
- * 命令派发上下文：当前在途命令栈、嵌套深度与指标引用。
+ * 回调派发上下文：当前在途回调栈、嵌套深度与指标引用。
  * <p>
- * 同步命令在调用者线程内联执行，因此用 {@link ThreadLocal} 保存调用栈，
- * 让 {@link CommandDispatcher} 与 {@link EventDispatchExceptionHandler} 共享上下文，
- * 避免字段在多个协作对象之间互相穿透。栈结构保证「命令嵌套命令」时内层退出不会清掉外层的在途命令。
+ * 同步回调在调用者线程内联执行，因此用 {@link ThreadLocal} 保存调用栈，
+ * 让 {@link CallbackDispatcher} 与 {@link EventDispatchExceptionHandler} 共享上下文，
+ * 避免字段在多个协作对象之间互相穿透。栈结构保证「回调嵌套回调」时内层退出不会清掉外层的在途回调。
  *
  * @author zcd
  */
 final class DispatchContext {
 
-    /** 当前线程的在途命令栈。 */
-    private final ThreadLocal<Deque<Command<?>>> stack = ThreadLocal.withInitial(ArrayDeque::new);
+    /** 当前线程的在途回调栈。 */
+    private final ThreadLocal<Deque<Callback<?>>> stack = ThreadLocal.withInitial(ArrayDeque::new);
 
-    /** 命令嵌套深度上限。 */
+    /** 回调嵌套深度上限。 */
     private final int maxDepth;
 
     /** 指标引用。 */
@@ -38,36 +38,36 @@ final class DispatchContext {
     }
 
     /**
-     * 获取当前线程正在派发的命令。
+     * 获取当前线程正在派发的回调。
      *
-     * @return 当前在途命令，调用栈为空时返回 {@code null}
+     * @return 当前在途回调，调用栈为空时返回 {@code null}
      */
-    Command<?> current() {
-        Deque<Command<?>> current = stack.get();
+    Callback<?> current() {
+        Deque<Callback<?>> current = stack.get();
         return current.isEmpty() ? null : current.peek();
     }
 
     /**
-     * 进入一次命令派发。
+     * 进入一次回调派发。
      *
-     * @param command 命令对象
-     * @throws CommandException 嵌套深度超过上限时抛出
+     * @param callback 回调对象
+     * @throws CallbackException 嵌套深度超过上限时抛出
      */
-    void enter(Command<?> command) {
-        Deque<Command<?>> current = stack.get();
+    void enter(Callback<?> callback) {
+        Deque<Callback<?>> current = stack.get();
         if (current.size() >= maxDepth) {
-            stats.nestingRejectedCommands.increment();
-            throw new CommandException(CommandException.Code.NESTING_TOO_DEEP,
-                    "max depth " + maxDepth + " reached at " + command.getRouteKey());
+            stats.nestingRejectedCallbacks.increment();
+            throw new CallbackException(CallbackException.Code.NESTING_TOO_DEEP,
+                    "max depth " + maxDepth + " reached at " + callback.getRouteKey());
         }
-        current.push(command);
+        current.push(callback);
     }
 
     /**
-     * 退出一次命令派发。
+     * 退出一次回调派发。
      */
     void exit() {
-        Deque<Command<?>> current = stack.get();
+        Deque<Callback<?>> current = stack.get();
         if (!current.isEmpty()) {
             current.pop();
         }

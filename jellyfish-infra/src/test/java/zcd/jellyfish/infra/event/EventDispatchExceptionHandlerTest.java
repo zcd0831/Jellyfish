@@ -5,7 +5,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import zcd.jellyfish.api.event.command.PluginCommand;
+import zcd.jellyfish.api.event.callback.PluginRequest;
 import zcd.jellyfish.api.event.notification.ConfigWarningEvent;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -29,17 +29,17 @@ class EventDispatchExceptionHandlerTest {
         // Given
         EventBusStats stats = new EventBusStats();
         DispatchContext context = new DispatchContext(2, stats);
-        CommandReplies replies = new CommandReplies();
-        PluginCommand command = new PluginCommand("calculator", Object.class, null);
-        replies.open(command);
-        context.enter(command);
+        CallbackReplies replies = new CallbackReplies();
+        PluginRequest callback = new PluginRequest("calculator", Object.class, null);
+        replies.open(callback);
+        context.enter(callback);
         EventDispatchExceptionHandler handler = new EventDispatchExceptionHandler(context, replies);
 
         // When
         handler.handleException(new IllegalStateException("boom"), eventContext);
 
         // Then
-        assertThrows(IllegalStateException.class, () -> replies.await(command));
+        assertThrows(IllegalStateException.class, () -> replies.await(callback));
         assertEquals(0L, stats.getSubscriberErrors());
     }
 
@@ -48,7 +48,7 @@ class EventDispatchExceptionHandlerTest {
         // Given
         EventBusStats stats = new EventBusStats();
         DispatchContext context = new DispatchContext(2, stats);
-        EventDispatchExceptionHandler handler = new EventDispatchExceptionHandler(context, new CommandReplies());
+        EventDispatchExceptionHandler handler = new EventDispatchExceptionHandler(context, new CallbackReplies());
         when(eventContext.getEvent()).thenReturn(new ConfigWarningEvent("path", "message"));
 
         // When

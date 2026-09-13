@@ -1,4 +1,4 @@
-package zcd.jellyfish.api.event.command;
+package zcd.jellyfish.api.event.callback;
 
 /**
  * 工具调用结果。

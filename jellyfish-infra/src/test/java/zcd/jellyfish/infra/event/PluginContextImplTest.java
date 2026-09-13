@@ -4,10 +4,11 @@ import org.junit.jupiter.api.Test;
 import zcd.jellyfish.api.event.EventPublisher;
 import zcd.jellyfish.api.event.JellyfishEvent;
 import zcd.jellyfish.api.event.RegisterOptions;
-import zcd.jellyfish.api.event.command.CommandHandler;
-import zcd.jellyfish.api.event.command.PluginCommand;
+import zcd.jellyfish.api.event.callback.CallbackHandler;
+import zcd.jellyfish.api.event.callback.PluginRequest;
 import zcd.jellyfish.api.event.notification.ConfigWarningEvent;
-import zcd.jellyfish.infra.event.command.CommandRegistry;
+import zcd.jellyfish.infra.event.callback.CallbackRegistry;
+import zcd.jellyfish.infra.event.callback.ExtensionPointRegistry;
 import zcd.jellyfish.infra.event.notification.EventDispatchResult;
 import zcd.jellyfish.infra.event.notification.EventRegistry;
 
@@ -21,15 +22,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * {@link PluginContextImpl} 的单元测试：验证能力入口与注册委托都绑定 pluginId。
  * <p>
- * 这里使用真实注册表而非 mock，因为 {@link CommandRegistry} 与 {@link EventRegistry} 均为 final，
+ * 这里使用真实注册表而非 mock，因为 {@link CallbackRegistry} 与 {@link EventRegistry} 均为 final，
  * 且本类的职责只是把 {@code pluginId} 作为 owner 透传下去。
  *
  * @author zcd
  */
 class PluginContextImplTest {
 
-    /** 命令注册表。 */
-    private final CommandRegistry commandRegistry = new CommandRegistry();
+    /** 回调注册表。 */
+    private final CallbackRegistry callbackRegistry = new CallbackRegistry(ExtensionPointRegistry.withBuiltIns());
 
     /** 通知注册表。 */
     private final EventRegistry eventRegistry = new EventRegistry();
@@ -41,13 +42,13 @@ class PluginContextImplTest {
     private final EventPublisher publisher = published::add;
 
     /** 被测插件上下文。 */
-    private final PluginContextImpl context = new PluginContextImpl("plugin-a", commandRegistry, eventRegistry,
+    private final PluginContextImpl context = new PluginContextImpl("plugin-a", callbackRegistry, eventRegistry,
             publisher);
 
     @Test
-    void commands_and_events_should_return_self_and_publisher_should_return_injected() {
+    void callbacks_and_events_should_return_self_and_publisher_should_return_injected() {
         // Then
-        assertSame(context, context.commands());
+        assertSame(context, context.callbacks());
         assertSame(context, context.events());
         assertSame(publisher, context.publisher());
         assertEquals("plugin-a", context.getPluginId());
@@ -55,33 +56,33 @@ class PluginContextImplTest {
 
     @Test
     @SuppressWarnings("unchecked")
-    void register_named_command_should_register_under_plugin_owner() throws Exception {
+    void register_named_request_should_register_under_plugin_owner() throws Exception {
         // Given
         List<String> handled = new ArrayList<>();
-        context.register("calculator", command -> {
-            handled.add(command.getName());
+        context.register("calculator", callback -> {
+            handled.add(callback.getName());
             return "42";
         }, RegisterOptions.DEFAULT);
 
         // When
-        CommandHandler<?, ?> handler = commandRegistry.resolve(new PluginCommand("calculator", Object.class, null));
-        Object result = ((CommandHandler<PluginCommand, Object>) handler)
-                .handle(new PluginCommand("calculator", Object.class, null));
+        CallbackHandler<?, ?> handler = callbackRegistry.resolveUnique(new PluginRequest("calculator", Object.class, null));
+        Object result = ((CallbackHandler<PluginRequest, Object>) handler)
+                .handle(new PluginRequest("calculator", Object.class, null));
 
         // Then
         assertEquals("42", result);
         assertEquals(1, handled.size());
-        assertTrue(commandRegistry.render().contains("plugin-a"));
+        assertTrue(callbackRegistry.render().contains("plugin-a"));
     }
 
     @Test
-    void register_typed_command_should_register_under_plugin_owner() {
+    void register_typed_request_should_register_under_plugin_owner() {
         // Given
-        CommandHandler<PluginCommand, Object> handler = command -> "typed";
-        context.register(PluginCommand.class, "calc", handler, RegisterOptions.DEFAULT);
+        CallbackHandler<PluginRequest, Object> handler = callback -> "typed";
+        context.register(PluginRequest.class, "calc", handler, RegisterOptions.DEFAULT);
 
         // When
-        CommandHandler<?, ?> resolved = commandRegistry.resolve(new PluginCommand("calc", Object.class, null));
+        CallbackHandler<?, ?> resolved = callbackRegistry.resolveUnique(new PluginRequest("calc", Object.class, null));
 
         // Then
         assertSame(handler, resolved);

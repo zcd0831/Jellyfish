@@ -28,20 +28,20 @@ public final class EventBusStats {
     /** 订阅者异常数量。 */
     final LongAdder subscriberErrors = new LongAdder();
 
-    /** 已派发的命令数量。 */
-    final LongAdder dispatchedCommands = new LongAdder();
+    /** 已派发的回调数量。 */
+    final LongAdder dispatchedCallbacks = new LongAdder();
 
-    /** 失败的命令数量。 */
-    final LongAdder failedCommands = new LongAdder();
+    /** 失败的回调数量。 */
+    final LongAdder failedCallbacks = new LongAdder();
 
-    /** 无处理器的命令数量。 */
-    final LongAdder noHandlerCommands = new LongAdder();
+    /** 无处理器的回调数量。 */
+    final LongAdder noHandlerCallbacks = new LongAdder();
 
-    /** 处理器不唯一的命令数量。 */
-    final LongAdder ambiguousHandlerCommands = new LongAdder();
+    /** 处理器不唯一的回调数量。 */
+    final LongAdder ambiguousHandlerCallbacks = new LongAdder();
 
-    /** 因嵌套过深被拒绝的命令数量。 */
-    final LongAdder nestingRejectedCommands = new LongAdder();
+    /** 因嵌套过深被拒绝的回调数量。 */
+    final LongAdder nestingRejectedCallbacks = new LongAdder();
 
     /** 启动期缓冲回放的通知数量。 */
     final LongAdder pendingReplayed = new LongAdder();
@@ -107,48 +107,48 @@ public final class EventBusStats {
     }
 
     /**
-     * 获取已派发的命令数量。
+     * 获取已派发的回调数量。
      *
-     * @return 命令数量
+     * @return 回调数量
      */
-    public long getDispatchedCommands() {
-        return dispatchedCommands.sum();
+    public long getDispatchedCallbacks() {
+        return dispatchedCallbacks.sum();
     }
 
     /**
-     * 获取失败的命令数量。
+     * 获取失败的回调数量。
      *
-     * @return 命令数量
+     * @return 回调数量
      */
-    public long getFailedCommands() {
-        return failedCommands.sum();
+    public long getFailedCallbacks() {
+        return failedCallbacks.sum();
     }
 
     /**
-     * 获取无处理器的命令数量。
+     * 获取无处理器的回调数量。
      *
-     * @return 命令数量
+     * @return 回调数量
      */
-    public long getNoHandlerCommands() {
-        return noHandlerCommands.sum();
+    public long getNoHandlerCallbacks() {
+        return noHandlerCallbacks.sum();
     }
 
     /**
-     * 获取处理器不唯一的命令数量。
+     * 获取处理器不唯一的回调数量。
      *
-     * @return 命令数量
+     * @return 回调数量
      */
-    public long getAmbiguousHandlerCommands() {
-        return ambiguousHandlerCommands.sum();
+    public long getAmbiguousHandlerCallbacks() {
+        return ambiguousHandlerCallbacks.sum();
     }
 
     /**
-     * 获取因嵌套过深被拒绝的命令数量。
+     * 获取因嵌套过深被拒绝的回调数量。
      *
-     * @return 命令数量
+     * @return 回调数量
      */
-    public long getNestingRejectedCommands() {
-        return nestingRejectedCommands.sum();
+    public long getNestingRejectedCallbacks() {
+        return nestingRejectedCallbacks.sum();
     }
 
     /**
@@ -201,11 +201,11 @@ public final class EventBusStats {
                 + ", deadEventTypes=" + getDeadEventTypes()
                 + ", unmatchedNotifications=" + getUnmatchedNotifications()
                 + ", subscriberErrors=" + getSubscriberErrors()
-                + ", dispatchedCommands=" + getDispatchedCommands()
-                + ", failedCommands=" + getFailedCommands()
-                + ", noHandlerCommands=" + getNoHandlerCommands()
-                + ", ambiguousHandlerCommands=" + getAmbiguousHandlerCommands()
-                + ", nestingRejectedCommands=" + getNestingRejectedCommands()
+                + ", dispatchedCallbacks=" + getDispatchedCallbacks()
+                + ", failedCallbacks=" + getFailedCallbacks()
+                + ", noHandlerCallbacks=" + getNoHandlerCallbacks()
+                + ", ambiguousHandlerCallbacks=" + getAmbiguousHandlerCallbacks()
+                + ", nestingRejectedCallbacks=" + getNestingRejectedCallbacks()
                 + ", pendingReplayed=" + getPendingReplayed()
                 + ", pendingOverflow=" + getPendingOverflow()
                 + ", activeThreads=" + getActiveThreads()

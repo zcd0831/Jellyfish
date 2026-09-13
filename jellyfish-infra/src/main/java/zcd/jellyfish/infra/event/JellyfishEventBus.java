@@ -10,10 +10,11 @@ import zcd.jellyfish.api.event.EventPublisher;
 import zcd.jellyfish.api.event.JellyfishEvent;
 import zcd.jellyfish.api.event.RegisterOptions;
 import zcd.jellyfish.api.event.Subscription;
-import zcd.jellyfish.api.event.command.Command;
-import zcd.jellyfish.api.event.command.CommandHandler;
+import zcd.jellyfish.api.event.callback.Callback;
+import zcd.jellyfish.api.event.callback.CallbackHandler;
 import zcd.jellyfish.api.plugin.PluginContext;
-import zcd.jellyfish.infra.event.command.CommandRegistry;
+import zcd.jellyfish.infra.event.callback.CallbackRegistry;
+import zcd.jellyfish.infra.event.callback.ExtensionPointRegistry;
 import zcd.jellyfish.infra.event.notification.EventRegistry;
 
 import java.lang.reflect.InvocationTargetException;
@@ -38,15 +39,19 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * 事件总线门面：同步命令通道 + 异步通知通道。
+ * 交互枢纽门面：内核与插件之间的唯一交互入口，下辖回调通道与事件通道。
  * <p>
- * 内部持有单个 Guava {@code EventBus} 作为唯一注册表，同步 / 异步的差异只在发布端体现：
- * {@link #dispatch(Command)} 直接内联 {@code post}，{@link #publish(JellyfishEvent)} 先提交线程池再 {@code post}。
- * Guava 的订阅者只有门面自己的 {@link CommandDispatcher} / {@link EventDispatcher}，插件与核心组件一律只注册到
- * Level 2 细粒度注册表。
+ * 不再自称「事件总线」：加上泛化后的回调通道，它同时承载三张表（回调、事件、事件注册表），
+ * 是内核主动回头找插件（扩展点）与插件单向观察内核（事件）的共同落点。
  * <p>
- * 生命周期：{@link #start()} 之前发布的异步通知进入缓冲队列，{@code start()} 时回放；命令必须先 {@code start()}，
- * 因为命令必须有处理器、不能缓冲。
+ * 内部持有单个 Guava {@code EventBus} 作为唯一注册表，两条通道的差异只在发布端体现：
+ * {@link #invoke(Callback)} / {@link #invokeAll(Callback)} 直接内联 {@code post}，
+ * {@link #publish(JellyfishEvent)} 先提交线程池再 {@code post}。
+ * Guava 的订阅者只有门面自己的 {@link CallbackDispatcher} / {@link EventDispatcher}，
+ * 插件与核心组件一律只注册到 Level 2 细粒度注册表。
+ * <p>
+ * 生命周期：{@link #start()} 之前发布的异步通知进入缓冲队列，{@code start()} 时回放；回调必须先 {@code start()}，
+ * 因为回调必须有处理器、不能缓冲。
  *
  * @author zcd
  */
@@ -64,11 +69,14 @@ public final class JellyfishEventBus implements EventPublisher, AutoCloseable {
     /** 通知通道线程池。 */
     private final Executor notifier;
 
-    /** 细粒度命令注册表。 */
-    private final CommandRegistry commandRegistry = new CommandRegistry();
+    /** 扩展点定义注册表，承载形状预设并驱动回调通道语义。 */
+    private final ExtensionPointRegistry extensionPointRegistry = ExtensionPointRegistry.withBuiltIns();
 
-    /** 命令应答槽。 */
-    private final CommandReplies commandReplies = new CommandReplies();
+    /** 细粒度回调注册表。 */
+    private final CallbackRegistry callbackRegistry;
+
+    /** 回调应答槽。 */
+    private final CallbackReplies callbackReplies = new CallbackReplies();
 
     /** 细粒度通知注册表。 */
     private final EventRegistry eventRegistry = new EventRegistry();
@@ -76,11 +84,11 @@ public final class JellyfishEventBus implements EventPublisher, AutoCloseable {
     /** 指标。 */
     private final EventBusStats stats;
 
-    /** 命令派发上下文。 */
+    /** 回调派发上下文。 */
     private final DispatchContext dispatchContext;
 
-    /** 命令分发器，Guava 订阅者之一。 */
-    private final CommandDispatcher commandDispatcher;
+    /** 回调分发器，Guava 订阅者之一。 */
+    private final CallbackDispatcher callbackDispatcher;
 
     /** 通知分发器，Guava 订阅者之一。 */
     private final EventDispatcher eventDispatcher;
@@ -101,7 +109,7 @@ public final class JellyfishEventBus implements EventPublisher, AutoCloseable {
     private volatile boolean closed;
 
     /**
-     * 以默认线程池构造事件总线。
+     * 以默认线程池构造交互枢纽。
      *
      * @param options 总线参数
      */
@@ -110,7 +118,7 @@ public final class JellyfishEventBus implements EventPublisher, AutoCloseable {
     }
 
     /**
-     * 以自定义派发器构造事件总线，便于测试注入同步 Executor。
+     * 以自定义派发器构造交互枢纽，便于测试注入同步 Executor。
      *
      * @param options  总线参数
      * @param notifier 通知派发器
@@ -120,7 +128,7 @@ public final class JellyfishEventBus implements EventPublisher, AutoCloseable {
     }
 
     /**
-     * 构造事件总线。
+     * 构造交互枢纽。
      *
      * @param options  总线参数
      * @param stats    指标
@@ -133,34 +141,57 @@ public final class JellyfishEventBus implements EventPublisher, AutoCloseable {
         if (this.notifier instanceof ThreadPoolExecutor) {
             stats.bindExecutor((ThreadPoolExecutor) this.notifier);
         }
-        this.dispatchContext = new DispatchContext(options.getMaxCommandDepth(), stats);
-        this.commandDispatcher = new CommandDispatcher(commandRegistry, commandReplies, stats);
+        this.callbackRegistry = new CallbackRegistry(extensionPointRegistry);
+        this.dispatchContext = new DispatchContext(options.getMaxCallbackDepth(), stats);
+        this.callbackDispatcher = new CallbackDispatcher(callbackRegistry, callbackReplies, stats);
         this.eventDispatcher = new EventDispatcher(eventRegistry, stats);
-        this.delegate = new EventBus(new EventDispatchExceptionHandler(dispatchContext, commandReplies));
-        this.delegate.register(commandDispatcher);
+        this.delegate = new EventBus(new EventDispatchExceptionHandler(dispatchContext, callbackReplies));
+        this.delegate.register(callbackDispatcher);
         this.delegate.register(eventDispatcher);
     }
 
     /**
-     * 同步派发命令并返回结果。
+     * 同步调用回调并返回单个结果。
      * <p>
-     * 命令在调用者线程内联执行，因此同一线程内天然有序；处理器异常原样回传给调用者。
+     * 回调在调用者线程内联执行，因此同一线程内天然有序；处理器异常原样回传给调用者。
      *
-     * @param command 命令对象
-     * @param <R>     结果类型
-     * @return 命令结果
-     * @throws JellyfishException 总线未启动或命令为空时抛出
+     * @param callback 回调对象
+     * @param <R>      结果类型
+     * @return 回调结果
+     * @throws JellyfishException 总线未启动或回调为空时抛出
      */
-    public <R> R dispatch(Command<R> command) {
-        Objects.requireNonNull(command, "command must not be null");
+    public <R> R invoke(Callback<R> callback) {
+        Objects.requireNonNull(callback, "callback must not be null");
         ensureStarted();
-        dispatchContext.enter(command);
-        commandReplies.open(command);
+        dispatchContext.enter(callback);
+        callbackReplies.open(callback);
         try {
-            delegate.post(command);
-            return commandReplies.await(command);
+            delegate.post(callback);
+            return callbackReplies.await(callback);
         } finally {
-            commandReplies.close(command);
+            callbackReplies.close(callback);
+            dispatchContext.exit();
+        }
+    }
+
+    /**
+     * 同步调用回调并收集全部成功结果，按处理器调用顺序排列。
+     *
+     * @param callback 回调对象
+     * @param <R>      结果类型
+     * @return 结果列表，可能为空
+     * @throws JellyfishException 总线未启动或回调为空时抛出
+     */
+    public <R> List<R> invokeAll(Callback<R> callback) {
+        Objects.requireNonNull(callback, "callback must not be null");
+        ensureStarted();
+        dispatchContext.enter(callback);
+        callbackReplies.open(callback);
+        try {
+            delegate.post(callback);
+            return callbackReplies.awaitAll(callback);
+        } finally {
+            callbackReplies.close(callback);
             dispatchContext.exit();
         }
     }
@@ -200,8 +231,8 @@ public final class JellyfishEventBus implements EventPublisher, AutoCloseable {
     /**
      * 注册门面内部订阅者（仅核心组件自用，插件请走 {@link #pluginContext(String)}）。
      * <p>
-     * 扫描对象的 {@code @Subscribe} 方法并分类注册到 Level 2：具体命令类型视为命令处理器，
-     * 通知类型视为订阅者。禁止 {@code Object} 订阅者（会吞掉死事件）与命令基类订阅（会收下所有子类命令）。
+     * 扫描对象的 {@code @Subscribe} 方法并分类注册到 Level 2：具体回调类型视为回调处理器，
+     * 通知类型视为订阅者。禁止 {@code Object} 订阅者（会吞掉死事件）与回调基类订阅（会收下所有子类回调）。
      *
      * @param subscriber 订阅者对象
      * @return 注册句柄，关闭后解除本次注册
@@ -216,12 +247,12 @@ public final class JellyfishEventBus implements EventPublisher, AutoCloseable {
             if (parameterType == Object.class) {
                 throw new JellyfishException("Object subscriber is forbidden: " + method);
             }
-            if (Command.class.isAssignableFrom(parameterType)) {
-                handles.add(registerCommandSubscriber(owner, subscriber, method, parameterType));
+            if (Callback.class.isAssignableFrom(parameterType)) {
+                handles.add(registerCallbackSubscriber(owner, subscriber, method, parameterType));
             } else if (JellyfishEvent.class.isAssignableFrom(parameterType)) {
                 handles.add(registerEventSubscriber(owner, subscriber, method, parameterType));
             } else {
-                throw new JellyfishException("subscriber parameter must be a JellyfishEvent or a Command: " + method);
+                throw new JellyfishException("subscriber parameter must be a JellyfishEvent or a Callback: " + method);
             }
         }
         return new CompositeSubscription(handles);
@@ -247,7 +278,7 @@ public final class JellyfishEventBus implements EventPublisher, AutoCloseable {
     }
 
     /**
-     * 优雅关闭：停止接收、排空线程池、清理两层注册表。
+     * 优雅关闭：停止接收、排空线程池、清理两层注册表与扩展点定义。
      */
     @Override
     public void close() {
@@ -260,9 +291,10 @@ public final class JellyfishEventBus implements EventPublisher, AutoCloseable {
             pending.clear();
         }
         shutdownNotifier();
-        commandRegistry.clear();
+        callbackRegistry.clear();
         eventRegistry.clear();
-        LOG.info("事件总线已关闭: droppedEvents={}", stats.getDroppedEvents());
+        extensionPointRegistry.clear();
+        LOG.info("交互枢纽已关闭: droppedEvents={}", stats.getDroppedEvents());
     }
 
     /**
@@ -280,7 +312,7 @@ public final class JellyfishEventBus implements EventPublisher, AutoCloseable {
      * @return 诊断快照
      */
     public RegistrySnapshot snapshot() {
-        return RegistrySnapshot.of(commandRegistry, eventRegistry);
+        return RegistrySnapshot.of(callbackRegistry, eventRegistry, extensionPointRegistry);
     }
 
     /**
@@ -294,7 +326,7 @@ public final class JellyfishEventBus implements EventPublisher, AutoCloseable {
         if (pluginId == null || pluginId.trim().isEmpty()) {
             throw new JellyfishException("pluginId must not be blank");
         }
-        return new PluginContextImpl(pluginId, commandRegistry, eventRegistry, this);
+        return new PluginContextImpl(pluginId, callbackRegistry, eventRegistry, this);
     }
 
     /**
@@ -322,7 +354,7 @@ public final class JellyfishEventBus implements EventPublisher, AutoCloseable {
      */
     private void ensureStarted() {
         if (!started) {
-            throw new JellyfishException("event bus is not started, call start() before dispatch");
+            throw new JellyfishException("event bus is not started, call start() before invoke");
         }
     }
 
@@ -417,23 +449,23 @@ public final class JellyfishEventBus implements EventPublisher, AutoCloseable {
     }
 
     /**
-     * 注册带注解的命令订阅者。
+     * 注册带注解的回调订阅者。
      *
-     * @param owner       来源
-     * @param subscriber  订阅者对象
-     * @param method      订阅方法
-     * @param commandType 命令参数类型
+     * @param owner        来源
+     * @param subscriber   订阅者对象
+     * @param method       订阅方法
+     * @param callbackType 回调参数类型
      * @return 注册句柄
      */
-    private Subscription registerCommandSubscriber(String owner, Object subscriber, Method method, Class<?> commandType) {
-        if (Modifier.isAbstract(commandType.getModifiers())) {
-            throw new JellyfishException("abstract command subscriber is forbidden: " + method);
+    private Subscription registerCallbackSubscriber(String owner, Object subscriber, Method method, Class<?> callbackType) {
+        if (Modifier.isAbstract(callbackType.getModifiers())) {
+            throw new JellyfishException("abstract callback subscriber is forbidden: " + method);
         }
         method.setAccessible(true);
-        CommandHandler<Command<Object>, Object> handler = command -> invokeCommandSubscriber(subscriber, method, command);
+        CallbackHandler<Callback<Object>, Object> handler = callback -> invokeCallbackSubscriber(subscriber, method, callback);
         @SuppressWarnings("unchecked")
-        Class<Command<Object>> type = (Class<Command<Object>>) commandType;
-        return commandRegistry.register(owner, false, type, null, handler, RegisterOptions.DEFAULT);
+        Class<Callback<Object>> type = (Class<Callback<Object>>) callbackType;
+        return callbackRegistry.register(owner, false, type, null, handler, RegisterOptions.DEFAULT);
     }
 
     /**
@@ -454,17 +486,17 @@ public final class JellyfishEventBus implements EventPublisher, AutoCloseable {
     }
 
     /**
-     * 反射调用命令订阅方法，解包 InvocationTargetException 以保留原始异常。
+     * 反射调用回调订阅方法，解包 InvocationTargetException 以保留原始异常。
      *
      * @param subscriber 订阅者对象
      * @param method     订阅方法
-     * @param command    命令对象
-     * @return 命令结果
+     * @param callback   回调对象
+     * @return 回调结果
      * @throws Exception 订阅方法抛出的原始异常
      */
-    private static Object invokeCommandSubscriber(Object subscriber, Method method, Command<?> command) throws Exception {
+    private static Object invokeCallbackSubscriber(Object subscriber, Method method, Callback<?> callback) throws Exception {
         try {
-            return method.invoke(subscriber, command);
+            return method.invoke(subscriber, callback);
         } catch (InvocationTargetException e) {
             Throwable cause = e.getCause();
             if (cause instanceof Exception) {

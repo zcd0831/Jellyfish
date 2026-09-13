@@ -1,33 +1,37 @@
-package zcd.jellyfish.infra.event.command;
+package zcd.jellyfish.infra.event.callback;
 
-import zcd.jellyfish.api.event.command.CommandHandler;
+import zcd.jellyfish.api.event.callback.CallbackHandler;
 
 /**
- * 命令注册项：处理器 + 来源 + 路由信息 + 注册序号。
+ * 回调注册项：处理器 + 来源 + 路由信息 + 注册序号 + 调用顺序。
  * <p>
- * {@code sequence} 用于派发时稳定排序，保证候选顺序与注册顺序一致。
+ * {@code sequence} 用于保证候选顺序与注册顺序一致；{@code order} 由插件声明，
+ * 有序形状按 {@code order} 升序调用，同序时回退到 {@code sequence}。
  *
  * @author zcd
  */
-final class CommandRegistration {
+final class CallbackRegistration {
 
     /** 来源（内置组件名或 pluginId），用于诊断与按来源回收。 */
     private final String owner;
 
-    /** 命令类型。 */
-    private final Class<?> commandType;
+    /** 回调类型。 */
+    private final Class<?> callbackType;
 
     /** 路由键，{@code null} 表示类型唯一。 */
     private final String routeKey;
 
-    /** 命令处理器。 */
-    private final CommandHandler<?, ?> handler;
+    /** 回调处理器。 */
+    private final CallbackHandler<?, ?> handler;
 
     /** 是否来自插件。 */
     private final boolean fromPlugin;
 
     /** 注册序号，单调递增。 */
     private final long sequence;
+
+    /** 调用顺序，仅对有序形状有意义。 */
+    private final int order;
 
     /** 被本次注册覆盖掉的来源，未发生覆盖时为 {@code null}。 */
     private final String overriddenOwner;
@@ -36,21 +40,23 @@ final class CommandRegistration {
      * 构造注册项。
      *
      * @param owner           来源
-     * @param commandType     命令类型
+     * @param callbackType    回调类型
      * @param routeKey        路由键，可为 {@code null}
-     * @param handler         命令处理器
+     * @param handler         回调处理器
      * @param fromPlugin      是否来自插件
      * @param sequence        注册序号
+     * @param order           调用顺序
      * @param overriddenOwner 被覆盖的来源，可为 {@code null}
      */
-    CommandRegistration(String owner, Class<?> commandType, String routeKey, CommandHandler<?, ?> handler,
-                        boolean fromPlugin, long sequence, String overriddenOwner) {
+    CallbackRegistration(String owner, Class<?> callbackType, String routeKey, CallbackHandler<?, ?> handler,
+                         boolean fromPlugin, long sequence, int order, String overriddenOwner) {
         this.owner = owner;
-        this.commandType = commandType;
+        this.callbackType = callbackType;
         this.routeKey = routeKey;
         this.handler = handler;
         this.fromPlugin = fromPlugin;
         this.sequence = sequence;
+        this.order = order;
         this.overriddenOwner = overriddenOwner;
     }
 
@@ -64,12 +70,12 @@ final class CommandRegistration {
     }
 
     /**
-     * 获取命令类型。
+     * 获取回调类型。
      *
-     * @return 命令类型
+     * @return 回调类型
      */
-    Class<?> getCommandType() {
-        return commandType;
+    Class<?> getCallbackType() {
+        return callbackType;
     }
 
     /**
@@ -82,11 +88,11 @@ final class CommandRegistration {
     }
 
     /**
-     * 获取命令处理器。
+     * 获取回调处理器。
      *
-     * @return 命令处理器
+     * @return 回调处理器
      */
-    CommandHandler<?, ?> getHandler() {
+    CallbackHandler<?, ?> getHandler() {
         return handler;
     }
 
@@ -106,6 +112,15 @@ final class CommandRegistration {
      */
     long getSequence() {
         return sequence;
+    }
+
+    /**
+     * 获取调用顺序。
+     *
+     * @return 调用顺序
+     */
+    int getOrder() {
+        return order;
     }
 
     /**

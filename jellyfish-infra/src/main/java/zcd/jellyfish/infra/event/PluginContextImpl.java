@@ -5,13 +5,13 @@ import zcd.jellyfish.api.event.EventRegistrar;
 import zcd.jellyfish.api.event.JellyfishEvent;
 import zcd.jellyfish.api.event.RegisterOptions;
 import zcd.jellyfish.api.event.Subscription;
-import zcd.jellyfish.api.event.command.Command;
-import zcd.jellyfish.api.event.command.CommandHandler;
-import zcd.jellyfish.api.event.command.CommandRegistrar;
-import zcd.jellyfish.api.event.command.PluginCommand;
-import zcd.jellyfish.api.event.command.PluginCommandHandler;
+import zcd.jellyfish.api.event.callback.Callback;
+import zcd.jellyfish.api.event.callback.CallbackHandler;
+import zcd.jellyfish.api.event.callback.CallbackRegistrar;
+import zcd.jellyfish.api.event.callback.PluginRequest;
+import zcd.jellyfish.api.event.callback.PluginRequestHandler;
 import zcd.jellyfish.api.plugin.PluginContext;
-import zcd.jellyfish.infra.event.command.CommandRegistry;
+import zcd.jellyfish.infra.event.callback.CallbackRegistry;
 import zcd.jellyfish.infra.event.notification.EventRegistry;
 
 import java.util.function.Consumer;
@@ -25,13 +25,13 @@ import java.util.function.Predicate;
  *
  * @author zcd
  */
-public final class PluginContextImpl implements PluginContext, CommandRegistrar, EventRegistrar {
+public final class PluginContextImpl implements PluginContext, CallbackRegistrar, EventRegistrar {
 
     /** 插件标识，作为所有注册项的来源。 */
     private final String pluginId;
 
-    /** 细粒度命令注册表。 */
-    private final CommandRegistry commandRegistry;
+    /** 细粒度回调注册表。 */
+    private final CallbackRegistry callbackRegistry;
 
     /** 细粒度通知注册表。 */
     private final EventRegistry eventRegistry;
@@ -43,20 +43,20 @@ public final class PluginContextImpl implements PluginContext, CommandRegistrar,
      * 构造插件上下文。
      *
      * @param pluginId        插件标识
-     * @param commandRegistry 命令注册表
+     * @param callbackRegistry 回调注册表
      * @param eventRegistry   通知注册表
      * @param publisher       通知发布入口
      */
-    PluginContextImpl(String pluginId, CommandRegistry commandRegistry,
+    PluginContextImpl(String pluginId, CallbackRegistry callbackRegistry,
                       EventRegistry eventRegistry, EventPublisher publisher) {
         this.pluginId = pluginId;
-        this.commandRegistry = commandRegistry;
+        this.callbackRegistry = callbackRegistry;
         this.eventRegistry = eventRegistry;
         this.publisher = publisher;
     }
 
     @Override
-    public CommandRegistrar commands() {
+    public CallbackRegistrar callbacks() {
         return this;
     }
 
@@ -71,15 +71,15 @@ public final class PluginContextImpl implements PluginContext, CommandRegistrar,
     }
 
     @Override
-    public Subscription register(String name, PluginCommandHandler handler, RegisterOptions options) {
-        CommandHandler<PluginCommand, Object> adapter = handler::handle;
-        return commandRegistry.register(pluginId, true, PluginCommand.class, name, adapter, options);
+    public Subscription register(String name, PluginRequestHandler handler, RegisterOptions options) {
+        CallbackHandler<PluginRequest, Object> adapter = handler::handle;
+        return callbackRegistry.register(pluginId, true, PluginRequest.class, name, adapter, options);
     }
 
     @Override
-    public <C extends Command<R>, R> Subscription register(Class<C> commandType, String routeKey,
-                                                           CommandHandler<C, R> handler, RegisterOptions options) {
-        return commandRegistry.register(pluginId, true, commandType, routeKey, handler, options);
+    public <C extends Callback<R>, R> Subscription register(Class<C> callbackType, String routeKey,
+                                                           CallbackHandler<C, R> handler, RegisterOptions options) {
+        return callbackRegistry.register(pluginId, true, callbackType, routeKey, handler, options);
     }
 
     @Override

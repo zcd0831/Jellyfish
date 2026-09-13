@@ -1,4 +1,4 @@
-package zcd.jellyfish.api.event.command;
+package zcd.jellyfish.api.event.callback;
 
 import org.junit.jupiter.api.Test;
 

@@ -3,7 +3,7 @@ package zcd.jellyfish.infra.event;
 import zcd.jellyfish.api.JellyfishException;
 
 /**
- * 事件总线参数：线程池、启动期缓冲、命令嵌套深度与关闭等待时间。
+ * 事件总线参数：线程池、启动期缓冲、回调嵌套深度与关闭等待时间。
  * <p>
  * v1 使用代码默认值，后续再补 {@code event} 双源配置段（{@code EventBusSettings}）。
  *
@@ -26,8 +26,8 @@ public final class EventBusOptions {
     /** 默认启动期缓冲容量。 */
     private static final int DEFAULT_PENDING_CAPACITY = 1024;
 
-    /** 默认命令嵌套深度上限。 */
-    private static final int DEFAULT_MAX_COMMAND_DEPTH = 16;
+    /** 默认回调嵌套深度上限。 */
+    private static final int DEFAULT_MAX_CALLBACK_DEPTH = 16;
 
     /** 默认关闭等待时间（毫秒）。 */
     private static final long DEFAULT_SHUTDOWN_AWAIT_MILLIS = 5000L;
@@ -47,8 +47,8 @@ public final class EventBusOptions {
     /** 启动期缓冲容量。 */
     private final int pendingCapacity;
 
-    /** 命令嵌套深度上限。 */
-    private final int maxCommandDepth;
+    /** 回调嵌套深度上限。 */
+    private final int maxCallbackDepth;
 
     /** 关闭时等待线程池排空的毫秒数。 */
     private final long shutdownAwaitMillis;
@@ -64,7 +64,7 @@ public final class EventBusOptions {
         this.keepAliveSeconds = builder.keepAliveSeconds;
         this.queueCapacity = builder.queueCapacity;
         this.pendingCapacity = builder.pendingCapacity;
-        this.maxCommandDepth = builder.maxCommandDepth;
+        this.maxCallbackDepth = builder.maxCallbackDepth;
         this.shutdownAwaitMillis = builder.shutdownAwaitMillis;
     }
 
@@ -132,12 +132,12 @@ public final class EventBusOptions {
     }
 
     /**
-     * 获取命令嵌套深度上限。
+     * 获取回调嵌套深度上限。
      *
      * @return 深度上限
      */
-    public int getMaxCommandDepth() {
-        return maxCommandDepth;
+    public int getMaxCallbackDepth() {
+        return maxCallbackDepth;
     }
 
     /**
@@ -171,8 +171,8 @@ public final class EventBusOptions {
         /** 启动期缓冲容量。 */
         private int pendingCapacity = DEFAULT_PENDING_CAPACITY;
 
-        /** 命令嵌套深度上限。 */
-        private int maxCommandDepth = DEFAULT_MAX_COMMAND_DEPTH;
+        /** 回调嵌套深度上限。 */
+        private int maxCallbackDepth = DEFAULT_MAX_CALLBACK_DEPTH;
 
         /** 关闭等待时间（毫秒）。 */
         private long shutdownAwaitMillis = DEFAULT_SHUTDOWN_AWAIT_MILLIS;
@@ -233,13 +233,13 @@ public final class EventBusOptions {
         }
 
         /**
-         * 设置命令嵌套深度上限。
+         * 设置回调嵌套深度上限。
          *
-         * @param maxCommandDepth 深度上限，必须大于 0
+         * @param maxCallbackDepth 深度上限，必须大于 0
          * @return 构建器自身
          */
-        public Builder maxCommandDepth(int maxCommandDepth) {
-            this.maxCommandDepth = maxCommandDepth;
+        public Builder maxCallbackDepth(int maxCallbackDepth) {
+            this.maxCallbackDepth = maxCallbackDepth;
             return this;
         }
 
@@ -266,7 +266,7 @@ public final class EventBusOptions {
             requirePositive(keepAliveSeconds, "keepAliveSeconds");
             requirePositive(queueCapacity, "queueCapacity");
             requirePositive(pendingCapacity, "pendingCapacity");
-            requirePositive(maxCommandDepth, "maxCommandDepth");
+            requirePositive(maxCallbackDepth, "maxCallbackDepth");
             requirePositive(shutdownAwaitMillis, "shutdownAwaitMillis");
             if (maxPoolSize < corePoolSize) {
                 throw new JellyfishException("maxPoolSize must not be less than corePoolSize");

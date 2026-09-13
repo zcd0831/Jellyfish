@@ -18,9 +18,9 @@
 |------|------|
 | **极致轻量** | 核心依赖 < 15MB，启动 < 2s，适合微服务和 Serverless |
 | **Java 8 兼容** | 面向金融、政务、制造等大量存量 Java 8 系统 |
-| **事件驱动** | 事件总线双通道（同步命令 + 异步通知）解耦所有组件，**包括插件** |
+| **事件驱动** | 交互枢纽双通道（回调 + 事件）解耦所有组件，**包括插件** |
 | **插件化** | PF4J 热加载，插件通过订阅事件与核心交互，无需直接依赖 |
-| **跨语言** | Python/TypeScript 通过 Stdio 协议贡献插件（同样通过事件调度） |
+| **跨语言** | Python / TypeScript 等语言通过 PF4J 桥接插件宿主，经 Stdio 协议贡献插件，能力与 Java 插件同构 |
 | **双协议** | Web 使用 SSE，TUI/CLI 使用 NDJSON 或直接控制台输出 |
 | **双模式** | HTTP Server 模式 + 本地 TUI（全屏终端图形界面）模式 |
 | **多 Provider/Model** | 支持 OpenAI、Azure、Ollama 等多服务商，JSON 配置，运行时动态切换 |
@@ -44,7 +44,7 @@
 |------|------|------|------|
 | Web 服务器 | Undertow | 2.2.24.Final | 轻量 1.5MB，原生 SSE，Java 8 兼容 |
 | LLM 客户端 | llm-client | 0.8.58+ | 轻量，SSE 流式原生支持，Builder 模式 |
-| 事件总线 | Guava EventBus（自建双通道门面） | 33.0.0-jre | 成熟，~2MB，Java 8 兼容；同步命令内联、异步通知自管线程池 |
+| 事件总线 | Guava EventBus（自建双通道门面） | 33.0.0-jre | 成熟，~2MB，Java 8 兼容；回调通道内联/隔离、事件通道自管线程池 |
 | 插件框架 | PF4J | 3.10.0 | 轻量 ~200KB，类隔离，热加载 |
 | 命令执行 | Apache Commons Exec | 1.3 | 安全执行跨语言脚本 |
 | JSON | Jackson (databind) | 2.14.2 | 行业标准，用于配置解析 |
@@ -71,12 +71,12 @@ flowchart TB
             direction LR
 
             subgraph CoreInfra["核心基础设施"]
-                EventBus["JellyfishEventBus<br>双通道：同步命令 + 异步通知"]
+                EventBus["JellyfishEventBus<br>内核与插件交互枢纽<br>双通道：回调（有返回值）+ 事件（无返回值）"]
                 SessionMgr["SessionManager<br>会话隔离 / 消息列表<br>当前 agentId / 当前模型 / 会话级切换"]
                 AgentMgr["AgentManager<br>Agent 定义注册表<br>按 agentId 提供系统提示词 / 权限策略"]
                 ModelMgr["ModelManager<br>Provider/Model 注册/解析/路由<br>不持有全局当前态"]
                 LLMClient["LLMClient<br>统一 LLM 调用抽象"]
-                PluginMgr["PF4JPluginManager<br>插件加载/热部署/执行"]
+                PluginMgr["PF4JPluginManager<br>插件加载/热部署/执行<br>Java 插件与跨语言桥接插件同构"]
                 PermMgr["PermissionManager<br>Agent 粒度权限控制"]
             end
 
@@ -89,7 +89,8 @@ flowchart TB
 
     subgraph External["外部依赖"]
         LLM["外部 LLM API<br>OpenAI/Azure/Ollama"]
-        Plugins["PF4J 插件<br>Tools/Memory/Cross"]
+        Plugins["PF4J 插件<br>Java: Tools/Memory/Cross<br>桥接: Python / TS 语言适配"]
+        Scripts["脚本插件进程<br>Python 常驻网关 / TS·JS 常驻网关<br>单进程多路复用"]
         Jelly["jellyfish.json<br>全局级 + 项目级<br>Provider/Model/插件清单"]
         Agents["agents.json<br>全局级 + 项目级<br>Agent 定义"]
     end
@@ -98,7 +99,7 @@ flowchart TB
     ReAct -->|消息列表 / 上下文 / 当前 agentId / 当前模型| SessionMgr
     ReAct -->|getCurrentLlmClient| ModelMgr
     ReAct -->|调用 LLM| LLMClient
-    ReAct -->|ToolCallCommand| EventBus
+    ReAct -->|ToolCallRequest| EventBus
     EventBus -.->|ToolCallResult| ReAct
 
     %% ===================== 会话与 Agent 定义 =====================
@@ -113,6 +114,7 @@ flowchart TB
     EventBus -->|同步权限检查| PermMgr
     EventBus -->|同步工具调度| PluginMgr
     PluginMgr -->|加载/执行| Plugins
+    Plugins -->|桥接插件拉起常驻进程| Scripts
     PluginMgr -.->|工具执行结果| EventBus
 
     %% ===================== RuntimeConfig 注入 =====================
@@ -131,7 +133,7 @@ flowchart TB
 
 ## 2.2 架构分层详解
 
-分层在**代码结构**上落为 Maven 多模块，模块之间的依赖方向单向、由编译期强制：`cli → core → infra → api`，禁止反向或循环依赖。入口层（cli）只做组装与分发，应用层（core）只做推理决策，基础设施层（infra）提供全部运行依赖，契约层（api）只面向仓库外的插件作者。
+分层在**代码结构**上落为 Maven 多模块，模块之间的依赖方向单向、由编译期强制：内核侧 `cli → core → infra → api`，跨语言侧 `jellyfish-plugin-* → jellyfish-script → api`，禁止反向或循环依赖；桥接插件由 PF4J 运行时加载，内核不依赖它。入口层（cli）只做组装与分发，应用层（core）只做推理决策，基础设施层（infra）提供全部运行依赖，契约层（api）只面向仓库外的插件作者。
 
 ```mermaid
 flowchart TB
@@ -154,12 +156,12 @@ flowchart TB
         direction LR
         subgraph CoreInfra["核心基础设施"]
             direction TB
-            EventBus["event/ JellyfishEventBus<br>双通道 + 两层注册表"]
+            EventBus["event/ JellyfishEventBus<br>回调通道 + 事件通道 + 两层注册表"]
             SessionMgr["session/ SessionManager<br>会话隔离 / 消息列表<br>当前 agentId / 当前模型 / 会话级切换"]
             AgentMgr["agent/ AgentManager<br>Agent 定义注册表 / 按 agentId 提供提示词 / 权限"]
             ModelMgr["model/ ModelManager<br>Provider/Model 注册/解析/路由"]
             Llm["llm/ LlmClient 家族<br>统一调用抽象 + SSE 流式"]
-            PluginMgr["plugin/ PF4JPluginManager<br>插件加载 / 热部署 / 执行"]
+            PluginMgr["plugin/ PF4JPluginManager<br>插件加载 / 热部署 / 执行<br>Java 插件与桥接插件同构"]
             PermMgr["permission/ PermissionManager<br>Agent 粒度权限控制"]
         end
         subgraph SupportInfra["支撑基础设施"]
@@ -175,6 +177,20 @@ flowchart TB
         Ex["JellyfishException<br>统一运行时异常"]
     end
 
+    subgraph SCRIPTM["jellyfish-script｜跨语言插件运行时（语言无关）"]
+        direction LR
+        Gateway["ScriptGateway 单例<br>常驻进程池 / 路由 / 订阅记录"]
+        Transport["ScriptProcess · ScriptProtocol<br>JSON-RPC 2.0 over Stdio"]
+        EvtBridge["EventBridge<br>双向事件桥接"]
+        Lifecycle["ScriptLifecycle · ScriptPermissions<br>防残留 / 安全护栏"]
+    end
+
+    subgraph BRIDGE["PF4J 桥接插件（plugins/，各自 shade jellyfish-script）"]
+        direction LR
+        PyBridge["PythonBridgePlugin<br>+ Python 网关资源"]
+        NodeBridge["NodeBridgePlugin<br>+ Node 网关资源"]
+    end
+
     App --> Launcher
     App --> DI
     Launcher --> Modes
@@ -185,6 +201,14 @@ flowchart TB
     Harness -->|依赖| CoreInfra
     Harness -->|依赖| SupportInfra
     CoreInfra -->|依赖契约| SPI
+    PyBridge -.->|实现 SPI| SPI
+    NodeBridge -.->|实现 SPI| SPI
+    PluginMgr -.->|运行时加载| PyBridge
+    PluginMgr -.->|运行时加载| NodeBridge
+    Gateway -->|依赖契约| SPI
+    Gateway --> Transport
+    Gateway --> EvtBridge
+    Gateway --> Lifecycle
     Config -.->|注入配置| EventBus
     Config -.->|注入配置| SessionMgr
     Config -.->|注入配置| ModelMgr
@@ -202,12 +226,16 @@ flowchart TB
 | 应用层 `jellyfish-core` | `zcd:jellyfish-core` | ReAct 循环与 `AgentHarness` 门面，对基础设施层只认接口 | `api`、`infra` |
 | 基础设施层 `jellyfish-infra` | `zcd:jellyfish-infra` | 架构图【基础设施层】的全部实现，含配置加载 | `api` |
 | 契约层 `jellyfish-api` | `zcd:jellyfish-api` | SPI 接口、能力上下文、统一异常；保持窄接口、零内部依赖 | 无 |
+| 跨语言运行时 `jellyfish-script` | `zcd:jellyfish-script` | 语言无关的跨语言运行时：JSON-RPC over Stdio、常驻进程池、双向事件桥接、生命周期与安全护栏 | `api` |
+| 桥接插件 `jellyfish-plugin-python` | `zcd:jellyfish-plugin-python` | Python 桥接插件：PF4J 描述符 + Python 语言适配 + 网关资源，运行时自行 shade `jellyfish-script` | `script`、`api` |
+| 桥接插件 `jellyfish-plugin-node` | `zcd:jellyfish-plugin-node` | TS/JS 桥接插件：同 Python，宿主 Node 常驻网关 | `script`、`api` |
 
-三条不可动摇的约束：
+四条不可动摇的约束：
 
 1. **分层靠模块强制**：`core` 与 `infra` 拆成独立模块，Maven 才能在编译期守住「应用层 → 基础设施层」的依赖方向；`api` 独立，是因为它的消费者是仓库外的插件。
 2. **`AgentHarness` 是唯一的组装门面**：`cli` / `tui` / `server` 都通过同一个 `JellyfishApplication` 入口走它，外部入口只认它，不直接触碰 infra 内部组件。
 3. **DI 装配在最外层**：Dagger 组件与 Module 只放在 `jellyfish-cli`，`core` / `infra` 只暴露构造器与 `@Module`；新增启动模式不必改动 `core` / `infra`。`tui` / `server` 先不建模块，只在 `cli/mode` 留占位。
+4. **跨语言插件靠桥接插件落地**：`jellyfish-script` 只做语言无关的跨语言运行时，由 PF4J 桥接插件把运行时 shade 进插件 jar；内核 classpath 上不出现跨语言代码，`infra` / `core` 不感知脚本进程。
 
 包名一律全小写；完整的包清单见仓库 `AGENTS.md` 的「代码结构」章节。
 

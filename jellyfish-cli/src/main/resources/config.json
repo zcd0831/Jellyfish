@@ -3,5 +3,13 @@
   "model": {
     "globalPath": "",
     "projectPath": ""
+  },
+  "agent": {
+    "globalPath": "",
+    "projectPath": ""
+  },
+  "jellyfish": {
+    "globalPath": "",
+    "projectPath": ""
   }
 }

@@ -1,7 +1,11 @@
 package zcd.jellyfish.infra.model;
 
 import org.apache.commons.lang3.StringUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import zcd.jellyfish.api.JellyfishException;
+import zcd.jellyfish.api.event.EventPublisher;
+import zcd.jellyfish.api.event.notification.ModelsLoadedEvent;
 import zcd.jellyfish.infra.config.Model;
 import zcd.jellyfish.infra.config.Provider;
 import zcd.jellyfish.infra.config.RuntimeConfig;
@@ -10,8 +14,11 @@ import zcd.jellyfish.infra.llm.LlmClientFactory;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 
 /**
  * 模型注册与路由门面：把「provider 名 + model 名」解析成 {@link ResolvedModel}，
@@ -38,6 +45,9 @@ import java.util.Map;
 @Singleton
 public class ModelManager {
 
+    /** 日志。 */
+    private static final Logger LOG = LoggerFactory.getLogger(ModelManager.class);
+
     /** 运行时配置门面，提供合并后的 provider 列表与默认 provider / model。 */
     private final RuntimeConfig runtimeConfig;
 
@@ -47,36 +57,84 @@ public class ModelManager {
     /** LLM 客户端工厂，按 provider 缓存客户端。 */
     private final LlmClientFactory llmClientFactory;
 
+    /** 通知发布入口，用于广播索引重建事件。 */
+    private final EventPublisher events;
+
     /**
-     * 构造时加载配置并建立索引。
+     * 构造时建立索引。
      * <p>
-     * 构造期只重建索引、不解析默认模型，因此配置缺失或默认值指向不存在的 provider / model
-     * 都不会导致启动失败。
+     * 构造期只重建索引、不解析默认模型，也不广播 {@link ModelsLoadedEvent}：此刻
+     * {@link RuntimeConfig} 尚未刷新（构造器不读配置），索引必为空，事件总线也可能还没启动——
+     * 发出去只会是一条被缓冲重放的假事件。真正的装载发生在装配根调用 {@link #refresh(boolean)} 时。
      *
      * @param runtimeConfig    运行时配置门面
      * @param modelRegistry    provider / model 索引
      * @param llmClientFactory LLM 客户端工厂
+     * @param events           通知发布入口
      */
     @Inject
-    public ModelManager(RuntimeConfig runtimeConfig, ModelRegistry modelRegistry, LlmClientFactory llmClientFactory) {
+    public ModelManager(RuntimeConfig runtimeConfig, ModelRegistry modelRegistry, LlmClientFactory llmClientFactory,
+                        EventPublisher events) {
         this.runtimeConfig = runtimeConfig;
         this.modelRegistry = modelRegistry;
         this.llmClientFactory = llmClientFactory;
-        refresh(false);
+        this.events = Objects.requireNonNull(events, "events must not be null");
+        rebuild(false);
     }
 
     /**
-     * 刷新模型索引。
+     * 刷新模型索引，并在重建后广播 {@link ModelsLoadedEvent}。
+     * <p>
+     * 事件表示「索引已重建」而不是「配置发生了变更」：本轮不做新旧快照 diff，因此首次装载与热更新
+     * 发出的是同一种事件，且内容可以为空（“一个 provider 都没配”同样必须可见）。
+     * 发布属 best-effort，失败不影响索引重建结果。
      *
      * @param reloadConfig 是否先重新读取配置文件（配置热更新时传 {@code true}）
      */
     public void refresh(boolean reloadConfig) {
+        rebuild(reloadConfig);
+        publishLoaded();
+    }
+
+    /**
+     * 只重建索引、不广播事件。
+     *
+     * @param reloadConfig 是否先重新读取配置文件
+     */
+    private void rebuild(boolean reloadConfig) {
         if (reloadConfig) {
             runtimeConfig.refresh();
             // 配置可能变更 apiKey / baseUrl，旧客户端会以旧签名残留在缓存中且永不复用，这里显式清理
             llmClientFactory.clearCache();
         }
         modelRegistry.refresh(runtimeConfig.getProviders());
+    }
+
+    /**
+     * 广播索引重建事件，发布失败只记日志。
+     */
+    private void publishLoaded() {
+        try {
+            events.publish(new ModelsLoadedEvent(runtimeConfig.getDefaultProvider(),
+                    runtimeConfig.getDefaultModel(), providerNames()));
+        } catch (RuntimeException e) {
+            LOG.warn("模型装载事件发布失败", e);
+        }
+    }
+
+    /**
+     * 汇总当前索引到的 provider 名，供事件携带。
+     *
+     * @return provider 名集合，可能为空但不会为 {@code null}
+     */
+    private Set<String> providerNames() {
+        Set<String> names = new LinkedHashSet<>();
+        for (Provider provider : modelRegistry.getProviders()) {
+            if (provider != null && StringUtils.isNotBlank(provider.getName())) {
+                names.add(provider.getName());
+            }
+        }
+        return names;
     }
 
     /**

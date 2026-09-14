@@ -8,14 +8,20 @@ import zcd.jellyfish.api.event.notification.ConfigWarningEvent;
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.function.BinaryOperator;
 import java.util.function.Function;
 
 /**
  * 运行时配置门面：统一负责所有配置文件的「全局级 + 项目级」双源读取与合并。
+ * <p>
+ * 三类配置段各对应一份文件与一个根类：{@code models.json} → {@link ModelSettings}、
+ * {@code agents.json} → {@link AgentSettings}、{@code jellyfish.json} → {@link JellyfishSettings}；
+ * 文件路径全部由 {@code classpath:config.json}（{@link AppConfig}）声明。
  * <p>
  * 合并规则（对每个配置段一致）：
  * <ul>
@@ -71,9 +77,14 @@ public class RuntimeConfig {
      * 配置热更新时由上层再次调用。
      */
     public synchronized void refresh() {
-        ModelSettings merged = load(appConfig.getModel(), ModelSettings.class, RuntimeConfig::mergeModelSettings);
-        notifyIfInvalid(merged);
-        this.snapshot = RuntimeSnapshot.of(merged);
+        ModelSettings mergedModel = load(appConfig.getModel(), ModelSettings.class, RuntimeConfig::mergeModelSettings);
+        AgentSettings mergedAgents = load(appConfig.getAgent(), AgentSettings.class, RuntimeConfig::mergeAgentSettings);
+        JellyfishSettings mergedJellyfish = load(appConfig.getJellyfish(), JellyfishSettings.class,
+                RuntimeConfig::mergeJellyfishSettings);
+        notifyIfInvalid(mergedModel);
+        notifyIfInvalid(mergedAgents);
+        notifyIfInvalid(mergedJellyfish);
+        this.snapshot = RuntimeSnapshot.of(mergedModel, mergedAgents, mergedJellyfish);
     }
 
     /**
@@ -146,6 +157,35 @@ public class RuntimeConfig {
     }
 
     /**
+     * 获取合并后的 agent 配置快照。
+     *
+     * @return agent 配置，保证非 {@code null} 且只读
+     */
+    public AgentSettings getAgentSettings() {
+        return snapshot.getAgentSettings();
+    }
+
+    /**
+     * 获取合并后的运行期设置快照。
+     *
+     * @return 运行期设置，保证非 {@code null} 且只读
+     */
+    public JellyfishSettings getJellyfishSettings() {
+        return snapshot.getJellyfishSettings();
+    }
+
+    /**
+     * 获取合并后的插件段。
+     * <p>
+     * 不重复存放：插件段随 {@link JellyfishSettings} 一起进快照，这里只是转发。
+     *
+     * @return 插件段，保证非 {@code null} 且只读
+     */
+    public PluginsSettings getPluginsSettings() {
+        return snapshot.getJellyfishSettings().getPlugins();
+    }
+
+    /**
      * 读取单个配置段，并对「路径已配置但读不到内容」发出告警事件。
      *
      * @param path 完整文件路径，可为空
@@ -210,17 +250,129 @@ public class RuntimeConfig {
     }
 
     /**
-     * 取项目级非空值，缺省时回退全局级。
+     * 合并全局级与项目级 agent 配置，产出不可变结果。
+     *
+     * @param global  全局级配置，可为 {@code null}
+     * @param project 项目级配置，可为 {@code null}
+     * @return 合并结果，保证非 {@code null}
+     */
+    private static AgentSettings mergeAgentSettings(AgentSettings global, AgentSettings project) {
+        Map<String, AgentDefinition> agents = new LinkedHashMap<>();
+        putAgents(agents, global);
+        // 同名 agent 整对象替换，理由同 provider：逐字段合并会让「一半授权来自全局、一半来自项目」无法审计
+        putAgents(agents, project);
+        return new AgentSettings(override(project, global, AgentSettings::getDefaultAgent), agents);
+    }
+
+    /**
+     * 把一份配置中的 agent 以不可变副本写入目标映射，并用 map 的 key 回填 agentId。
+     *
+     * @param target   目标映射
+     * @param settings 待合并配置，可为 {@code null}
+     */
+    private static void putAgents(Map<String, AgentDefinition> target, AgentSettings settings) {
+        if (settings == null) {
+            return;
+        }
+        for (Map.Entry<String, AgentDefinition> entry : settings.getAgents().entrySet()) {
+            AgentDefinition definition = entry.getValue();
+            if (definition == null) {
+                continue;
+            }
+            target.put(entry.getKey(), definition.withAgentId(entry.getKey()));
+        }
+    }
+
+    /**
+     * 合并全局级与项目级运行期设置，产出不可变结果。
+     *
+     * @param global  全局级配置，可为 {@code null}
+     * @param project 项目级配置，可为 {@code null}
+     * @return 合并结果，保证非 {@code null}
+     */
+    private static JellyfishSettings mergeJellyfishSettings(JellyfishSettings global, JellyfishSettings project) {
+        return new JellyfishSettings(mergePluginsSettings(pluginsOf(global), pluginsOf(project)));
+    }
+
+    /**
+     * 取一份运行期设置里的插件段，缺省时返回 {@code null}，交给合并函数按空处理。
+     *
+     * @param settings 运行期设置，可为 {@code null}
+     * @return 插件段，未配置时为 {@code null}
+     */
+    private static PluginsSettings pluginsOf(JellyfishSettings settings) {
+        return settings == null ? null : settings.getPlugins();
+    }
+
+    /**
+     * 合并全局级与项目级插件段。
+     *
+     * @param global  全局级插件段，可为 {@code null}
+     * @param project 项目级插件段，可为 {@code null}
+     * @return 合并结果，保证非 {@code null}
+     */
+    private static PluginsSettings mergePluginsSettings(PluginsSettings global, PluginsSettings project) {
+        Map<String, Map<String, Object>> configurations = new LinkedHashMap<>();
+        putPluginConfigurations(configurations, global);
+        // 同名插件配置段整对象替换：`readOnlyTools` 这类声明必须整段生效或整段不生效，不能半新半旧
+        putPluginConfigurations(configurations, project);
+        return new PluginsSettings(
+                listOverride(project, global, PluginsSettings::getRoots),
+                listOverride(project, global, PluginsSettings::getEnabled),
+                listOverride(project, global, PluginsSettings::getDisabled),
+                configurations);
+    }
+
+    /**
+     * 把一份插件段里的各插件配置写入目标映射。
+     *
+     * @param target   目标映射
+     * @param settings 待合并插件段，可为 {@code null}
+     */
+    private static void putPluginConfigurations(Map<String, Map<String, Object>> target,
+                                                PluginsSettings settings) {
+        if (settings == null) {
+            return;
+        }
+        for (Map.Entry<String, Map<String, Object>> entry : settings.getConfigurations().entrySet()) {
+            if (entry.getValue() != null) {
+                target.put(entry.getKey(), entry.getValue());
+            }
+        }
+    }
+
+    /**
+     * 取项目级非空字符串，缺省时回退全局级。
      *
      * @param project  项目级配置，可为 {@code null}
      * @param global   全局级配置，可为 {@code null}
      * @param accessor 取值函数
+     * @param <T>      配置类型
      * @return 项目级非空值，否则全局级值
      */
-    private static String override(ModelSettings project, ModelSettings global,
-                                   Function<ModelSettings, String> accessor) {
+    private static <T> String override(T project, T global, Function<T, String> accessor) {
         String projectValue = project == null ? null : accessor.apply(project);
         if (StringUtils.isNotBlank(projectValue)) {
+            return projectValue;
+        }
+        return global == null ? null : accessor.apply(global);
+    }
+
+    /**
+     * 取项目级非空列表，缺省时回退全局级。
+     * <p>
+     * 列表语义为「非空则整体替换」而不是并集：并集会让「项目级想收窄」做不到，
+     * 而启用 / 禁用名单恰恰是最需要收窄的两段。
+     *
+     * @param project  项目级插件段，可为 {@code null}
+     * @param global   全局级插件段，可为 {@code null}
+     * @param accessor 取值函数
+     * @return 项目级非空列表，否则全局级列表
+     */
+    private static List<String> listOverride(PluginsSettings project, PluginsSettings global,
+                                             Function<PluginsSettings, List<String>> accessor) {
+        List<String> projectValue = project == null ? null : accessor.apply(project);
+        if (projectValue != null && !projectValue.isEmpty()) {
             return projectValue;
         }
         return global == null ? null : accessor.apply(global);
@@ -254,6 +406,41 @@ public class RuntimeConfig {
         if (StringUtils.isNotBlank(defaultModel) && !hasModel(providers, defaultProvider, defaultModel)) {
             eventPublisher.publish(new ConfigWarningEvent("model",
                     "默认 model [" + defaultModel + "] 未在任何 provider 中定义"));
+        }
+    }
+
+    /**
+     * 对合并后的 agent 配置做一致性告警：默认 agent 指向不存在的条目时只发出
+     * {@link ConfigWarningEvent}，由 {@code AgentManager} 在真正用到时决定如何处理。
+     * <p>
+     * 刻意不告警「一个 agent 都没配」：这是合法状态（全部人员按 fail-open 放行），
+     * 报成告警会让干净启动也刷屏。
+     *
+     * @param merged 合并后的 agent 配置
+     */
+    private void notifyIfInvalid(AgentSettings merged) {
+        String defaultAgent = merged.getDefaultAgent();
+        if (StringUtils.isNotBlank(defaultAgent) && !merged.getAgents().containsKey(defaultAgent)) {
+            eventPublisher.publish(new ConfigWarningEvent("agent",
+                    "默认 agent [" + defaultAgent + "] 不存在于 agents 中"));
+        }
+    }
+
+    /**
+     * 对合并后的运行期设置做一致性告警。
+     * <p>
+     * 只查一处真实歧义：同一个 pluginId 同时出现在启用与禁用名单里。此时按既有语义
+     * （禁用优先）处理是对的，但用户多半写错了，值得一条告警。
+     *
+     * @param merged 合并后的运行期设置
+     */
+    private void notifyIfInvalid(JellyfishSettings merged) {
+        PluginsSettings plugins = merged.getPlugins();
+        Set<String> conflicted = new LinkedHashSet<>(plugins.getEnabled());
+        conflicted.retainAll(plugins.getDisabled());
+        for (String pluginId : conflicted) {
+            eventPublisher.publish(new ConfigWarningEvent(pluginId,
+                    "插件同时出现在启用与禁用名单中，按禁用处理"));
         }
     }
 

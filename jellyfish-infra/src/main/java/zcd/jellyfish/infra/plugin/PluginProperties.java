@@ -25,7 +25,7 @@ public final class PluginProperties {
     /** 内核兼容版本约束（semver 表达式），由 PF4J 的 {@code VersionManager} 在加载期校验。 */
     public static final String PLUGIN_REQUIRES = "plugin.requires";
 
-    /** 插件标签，供 {@code agents.json} 的按标签授权使用。 */
+    /** 插件标签，仅作诊断与展示用途；agent 授权只按工具名，不做按标签授权。 */
     public static final String JELLYFISH_TAGS = "jellyfish.tags";
 
     /**

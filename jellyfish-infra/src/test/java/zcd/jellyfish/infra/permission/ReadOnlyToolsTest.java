@@ -7,6 +7,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import zcd.jellyfish.api.event.EventPublisher;
 import zcd.jellyfish.api.event.notification.ConfigWarningEvent;
+import zcd.jellyfish.infra.config.PluginsSettings;
 import zcd.jellyfish.infra.plugin.PluginRuntimeConfig;
 
 import java.util.Arrays;
@@ -19,6 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -132,6 +134,55 @@ class ReadOnlyToolsTest {
         // When / Then
         assertThrows(NullPointerException.class, () -> new ReadOnlyTools(null, events));
         assertThrows(NullPointerException.class, () -> new ReadOnlyTools(pluginRuntimeConfig(null), null));
+    }
+
+    @Test
+    void names_should_be_recomputed_when_plugin_snapshot_replaced() {
+        // Given
+        Map<String, Map<String, Object>> configurations = new LinkedHashMap<>();
+        configurations.put("plugin-a", declaration(Collections.singletonList("read_file")));
+        PluginRuntimeConfig config = pluginRuntimeConfig(configurations);
+        ReadOnlyTools tools = new ReadOnlyTools(config, events);
+        assertEquals(Collections.singleton("read_file"), tools.names());
+
+        // When：配置刷新后快照换新，白名单必须跟着换
+        config.refresh(new PluginsSettings(null, null, null,
+                Collections.singletonMap("plugin-a", declaration(Collections.singletonList("grep")))));
+
+        // Then
+        assertEquals(Collections.singleton("grep"), tools.names());
+        assertFalse(tools.contains("read_file"));
+    }
+
+    @Test
+    void names_should_be_empty_when_plugin_snapshot_refreshed_to_empty() {
+        // Given
+        Map<String, Map<String, Object>> configurations = new LinkedHashMap<>();
+        configurations.put("plugin-a", declaration(Collections.singletonList("read_file")));
+        PluginRuntimeConfig config = pluginRuntimeConfig(configurations);
+        ReadOnlyTools tools = new ReadOnlyTools(config, events);
+        assertEquals(Collections.singleton("read_file"), tools.names());
+
+        // When
+        config.refresh(null);
+
+        // Then
+        assertTrue(tools.names().isEmpty());
+    }
+
+    @Test
+    void names_should_not_reparse_when_snapshot_unchanged() {
+        // Given：空白项会产出一条告警，用它判断「解析发生了几次」
+        Map<String, Map<String, Object>> configurations = new LinkedHashMap<>();
+        configurations.put("plugin-a", declaration(Arrays.asList("read_file", "  ")));
+        ReadOnlyTools tools = new ReadOnlyTools(pluginRuntimeConfig(configurations), events);
+
+        // When
+        tools.names();
+        tools.names();
+
+        // Then：同一快照只解析一次，告警不重复
+        verify(events, times(1)).publish(any(ConfigWarningEvent.class));
     }
 
     /**

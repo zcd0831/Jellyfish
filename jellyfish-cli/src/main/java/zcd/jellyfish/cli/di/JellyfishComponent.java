@@ -2,6 +2,7 @@ package zcd.jellyfish.cli.di;
 
 import dagger.Component;
 import zcd.jellyfish.core.AgentHarness;
+import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.config.RuntimeConfig;
 import zcd.jellyfish.infra.llm.LlmClientFactory;
 import zcd.jellyfish.infra.model.ModelManager;
@@ -11,13 +12,13 @@ import javax.inject.Singleton;
 
 /**
  * 应用级 Dagger2 组件：在最外层（composition root）装配共享的 {@code OkHttpClient}、
- * LLM 客户端注册表、配置门面、扩展层（注册表 / 同步策略 / 事件通道）、插件运行时与权限判定。
+ * LLM 客户端注册表、配置门面、扩展层（注册表 / 同步策略 / 事件通道）、插件运行时、agent 定义与权限判定。
  *
  * @author zcd
  */
 @Singleton
 @Component(modules = {ConfigModule.class, LlmModule.class, ExtensionModule.class, EventModule.class,
-        PluginModule.class, PermissionModule.class})
+        PluginModule.class, AgentModule.class, PermissionModule.class})
 public interface JellyfishComponent {
 
     /**
@@ -47,6 +48,13 @@ public interface JellyfishComponent {
      * @return AgentHarness
      */
     AgentHarness agentHarness();
+
+    /**
+     * 获取 agent 门面。
+     *
+     * @return AgentManager
+     */
+    AgentManager agentManager();
 
     /**
      * 获取权限管理器。

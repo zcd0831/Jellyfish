@@ -40,7 +40,7 @@ public class ConfigLoader {
      */
     public AppConfig loadAppConfig() {
         AppConfig loaded = read(AppConfig.CONFIG_PATH, AppConfig.class);
-        return loaded == null ? new AppConfig(null, null) : loaded;
+        return loaded == null ? new AppConfig(null, null, null, null) : loaded;
     }
 
     /**

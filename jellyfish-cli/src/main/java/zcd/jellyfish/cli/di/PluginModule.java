@@ -2,6 +2,7 @@ package zcd.jellyfish.cli.di;
 
 import dagger.Module;
 import dagger.Provides;
+import zcd.jellyfish.infra.config.RuntimeConfig;
 import zcd.jellyfish.infra.event.EventChannel;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.plugin.PF4JPluginManager;
@@ -18,8 +19,9 @@ import javax.inject.Singleton;
  * （能力上下文与回收）→ {@link PF4JPluginManager}（加载、体检、热部署）。插件管理器因此只依赖
  * 「会造上下文、会回收」这一个协作者，不感知注册表与事件通道。
  * <p>
- * {@link PluginRuntimeConfig} 目前使用代码默认值（扫描 {@code plugins/} 目录、不限启用禁用）；
- * 等 {@code jellyfish.json} 的 {@code plugins} 段落地后，只需把这里换成读取双源配置的实现。
+ * {@link PluginRuntimeConfig} 由配置驱动：先从 {@link RuntimeConfig} 的合并快照读出插件段，
+ * 再刷进去。真正的生效时刻是 {@code AgentHarness.bootstrap()} 里的又一次 {@code refresh}——
+ * 本对象在构造期就被注入插件管理器，而配置要到那时才加载完毕，因此它是「引用稳定、快照可换」的。
  *
  * @author zcd
  */
@@ -31,13 +33,19 @@ public final class PluginModule {
 
     /**
      * 提供插件运行时装配输入。
+     * <p>
+     * 构造期快照必为空（{@link RuntimeConfig} 构造不读文件），所以这里只负责给出一个合法的默认对象，
+     * 真正的值由装配根在配置加载后刷新。
      *
+     * @param runtimeConfig 运行时配置门面
      * @return 装配输入
      */
     @Provides
     @Singleton
-    static PluginRuntimeConfig providePluginRuntimeConfig() {
-        return PluginRuntimeConfig.defaults();
+    static PluginRuntimeConfig providePluginRuntimeConfig(RuntimeConfig runtimeConfig) {
+        PluginRuntimeConfig config = PluginRuntimeConfig.defaults();
+        config.refresh(runtimeConfig.getPluginsSettings());
+        return config;
     }
 
     /**

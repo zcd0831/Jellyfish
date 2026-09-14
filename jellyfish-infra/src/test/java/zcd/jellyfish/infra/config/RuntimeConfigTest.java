@@ -16,6 +16,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
@@ -23,6 +24,7 @@ import java.util.stream.Collectors;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
@@ -281,6 +283,108 @@ class RuntimeConfigTest {
                 () -> runtimeConfig.load(paths, ModelSettings.class, null));
     }
 
+    @Test
+    void refresh_should_merge_agents_with_project_override_and_backfill_agent_id() throws IOException {
+        // Given
+        Path globalAgents = writeFile("agents-global.json",
+                "{\"defaultAgent\":\"global-agent\",\"agents\":{"
+                        + "\"coder\":{\"systemPrompt\":\"global\"},"
+                        + "\"writer\":{\"systemPrompt\":\"keep\"}}}");
+        Path projectAgents = writeFile("agents-project.json",
+                "{\"agents\":{\"coder\":{\"systemPrompt\":\"project\"},\"reviewer\":{}}}");
+
+        // When
+        RuntimeConfig runtimeConfig = newRuntimeConfig(pathsTo(null, null),
+                pathsTo(globalAgents, projectAgents), pathsTo(null, null));
+
+        // Then：默认值项目级未配置 → 回退全局级
+        assertEquals("global-agent", runtimeConfig.getAgentSettings().getDefaultAgent());
+        // Then：同名 agent 整对象替换，顺序保留全局级位置，新 agent 追加在后
+        assertEquals(Arrays.asList("coder", "writer", "reviewer"),
+                new ArrayList<>(runtimeConfig.getAgentSettings().getAgents().keySet()));
+        assertEquals("project",
+                runtimeConfig.getAgentSettings().getAgents().get("coder").getSystemPrompt());
+        assertEquals("keep", runtimeConfig.getAgentSettings().getAgents().get("writer").getSystemPrompt());
+        // Then：agentId 由配置 key 回填
+        assertEquals("writer", runtimeConfig.getAgentSettings().getAgents().get("writer").getAgentId());
+    }
+
+    @Test
+    void refresh_should_warn_when_default_agent_not_declared() throws IOException {
+        // Given
+        Path agents = writeFile("agents.json", "{\"defaultAgent\":\"ghost\",\"agents\":{\"coder\":{}}}");
+        RecordingPublisher publisher = new RecordingPublisher();
+        when(appConfig.getModel()).thenReturn(pathsTo(null, null));
+        when(appConfig.getAgent()).thenReturn(pathsTo(agents, null));
+        when(appConfig.getJellyfish()).thenReturn(pathsTo(null, null));
+
+        // When
+        new RuntimeConfig(appConfig, new ConfigLoader(new SettingsReader(), new SettingsBinder()), publisher)
+                .refresh();
+
+        // Then
+        assertTrue(publisher.warnings().stream().anyMatch(warning -> "agent".equals(warning.getSource())));
+    }
+
+    @Test
+    void refresh_should_not_warn_when_no_agent_configured() {
+        // Given
+        RecordingPublisher publisher = new RecordingPublisher();
+        when(appConfig.getModel()).thenReturn(pathsTo(null, null));
+        when(appConfig.getAgent()).thenReturn(pathsTo(null, null));
+        when(appConfig.getJellyfish()).thenReturn(pathsTo(null, null));
+
+        // When
+        new RuntimeConfig(appConfig, new ConfigLoader(new SettingsReader(), new SettingsBinder()), publisher)
+                .refresh();
+
+        // Then：无 agent 是合法状态（全员 fail-open），不应发 agent 段告警
+        assertTrue(publisher.warnings().stream().noneMatch(warning -> "agent".equals(warning.getSource())));
+    }
+
+    @Test
+    void refresh_should_merge_plugins_and_expose_plugins_settings() throws IOException {
+        // Given
+        Path global = writeFile("jellyfish-global.json",
+                "{\"plugins\":{\"roots\":[\"global-plugins\"],\"enabled\":[\"a\",\"b\"],"
+                        + "\"configurations\":{\"p1\":{\"readOnlyTools\":[\"x\"]},\"p2\":{\"k\":\"global\"}}}}");
+        Path project = writeFile("jellyfish-project.json",
+                "{\"plugins\":{\"roots\":[\"project-plugins\"],"
+                        + "\"configurations\":{\"p2\":{\"k\":\"project\"}}}}");
+
+        // When
+        RuntimeConfig runtimeConfig = newRuntimeConfig(pathsTo(null, null), pathsTo(null, null),
+                pathsTo(global, project));
+
+        // Then：列表段项目级非空则整体替换，为空则回退全局级
+        PluginsSettings plugins = runtimeConfig.getPluginsSettings();
+        assertEquals(Collections.singletonList("project-plugins"), plugins.getRoots());
+        assertEquals(Arrays.asList("a", "b"), plugins.getEnabled());
+        // Then：配置段同名整对象替换、不同 key 追加
+        assertEquals(Collections.singletonList("x"), plugins.getConfigurations().get("p1").get("readOnlyTools"));
+        assertEquals("project", plugins.getConfigurations().get("p2").get("k"));
+        // Then：转发入口与快照一致
+        assertSame(plugins, runtimeConfig.getJellyfishSettings().getPlugins());
+    }
+
+    @Test
+    void refresh_should_warn_when_plugin_enabled_and_disabled_at_once() throws IOException {
+        // Given
+        Path jellyfish = writeFile("jellyfish.json",
+                "{\"plugins\":{\"enabled\":[\"a\"],\"disabled\":[\"a\"]}}");
+        RecordingPublisher publisher = new RecordingPublisher();
+        when(appConfig.getModel()).thenReturn(pathsTo(null, null));
+        when(appConfig.getAgent()).thenReturn(pathsTo(null, null));
+        when(appConfig.getJellyfish()).thenReturn(pathsTo(jellyfish, null));
+
+        // When
+        new RuntimeConfig(appConfig, new ConfigLoader(new SettingsReader(), new SettingsBinder()), publisher)
+                .refresh();
+
+        // Then
+        assertTrue(publisher.warnings().stream().anyMatch(warning -> "a".equals(warning.getSource())));
+    }
+
     /**
      * 用于验证 merger 返回 {@code null} 的场景。
      *
@@ -300,6 +404,25 @@ class RuntimeConfigTest {
      */
     private RuntimeConfig newRuntimeConfig(ConfigPaths paths) {
         when(appConfig.getModel()).thenReturn(paths);
+        RuntimeConfig runtimeConfig = new RuntimeConfig(appConfig,
+                new ConfigLoader(new SettingsReader(), new SettingsBinder()),
+                new RecordingPublisher());
+        runtimeConfig.refresh();
+        return runtimeConfig;
+    }
+
+    /**
+     * 构造被测对象，并让 {@link AppConfig} 返回给定两份双源路径。
+     *
+     * @param model     模型配置段的双源路径
+     * @param agent     agent 配置段的双源路径
+     * @param jellyfish 运行期设置段的双源路径
+     * @return 已加载一次配置的 {@link RuntimeConfig}
+     */
+    private RuntimeConfig newRuntimeConfig(ConfigPaths model, ConfigPaths agent, ConfigPaths jellyfish) {
+        when(appConfig.getModel()).thenReturn(model);
+        when(appConfig.getAgent()).thenReturn(agent);
+        when(appConfig.getJellyfish()).thenReturn(jellyfish);
         RuntimeConfig runtimeConfig = new RuntimeConfig(appConfig,
                 new ConfigLoader(new SettingsReader(), new SettingsBinder()),
                 new RecordingPublisher());

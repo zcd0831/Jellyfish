@@ -1,6 +1,14 @@
 {
   "processName": "Jellyfish",
   "model": {
+    "globalPath": "/etc/jellyfish/models.json",
+    "projectPath": "./models.json"
+  },
+  "agent": {
+    "globalPath": "/etc/jellyfish/agents.json",
+    "projectPath": "./agents.json"
+  },
+  "jellyfish": {
     "globalPath": "/etc/jellyfish/jellyfish.json",
     "projectPath": "./jellyfish.json"
   }

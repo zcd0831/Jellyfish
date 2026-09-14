@@ -2,9 +2,12 @@ package zcd.jellyfish.infra.model;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import zcd.jellyfish.api.JellyfishException;
+import zcd.jellyfish.api.event.EventPublisher;
+import zcd.jellyfish.api.event.notification.ModelsLoadedEvent;
 import zcd.jellyfish.infra.config.Model;
 import zcd.jellyfish.infra.config.Provider;
 import zcd.jellyfish.infra.config.RuntimeConfig;
@@ -18,8 +21,12 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -47,6 +54,10 @@ class ModelManagerTest {
     @Mock
     LlmClientFactory llmClientFactory;
 
+    /** 通知发布入口，用于验证装载事件。 */
+    @Mock
+    EventPublisher events;
+
     /** provider 名。 */
     private static final String PROVIDER = "openai";
 
@@ -62,6 +73,59 @@ class ModelManagerTest {
         verify(modelRegistry).refresh(Collections.<Provider>emptyList());
         verify(runtimeConfig, never()).getDefaultProvider();
         verify(runtimeConfig, never()).getDefaultModel();
+        // 构造期总线可能尚未启动，不能广播事件
+        verify(events, never()).publish(any());
+    }
+
+    @Test
+    void refresh_should_publish_models_loaded_event_when_rebuilt() {
+        // Given
+        Provider provider = provider();
+        when(runtimeConfig.getProviders()).thenReturn(Collections.singletonList(provider));
+        when(modelRegistry.getProviders()).thenReturn(Collections.singletonList(provider));
+        when(runtimeConfig.getDefaultProvider()).thenReturn(PROVIDER);
+        when(runtimeConfig.getDefaultModel()).thenReturn(MODEL);
+        ModelManager manager = newModelManager();
+
+        // When
+        manager.refresh(false);
+
+        // Then
+        ArgumentCaptor<ModelsLoadedEvent> captor = ArgumentCaptor.forClass(ModelsLoadedEvent.class);
+        verify(events).publish(captor.capture());
+        assertEquals(PROVIDER, captor.getValue().getDefaultProvider());
+        assertEquals(MODEL, captor.getValue().getDefaultModel());
+        assertEquals(Collections.singleton(PROVIDER), captor.getValue().getProviderNames());
+    }
+
+    @Test
+    void refresh_should_publish_empty_event_when_no_provider_configured() {
+        // Given
+        when(runtimeConfig.getProviders()).thenReturn(Collections.<Provider>emptyList());
+        ModelManager manager = newModelManager();
+
+        // When
+        manager.refresh(false);
+
+        // Then
+        ArgumentCaptor<ModelsLoadedEvent> captor = ArgumentCaptor.forClass(ModelsLoadedEvent.class);
+        verify(events).publish(captor.capture());
+        assertTrue(captor.getValue().getProviderNames().isEmpty());
+        assertNull(captor.getValue().getDefaultProvider());
+    }
+
+    @Test
+    void refresh_should_keep_index_when_event_publish_fails() {
+        // Given
+        when(runtimeConfig.getProviders()).thenReturn(Collections.<Provider>emptyList());
+        doThrow(new IllegalStateException("bus down")).when(events).publish(any());
+        ModelManager manager = newModelManager();
+
+        // When
+        manager.refresh(true);
+
+        // Then
+        verify(modelRegistry, times(2)).refresh(Collections.<Provider>emptyList());
     }
 
     @Test
@@ -385,12 +449,12 @@ class ModelManagerTest {
     }
 
     /**
-     * 构造被测实例，构造器会先执行一次索引刷新。
+     * 构造被测实例，构造器会先执行一次索引刷新（不广播事件）。
      *
      * @return ModelManager 实例
      */
     private ModelManager newModelManager() {
-        return new ModelManager(runtimeConfig, modelRegistry, llmClientFactory);
+        return new ModelManager(runtimeConfig, modelRegistry, llmClientFactory, events);
     }
 
     /**

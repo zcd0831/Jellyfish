@@ -8,7 +8,10 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * 模型配置文件（{@code jellyfish.json}）反序列化后的原始结构。
+ * 模型配置文件（{@code models.json}）反序列化后的原始结构。
+ * <p>
+ * 本类<b>只承载模型段</b>：插件段归 {@link JellyfishSettings}（其文件是 {@code jellyfish.json}）。
+ * 类名与文件名一一对应，是仓库统一约定的一部分。
  * <p>
  * 该类只承载「单份文件」的内容，不做 global/project 合并；合并结果由 {@link RuntimeConfig} 产出，
  * 每次都构造新的 {@link ModelSettings} 实例，因此同一份文件被重复解析时互不影响。

@@ -118,9 +118,9 @@ public class AgentManager implements PermissionPolicyProvider {
      * <b>与 {@code ModelManager.resolveDefault()} 的唯一差别</b>：没有 agent 时返回 {@code null}
      * 而不是抛异常。「一个 agent 都没配」是合法状态（全员 fail-open），不需要让会话创建失败。
      * <p>
-     * TODO 会话级自动绑定未落地：{@code SessionManager} 尚未实现，本方法目前没有任何调用点。
-     *      待它落地后在「创建会话」那一步调用本方法并把结果写入会话的当前 agentId；
-     *      刻意<b>不</b>在 {@code SessionManager} 里写占位实现，避免出现一个永远不被执行的假接线。
+     * 调用点是 {@code SessionManager.create(...)}：会话创建时用它绑定默认 agentId（结果可能仍为
+     * {@code null}）。这里只提供入口，不缓存结果——每次创建会话都按当前索引解析，agent 定义热更新后
+     * 新建的会话拿到的是新定义。
      *
      * @return 默认 agent 定义，无任何 agent 时返回 {@code null}
      */

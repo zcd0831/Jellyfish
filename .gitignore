@@ -26,6 +26,10 @@ replay_pid*
 # IDE
 .idea
 
+# macOS Finder 元数据（会在仓库里到处生成，不该进版本库）
+.DS_Store
+**/.DS_Store
+
 # Maven build output
 target/
 

@@ -17,14 +17,16 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class CliReActListenerTest {
 
     @Test
-    void onText_should_write_to_stdout_verbatim() {
+    void onText_should_buffer_until_complete_then_write_to_stdout_verbatim() {
         RecordingConsoleIO console = new RecordingConsoleIO(null);
         CliReActListener listener = new CliReActListener(console, false);
 
         listener.onText("你好");
         listener.onText("，世界");
 
-        assertEquals("你好，世界", console.out());
+        assertEquals("", console.out());
+        listener.onComplete(ReActResult.completed("s1", "你好，世界", 1));
+        assertEquals("你好，世界\n", console.out());
         assertEquals("", console.err());
     }
 
@@ -35,6 +37,7 @@ class CliReActListenerTest {
 
         listener.onText(null);
         listener.onText("");
+        listener.onComplete(ReActResult.completed("s1", "", 1));
 
         assertEquals("", console.out());
     }
@@ -82,7 +85,7 @@ class CliReActListenerTest {
         listener.onText("回答");
 
         assertEquals("· 想完了\n", console.err());
-        assertEquals("回答", console.out());
+        assertEquals("", console.out());
     }
 
     @Test
@@ -163,13 +166,63 @@ class CliReActListenerTest {
     }
 
     @Test
-    void onComplete_should_warn_on_stderr_when_truncated() {
+    void onComplete_should_write_result_content_when_truncated() {
         RecordingConsoleIO console = new RecordingConsoleIO(null);
         CliReActListener listener = new CliReActListener(console, false);
 
         listener.onComplete(ReActResult.truncated("s1", "达到上限", 16));
 
         assertTrue(console.err().contains("已达最大轮次"));
+        assertEquals("达到上限\n", console.out());
+    }
+
+    @Test
+    void onToolCallStarted_should_move_buffered_text_to_stderr_as_trace() {
+        RecordingConsoleIO console = new RecordingConsoleIO(null);
+        CliReActListener listener = new CliReActListener(console, false);
+
+        listener.onText("我先看一下文件。");
+        listener.onToolCallStarted("call-1", "read_file");
+
+        assertEquals("… 我先看一下文件。\n→ read_file\n", console.err());
+        assertEquals("", console.out());
+    }
+
+    @Test
+    void onComplete_should_write_only_final_round_text_when_tool_round_preceded() {
+        RecordingConsoleIO console = new RecordingConsoleIO(null);
+        CliReActListener listener = new CliReActListener(console, false);
+
+        listener.onText("我先看一下文件。");
+        listener.onToolCallStarted("call-1", "read_file");
+        listener.onToolCallCompleted("call-1", "read_file", true, "ok");
+        listener.onText("结论是两句话。");
+        listener.onComplete(ReActResult.completed("s1", "结论是两句话。", 2));
+
+        assertEquals("结论是两句话。\n", console.out());
+    }
+
+    @Test
+    void onCancelled_should_move_buffered_text_to_stderr() {
+        RecordingConsoleIO console = new RecordingConsoleIO(null);
+        CliReActListener listener = new CliReActListener(console, false);
+
+        listener.onText("写了一半");
+        listener.onCancelled();
+
+        assertEquals("… 写了一半\n已取消。\n", console.err());
+        assertEquals("", console.out());
+    }
+
+    @Test
+    void onError_should_move_buffered_text_to_stderr() {
+        RecordingConsoleIO console = new RecordingConsoleIO(null);
+        CliReActListener listener = new CliReActListener(console, false);
+
+        listener.onText("写了一半");
+        listener.onError(new JellyfishException("连接断开"));
+
+        assertEquals("… 写了一半\n回合失败：连接断开\n", console.err());
         assertEquals("", console.out());
     }
 

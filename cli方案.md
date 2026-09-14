@@ -296,7 +296,7 @@ public final class CliRunMode implements RunMode {
 
 | 终态 | 输出 | 退出码 |
 | --- | --- | --- |
-| `completed` | 回答已在 stdout 流式打完 | 0 |
+| `completed` | 回答已在 stdout 写出（回合收敛后整体落盘） | 0 |
 | `truncated` | stdout 保留可读提示（`ReActResult.content`）+ stderr 一行警告 | 6 |
 | `cancelled` | stderr 一行「已取消」（单次模式理论上不可达，防御性处理） | 4 |
 | 抛 `JellyfishException` | `onError` 已打 stderr，这里再补退出码 | 4 |
@@ -318,13 +318,13 @@ public interface ConsoleIO {
 
 | `ReActListener` 事件 | 去向 | 形态 |
 | --- | --- | --- |
-| `onText(delta)` | **stdout** | 原样增量写出（模型给什么写什么），每次 flush |
+| `onText(delta)` | **stdout** | 只入缓冲，**不立即写出**；回合收敛时整体写 stdout（未以换行收尾则补一个） |
 | `onThinking(delta)` | stderr | 缺省**丢弃**；`--show-thinking` 时以 `· ` 前缀逐行写 |
-| `onToolCallStarted(id, name)` | stderr | `→ <name>` |
+| `onToolCallStarted(id, name)` | stderr | 先把缓冲的文本当**过程轨迹**以 `… ` 前缀转写 stderr 并清空，再打 `→ <name>` |
 | `onToolCallCompleted(id, name, ok, out)` | stderr | `← <name> ok|failed（<out 长度> 字符）`——**不打全文**，避免刷屏 |
-| `onComplete(result)` | stdout / stderr | 回答未以换行收尾则补一个换行到 stdout；`truncated` 时 stderr 一行警告 |
-| `onError(t)` | stderr | `回合失败：<message>` |
-| `onCancelled()` | stderr | `已取消` |
+| `onComplete(result)` | stdout / stderr | 把缓冲整体写 stdout（空缓冲且 `content` 非空时回退写 `content`，覆盖 `truncated` 的可读提示）；`truncated` 时 stderr 一行警告 |
+| `onError(t)` | stderr | 缓冲残片以 `… ` 前缀转写 stderr；`回合失败：<message>` |
+| `onCancelled()` | stderr | 缓冲残片以 `… ` 前缀转写 stderr；`已取消` |
 
 **「回答走 stdout、诊断走 stderr」是本轮最重要的一条契约**：它让 `jellyfish -cli -p "..." > answer.txt` 拿到干净回答、`2> log.txt` 拿到诊断，也让这个外壳第一次真正具备「可被脚本使用」的属性（D3）。
 
@@ -492,7 +492,7 @@ public final class SessionBootstrap {
 | R1 | shade 合并后 `Log4j2Plugins.dat` 丢失 → 日志配置失效（静默无日志） | 用官方 plugin cache transformer；P5 冒烟**必须**验证「`--verbose` 能看见 DEBUG 日志」「默认看不见 INFO」，而不是只看编译通过 |
 | R2 | TamboUI 只有 snapshot 且标注 experimental；示例是 Java 17+ 风格 | 口径：TUI 轮**第一件事**是在 JDK 1.8 下冒烟 `tamboui-tui` + `tamboui-jline3-backend`；不通过则换 Lanterna 或 JLine 3 手写。本轮不受影响（占位） |
 | R3 | `undertow.version = 2.4.3.Final` 与 JDK 1.8 / `javax` 不兼容 | 已查证：2.3.0 起要求 Java 11 且迁到 `jakarta.*`；Server 轮改用 `2.2.39.Final`。本轮不受影响（占位） |
-| R4 | stdout 与 stderr 都指向同一终端时，流式回答与诊断行可能视觉交错 | 已知并接受：需要干净输出时按 §3.4 重定向；诊断行都短且带前缀，可读 |
+| R4 | stdout 与 stderr 都指向同一终端时，流式回答与诊断行视觉交错 | **已修复**：`CliReActListener` 缓冲回答、回合收敛时整体写 stdout（诊断行不再插进半句话）；中间轮次文本归 stderr。剩余风险仅是「无渐进显示」 |
 | R5 | `System.setProperty("jellyfish.log.level")` 必须在首次日志之前设置，否则不生效 | 放在 `main` 解析参数后、任何 `LOG` 调用前；`Launcher` 内不做静态初始化日志；P5 冒烟覆盖 |
 | R6 | 参数面过早固化，TUI / Server 轮要改 | 参数表按三种模式统一设计（`--session` / `--model` / `--agent` / `--mode` 都是模式无关的），`--port` / `--host` 已为 Server 预留；解析器无状态，扩展只加字段 |
 | R7 | CLI 直连 `SessionManager` / `CommandManager`，将来 TUI 复制一份分流逻辑 | 分流判据只有 `CommandManager.isCommand` 一处，规则（现读当前会话、命令副作用回写会话域）写进 `AGENTS.md`，TUI 轮复用同一份约束 |
@@ -574,6 +574,13 @@ public final class SessionBootstrap {
 | 4 | 参数里 `-v/--version` | `-V/--version` + `--verbose`（已记 D2） | 消歧 |
 | 5 | 模型校验只查「存在」 | `--model` **必须 `provider/model`**，且会话不存在时给中文理由 | 避免在 CLI 复制「按模型名反查 provider」的逻辑；会话不持久化这点必须写进提示语 |
 
+### 11.1.1 调试阶段追加的渲染修正
+
+| # | 原行为 | 现行为 | 原因 |
+| --- | --- | --- | --- |
+| 6 | `onText` 立即写 stdout（流式增量） | **按轮次缓冲，`onComplete` 时整体写 stdout** | 增量文本没有换行结尾，stderr 的工具诊断行会紧贴半句话后面，把回答从中间切断；缓冲后终端不再交错，文件内容仍是逐字节精确的回答。代价是 CLI 不再有渐进显示（思考与工具进度仍实时走 stderr 作为进度反馈） |
+| 7 | 中间轮次（工具调用前）的模型文本也写 stdout | **以 `… ` 前缀转写 stderr**，stdout 只保留最终回答 | 模型常在调用工具前先吐一句「我先看一下文件」，随后才给最终回答；实时写 stdout 会让这句话在回答前后各出现一次 |
+
 ### 11.2 测试补充（超出 §5 的测试计划）
 
 | 测试类 | 为什么加 |
@@ -582,6 +589,7 @@ public final class SessionBootstrap {
 | `JellyfishApplicationTest` | 只覆盖不触碰内核装配的三条路径：参数错误 / 帮助 / 版本 |
 | `RecordingConsoleIO`（测试支撑） | 手写记录器优于 `verify(System.out)`；与 infra 的 `LlmClientTestSupport` 同属测试支撑类 |
 | `SessionTestSupport`（测试支撑） | `Session` 是 final 且构造器包级可见，只能经真实 `SessionManager` 造出真会话；同时避免把聚合根 mock 成假对象（`LauncherTest` 还依赖「`switchTo` 之后 `current()` 真的变了」这条接线行为） |
+| `CliReActListenerTest` 追加用例 | 调试期发现「诊断行插进半句话」与「中间轮次文本重复」后，新增：缓冲期间 stdout 为空、收敛后整体写出、`onToolCallStarted` 把缓冲转写 stderr、只输出最终轮文本、取消 / 失败时残片转写 stderr |
 
 ### 11.3 端到端冒烟（可执行 jar，离线可验部分全部通过）
 

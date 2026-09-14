@@ -175,6 +175,15 @@ public class RuntimeConfig {
     }
 
     /**
+     * 获取合并后的 ReAct 段。
+     *
+     * @return ReAct 段，保证非 {@code null}
+     */
+    public ReactSettings getReactSettings() {
+        return snapshot.getJellyfishSettings().getReact();
+    }
+
+    /**
      * 获取合并后的插件段。
      * <p>
      * 不重复存放：插件段随 {@link JellyfishSettings} 一起进快照，这里只是转发。
@@ -291,7 +300,34 @@ public class RuntimeConfig {
      * @return 合并结果，保证非 {@code null}
      */
     private static JellyfishSettings mergeJellyfishSettings(JellyfishSettings global, JellyfishSettings project) {
-        return new JellyfishSettings(mergePluginsSettings(pluginsOf(global), pluginsOf(project)));
+        return new JellyfishSettings(
+                mergePluginsSettings(pluginsOf(global), pluginsOf(project)),
+                mergeReactSettings(reactOf(global), reactOf(project)));
+    }
+
+    /**
+     * 取一份运行期设置里的 ReAct 段，缺省时返回 {@code null}，交给合并函数按缺省处理。
+     *
+     * @param settings 运行期设置，可为 {@code null}
+     * @return ReAct 段，未配置时为 {@code null}
+     */
+    private static ReactSettings reactOf(JellyfishSettings settings) {
+        return settings == null ? null : settings.getReact();
+    }
+
+    /**
+     * 合并全局级与项目级 ReAct 段。
+     * <p>
+     * 与 provider / agent 同口径的「整对象覆盖」：项目级非空则整体替换全局级，否则回退全局级，
+     * 两者都缺省时由 {@link JellyfishSettings} 的构造器落到缺省值。不做逐字段合并，
+     * 避免「一半参数来自全局、一半来自项目」这种无法审计的混合态。
+     *
+     * @param global  全局级 ReAct 段，可为 {@code null}
+     * @param project 项目级 ReAct 段，可为 {@code null}
+     * @return 合并结果，可能为 {@code null}（表示用缺省值）
+     */
+    private static ReactSettings mergeReactSettings(ReactSettings global, ReactSettings project) {
+        return project != null ? project : global;
     }
 
     /**

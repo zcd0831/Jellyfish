@@ -1,6 +1,7 @@
 package zcd.jellyfish.infra.session;
 
 import org.junit.jupiter.api.Test;
+import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.infra.llm.LlmMessage;
 import zcd.jellyfish.infra.llm.LlmUsage;
@@ -8,6 +9,7 @@ import zcd.jellyfish.infra.llm.LlmUsage;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -188,5 +190,79 @@ class SessionTest {
 
         // Then
         assertEquals(PermissionMode.NORMAL, session.getPermissionMode());
+    }
+
+    @Test
+    void addTodo_should_assign_incrementing_ids_and_keep_order() {
+        // Given
+        Session session = new Session("session-1", null, null, null, null, CREATED_AT);
+
+        // When
+        PendingTodo first = session.addTodo("首先做 A");
+        PendingTodo second = session.addTodo("再做 B");
+
+        // Then
+        assertEquals("1", first.getId());
+        assertEquals("2", second.getId());
+        assertTrue(first.isPending());
+        assertEquals(2, session.getTodos().size());
+        assertEquals("首先做 A", session.getTodos().get(0).getContent());
+    }
+
+    @Test
+    void getTodos_should_return_defensive_unmodifiable_snapshot() {
+        // Given
+        Session session = new Session("session-1", null, null, null, null, CREATED_AT);
+        session.addTodo("第一项");
+        List<PendingTodo> snapshot = session.getTodos();
+
+        // When：后续追加不应影响已取出的快照
+        session.addTodo("第二项");
+
+        // Then
+        assertEquals(1, snapshot.size());
+        assertThrows(UnsupportedOperationException.class, () -> snapshot.add(null));
+    }
+
+    @Test
+    void addTodo_should_reject_blank_content() {
+        // Given
+        Session session = new Session("session-1", null, null, null, null, CREATED_AT);
+
+        // When / Then
+        assertThrows(JellyfishException.class, () -> session.addTodo("   "));
+    }
+
+    @Test
+    void completeTodo_should_mark_done_and_be_idempotent() {
+        // Given
+        Session session = new Session("session-1", null, null, null, null, CREATED_AT);
+        PendingTodo todo = session.addTodo("写单测");
+
+        // When / Then：首次流转为 true，重复标记与未命中均为 false
+        assertTrue(session.completeTodo(todo.getId()));
+        assertTrue(session.getTodos().get(0).isDone());
+        assertFalse(session.completeTodo(todo.getId()));
+        assertFalse(session.completeTodo("999"));
+        assertFalse(session.completeTodo(null));
+    }
+
+    @Test
+    void clearTodos_should_return_count_and_not_reuse_ids() {
+        // Given
+        Session session = new Session("session-1", null, null, null, null, CREATED_AT);
+        session.addTodo("a");
+        session.addTodo("b");
+
+        // When
+        int cleared = session.clearTodos();
+        PendingTodo next = session.addTodo("c");
+
+        // Then
+        assertEquals(2, cleared);
+        assertTrue(session.getTodos().size() == 1);
+        assertEquals("3", next.getId());
+        assertEquals(1, session.clearTodos());
+        assertEquals(0, session.clearTodos());
     }
 }

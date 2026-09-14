@@ -9,9 +9,10 @@ import dagger.Module;
  * （已由 {@link ExtensionModule} 作为单例提供），自身带 {@code @Inject} 构造器，由 Dagger 自行装配。
  * <p>
  * <b>本模块不注册任何命令处理器</b>：系统命令与插件命令同源，都经 {@code ExtensionRegistry.handle(...)}
- * 落同一份注册表，命令域只负责解析、分发与清单。系统命令（{@code /help} / {@code /model} / {@code /agent} /
- * {@code /mode} / {@code /new} / {@code /exit}）尚未落地，续做时由 {@code core} 侧持有 session / model /
- * agent 域服务的组件注册，owner 取 {@code "core"} 以区别于插件。
+ * 落同一份注册表，命令域只负责解析、分发与清单。内核系统命令（{@code /help} / {@code /new} / {@code /session} /
+ * {@code /resume} / {@code /model} / {@code /agent} / {@code /mode} / {@code /status} / {@code /usage} / {@code /todo}）
+ * 已由 {@code core/command/SystemCommands} 以 owner = {@code "core"} 注册；{@code /exit} 归外壳，
+ * {@code /compact} 等仍待落地。
  *
  * @author zcd
  */

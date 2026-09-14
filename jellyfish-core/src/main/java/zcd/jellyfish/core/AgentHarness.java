@@ -1,5 +1,6 @@
 package zcd.jellyfish.core;
 
+import zcd.jellyfish.core.command.SystemCommands;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.config.RuntimeConfig;
 import zcd.jellyfish.infra.event.EventChannel;
@@ -13,13 +14,15 @@ import javax.inject.Singleton;
 /**
  * Agent 运行时宿主与组装门面：外部入口（CLI / TUI / Server）只认它。
  * <p>
- * 目前只落地启动时序里与配置加载、索引建立相关的一环，其余职责为占位：
+ * 目前落地了启动时序里与配置加载、索引建立、核心命令注册相关的一环：
  * <ul>
- *     <li>已在实现：启动事件总线 → 加载运行时配置 → 重建模型 / agent 索引 → 刷新插件配置 → 启动插件运行时，
- *     保证启动期配置告警不丢失、各注册表在配置就绪后再建索引、插件在拿到最终的扫描目录与启用名单后启动；</li>
- *     <li>待实现：注册核心组件订阅者、驱动 ReAct 循环（思考 → 行动 → 观察）、关闭时优雅收敛。</li>
+ *     <li>已在实现：启动事件总线 → 注册核心系统命令 → 加载运行时配置 → 重建模型 / agent 索引 →
+ *     刷新插件配置 → 启动插件运行时，保证启动期配置告警不丢失、各注册表在配置就绪后再建索引、
+ *     插件在拿到最终的扫描目录与启用名单后启动；核心命令先于插件注册，插件要覆盖同名命令必须显式
+ *     声明 {@code override}；</li>
+ *     <li>已在实现：驱动 ReAct 循环（{@link #chat} 委托 {@link ReActLooper}）；关闭时优雅收敛。</li>
  * </ul>
- * 启动顺序有意固定为「先 {@code eventChannel.start()} → 再 {@code runtimeConfig.refresh()} →
+ * 启动顺序有意固定为「先 {@code eventChannel.start()} → 再注册核心命令 → 再 {@code runtimeConfig.refresh()} →
  * 再各注册表 {@code refresh(...)} → 最后 {@code pluginManager.bootstrap()}」：
  * <ol>
  *     <li>通知订阅者注册完成后再加载配置，配置层发出的 {@code ConfigWarningEvent} 才能被订阅到；</li>
@@ -52,6 +55,12 @@ public class AgentHarness {
     /** 插件运行时门面：加载 / 体检 / 启动插件，并按 owner 回收注册。 */
     private final PF4JPluginManager pluginManager;
 
+    /** ReAct 循环器：本门面唯一智能入口的执行体。 */
+    private final ReActLooper reActLooper;
+
+    /** 内核系统命令注册器：{@code /help} 等。 */
+    private final SystemCommands systemCommands;
+
     /**
      * 构造运行时宿主。
      *
@@ -61,27 +70,33 @@ public class AgentHarness {
      * @param agentManager         agent 门面
      * @param pluginRuntimeConfig  插件运行时装配输入
      * @param pluginManager        插件运行时门面
+     * @param reActLooper          ReAct 循环器
+     * @param systemCommands       内核系统命令注册器
      */
     @Inject
     public AgentHarness(RuntimeConfig runtimeConfig, EventChannel eventChannel, ModelManager modelManager,
                         AgentManager agentManager, PluginRuntimeConfig pluginRuntimeConfig,
-                        PF4JPluginManager pluginManager) {
+                        PF4JPluginManager pluginManager, ReActLooper reActLooper, SystemCommands systemCommands) {
         this.runtimeConfig = runtimeConfig;
         this.eventChannel = eventChannel;
         this.modelManager = modelManager;
         this.agentManager = agentManager;
         this.pluginRuntimeConfig = pluginRuntimeConfig;
         this.pluginManager = pluginManager;
+        this.reActLooper = reActLooper;
+        this.systemCommands = systemCommands;
     }
 
     /**
-     * 启动应用：启动事件通道 → 加载运行时配置 → 重建模型索引 → 重建 agent 索引 → 刷新插件配置 →
-     * 启动插件运行时。
+     * 启动应用：启动事件通道 → 注册核心命令 → 加载运行时配置 → 重建模型索引 → 重建 agent 索引 →
+     * 刷新插件配置 → 启动插件运行时。
      * <p>
-     * 其余启动步骤（注册核心订阅者）为占位，后续在此补充。
+     * 核心命令先于插件注册：插件若要覆盖同名系统命令，必须显式声明 {@code override}，
+     * 否则会在插件启动时以 {@code DUPLICATE_HANDLER} 当场暴露，而不是静默地两套并存。
      */
     public void bootstrap() {
         eventChannel.start();
+        systemCommands.register();
         runtimeConfig.refresh();
         modelManager.refresh(false);
         agentManager.refresh(false);
@@ -91,16 +106,36 @@ public class AgentHarness {
     }
 
     /**
-     * 关闭应用：先停插件（并按 owner 回收注册），再收敛事件通道。幂等。
+     * 启动一次 ReAct 回合：本门面唯一的智能入口。
+     *
+     * @param sessionId 会话标识，不可为空白
+     * @param userInput 用户输入，可为 {@code null}
+     * @param listener  流式回调，可为 {@code null}（等价于 {@link ReActListener#NOOP}）
+     * @return 回合句柄，保证非 {@code null}
+     */
+    public ReActTurn chat(String sessionId, String userInput, ReActListener listener) {
+        return reActLooper.chat(sessionId, userInput, listener);
+    }
+
+    /**
+     * 关闭应用：先停 ReAct 循环（不再接新回合），再回收核心命令，再停插件（并按 owner 回收注册），
+     * 最后收敛事件通道。幂等。
      * <p>
-     * 顺序与 {@link #bootstrap()} 相反：插件先停，避免插件在通道关停后继续收到通知；
-     * 两者都失败也不互相阻断，保证运行总能收敛。
+     * 顺序与 {@link #bootstrap()} 相反；任何一步失败都不阻断后续步骤，保证运行总能收敛。
      */
     public void shutdown() {
         try {
-            pluginManager.close();
+            reActLooper.close();
         } finally {
-            eventChannel.close();
+            try {
+                systemCommands.close();
+            } finally {
+                try {
+                    pluginManager.close();
+                } finally {
+                    eventChannel.close();
+                }
+            }
         }
     }
 }

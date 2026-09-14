@@ -38,11 +38,10 @@ import java.util.Objects;
  * <b>公共入口不抛异常</b>：用户输入错误与插件缺陷都被翻译成 {@link CommandResult} 或清单 / 文案
  * （另打 WARN 日志）。唯一的例外是 api 侧值对象的构造期校验——那是编程错误，立即抛。
  * <p>
- * <b>TODO 系统命令未落地</b>：{@code /help} {@code /model} {@code /agent} {@code /mode} {@code /new}
- * {@code /exit} 都还没实现，本类也不注册任何处理器。续做时建议落在 {@code core}（owner = {@code "core"}），
- * 经 {@code handle(CommandRequest.class, name, descriptor, handler)} 落同一份注册表：{@code /help} 直接调
- * {@link #renderHelp()}，其余由持有 {@code SessionManager} / {@code ModelManager} / {@code AgentManager}
- * 的组件实现，副作用写回对应域服务（外壳执行后读域服务拿状态，不从结果文本里反解）。
+ * <b>系统命令已落地</b>：{@code /help} {@code /new} {@code /session} {@code /resume} {@code /model}
+ * {@code /agent} {@code /mode} {@code /status} {@code /usage} {@code /todo} 由 {@code core/command/SystemCommands}
+ * 以 owner = {@code "core"} 注册进同一份注册表（本类仍不注册任何处理器）。
+ * {@code /exit} 归外壳；{@code /compact} 等依赖摘要压缩的命令仍待落地。
  *
  * @author zcd
  */

@@ -6,6 +6,7 @@ import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
+import zcd.jellyfish.core.command.SystemCommands;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.config.PluginsSettings;
 import zcd.jellyfish.infra.config.RuntimeConfig;
@@ -54,6 +55,14 @@ class AgentHarnessTest {
     @Mock
     private PF4JPluginManager pluginManager;
 
+    /** ReAct 循环器。 */
+    @Mock
+    private ReActLooper reActLooper;
+
+    /** 内核系统命令注册器。 */
+    @Mock
+    private SystemCommands systemCommands;
+
     @Test
     void bootstrap_should_start_in_fixed_order() {
         // Given
@@ -64,10 +73,11 @@ class AgentHarnessTest {
         // When
         harness.bootstrap();
 
-        // Then：事件订阅者就绪 → 配置 → 各索引 → 插件配置 → 插件启动
-        InOrder order = inOrder(eventChannel, runtimeConfig, modelManager, agentManager, pluginRuntimeConfig,
-                pluginManager);
+        // Then：事件订阅者就绪 → 注册核心命令 → 配置 → 各索引 → 插件配置 → 插件启动
+        InOrder order = inOrder(eventChannel, systemCommands, runtimeConfig, modelManager, agentManager,
+                pluginRuntimeConfig, pluginManager);
         order.verify(eventChannel).start();
+        order.verify(systemCommands).register();
         order.verify(runtimeConfig).refresh();
         order.verify(modelManager).refresh(false);
         order.verify(agentManager).refresh(false);
@@ -89,17 +99,36 @@ class AgentHarnessTest {
     }
 
     @Test
-    void shutdown_should_close_plugin_manager_before_event_channel() {
+    void shutdown_should_converge_in_reverse_order() {
         // Given
         AgentHarness harness = newHarness();
 
         // When
         harness.shutdown();
 
-        // Then：插件先停，避免它在通道关停后继续收到通知
-        InOrder order = Mockito.inOrder(pluginManager, eventChannel);
+        // Then：先停 ReAct，再回收核心命令，再插件，最后通道
+        InOrder order = Mockito.inOrder(reActLooper, systemCommands, pluginManager, eventChannel);
+        order.verify(reActLooper).close();
+        order.verify(systemCommands).close();
         order.verify(pluginManager).close();
         order.verify(eventChannel).close();
+    }
+
+    @Test
+    void chat_should_delegate_to_looper() {
+        // Given
+        AgentHarness harness = newHarness();
+        ReActListener listener = new ReActListener() {
+        };
+        ReActTurn turn = Mockito.mock(ReActTurn.class);
+        when(reActLooper.chat("s1", "hi", listener)).thenReturn(turn);
+
+        // When
+        ReActTurn result = harness.chat("s1", "hi", listener);
+
+        // Then
+        Mockito.verify(reActLooper).chat("s1", "hi", listener);
+        org.junit.jupiter.api.Assertions.assertSame(turn, result);
     }
 
     /**
@@ -109,6 +138,6 @@ class AgentHarnessTest {
      */
     private AgentHarness newHarness() {
         return new AgentHarness(runtimeConfig, eventChannel, modelManager, agentManager, pluginRuntimeConfig,
-                pluginManager);
+                pluginManager, reActLooper, systemCommands);
     }
 }

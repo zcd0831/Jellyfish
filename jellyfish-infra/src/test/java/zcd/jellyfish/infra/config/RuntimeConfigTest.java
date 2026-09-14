@@ -368,6 +368,47 @@ class RuntimeConfigTest {
     }
 
     @Test
+    void refresh_should_merge_react_with_project_override() throws IOException {
+        // Given：项目级只配了 maxRounds，其余字段应按缺省而不是按全局级
+        Path global = writeFile("jellyfish-global.json",
+                "{\"react\":{\"maxRounds\":3,\"contextReserveTokens\":100,\"maxToolOutputChars\":50}}");
+        Path project = writeFile("jellyfish-project.json", "{\"react\":{\"maxRounds\":7}}");
+
+        // When
+        RuntimeConfig runtimeConfig = newRuntimeConfig(pathsTo(null, null), pathsTo(null, null),
+                pathsTo(global, project));
+
+        // Then
+        ReactSettings react = runtimeConfig.getReactSettings();
+        assertEquals(7, react.getMaxRounds());
+        assertEquals(ReactSettings.DEFAULT_CONTEXT_RESERVE_TOKENS, react.getContextReserveTokens());
+        assertEquals(ReactSettings.DEFAULT_MAX_TOOL_OUTPUT_CHARS, react.getMaxToolOutputChars());
+    }
+
+    @Test
+    void refresh_should_fall_back_to_global_react_when_project_absent() throws IOException {
+        // Given
+        Path global = writeFile("jellyfish-global.json", "{\"react\":{\"maxRounds\":9}}");
+
+        // When
+        RuntimeConfig runtimeConfig = newRuntimeConfig(pathsTo(null, null), pathsTo(null, null),
+                pathsTo(global, null));
+
+        // Then
+        assertEquals(9, runtimeConfig.getReactSettings().getMaxRounds());
+    }
+
+    @Test
+    void refresh_should_use_default_react_when_not_configured() {
+        // When
+        RuntimeConfig runtimeConfig = newRuntimeConfig(pathsTo(null, null), pathsTo(null, null),
+                pathsTo(null, null));
+
+        // Then
+        assertTrue(runtimeConfig.getReactSettings().isDefault());
+    }
+
+    @Test
     void refresh_should_warn_when_plugin_enabled_and_disabled_at_once() throws IOException {
         // Given
         Path jellyfish = writeFile("jellyfish.json",

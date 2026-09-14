@@ -20,6 +20,7 @@ import zcd.jellyfish.infra.llm.LlmUsage;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -432,6 +433,79 @@ class SessionManagerTest {
 
         // When / Then
         assertThrows(UnsupportedOperationException.class, () -> manager.all().clear());
+    }
+
+    @Test
+    void addTodo_should_persist_into_session() {
+        // Given
+        SessionManager manager = new SessionManager(agentManager, events);
+        Session session = manager.create(CODER, null, null, null);
+
+        // When
+        PendingTodo todo = manager.addTodo(session.getSessionId(), "写文档");
+
+        // Then
+        assertEquals("1", todo.getId());
+        assertEquals(1, manager.todosOf(session.getSessionId()).size());
+        assertEquals("写文档", manager.todosOf(session.getSessionId()).get(0).getContent());
+    }
+
+    @Test
+    void completeTodo_should_flow_status_through_session() {
+        // Given
+        SessionManager manager = new SessionManager(agentManager, events);
+        Session session = manager.create(CODER, null, null, null);
+        PendingTodo todo = manager.addTodo(session.getSessionId(), "写文档");
+
+        // When / Then
+        assertTrue(manager.completeTodo(session.getSessionId(), todo.getId()));
+        assertTrue(manager.todosOf(session.getSessionId()).get(0).isDone());
+        assertFalse(manager.completeTodo(session.getSessionId(), todo.getId()));
+    }
+
+    @Test
+    void clearTodos_should_empty_session_todos() {
+        // Given
+        SessionManager manager = new SessionManager(agentManager, events);
+        Session session = manager.create(CODER, null, null, null);
+        manager.addTodo(session.getSessionId(), "a");
+        manager.addTodo(session.getSessionId(), "b");
+
+        // When
+        int cleared = manager.clearTodos(session.getSessionId());
+
+        // Then
+        assertEquals(2, cleared);
+        assertTrue(manager.todosOf(session.getSessionId()).isEmpty());
+    }
+
+    @Test
+    void todo_entry_points_should_throw_when_session_missing() {
+        // Given
+        SessionManager manager = new SessionManager(agentManager, events);
+
+        // When / Then
+        assertThrows(JellyfishException.class, () -> manager.addTodo("missing", "a"));
+        assertThrows(JellyfishException.class, () -> manager.todosOf("missing"));
+        assertThrows(JellyfishException.class, () -> manager.completeTodo("missing", "1"));
+        assertThrows(JellyfishException.class, () -> manager.clearTodos("missing"));
+    }
+
+    @Test
+    void todos_should_be_isolated_per_session() {
+        // Given
+        SessionManager manager = new SessionManager(agentManager, events);
+        Session first = manager.create(CODER, null, null, null);
+        Session second = manager.create(CODER, null, null, null);
+
+        // When
+        manager.addTodo(first.getSessionId(), "a1");
+        manager.addTodo(second.getSessionId(), "b1");
+        manager.addTodo(first.getSessionId(), "a2");
+
+        // Then
+        assertEquals(2, manager.todosOf(first.getSessionId()).size());
+        assertEquals(1, manager.todosOf(second.getSessionId()).size());
     }
 
     /**

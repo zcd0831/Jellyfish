@@ -15,7 +15,7 @@ import java.util.List;
  *     {@code updatedAt}、{@code title}；</li>
  *     <li><b>会话级选择</b>：当前 {@code agentId}、当前 {@code provider} / {@code model}、
  *     当前 {@link PermissionMode}；</li>
- *     <li><b>内容与计量</b>：消息列表与 token 累计。</li>
+ *     <li><b>内容与计量</b>：消息列表、token 累计与待办列表。</li>
  * </ol>
  * <b>变更方法一律包级可见</b>：外部只能经 {@link SessionManager} 修改会话，事件广播与将来的持久化
  * 派发都挂在那一个入口上；本类只保证「单会话内的原子性与快照安全」，因此它<b>不感知</b>事件通道、
@@ -58,6 +58,12 @@ public final class Session {
 
     /** token 累计快照，追加时整体替换为新实例。 */
     private SessionUsage usage = SessionUsage.EMPTY;
+
+    /** 会话级待办项列表，按追加顺序排列。 */
+    private final List<PendingTodo> todos = new ArrayList<PendingTodo>();
+
+    /** 待办编号自增序列；清空待办后不复用旧编号。 */
+    private long todoSequence;
 
     /**
      * 构造会话运行态，仅供 {@link SessionManager} 调用。
@@ -234,5 +240,72 @@ public final class Session {
     synchronized void setPermissionMode(PermissionMode permissionMode) {
         this.permissionMode = permissionMode == null ? PermissionMode.NORMAL : permissionMode;
         this.updatedAt = System.currentTimeMillis();
+    }
+
+    /**
+     * 取待办列表的不可修改快照。
+     * <p>
+     * 读路径与 {@link #getMessages()} 同口径：公开但返回防御性快照，调用方拿到的列表不会被后续追加改动。
+     *
+     * @return 不可修改列表，可能为空但不会为 {@code null}
+     */
+    public synchronized List<PendingTodo> getTodos() {
+        return Collections.unmodifiableList(new ArrayList<PendingTodo>(todos));
+    }
+
+    /**
+     * 追加一条待办并分配会话内自增编号。
+     * <p>
+     * 包级可见：只有 {@link SessionManager} 能改会话，将来的落盘派发都挂在那一个入口上。
+     *
+     * @param content 待办内容
+     * @return 新增的待办项
+     */
+    synchronized PendingTodo addTodo(String content) {
+        PendingTodo todo = PendingTodo.pending(String.valueOf(++todoSequence), content,
+                System.currentTimeMillis());
+        todos.add(todo);
+        updatedAt = System.currentTimeMillis();
+        return todo;
+    }
+
+    /**
+     * 按编号标记待办为已完成。
+     * <p>
+     * 幂等：已完成的项再次标记不算失败，返回 {@code false} 让调用方区分「没这条」与「本条已完成」。
+     *
+     * @param todoId 待办编号，可为 {@code null}
+     * @return 确实发生状态流转返回 {@code true}
+     */
+    synchronized boolean completeTodo(String todoId) {
+        if (todoId == null) {
+            return false;
+        }
+        for (int i = 0; i < todos.size(); i++) {
+            PendingTodo todo = todos.get(i);
+            if (todoId.equals(todo.getId())) {
+                if (todo.isDone()) {
+                    return false;
+                }
+                todos.set(i, todo.done());
+                updatedAt = System.currentTimeMillis();
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 清空全部待办。
+     *
+     * @return 被清空的待办条数
+     */
+    synchronized int clearTodos() {
+        int size = todos.size();
+        if (size > 0) {
+            todos.clear();
+            updatedAt = System.currentTimeMillis();
+        }
+        return size;
     }
 }

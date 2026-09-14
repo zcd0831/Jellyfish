@@ -60,7 +60,7 @@ public interface JellyfishComponent {
     /**
      * 获取权限管理器。
      * <p>
-     * 当前尚无内核调用点（ReAct 循环未落地），此处先暴露装配结果，等调用点接入后由它同步询问。
+     * 调用点是 {@code ReActLooper}：每次工具执行前同步询问，判定结果决定是否回灌拒绝理由。
      *
      * @return PermissionManager
      */
@@ -71,6 +71,7 @@ public interface JellyfishComponent {
      * <p>
      * 当前尚无外壳调用点（CLI / TUI / Server / Web 都未落地），此处先暴露装配结果：
      * 任一外壳都可以用它解析并执行命令，或取结构化清单自行渲染菜单。
+     * 内核系统命令已由 {@code core/command/SystemCommands} 在 {@code AgentHarness.bootstrap()} 里注册。
      *
      * @return CommandManager
      */

@@ -43,10 +43,12 @@ import java.util.concurrent.atomic.AtomicReference;
  * <p>
  * <b>本轮不做</b>：
  * <ul>
- *     <li>持久化：由插件经{@code ExtensionRegistry} 同步扩展点完成，落点见 {@link #appendMessage} 的 TODO；</li>
- *     <li>上下文裁剪与 token 预算：归将来的 {@code core/prompt}，本类只做计量；</li>
- *     <li>pending todo 注入：注入发生在构建上下文时且不写回消息历史，见 session 方案 §4.5。</li>
+ *     <li>持久化：由插件经{@code ExtensionRegistry} 同步扩展点完成，落点见 {@link #appendMessage} 的 TODO；
+ *     待办变更同样属于将来要落盘的范围，目前仅内存态。</li>
+ *     <li>上下文裁剪与 token 预算：归 {@code core/prompt}，本类只做计量；</li>
  * </ul>
+ * <b>已落地</b>：会话级待办运行态（{@code /todo} 命令与 {@code core/prompt} 的注入都读这里），
+ * 注入发生在构建上下文时且不写回消息历史（见 session 方案 §4.5）。
  *
  * @author zcd
  */
@@ -298,6 +300,54 @@ public class SessionManager {
             llmMessages.add(message.getMessage());
         }
         return Collections.unmodifiableList(llmMessages);
+    }
+
+    /**
+     * 追加一条会话级待办。
+     *
+     * @param sessionId 会话标识，不可为空白
+     * @param content   待办内容，不可为空白
+     * @return 新增的待办项
+     * @throws JellyfishException 会话不存在或内容为空白时抛出
+     */
+    public PendingTodo addTodo(String sessionId, String content) {
+        return require(sessionId).addTodo(content);
+    }
+
+    /**
+     * 按编号标记待办为已完成。
+     * <p>
+     * 幂等：编号不存在或本就已完成时返回 {@code false}，不抛错——用户重复敲同一条命令不应中断。
+     *
+     * @param sessionId 会话标识，不可为空白
+     * @param todoId    待办编号
+     * @return 确实发生状态流转返回 {@code true}
+     * @throws JellyfishException 会话不存在时抛出
+     */
+    public boolean completeTodo(String sessionId, String todoId) {
+        return require(sessionId).completeTodo(todoId);
+    }
+
+    /**
+     * 清空会话全部待办。
+     *
+     * @param sessionId 会话标识，不可为空白
+     * @return 被清空的待办条数
+     * @throws JellyfishException 会话不存在时抛出
+     */
+    public int clearTodos(String sessionId) {
+        return require(sessionId).clearTodos();
+    }
+
+    /**
+     * 取会话待办列表的不可修改快照。
+     *
+     * @param sessionId 会话标识，不可为空白
+     * @return 不可修改列表，可能为空但不会为 {@code null}
+     * @throws JellyfishException 会话不存在时抛出
+     */
+    public List<PendingTodo> todosOf(String sessionId) {
+        return require(sessionId).getTodos();
     }
 
     /**

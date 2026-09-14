@@ -19,10 +19,11 @@ class JellyfishSettingsTest {
     @Test
     void getPlugins_should_return_empty_object_when_null() {
         // When
-        JellyfishSettings settings = new JellyfishSettings(null);
+        JellyfishSettings settings = new JellyfishSettings(null, null);
 
         // Then
         assertTrue(settings.getPlugins().isEmpty());
+        assertTrue(settings.getReact().isDefault());
         assertTrue(settings.isEmpty());
     }
 
@@ -32,10 +33,24 @@ class JellyfishSettingsTest {
         PluginsSettings plugins = new PluginsSettings(Collections.singletonList("plugins"), null, null, null);
 
         // When
-        JellyfishSettings settings = new JellyfishSettings(plugins);
+        JellyfishSettings settings = new JellyfishSettings(plugins, null);
 
         // Then
         assertSame(plugins, settings.getPlugins());
+    }
+
+    @Test
+    void getReact_should_return_same_instance_when_given() {
+        // Given
+        ReactSettings react = new ReactSettings(3, 0, 100);
+
+        // When
+        JellyfishSettings settings = new JellyfishSettings(null, react);
+
+        // Then
+        assertSame(react, settings.getReact());
+        // 显式配置（含显式 0 预留）不算「未配置」
+        assertTrue(!settings.isEmpty());
     }
 
     @Test
@@ -51,6 +66,20 @@ class JellyfishSettingsTest {
         assertEquals(Collections.singletonList("plugin-b"), settings.getPlugins().getDisabled());
         assertEquals(Collections.singletonList("read_file"),
                 settings.getPlugins().getConfigurations().get("plugin-a").get("readOnlyTools"));
+    }
+
+    @Test
+    void deserialization_should_bind_react_section() {
+        // Given
+        String json = "{\"react\":{\"maxRounds\":5,\"contextReserveTokens\":0,\"maxToolOutputChars\":100}}";
+
+        // When
+        JellyfishSettings settings = ObjectMapperWrapper.readValue(json, JellyfishSettings.class);
+
+        // Then
+        assertEquals(5, settings.getReact().getMaxRounds());
+        assertEquals(0, settings.getReact().getContextReserveTokens());
+        assertEquals(100, settings.getReact().getMaxToolOutputChars());
     }
 
     @Test

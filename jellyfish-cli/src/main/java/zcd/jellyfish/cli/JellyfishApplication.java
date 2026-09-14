@@ -32,6 +32,12 @@ public final class JellyfishApplication {
     /** 日志级别系统属性名，由 {@code log4j2.xml} 读取。 */
     private static final String LOG_LEVEL_PROPERTY = "jellyfish.log.level";
 
+    /** Log4j2 配置选择属性名。 */
+    private static final String LOG_CONFIG_PROPERTY = "log4j.configurationFile";
+
+    /** TUI 模式使用的日志配置：输出到文件，不碰 stderr（stderr 在备用屏期间会撕坏画面）。 */
+    private static final String TUI_LOG_CONFIG = "log4j2-tui.xml";
+
     /** 详细日志旗标。 */
     private static final String FLAG_VERBOSE = "--verbose";
 
@@ -69,6 +75,7 @@ public final class JellyfishApplication {
             console.writeErrLine(StartupOptionsParser.usage());
             return ExitCodes.USAGE_ERROR;
         }
+        applyLogTarget(options);
         if (options.isHelp()) {
             console.writeOut(StartupOptionsParser.usage() + "\n");
             return ExitCodes.OK;
@@ -104,6 +111,35 @@ public final class JellyfishApplication {
                 return;
             }
         }
+    }
+
+    /**
+     * 若启动参数要求 TUI 模式，则把日志输出目标切到文件。
+     * <p>
+     * <b>为什么必须在 DI 装配之前做</b>：Log4j2 在<b>第一个 Logger 被创建</b>时读取配置并固定下来，
+     * 而 {@code DaggerJellyfishComponent.create()} 之后的调用链（配置加载、插件运行时）就会创建 Logger。
+     * 因此设置系统属性必须发生在那之前，否则后到的设置不生效，日志继续写 stderr、继续撕坏画面。
+     * <p>
+     * <b>为什么不编程式操作 Appenders</b>：业务代码里出现日志框架实现类会把这些类硬绑到 Log4j2 上，
+     * 也就再也不能换 binding。只设一个系统属性，切换点归配置文件管。
+     *
+     * @param options 启动参数，可为 {@code null}
+     */
+    /**
+     * 把日志从终端切到文件。
+     * <p>
+     * 必须在<b>第一个 Logger 被创建之前</b>调用（即 DI 装配之前），否则配置已经初始化、再改不生效。
+     * <p>
+     * 不需要预先建目录：实测 Log4j2 会自建缺失的多级父目录（{@code -Djellyfish.log.file=/tmp/a/b/c.log}
+     * 能把 {@code a/b} 一并建出来）。
+     *
+     * @param options 启动参数，可为 {@code null}
+     */
+    private static void applyLogTarget(StartupOptions options) {
+        if (options == null || options.getMode() != StartupOptions.Mode.TUI) {
+            return;
+        }
+        System.setProperty(LOG_CONFIG_PROPERTY, TUI_LOG_CONFIG);
     }
 
     /**

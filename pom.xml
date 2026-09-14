@@ -14,6 +14,7 @@
         <module>jellyfish-api</module>
         <module>jellyfish-infra</module>
         <module>jellyfish-core</module>
+        <module>jellyfish-tui</module>
         <module>jellyfish-cli</module>
     </modules>
 

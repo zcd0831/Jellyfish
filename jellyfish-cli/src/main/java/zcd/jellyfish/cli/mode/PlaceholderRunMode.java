@@ -46,7 +46,7 @@ abstract class PlaceholderRunMode implements RunMode {
 
     @Override
     public int run(StartupOptions options) {
-        console.writeErrLine(mode().getFlag() + " 尚未实现，请使用 -cli（单次调用）。");
+        console.writeErrLine(mode().getFlag() + " 尚未实现，请使用 -cli（单次调用）或 -tui（交互式界面）。");
         return ExitCodes.NOT_IMPLEMENTED;
     }
 }

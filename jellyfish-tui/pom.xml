@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+         http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>zcd</groupId>
+        <artifactId>jellyfish</artifactId>
+        <version>0.0.1-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>jellyfish-tui</artifactId>
+    <name>Jellyfish TUI</name>
+    <description>TUI 外壳：TamboUI 声明式界面、TUI 版 ReActListener 与线程契约。</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>zcd</groupId>
+            <artifactId>jellyfish-api</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>zcd</groupId>
+            <artifactId>jellyfish-infra</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>zcd</groupId>
+            <artifactId>jellyfish-core</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <!-- TamboUI：声明式 DSL。toolkit 会传递 core / widgets / tui / css / annotations；
+             版本由父 POM 的 tamboui-bom 统一管理，这里刻意不带 version。 -->
+        <dependency>
+            <groupId>dev.tamboui</groupId>
+            <artifactId>tamboui-toolkit</artifactId>
+        </dependency>
+        <!-- 终端后端：必须显式选一个，TamboUI 自身不带默认后端 -->
+        <dependency>
+            <groupId>dev.tamboui</groupId>
+            <artifactId>tamboui-jline3-backend</artifactId>
+        </dependency>
+
+        <!-- 单元测试：投影 / 暂存区 / 监听器这些与 TamboUI 无耦合的纯逻辑 -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  TUI 模式的日志配置。
+  与 log4j2.xml 的唯一区别是输出目标：
+  1. 写文件而不是 stderr：TUI 独占终端的备用屏，任何写向 stderr 的字节都会直接糊在画面上，
+     把界面撕成乱码。备用屏期间 stdout / stderr 都不是「可用的输出通道」。
+  2. 默认 WARN：正常一次对话不该有任何日志噪音。
+  3. 级别与文件路径经系统属性读取：业务代码里不出现任何日志框架的实现类，
+     切换只靠 JellyfishApplication 设置 log4j.configurationFile。
+  4. 默认路径是**绝对路径**（用户主目录下），不是相对路径：相对路径按进程 CWD 解析，
+     在项目目录里启动就会往项目里丢日志文件（有被误提交的风险），在只读目录里启动则静默写失败。
+     缺失的父目录由 Log4j2 自建（实测多级也能建），不需要应用代码预先创建。
+  注意：XML 注释里不能出现连续两个减号。
+-->
+<Configuration>
+    <Properties>
+        <Property name="logLevel">${sys:jellyfish.log.level:-WARN}</Property>
+        <Property name="logFile">${sys:jellyfish.log.file:-${sys:user.home}/jellyfish/jellyfish-tui.log}</Property>
+    </Properties>
+    <Appenders>
+        <File name="TuiFile" fileName="${logFile}" append="true">
+            <PatternLayout pattern="%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level %logger{36} - %msg%n"/>
+        </File>
+    </Appenders>
+    <Loggers>
+        <Root level="${logLevel}">
+            <AppenderRef ref="TuiFile"/>
+        </Root>
+    </Loggers>
+</Configuration>

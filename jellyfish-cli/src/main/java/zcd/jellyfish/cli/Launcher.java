@@ -120,7 +120,8 @@ public final class Launcher {
     RunMode modeFor(StartupOptions options) {
         switch (options.getMode()) {
             case TUI:
-                return new TuiRunMode(console);
+                return new TuiRunMode(component.agentHarness(), component.commandManager(),
+                        component.sessionManager(), component.modelManager(), console);
             case SERVER:
                 return new ServerRunMode(console);
             case CLI:

@@ -25,6 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -84,29 +85,24 @@ class LauncherTest {
     }
 
     @Test
-    void modeFor_should_return_tui_placeholder_when_tui_given() {
+    void modeFor_should_return_tui_mode_when_tui_given() {
+        givenTuiCollaborators();
+
         RunMode mode = launcher.modeFor(StartupOptions.builder(StartupOptions.Mode.TUI).build());
 
         assertTrue(mode instanceof TuiRunMode);
-        assertFalse(mode.isImplemented());
+        assertTrue(mode.isImplemented());
     }
 
     @Test
     void modeFor_should_return_server_placeholder_when_server_given() {
+        // 占位模式不接任何内核门面，因此刻意不桩任何协作者
         RunMode mode = launcher.modeFor(StartupOptions.builder(StartupOptions.Mode.SERVER).build());
 
         assertTrue(mode instanceof ServerRunMode);
         assertFalse(mode.isImplemented());
     }
 
-    @Test
-    void launch_should_return_not_implemented_and_skip_kernel_when_tui_given() {
-        int code = launcher.launch(StartupOptions.builder(StartupOptions.Mode.TUI).build());
-
-        assertEquals(ExitCodes.NOT_IMPLEMENTED, code);
-        assertTrue(console.err().contains("-tui"));
-        verify(component, never()).agentHarness();
-    }
 
     @Test
     void launch_should_return_not_implemented_and_skip_kernel_when_server_given() {
@@ -192,10 +188,24 @@ class LauncherTest {
     /**
      * 桩：构造 CLI 模式所需的协作者。
      */
+    /**
+     * 桩上 CLI 真实现需要的三个门面。
+     * <p>
+     * 刻意按用例需要的最小集桩：Mockito 的严格模式会把「桩了但没用到」当成失败，
+     * 这也正好挡住「为了省事一次桩全套」的写法。
+     */
     private void givenRunModeCollaborators() {
         when(component.agentHarness()).thenReturn(harness);
         when(component.commandManager()).thenReturn(commands);
         when(component.sessionManager()).thenReturn(sessions);
+    }
+
+    /**
+     * 桩上 TUI 真实现需要的门面：比 CLI 多一个模型门面（状态栏展示上下文长度用）。
+     */
+    private void givenTuiCollaborators() {
+        givenRunModeCollaborators();
+        when(component.modelManager()).thenReturn(models);
     }
 
     /**

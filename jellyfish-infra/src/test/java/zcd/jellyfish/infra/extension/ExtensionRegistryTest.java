@@ -389,6 +389,66 @@ class ExtensionRegistryTest {
                 () -> extensions.contribute("owner", CommandRequest.class, null, request -> "ok", null));
     }
 
+    @Test
+    void bindings_should_return_handlers_with_owner_sorted_by_order() {
+        // Given：故意让后注册的 order 更小
+        ExtensionHandler<ContributionRequest, String> late = request -> "late";
+        ExtensionHandler<ContributionRequest, String> early = request -> "early";
+        extensions.contribute("late-owner", ContributionRequest.class, null, late, RegisterOptions.order(10));
+        extensions.contribute("early-owner", ContributionRequest.class, null, early, RegisterOptions.order(-5));
+
+        // When
+        List<HandlerBinding<ContributionRequest, String>> bindings =
+                extensions.bindings(ContributionRequest.class, null);
+
+        // Then：顺序与 handlers 一致，且能拿到来源
+        assertEquals(2, bindings.size());
+        assertEquals("early-owner", bindings.get(0).getOwner());
+        assertSame(early, bindings.get(0).getHandler());
+        assertEquals("late-owner", bindings.get(1).getOwner());
+        assertSame(late, bindings.get(1).getHandler());
+    }
+
+    @Test
+    void bindings_should_expose_same_handlers_as_handlers_lookup() {
+        // Given
+        ExtensionHandler<CommandRequest, Object> handler = request -> "ok";
+        extensions.handle("plugin-a", CommandRequest.class, "calc", null, handler, RegisterOptions.DEFAULT);
+
+        // When
+        List<HandlerBinding<CommandRequest, Object>> bindings = extensions.bindings(CommandRequest.class, "calc");
+
+        // Then
+        assertEquals(1, bindings.size());
+        assertEquals("plugin-a", bindings.get(0).getOwner());
+        assertSame(extensions.handlers(CommandRequest.class, "calc").get(0), bindings.get(0).getHandler());
+    }
+
+    @Test
+    void bindings_should_apply_type_level_route_key_matching() {
+        // Given：类型级注册（routeKey 为 null）
+        extensions.contribute("kernel", ContributionRequest.class, null, request -> "k", RegisterOptions.DEFAULT);
+
+        // When：任意路由键都应命中
+        List<HandlerBinding<ContributionRequest, String>> bindings =
+                extensions.bindings(ContributionRequest.class, "anything");
+
+        // Then
+        assertEquals(1, bindings.size());
+        assertEquals("kernel", bindings.get(0).getOwner());
+    }
+
+    @Test
+    void bindings_should_be_empty_and_unmodifiable_when_no_match() {
+        // When
+        List<HandlerBinding<ContributionRequest, String>> bindings =
+                extensions.bindings(ContributionRequest.class, null);
+
+        // Then
+        assertTrue(bindings.isEmpty());
+        assertThrows(UnsupportedOperationException.class, () -> bindings.add(null));
+    }
+
     /**
      * 测试用类型级请求。
      *

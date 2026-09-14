@@ -125,4 +125,16 @@ public final class PluginRuntimeConfig {
         Map<String, Object> configuration = pluginConfigurations.get(pluginId);
         return configuration == null ? Collections.<String, Object>emptyMap() : configuration;
     }
+
+    /**
+     * 获取全部插件配置段。
+     * <p>
+     * 供<b>不按 pluginId 逐个查询</b>的消费方使用：例如权限模块要把各插件声明的只读工具白名单
+     * 合并成一张全局工具名集合，它并不关心「哪个插件声明的」。
+     *
+     * @return 不可变映射（pluginId → 该插件配置段），无配置时为空映射而非 {@code null}
+     */
+    public Map<String, Map<String, Object>> getPluginConfigurations() {
+        return pluginConfigurations;
+    }
 }

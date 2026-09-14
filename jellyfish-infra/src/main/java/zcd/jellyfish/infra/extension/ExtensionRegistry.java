@@ -92,10 +92,39 @@ public final class ExtensionRegistry {
     }
 
     /**
+     * 有序查找全部命中的处理器，并携带来源：只查不调。
+     * <p>
+     * 语义与 {@link #handlers} 完全一致（类型宽匹配、{@code order} 升序、同序按注册顺序、不可修改、
+     * 无命中返回空列表），唯一差别是同时给出 owner，供需要归因的调用点使用：
+     * <ul>
+     *     <li>类型宽匹配：注册父类型即可被查询子类型命中，路由键为 {@code null} 的类型级注册对所有路由键生效；</li>
+     *     <li>不调用任何处理器，也不做任何编排。</li>
+     * </ul>
+     *
+     * @param type     请求类型，不可为 {@code null}
+     * @param routeKey 路由键，可为 {@code null}
+     * @param <C>      请求类型
+     * @param <R>      结果类型
+     * @return 不可修改的绑定列表，无命中时为空列表
+     */
+    @SuppressWarnings("unchecked")
+    public <C extends ExtensionRequest<R>, R> List<HandlerBinding<C, R>> bindings(Class<C> type, String routeKey) {
+        List<HandlerRegistration> registrations = registry.resolve(type, routeKey);
+        List<HandlerBinding<C, R>> bindings = new ArrayList<>(registrations.size());
+        for (HandlerRegistration registration : registrations) {
+            bindings.add(new HandlerBinding<C, R>(registration.getOwner(),
+                    (ExtensionHandler<C, R>) registration.getHandler()));
+        }
+        return Collections.unmodifiableList(bindings);
+    }
+
+    /**
      * 有序查找全部命中的处理器：只查不调。
      * <p>
      * 类型宽匹配（注册父类型即可被查询子类型命中），路由键为 {@code null} 的类型级注册对所有路由键生效；
      * 结果按 {@code order} 升序、同序按注册顺序排列。
+     * <p>
+     * 与 {@link #bindings} 走同一条查找路径，只是丢掉了 owner；需要归因时改用 {@code bindings}。
      *
      * @param type     请求类型，不可为 {@code null}
      * @param routeKey 路由键，可为 {@code null}
@@ -103,12 +132,11 @@ public final class ExtensionRegistry {
      * @param <R>      结果类型
      * @return 不可修改的处理器列表，无命中时为空列表
      */
-    @SuppressWarnings("unchecked")
     public <C extends ExtensionRequest<R>, R> List<ExtensionHandler<C, R>> handlers(Class<C> type, String routeKey) {
-        List<HandlerRegistration> registrations = registry.resolve(type, routeKey);
-        List<ExtensionHandler<C, R>> handlers = new ArrayList<>(registrations.size());
-        for (HandlerRegistration registration : registrations) {
-            handlers.add((ExtensionHandler<C, R>) registration.getHandler());
+        List<HandlerBinding<C, R>> bindings = bindings(type, routeKey);
+        List<ExtensionHandler<C, R>> handlers = new ArrayList<>(bindings.size());
+        for (HandlerBinding<C, R> binding : bindings) {
+            handlers.add(binding.getHandler());
         }
         return Collections.unmodifiableList(handlers);
     }

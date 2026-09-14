@@ -10,12 +10,13 @@ import javax.inject.Singleton;
 
 /**
  * 应用级 Dagger2 组件：在最外层（composition root）装配共享的 {@code OkHttpClient}、
- * LLM 客户端注册表、配置门面与上层 manager。
+ * LLM 客户端注册表、配置门面、扩展层（注册表 / 同步策略 / 事件通道）与插件运行时。
  *
  * @author zcd
  */
 @Singleton
-@Component(modules = {ConfigModule.class, LlmModule.class, ExtensionModule.class, EventModule.class})
+@Component(modules = {ConfigModule.class, LlmModule.class, ExtensionModule.class, EventModule.class,
+        PluginModule.class})
 public interface JellyfishComponent {
 
     /**

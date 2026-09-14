@@ -3,6 +3,7 @@ package zcd.jellyfish.core;
 import zcd.jellyfish.infra.config.RuntimeConfig;
 import zcd.jellyfish.infra.event.EventChannel;
 import zcd.jellyfish.infra.model.ModelManager;
+import zcd.jellyfish.infra.plugin.PF4JPluginManager;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
@@ -34,28 +35,49 @@ public class AgentHarness {
     /** 模型管理器，持有 provider / model 索引。 */
     private final ModelManager modelManager;
 
+    /** 插件运行时门面：加载 / 体检 / 启动插件，并按 owner 回收注册。 */
+    private final PF4JPluginManager pluginManager;
+
     /**
      * 构造运行时宿主。
      *
      * @param runtimeConfig 运行时配置门面
      * @param eventChannel  事件通道
      * @param modelManager  模型管理器
+     * @param pluginManager 插件运行时门面
      */
     @Inject
-    public AgentHarness(RuntimeConfig runtimeConfig, EventChannel eventChannel, ModelManager modelManager) {
+    public AgentHarness(RuntimeConfig runtimeConfig, EventChannel eventChannel, ModelManager modelManager,
+                        PF4JPluginManager pluginManager) {
         this.runtimeConfig = runtimeConfig;
         this.eventChannel = eventChannel;
         this.modelManager = modelManager;
+        this.pluginManager = pluginManager;
     }
 
     /**
-     * 启动应用：先启动事件通道，再加载运行时配置，最后重建模型索引。
+     * 启动应用：启动事件通道 → 加载运行时配置 → 重建模型索引 → 启动插件运行时。
      * <p>
-     * 其余启动步骤（注册核心订阅者、加载插件）为占位，后续在此补充。
+     * 其余启动步骤（注册核心订阅者）为占位，后续在此补充。
      */
     public void bootstrap() {
         eventChannel.start();
         runtimeConfig.refresh();
         modelManager.refresh(false);
+        pluginManager.bootstrap();
+    }
+
+    /**
+     * 关闭应用：先停插件（并按 owner 回收注册），再收敛事件通道。幂等。
+     * <p>
+     * 顺序与 {@link #bootstrap()} 相反：插件先停，避免插件在通道关停后继续收到通知；
+     * 两者都失败也不互相阻断，保证运行总能收敛。
+     */
+    public void shutdown() {
+        try {
+            pluginManager.close();
+        } finally {
+            eventChannel.close();
+        }
     }
 }

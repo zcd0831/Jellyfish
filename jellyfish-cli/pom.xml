@@ -35,5 +35,12 @@
             <groupId>com.google.dagger</groupId>
             <artifactId>dagger</artifactId>
         </dependency>
+
+        <!-- 单元测试：DI Module 的装配契约 -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 </project>

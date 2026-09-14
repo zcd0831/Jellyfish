@@ -3,6 +3,7 @@ package zcd.jellyfish.infra.extension;
 import org.junit.jupiter.api.Test;
 import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.extension.CommandRequest;
+import zcd.jellyfish.api.extension.CommandResult;
 import zcd.jellyfish.api.extension.ExtensionHandler;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -19,10 +20,10 @@ class HandlerBindingTest {
     @Test
     void getters_should_return_constructor_values() {
         // Given
-        ExtensionHandler<CommandRequest, Object> handler = request -> "ok";
+        ExtensionHandler<CommandRequest, CommandResult> handler = request -> CommandResult.ok("ok");
 
         // When
-        HandlerBinding<CommandRequest, Object> binding = new HandlerBinding<>("plugin-a", handler);
+        HandlerBinding<CommandRequest, CommandResult> binding = new HandlerBinding<>("plugin-a", handler);
 
         // Then
         assertEquals("plugin-a", binding.getOwner());
@@ -32,20 +33,24 @@ class HandlerBindingTest {
     @Test
     void constructor_should_throw_when_owner_is_blank() {
         // When / Then
-        assertThrows(JellyfishException.class, () -> new HandlerBinding<CommandRequest, Object>(null, request -> "ok"));
-        assertThrows(JellyfishException.class, () -> new HandlerBinding<CommandRequest, Object>("  ", request -> "ok"));
+        assertThrows(JellyfishException.class, () -> new HandlerBinding<CommandRequest, CommandResult>(null,
+                request -> CommandResult.ok("ok")));
+        assertThrows(JellyfishException.class, () -> new HandlerBinding<CommandRequest, CommandResult>("  ",
+                request -> CommandResult.ok("ok")));
     }
 
     @Test
     void constructor_should_throw_when_handler_is_null() {
         // When / Then
-        assertThrows(NullPointerException.class, () -> new HandlerBinding<CommandRequest, Object>("plugin-a", null));
+        assertThrows(NullPointerException.class,
+                () -> new HandlerBinding<CommandRequest, CommandResult>("plugin-a", null));
     }
 
     @Test
     void toString_should_render_owner() {
         // When
-        String text = new HandlerBinding<CommandRequest, Object>("guard-plugin", request -> "ok").toString();
+        String text = new HandlerBinding<CommandRequest, CommandResult>("guard-plugin",
+                request -> CommandResult.ok("ok")).toString();
 
         // Then
         assertEquals("HandlerBinding{owner=guard-plugin}", text);

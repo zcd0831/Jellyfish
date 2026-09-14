@@ -202,7 +202,40 @@ public final class ExtensionRegistry {
     }
 
     /**
-     * 取出某请求类型下的全部描述符。
+     * 列出某类型下全部注册的「名字 + 描述符 + 来源」。
+     * <p>
+     * 与 {@link #descriptors} 同一条取数路径、同一顺序（{@code order} 升序、同序按注册顺序），
+     * 两点差别：① 连 owner 与 routeKey 一起给；② <b>描述符为 {@code null} 的注册也会返回</b>
+     * ——清单类调用点（命令帮助与菜单）需要看见「没有名片但存在」的项。
+     *
+     * @param type           请求类型，不可为 {@code null}
+     * @param descriptorType 期望的描述符类型，不可为 {@code null}
+     * @param <D>            描述符类型
+     * @return 不可修改的绑定列表，无注册时为空列表
+     * @throws ExtensionException 存在非空描述符但类型不符时抛出
+     */
+    public <D> List<DescriptorBinding<D>> descriptorBindings(Class<? extends ExtensionRequest<?>> type,
+                                                            Class<D> descriptorType) {
+        Objects.requireNonNull(descriptorType, "descriptorType must not be null");
+        List<HandlerRegistration> registrations = registry.registrationsOf(type);
+        List<DescriptorBinding<D>> bindings = new ArrayList<>(registrations.size());
+        for (HandlerRegistration registration : registrations) {
+            Object descriptor = registration.getDescriptor();
+            if (descriptor != null && !descriptorType.isInstance(descriptor)) {
+                throw new ExtensionException(ExtensionException.Code.DESCRIPTOR_TYPE_MISMATCH,
+                        "expected " + descriptorType.getName() + " but got " + descriptor.getClass().getName()
+                                + " for " + registration);
+            }
+            bindings.add(new DescriptorBinding<D>(registration.getOwner(), registration.getRouteKey(),
+                    descriptor == null ? null : descriptorType.cast(descriptor)));
+        }
+        return Collections.unmodifiableList(bindings);
+    }
+
+    /**
+     * 取出某请求类型下的全部描述符，按注册顺序，跳过没有描述符的注册。
+     * <p>
+     * 与 {@link #descriptorBindings} 同源：需要名字或来源时改用那个入口。
      *
      * @param type           请求类型，不可为 {@code null}
      * @param descriptorType 期望的描述符类型，不可为 {@code null}
@@ -211,7 +244,13 @@ public final class ExtensionRegistry {
      * @throws ExtensionException 存在非空描述符但类型不符时抛出
      */
     public <D> List<D> descriptors(Class<? extends ExtensionRequest<?>> type, Class<D> descriptorType) {
-        return registry.descriptorsOf(type, descriptorType);
+        List<D> descriptors = new ArrayList<>();
+        for (DescriptorBinding<D> binding : descriptorBindings(type, descriptorType)) {
+            if (binding.getDescriptor() != null) {
+                descriptors.add(binding.getDescriptor());
+            }
+        }
+        return Collections.unmodifiableList(descriptors);
     }
 
     /**

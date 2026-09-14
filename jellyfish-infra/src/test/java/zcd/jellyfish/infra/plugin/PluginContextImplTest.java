@@ -5,6 +5,7 @@ import zcd.jellyfish.api.event.JellyfishEvent;
 import zcd.jellyfish.api.event.RegisterOptions;
 import zcd.jellyfish.api.event.notification.ConfigWarningEvent;
 import zcd.jellyfish.api.extension.CommandRequest;
+import zcd.jellyfish.api.extension.CommandResult;
 import zcd.jellyfish.api.extension.ExtensionHandler;
 import zcd.jellyfish.api.extension.ToolDescriptor;
 import zcd.jellyfish.api.extension.ToolCallRequest;
@@ -102,7 +103,7 @@ class PluginContextImplTest {
     @Test
     void contribute_should_register_under_plugin_owner() {
         // Given
-        ExtensionHandler<CommandRequest, Object> handler = request -> "42";
+        ExtensionHandler<CommandRequest, CommandResult> handler = request -> CommandResult.ok("42");
 
         // When
         context.contribute(CommandRequest.class, handler, RegisterOptions.order(3));

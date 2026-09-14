@@ -3,6 +3,7 @@ package zcd.jellyfish.cli.di;
 import dagger.Component;
 import zcd.jellyfish.core.AgentHarness;
 import zcd.jellyfish.infra.agent.AgentManager;
+import zcd.jellyfish.infra.command.CommandManager;
 import zcd.jellyfish.infra.config.RuntimeConfig;
 import zcd.jellyfish.infra.llm.LlmClientFactory;
 import zcd.jellyfish.infra.model.ModelManager;
@@ -18,7 +19,7 @@ import javax.inject.Singleton;
  */
 @Singleton
 @Component(modules = {ConfigModule.class, LlmModule.class, ExtensionModule.class, EventModule.class,
-        PluginModule.class, AgentModule.class, PermissionModule.class})
+        PluginModule.class, AgentModule.class, PermissionModule.class, CommandModule.class})
 public interface JellyfishComponent {
 
     /**
@@ -64,4 +65,14 @@ public interface JellyfishComponent {
      * @return PermissionManager
      */
     PermissionManager permissionManager();
+
+    /**
+     * 获取命令域服务。
+     * <p>
+     * 当前尚无外壳调用点（CLI / TUI / Server / Web 都未落地），此处先暴露装配结果：
+     * 任一外壳都可以用它解析并执行命令，或取结构化清单自行渲染菜单。
+     *
+     * @return CommandManager
+     */
+    CommandManager commandManager();
 }

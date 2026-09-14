@@ -4,7 +4,10 @@ import org.junit.jupiter.api.Test;
 import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.event.RegisterOptions;
 import zcd.jellyfish.api.event.Subscription;
+import zcd.jellyfish.api.extension.CommandArguments;
+import zcd.jellyfish.api.extension.CommandDescriptor;
 import zcd.jellyfish.api.extension.CommandRequest;
+import zcd.jellyfish.api.extension.CommandResult;
 import zcd.jellyfish.api.extension.ExtensionException;
 import zcd.jellyfish.api.extension.ExtensionHandler;
 import zcd.jellyfish.api.extension.ExtensionRequest;
@@ -13,6 +16,7 @@ import zcd.jellyfish.api.extension.ToolCallResult;
 import zcd.jellyfish.api.extension.ToolDescriptor;
 import zcd.jellyfish.infra.registry.TypeRegistry;
 
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -42,7 +46,7 @@ class ExtensionRegistryTest {
     @Test
     void handle_should_register_unique_handler_and_expose_it_via_handler() {
         // Given
-        ExtensionHandler<CommandRequest, Object> handler = request -> "ok";
+        ExtensionHandler<CommandRequest, CommandResult> handler = request -> CommandResult.ok("ok");
 
         // When
         extensions.handle("plugin-a", CommandRequest.class, "calc", "descriptor", handler, RegisterOptions.DEFAULT);
@@ -55,12 +59,13 @@ class ExtensionRegistryTest {
     @Test
     void handle_should_throw_duplicate_handler_when_key_occupied() {
         // Given
-        extensions.handle("builtin", CommandRequest.class, "calc", null, request -> "one", RegisterOptions.DEFAULT);
+        extensions.handle("builtin", CommandRequest.class, "calc", null, request -> CommandResult.ok("one"),
+                RegisterOptions.DEFAULT);
 
         // When
         ExtensionException exception = assertThrows(ExtensionException.class,
-                () -> extensions.handle("plugin-a", CommandRequest.class, "calc", null, request -> "two",
-                        RegisterOptions.DEFAULT));
+                () -> extensions.handle("plugin-a", CommandRequest.class, "calc", null,
+                        request -> CommandResult.ok("two"), RegisterOptions.DEFAULT));
 
         // Then
         assertEquals(ExtensionException.Code.DUPLICATE_HANDLER, exception.getCode());
@@ -69,8 +74,9 @@ class ExtensionRegistryTest {
     @Test
     void handle_should_replace_handler_when_override_declared() {
         // Given
-        extensions.handle("builtin", CommandRequest.class, "calc", null, request -> "one", RegisterOptions.DEFAULT);
-        ExtensionHandler<CommandRequest, Object> replacement = request -> "two";
+        extensions.handle("builtin", CommandRequest.class, "calc", null, request -> CommandResult.ok("one"),
+                RegisterOptions.DEFAULT);
+        ExtensionHandler<CommandRequest, CommandResult> replacement = request -> CommandResult.ok("two");
 
         // When
         extensions.handle("plugin-a", CommandRequest.class, "calc", null, replacement,
@@ -84,7 +90,7 @@ class ExtensionRegistryTest {
     void subscription_close_should_release_registration() {
         // Given
         Subscription handle = extensions.handle("plugin-a", CommandRequest.class, "calc", null,
-                request -> "ok", RegisterOptions.DEFAULT);
+                request -> CommandResult.ok("ok"), RegisterOptions.DEFAULT);
 
         // When
         handle.close();
@@ -163,8 +169,10 @@ class ExtensionRegistryTest {
     @Test
     void handler_should_throw_ambiguous_handler_when_multiple_match() {
         // Given
-        extensions.contribute("a", CommandRequest.class, null, request -> "a", RegisterOptions.DEFAULT);
-        extensions.contribute("b", CommandRequest.class, null, request -> "b", RegisterOptions.DEFAULT);
+        extensions.contribute("a", CommandRequest.class, null, request -> CommandResult.ok("a"),
+                RegisterOptions.DEFAULT);
+        extensions.contribute("b", CommandRequest.class, null, request -> CommandResult.ok("b"),
+                RegisterOptions.DEFAULT);
 
         // When
         ExtensionException exception = assertThrows(ExtensionException.class,
@@ -180,7 +188,7 @@ class ExtensionRegistryTest {
         AtomicInteger calls = new AtomicInteger();
         extensions.handle("plugin-a", CommandRequest.class, "calc", null, request -> {
             calls.incrementAndGet();
-            return "ok";
+            return CommandResult.ok("ok");
         }, RegisterOptions.DEFAULT);
 
         // When
@@ -193,21 +201,21 @@ class ExtensionRegistryTest {
     @Test
     void invoke_should_call_only_the_given_handler_in_current_thread() {
         // Given
-        ExtensionHandler<CommandRequest, Object> given = request -> "given";
+        ExtensionHandler<CommandRequest, CommandResult> given = request -> CommandResult.ok("given");
         extensions.handle("a", CommandRequest.class, "calc", null, given, RegisterOptions.DEFAULT);
         AtomicInteger otherCalls = new AtomicInteger();
         extensions.handle("b", CommandRequest.class, "other", null, request -> {
             otherCalls.incrementAndGet();
-            return "other";
+            return CommandResult.ok("other");
         }, RegisterOptions.DEFAULT);
-        CommandRequest request = new CommandRequest("calc", Object.class, null);
+        CommandRequest request = new CommandRequest("calc", CommandArguments.EMPTY);
 
         // When
         String thread = Thread.currentThread().getName();
-        Object result = extensions.invoke(given, request);
+        CommandResult result = extensions.invoke(given, request);
 
         // Then：内联执行、只碰传入的处理器
-        assertEquals("given", result);
+        assertEquals("given", result.getOutput());
         assertEquals(0, otherCalls.get());
         assertEquals(thread, Thread.currentThread().getName());
     }
@@ -235,8 +243,8 @@ class ExtensionRegistryTest {
     @Test
     void invoke_should_allow_null_result() {
         // Given
-        ExtensionHandler<CommandRequest, Object> handler = request -> null;
-        CommandRequest request = new CommandRequest("calc", Object.class, null);
+        ExtensionHandler<CommandRequest, CommandResult> handler = request -> null;
+        CommandRequest request = new CommandRequest("calc", CommandArguments.EMPTY);
 
         // Then
         assertNull(extensions.invoke(handler, request));
@@ -245,25 +253,25 @@ class ExtensionRegistryTest {
     @Test
     void invoke_should_rethrow_runtime_exception_from_handler() {
         // Given
-        ExtensionHandler<CommandRequest, Object> handler = request -> {
+        ExtensionHandler<CommandRequest, CommandResult> handler = request -> {
             throw new IllegalStateException("boom");
         };
 
         // When / Then
         assertThrows(IllegalStateException.class,
-                () -> extensions.invoke(handler, new CommandRequest("calc", Object.class, null)));
+                () -> extensions.invoke(handler, new CommandRequest("calc", CommandArguments.EMPTY)));
     }
 
     @Test
     void invoke_should_wrap_checked_exception_from_handler() {
         // Given
-        ExtensionHandler<CommandRequest, Object> handler = request -> {
+        ExtensionHandler<CommandRequest, CommandResult> handler = request -> {
             throw new Exception("checked");
         };
 
         // When
         JellyfishException exception = assertThrows(JellyfishException.class,
-                () -> extensions.invoke(handler, new CommandRequest("calc", Object.class, null)));
+                () -> extensions.invoke(handler, new CommandRequest("calc", CommandArguments.EMPTY)));
 
         // Then
         assertEquals("checked", exception.getCause().getMessage());
@@ -346,9 +354,85 @@ class ExtensionRegistryTest {
     }
 
     @Test
+    void descriptorBindings_should_return_names_and_owners_including_missing_descriptors() {
+        // Given：一条有名片、一条没名片
+        CommandDescriptor agent = new CommandDescriptor("切换 agent", "<agentId>", Arrays.asList("a"));
+        extensions.handle("plugin-a", CommandRequest.class, "agent", agent, request -> null,
+                RegisterOptions.DEFAULT);
+        extensions.handle("plugin-b", CommandRequest.class, "plain", null, request -> null, RegisterOptions.DEFAULT);
+
+        // When
+        List<DescriptorBinding<CommandDescriptor>> bindings =
+                extensions.descriptorBindings(CommandRequest.class, CommandDescriptor.class);
+
+        // Then：没名片的那条也在清单里，否则帮助与菜单会漏掉一条可执行的命令
+        assertEquals(2, bindings.size());
+        assertEquals("agent", bindings.get(0).getRouteKey());
+        assertEquals("plugin-a", bindings.get(0).getOwner());
+        assertSame(agent, bindings.get(0).getDescriptor());
+        assertEquals("plain", bindings.get(1).getRouteKey());
+        assertNull(bindings.get(1).getDescriptor());
+    }
+
+    @Test
+    void descriptorBindings_should_follow_registration_order() {
+        // Given：故意让后注册的 order 更小
+        extensions.handle("late", CommandRequest.class, "late", null, request -> null, RegisterOptions.order(10));
+        extensions.handle("early", CommandRequest.class, "early", null, request -> null, RegisterOptions.order(-5));
+
+        // When
+        List<DescriptorBinding<CommandDescriptor>> bindings =
+                extensions.descriptorBindings(CommandRequest.class, CommandDescriptor.class);
+
+        // Then
+        assertEquals("early", bindings.get(0).getRouteKey());
+        assertEquals("late", bindings.get(1).getRouteKey());
+    }
+
+    @Test
+    void descriptorBindings_should_return_unmodifiable_empty_list_when_no_registration() {
+        // When
+        List<DescriptorBinding<CommandDescriptor>> bindings =
+                extensions.descriptorBindings(CommandRequest.class, CommandDescriptor.class);
+
+        // Then
+        assertTrue(bindings.isEmpty());
+        assertThrows(UnsupportedOperationException.class, () -> bindings.add(null));
+    }
+
+    @Test
+    void descriptorBindings_should_throw_when_descriptor_type_mismatches() {
+        // Given
+        extensions.handle("plugin-a", CommandRequest.class, "calc", "not-a-descriptor", request -> null,
+                RegisterOptions.DEFAULT);
+
+        // When
+        ExtensionException exception = assertThrows(ExtensionException.class,
+                () -> extensions.descriptorBindings(CommandRequest.class, CommandDescriptor.class));
+
+        // Then
+        assertEquals(ExtensionException.Code.DESCRIPTOR_TYPE_MISMATCH, exception.getCode());
+    }
+
+    @Test
+    void descriptors_should_skip_registrations_without_descriptor() {
+        // Given
+        CommandDescriptor help = new CommandDescriptor("帮助", null, null);
+        extensions.handle("plugin-a", CommandRequest.class, "help", help, request -> null, RegisterOptions.DEFAULT);
+        extensions.handle("plugin-b", CommandRequest.class, "plain", null, request -> null, RegisterOptions.DEFAULT);
+
+        // When
+        List<CommandDescriptor> descriptors = extensions.descriptors(CommandRequest.class, CommandDescriptor.class);
+
+        // Then
+        assertEquals(Collections.singletonList(help), descriptors);
+    }
+
+    @Test
     void unregisterAll_should_drop_registrations_of_owner_only() {
         // Given
-        extensions.handle("plugin-a", CommandRequest.class, "calc", null, request -> "one", RegisterOptions.DEFAULT);
+        extensions.handle("plugin-a", CommandRequest.class, "calc", null, request -> CommandResult.ok("one"),
+                RegisterOptions.DEFAULT);
         extensions.contribute("kernel", ContributionRequest.class, null, request -> "k", RegisterOptions.DEFAULT);
 
         // When
@@ -363,7 +447,7 @@ class ExtensionRegistryTest {
     @Test
     void snapshot_should_render_registrations() {
         // Given
-        extensions.handle("plugin-a", CommandRequest.class, "calc", null, request -> "one",
+        extensions.handle("plugin-a", CommandRequest.class, "calc", null, request -> CommandResult.ok("one"),
                 RegisterOptions.order(2));
 
         // Then
@@ -384,9 +468,11 @@ class ExtensionRegistryTest {
     void handle_should_reject_null_options() {
         // When / Then
         assertThrows(NullPointerException.class,
-                () -> extensions.handle("owner", CommandRequest.class, "calc", null, request -> "ok", null));
+                () -> extensions.handle("owner", CommandRequest.class, "calc", null,
+                        request -> CommandResult.ok("ok"), null));
         assertThrows(NullPointerException.class,
-                () -> extensions.contribute("owner", CommandRequest.class, null, request -> "ok", null));
+                () -> extensions.contribute("owner", CommandRequest.class, null,
+                        request -> CommandResult.ok("ok"), null));
     }
 
     @Test
@@ -412,11 +498,12 @@ class ExtensionRegistryTest {
     @Test
     void bindings_should_expose_same_handlers_as_handlers_lookup() {
         // Given
-        ExtensionHandler<CommandRequest, Object> handler = request -> "ok";
+        ExtensionHandler<CommandRequest, CommandResult> handler = request -> CommandResult.ok("ok");
         extensions.handle("plugin-a", CommandRequest.class, "calc", null, handler, RegisterOptions.DEFAULT);
 
         // When
-        List<HandlerBinding<CommandRequest, Object>> bindings = extensions.bindings(CommandRequest.class, "calc");
+        List<HandlerBinding<CommandRequest, CommandResult>> bindings = extensions.bindings(
+                CommandRequest.class, "calc");
 
         // Then
         assertEquals(1, bindings.size());

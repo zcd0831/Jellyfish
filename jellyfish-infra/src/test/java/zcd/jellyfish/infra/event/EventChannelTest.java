@@ -7,6 +7,7 @@ import zcd.jellyfish.api.event.Subscription;
 import zcd.jellyfish.api.event.notification.ConfigWarningEvent;
 import zcd.jellyfish.api.event.notification.SessionCreatedEvent;
 import zcd.jellyfish.api.extension.CommandRequest;
+import zcd.jellyfish.api.extension.CommandResult;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.registry.TypeRegistry;
 
@@ -182,7 +183,7 @@ class EventChannelTest {
         AtomicInteger extensionCalls = new AtomicInteger();
         extensions.handle("plugin-a", CommandRequest.class, "calc", null, request -> {
             extensionCalls.incrementAndGet();
-            return "ok";
+            return CommandResult.ok("ok");
         }, RegisterOptions.DEFAULT);
         channel.start();
         channel.subscribe("plugin-a", ConfigWarningEvent.class, event -> {

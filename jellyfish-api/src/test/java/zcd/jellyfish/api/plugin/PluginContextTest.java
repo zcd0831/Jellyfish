@@ -6,6 +6,7 @@ import zcd.jellyfish.api.event.RegisterOptions;
 import zcd.jellyfish.api.event.Subscription;
 import zcd.jellyfish.api.event.notification.ConfigWarningEvent;
 import zcd.jellyfish.api.extension.CommandRequest;
+import zcd.jellyfish.api.extension.CommandResult;
 import zcd.jellyfish.api.extension.ExtensionHandler;
 import zcd.jellyfish.api.extension.ExtensionRequest;
 
@@ -32,7 +33,7 @@ class PluginContextTest {
     private final RecordingContext context = new RecordingContext();
 
     /** 占位处理器。 */
-    private final ExtensionHandler<CommandRequest, Object> handler = request -> "ok";
+    private final ExtensionHandler<CommandRequest, CommandResult> handler = request -> CommandResult.ok("ok");
 
     @Test
     void handle_without_descriptor_should_delegate_with_null_descriptor_and_default_options() {

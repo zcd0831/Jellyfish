@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import zcd.jellyfish.api.event.Subscription;
 import zcd.jellyfish.api.event.notification.ConfigWarningEvent;
 import zcd.jellyfish.api.extension.CommandRequest;
+import zcd.jellyfish.api.extension.CommandResult;
 import zcd.jellyfish.api.extension.ExtensionException;
 import zcd.jellyfish.api.extension.ToolCallRequest;
 import zcd.jellyfish.api.plugin.PluginContext;
@@ -44,7 +45,7 @@ class PluginContextFactoryTest {
         PluginContext context = factory.create(PluginDeclaration.of("plugin-a"));
 
         // When
-        context.handle(CommandRequest.class, "calc", request -> "ok");
+        context.handle(CommandRequest.class, "calc", request -> CommandResult.ok("ok"));
 
         // Then
         assertTrue(registry.snapshot().render().contains("<- plugin-a"));
@@ -66,7 +67,7 @@ class PluginContextFactoryTest {
     void release_should_drop_extension_handlers_and_event_subscriptions_together() {
         // Given：同一个插件既注册处理器又订阅事件
         PluginContext context = factory.create(PluginDeclaration.of("plugin-a"));
-        context.handle(CommandRequest.class, "calc", request -> "ok");
+        context.handle(CommandRequest.class, "calc", request -> CommandResult.ok("ok"));
         context.observe(ConfigWarningEvent.class, event -> {
             // 仅用于产生一条订阅
         });
@@ -84,8 +85,9 @@ class PluginContextFactoryTest {
     void release_should_keep_other_plugins_registrations() {
         // Given
         PluginContext kept = factory.create(PluginDeclaration.of("plugin-b"));
-        kept.handle(CommandRequest.class, "calc", request -> "ok");
-        factory.create(PluginDeclaration.of("plugin-a")).handle(CommandRequest.class, "other", request -> "ok");
+        kept.handle(CommandRequest.class, "calc", request -> CommandResult.ok("ok"));
+        factory.create(PluginDeclaration.of("plugin-a"))
+                .handle(CommandRequest.class, "other", request -> CommandResult.ok("ok"));
 
         // When
         factory.release("plugin-a");
@@ -111,7 +113,7 @@ class PluginContextFactoryTest {
     void subscription_from_context_should_release_single_registration() {
         // Given
         PluginContext context = factory.create(PluginDeclaration.of("plugin-a"));
-        context.handle(CommandRequest.class, "calc", request -> "ok");
+        context.handle(CommandRequest.class, "calc", request -> CommandResult.ok("ok"));
         Subscription subscription = context.handle(ToolCallRequest.class, "echo", request -> null);
 
         // When

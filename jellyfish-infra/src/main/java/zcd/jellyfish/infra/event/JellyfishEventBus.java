@@ -4,18 +4,18 @@ import com.google.common.eventbus.EventBus;
 import com.google.common.eventbus.Subscribe;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.slf4j.MDC;
 import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.event.EventPublisher;
 import zcd.jellyfish.api.event.JellyfishEvent;
 import zcd.jellyfish.api.event.RegisterOptions;
 import zcd.jellyfish.api.event.Subscription;
-import zcd.jellyfish.api.event.callback.Callback;
-import zcd.jellyfish.api.event.callback.CallbackHandler;
+import zcd.jellyfish.api.extension.ExtensionRequest;
+import zcd.jellyfish.api.extension.ExtensionHandler;
 import zcd.jellyfish.api.plugin.PluginContext;
+import zcd.jellyfish.api.plugin.PluginDeclaration;
 import zcd.jellyfish.infra.event.callback.CallbackRegistry;
-import zcd.jellyfish.infra.event.callback.ExtensionPointRegistry;
 import zcd.jellyfish.infra.event.notification.EventRegistry;
+import zcd.jellyfish.infra.plugin.PluginContextImpl;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -41,11 +41,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /**
  * 交互枢纽门面：内核与插件之间的唯一交互入口，下辖回调通道与事件通道。
  * <p>
- * 不再自称「事件总线」：加上泛化后的回调通道，它同时承载三张表（回调、事件、事件注册表），
- * 是内核主动回头找插件（扩展点）与插件单向观察内核（事件）的共同落点。
+ * 不再自称「事件总线」：加上泛化后的回调通道，它同时承载两张表（回调、事件订阅），
+ * 是内核回头找插件（回调）与插件单向观察内核（事件）的共同落点。
  * <p>
  * 内部持有单个 Guava {@code EventBus} 作为唯一注册表，两条通道的差异只在发布端体现：
- * {@link #invoke(Callback)} / {@link #invokeAll(Callback)} 直接内联 {@code post}，
+ * {@link #invoke(ExtensionRequest)} 直接内联 {@code post}，
  * {@link #publish(JellyfishEvent)} 先提交线程池再 {@code post}。
  * Guava 的订阅者只有门面自己的 {@link CallbackDispatcher} / {@link EventDispatcher}，
  * 插件与核心组件一律只注册到 Level 2 细粒度注册表。
@@ -69,17 +69,11 @@ public final class JellyfishEventBus implements EventPublisher, AutoCloseable {
     /** 通知通道线程池。 */
     private final Executor notifier;
 
-    /** 扩展点定义注册表，承载形状预设并驱动回调通道语义。 */
-    private final ExtensionPointRegistry extensionPointRegistry = ExtensionPointRegistry.withBuiltIns();
-
     /** 细粒度回调注册表。 */
     private final CallbackRegistry callbackRegistry;
 
     /** 回调应答槽。 */
     private final CallbackReplies callbackReplies = new CallbackReplies();
-
-    /** ISOLATED 回调执行器。 */
-    private final CallbackExecutor callbackExecutor;
 
     /** 细粒度通知注册表。 */
     private final EventRegistry eventRegistry = new EventRegistry();
@@ -144,10 +138,9 @@ public final class JellyfishEventBus implements EventPublisher, AutoCloseable {
         if (this.notifier instanceof ThreadPoolExecutor) {
             stats.bindExecutor((ThreadPoolExecutor) this.notifier);
         }
-        this.callbackRegistry = new CallbackRegistry(extensionPointRegistry);
-        this.callbackExecutor = new CallbackExecutor(this.options, stats);
+        this.callbackRegistry = new CallbackRegistry();
         this.dispatchContext = new DispatchContext(options.getMaxCallbackDepth(), stats);
-        this.callbackDispatcher = new CallbackDispatcher(callbackRegistry, callbackReplies, callbackExecutor, stats);
+        this.callbackDispatcher = new CallbackDispatcher(callbackRegistry, callbackReplies, stats);
         this.eventDispatcher = new EventDispatcher(eventRegistry, stats);
         this.delegate = new EventBus(new EventDispatchExceptionHandler(dispatchContext, callbackReplies));
         this.delegate.register(callbackDispatcher);
@@ -155,16 +148,18 @@ public final class JellyfishEventBus implements EventPublisher, AutoCloseable {
     }
 
     /**
-     * 同步调用回调并返回单个结果。
+     * 同步调用回调并返回结果。
      * <p>
-     * 回调在调用者线程内联执行，因此同一线程内天然有序；处理器异常原样回传给调用者。
+     * 匹配到的处理器按 {@code order} 升序依次在调用者线程内联执行，因此同一线程内天然有序；
+     * 读到的是首个处理器的结果，需要聚合多个结果时由回调自带结果容器承接。
+     * 首个处理器异常会停止后续调用并原样回传给调用者。
      *
      * @param callback 回调对象
      * @param <R>      结果类型
      * @return 回调结果
      * @throws JellyfishException 总线未启动或回调为空时抛出
      */
-    public <R> R invoke(Callback<R> callback) {
+    public <R> R invoke(ExtensionRequest<R> callback) {
         Objects.requireNonNull(callback, "callback must not be null");
         ensureStarted();
         dispatchContext.enter(callback);
@@ -172,28 +167,6 @@ public final class JellyfishEventBus implements EventPublisher, AutoCloseable {
         try {
             delegate.post(callback);
             return callbackReplies.await(callback);
-        } finally {
-            callbackReplies.close(callback);
-            dispatchContext.exit();
-        }
-    }
-
-    /**
-     * 同步调用回调并收集全部成功结果，按处理器调用顺序排列。
-     *
-     * @param callback 回调对象
-     * @param <R>      结果类型
-     * @return 结果列表，可能为空
-     * @throws JellyfishException 总线未启动或回调为空时抛出
-     */
-    public <R> List<R> invokeAll(Callback<R> callback) {
-        Objects.requireNonNull(callback, "callback must not be null");
-        ensureStarted();
-        dispatchContext.enter(callback);
-        callbackReplies.open(callback);
-        try {
-            delegate.post(callback);
-            return callbackReplies.awaitAll(callback);
         } finally {
             callbackReplies.close(callback);
             dispatchContext.exit();
@@ -233,7 +206,7 @@ public final class JellyfishEventBus implements EventPublisher, AutoCloseable {
     }
 
     /**
-     * 注册门面内部订阅者（仅核心组件自用，插件请走 {@link #pluginContext(String)}）。
+     * 注册门面内部订阅者（仅核心组件自用，插件请走 {@link #pluginContext(PluginDeclaration)}）。
      * <p>
      * 扫描对象的 {@code @Subscribe} 方法并分类注册到 Level 2：具体回调类型视为回调处理器，
      * 通知类型视为订阅者。禁止 {@code Object} 订阅者（会吞掉死事件）与回调基类订阅（会收下所有子类回调）。
@@ -251,12 +224,12 @@ public final class JellyfishEventBus implements EventPublisher, AutoCloseable {
             if (parameterType == Object.class) {
                 throw new JellyfishException("Object subscriber is forbidden: " + method);
             }
-            if (Callback.class.isAssignableFrom(parameterType)) {
+            if (ExtensionRequest.class.isAssignableFrom(parameterType)) {
                 handles.add(registerCallbackSubscriber(owner, subscriber, method, parameterType));
             } else if (JellyfishEvent.class.isAssignableFrom(parameterType)) {
                 handles.add(registerEventSubscriber(owner, subscriber, method, parameterType));
             } else {
-                throw new JellyfishException("subscriber parameter must be a JellyfishEvent or a Callback: " + method);
+                throw new JellyfishException("subscriber parameter must be a JellyfishEvent or a ExtensionRequest: " + method);
             }
         }
         return new CompositeSubscription(handles);
@@ -282,7 +255,7 @@ public final class JellyfishEventBus implements EventPublisher, AutoCloseable {
     }
 
     /**
-     * 优雅关闭：停止接收、排空线程池、清理两层注册表与扩展点定义。
+     * 优雅关闭：停止接收、排空线程池、清理两层注册表。
      */
     @Override
     public void close() {
@@ -295,10 +268,8 @@ public final class JellyfishEventBus implements EventPublisher, AutoCloseable {
             pending.clear();
         }
         shutdownNotifier();
-        callbackExecutor.close();
         callbackRegistry.clear();
         eventRegistry.clear();
-        extensionPointRegistry.clear();
         LOG.info("交互枢纽已关闭: droppedEvents={}", stats.getDroppedEvents());
     }
 
@@ -317,21 +288,42 @@ public final class JellyfishEventBus implements EventPublisher, AutoCloseable {
      * @return 诊断快照
      */
     public RegistrySnapshot snapshot() {
-        return RegistrySnapshot.of(callbackRegistry, eventRegistry, extensionPointRegistry);
+        return RegistrySnapshot.of(callbackRegistry, eventRegistry);
     }
 
     /**
      * 获取插件注册入口，绑定 pluginId 作为 owner。
+     * <p>
+     * 注册边界由回调类型本身承载：插件拿不到的类型就注册不了，不需要额外的声明清单。
+     * <p>
+     * 本方法只做装配：上下文实现属于插件运行时（{@link PluginContextImpl} 在 {@code infra/plugin}），
+     * 它是 {@code infra.event} 对 {@code infra.plugin} 的唯一反向引用，新增此类引用需先确认归属。
      *
-     * @param pluginId 插件标识，不可为空
+     * @param declaration 插件声明，不可为 {@code null}
      * @return 插件能力上下文
-     * @throws JellyfishException pluginId 为空时抛出
+     * @throws JellyfishException 声明为 {@code null} 时抛出
      */
-    public PluginContext pluginContext(String pluginId) {
-        if (pluginId == null || pluginId.trim().isEmpty()) {
-            throw new JellyfishException("pluginId must not be blank");
+    public PluginContext pluginContext(PluginDeclaration declaration) {
+        Objects.requireNonNull(declaration, "declaration must not be null");
+        return new PluginContextImpl(declaration, callbackRegistry, eventRegistry, this);
+    }
+
+    /**
+     * 按 owner 批量回收注册：回调处理器与事件订阅一次清干净。
+     * <p>
+     * 插件卸载与停止的唯一回收入口。回调与事件分属两张表，分两步清是刻意的：
+     * 任何一步失败都不应该阻止另一步，否则会留下「一半还在表里」的幽灵注册。
+     *
+     * @param owner 来源标识，通常是 pluginId，不可为空白
+     * @throws JellyfishException owner 为空白时抛出
+     */
+    public void unregisterAll(String owner) {
+        if (owner == null || owner.trim().isEmpty()) {
+            throw new JellyfishException("owner must not be blank");
         }
-        return new PluginContextImpl(pluginId, callbackRegistry, eventRegistry, this);
+        int callbacks = callbackRegistry.unregisterAll(owner);
+        int subscriptions = eventRegistry.unsubscribeAll(owner);
+        LOG.info("已回收注册: owner={} callbacks={} subscriptions={}", owner, callbacks, subscriptions);
     }
 
     /**
@@ -381,56 +373,19 @@ public final class JellyfishEventBus implements EventPublisher, AutoCloseable {
     }
 
     /**
-     * 提交通知到线程池，并做 MDC 透传。
+     * 提交通知到线程池。
+     * <p>
+     * 不做调用线程上下文（如 MDC）的透传：事件自带 {@code sessionId} 等元信息，
+     * 上下文属于事件数据而不是线程状态，因此通知线程不得依赖发布线程的 ThreadLocal。
      *
      * @param event 通知事件
      */
     private void enqueue(JellyfishEvent event) {
         try {
-            notifier.execute(wrap(event));
+            notifier.execute(() -> delegate.post(event));
         } catch (RejectedExecutionException e) {
             stats.droppedEvents.increment();
             LOG.warn("通知提交被拒绝: {}", event.getClass().getName(), e);
-        }
-    }
-
-    /**
-     * 包装通知派发任务：快照并透传 MDC。
-     *
-     * @param event 通知事件
-     * @return 可在通知线程执行的任务
-     */
-    private Runnable wrap(JellyfishEvent event) {
-        Map<String, String> context = MDC.getCopyOfContextMap();
-        return () -> dispatchNotification(event, context);
-    }
-
-    /**
-     * 在通知线程恢复 MDC 后派发事件，派发结束恢复原上下文。
-     *
-     * @param event   通知事件
-     * @param context 发布线程的 MDC 快照，可为 {@code null}
-     */
-    private void dispatchNotification(JellyfishEvent event, Map<String, String> context) {
-        Map<String, String> previous = MDC.getCopyOfContextMap();
-        applyMdc(context);
-        try {
-            delegate.post(event);
-        } finally {
-            applyMdc(previous);
-        }
-    }
-
-    /**
-     * 应用 MDC 上下文。
-     *
-     * @param context MDC 快照，为空表示清空
-     */
-    private static void applyMdc(Map<String, String> context) {
-        if (context == null || context.isEmpty()) {
-            MDC.clear();
-        } else {
-            MDC.setContextMap(context);
         }
     }
 
@@ -467,10 +422,10 @@ public final class JellyfishEventBus implements EventPublisher, AutoCloseable {
             throw new JellyfishException("abstract callback subscriber is forbidden: " + method);
         }
         method.setAccessible(true);
-        CallbackHandler<Callback<Object>, Object> handler = callback -> invokeCallbackSubscriber(subscriber, method, callback);
+        ExtensionHandler<ExtensionRequest<Object>, Object> handler = callback -> invokeCallbackSubscriber(subscriber, method, callback);
         @SuppressWarnings("unchecked")
-        Class<Callback<Object>> type = (Class<Callback<Object>>) callbackType;
-        return callbackRegistry.register(owner, false, type, null, handler, RegisterOptions.DEFAULT);
+        Class<ExtensionRequest<Object>> type = (Class<ExtensionRequest<Object>>) callbackType;
+        return callbackRegistry.register(owner, type, null, handler, RegisterOptions.DEFAULT);
     }
 
     /**
@@ -499,7 +454,7 @@ public final class JellyfishEventBus implements EventPublisher, AutoCloseable {
      * @return 回调结果
      * @throws Exception 订阅方法抛出的原始异常
      */
-    private static Object invokeCallbackSubscriber(Object subscriber, Method method, Callback<?> callback) throws Exception {
+    private static Object invokeCallbackSubscriber(Object subscriber, Method method, ExtensionRequest<?> callback) throws Exception {
         try {
             return method.invoke(subscriber, callback);
         } catch (InvocationTargetException e) {

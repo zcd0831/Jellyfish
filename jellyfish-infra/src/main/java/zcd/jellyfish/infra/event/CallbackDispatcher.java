@@ -1,26 +1,29 @@
 package zcd.jellyfish.infra.event;
 
 import com.google.common.eventbus.Subscribe;
-import zcd.jellyfish.api.event.callback.Callback;
-import zcd.jellyfish.api.event.callback.CallbackException;
-import zcd.jellyfish.api.event.callback.CallbackHandler;
-import zcd.jellyfish.api.event.callback.ExtensionPoint;
-import zcd.jellyfish.api.event.callback.PermissionCheckRequest;
-import zcd.jellyfish.api.event.callback.PluginRequest;
-import zcd.jellyfish.api.event.callback.ToolCallRequest;
+import zcd.jellyfish.api.extension.ExtensionRequest;
+import zcd.jellyfish.api.extension.ExtensionException;
+import zcd.jellyfish.api.extension.ExtensionHandler;
+import zcd.jellyfish.api.extension.CommandRequest;
+import zcd.jellyfish.api.extension.ToolCallRequest;
 import zcd.jellyfish.infra.event.callback.CallbackRegistry;
-import zcd.jellyfish.infra.event.callback.ExtensionPointDefinition;
 
 import java.util.List;
 
 /**
  * 回调分发器：Guava 层的唯一回调入口。
  * <p>
- * 每类核心回调一个 {@code @Subscribe} 方法，内部统一走 {@link #invoke(Callback)}：
- * 查细粒度注册表 → 按扩展点定义的 {@code resultArity} 分叉为单结果 / 多结果 → 执行处理器 → 回填应答槽。
+ * 每类核心回调一个 {@code @Subscribe} 方法，内部统一走 {@link #dispatchCallback(ExtensionRequest)}：
+ * 查细粒度注册表 → 匹配到的处理器按 {@code order} 升序依次内联调用 → 逐个回填应答槽。
  * 这样把「Guava 的 {@code @Subscribe} 只能返回 void」这道边界关在框架代码里，插件代码永远是 {@code return / throw}。
  * <p>
- * 新增核心回调类型时，必须在这里显式加一个方法——这是有意保留的登记点，可 review、可加约定、可加指标。
+ * <b>每类回调一个方法是有意保留的登记点</b>：新增核心回调类型必须在这里加一个方法，好处是
+ * 可 review、可加约定、可加指标。这条「类型必须显式登记」的代价换来的是回调不会静默地
+ * 无人处理——缺登记时 Guava 会把它当死事件，而这里每个类型都有明确的落点。
+ * <p>
+ * 多处理器语义：匹配到几个就按顺序调用几个，每个结果都回填应答槽（{@code invoke} 读到的是首个结果；
+ * 需要聚合多个结果的调用点让回调自带结果容器承接）。<b>首个处理器失败即停止后续调用并把异常记入应答槽</b>，
+ * 由 {@code invoke} 在读取时上抛——工具调用这类场景不允许处理器失败被静默吞掉。
  *
  * @author zcd
  */
@@ -32,9 +35,6 @@ final class CallbackDispatcher {
     /** 回调应答槽。 */
     private final CallbackReplies callbackReplies;
 
-    /** ISOLATED 执行器。 */
-    private final CallbackExecutor callbackExecutor;
-
     /** 指标。 */
     private final EventBusStats stats;
 
@@ -43,14 +43,11 @@ final class CallbackDispatcher {
      *
      * @param callbackRegistry 细粒度回调注册表
      * @param callbackReplies  回调应答槽
-     * @param callbackExecutor ISOLATED 执行器
      * @param stats            指标
      */
-    CallbackDispatcher(CallbackRegistry callbackRegistry, CallbackReplies callbackReplies,
-                       CallbackExecutor callbackExecutor, EventBusStats stats) {
+    CallbackDispatcher(CallbackRegistry callbackRegistry, CallbackReplies callbackReplies, EventBusStats stats) {
         this.callbackRegistry = callbackRegistry;
         this.callbackReplies = callbackReplies;
-        this.callbackExecutor = callbackExecutor;
         this.stats = stats;
     }
 
@@ -65,80 +62,29 @@ final class CallbackDispatcher {
     }
 
     /**
-     * 派发权限检查回调。
+     * 派发具名命令回调。
      *
-     * @param callback 权限检查回调
+     * @param callback 具名命令回调
      */
     @Subscribe
-    void onPermissionCheck(PermissionCheckRequest callback) {
+    void onCommandRequest(CommandRequest callback) {
         dispatchCallback(callback);
     }
 
     /**
-     * 派发插件具名命令回调。
-     *
-     * @param callback 插件具名命令回调
-     */
-    @Subscribe
-    void onPluginRequest(PluginRequest callback) {
-        dispatchCallback(callback);
-    }
-
-    /**
-     * 按扩展点定义 fork 单结果 / 多结果派发。
+     * 按注册顺序把回调交给全部匹配的处理器。
      *
      * @param callback 回调对象
      * @param <R>      结果类型
      */
-    <R> void dispatchCallback(Callback<R> callback) {
-        ExtensionPointDefinition definition = callbackRegistry.definitionOf(callback);
-        if (definition.getResultArity() == ExtensionPoint.ResultArity.MANY) {
-            invokeAll(callback, definition);
-        } else {
-            invokeOne(callback, definition);
-        }
-    }
-
-    /**
-     * 单结果派发：保留原有的三道防线（{@code NO_HANDLER} / 处理器异常回传 / {@code NO_RESPONSE}）。
-     *
-     * @param callback   回调对象
-     * @param definition 扩展点定义
-     * @param <R>        结果类型
-     */
-    private <R> void invokeOne(Callback<R> callback, ExtensionPointDefinition definition) {
-        CallbackHandler<Callback<R>, R> handler = resolveUnique(callback, definition);
-        if (handler == null) {
-            return;
-        }
-        try {
-            Object result = call(callback, handler, definition);
-            callbackReplies.complete(callback, result);
-            stats.dispatchedCallbacks.increment();
-        } catch (Exception e) {
-            callbackReplies.fail(callback, e);
-            stats.failedCallbacks.increment();
-        }
-    }
-
-    /**
-     * 多结果派发：按注册顺序逐个调用，收集成功结果，失败语义由扩展点定义决定。
-     * <p>
-     * fail-open（A / D）丢弃失败处理器的结果并继续；fail-closed（E）记录首个失败并停止后续调用。
-     *
-     * @param callback   回调对象
-     * @param definition 扩展点定义
-     * @param <R>        结果类型
-     */
-    private <R> void invokeAll(Callback<R> callback, ExtensionPointDefinition definition) {
-        List<CallbackHandler<?, ?>> handlers = callbackRegistry.resolveAll(callback);
+    <R> void dispatchCallback(ExtensionRequest<R> callback) {
+        List<ExtensionHandler<?, ?>> handlers = callbackRegistry.resolve(callback);
         if (handlers.isEmpty()) {
-            handleEmpty(callback, definition);
+            handleNoHandler(callback);
             return;
         }
-        boolean failClosed = definition.getFailurePolicy() == ExtensionPoint.FailurePolicy.FAIL_CLOSED;
-        for (CallbackHandler<?, ?> raw : handlers) {
-            if (!callOne(callback, raw, failClosed, definition)) {
+        for (ExtensionHandler<?, ?> raw : handlers) {
+            if (!callOne(callback, raw)) {
                 return;
             }
         }
@@ -147,95 +93,36 @@ final class CallbackDispatcher {
     /**
      * 执行单个处理器并回填结果。
      *
-     * @param callback   回调对象
-     * @param raw        处理器
-     * @param failClosed 失败是否让整次调用失败
-     * @param definition 扩展点定义
-     * @param <R>        结果类型
+     * @param callback 回调对象
+     * @param raw      处理器
+     * @param <R>      结果类型
      * @return 是否应继续调用后续处理器
      */
-    private <R> boolean callOne(Callback<R> callback, CallbackHandler<?, ?> raw, boolean failClosed,
-                                ExtensionPointDefinition definition) {
+    @SuppressWarnings("unchecked")
+    private <R> boolean callOne(ExtensionRequest<R> callback, ExtensionHandler<?, ?> raw) {
+        ExtensionHandler<ExtensionRequest<R>, R> handler = (ExtensionHandler<ExtensionRequest<R>, R>) raw;
         try {
-            Object result = call(callback, raw, definition);
+            Object result = handler.handle(callback);
             callbackReplies.complete(callback, result);
             stats.dispatchedCallbacks.increment();
             return true;
         } catch (Exception e) {
             stats.failedCallbacks.increment();
-            if (failClosed) {
-                callbackReplies.fail(callback, e);
-                return false;
-            }
-            return true;
-        }
-    }
-
-    /**
-     * 按扩展点定义选择执行模式执行单个处理器。
-     * <p>
-     * INLINE 在调用线程内联执行（B 提供）；ISOLATED 提交到专用线程池并施加逐处理器超时（A 贡献 / D 拦截 / E 策略）。
-     *
-     * @param callback   回调对象
-     * @param raw        处理器
-     * @param definition 扩展点定义
-     * @param <R>        结果类型
-     * @return 处理器结果
-     * @throws Exception 处理器抛出的原始异常或 ISOLATED 执行失败
-     */
-    @SuppressWarnings("unchecked")
-    private <R> Object call(Callback<R> callback, CallbackHandler<?, ?> raw, ExtensionPointDefinition definition)
-            throws Exception {
-        CallbackHandler<Callback<R>, R> handler = (CallbackHandler<Callback<R>, R>) raw;
-        if (definition.getExecution() == ExtensionPoint.Execution.ISOLATED) {
-            return callbackExecutor.execute(callback, handler);
-        }
-        return handler.handle(callback);
-    }
-
-    /**
-     * 处理空表：REQUIRED 硬失败，OPTIONAL 视为无贡献（单结果形状回填 {@code null} 以区分于未应答）。
-     *
-     * @param callback   回调对象
-     * @param definition 扩展点定义
-     * @param <R>        结果类型
-     */
-    private <R> void handleEmpty(Callback<R> callback, ExtensionPointDefinition definition) {
-        stats.noHandlerCallbacks.increment();
-        if (definition.getEmptyPolicy() == ExtensionPoint.EmptyPolicy.REQUIRED) {
-            stats.failedCallbacks.increment();
-            callbackReplies.fail(callback, new CallbackException(CallbackException.Code.NO_HANDLER,
-                    "type=" + callback.getClass().getName() + " routeKey=" + callback.getRouteKey()));
-            return;
-        }
-        if (definition.getResultArity() == ExtensionPoint.ResultArity.ONE) {
-            callbackReplies.complete(callback, null);
-        }
-    }
-
-    /**
-     * 解析唯一处理器；空表按定义降级，解析失败把错误码回填到应答槽并记账。
-     *
-     * @param callback   回调对象
-     * @param definition 扩展点定义
-     * @param <R>        结果类型
-     * @return 命中的处理器；无需调用时返回 {@code null}
-     */
-    @SuppressWarnings("unchecked")
-    private <R> CallbackHandler<Callback<R>, R> resolveUnique(Callback<R> callback, ExtensionPointDefinition definition) {
-        try {
-            return (CallbackHandler<Callback<R>, R>) callbackRegistry.resolveUnique(callback);
-        } catch (CallbackException e) {
-            if (e.getCode() == CallbackException.Code.NO_HANDLER) {
-                handleEmpty(callback, definition);
-                return null;
-            }
-            if (e.getCode() == CallbackException.Code.AMBIGUOUS_HANDLER) {
-                stats.ambiguousHandlerCallbacks.increment();
-            }
-            stats.failedCallbacks.increment();
             callbackReplies.fail(callback, e);
-            return null;
+            return false;
         }
+    }
+
+    /**
+     * 无处理器即硬失败：回调是「请求-响应」语义，没有任何处理器意味着调用方拿不到结果。
+     *
+     * @param callback 回调对象
+     * @param <R>      结果类型
+     */
+    private <R> void handleNoHandler(ExtensionRequest<R> callback) {
+        stats.noHandlerCallbacks.increment();
+        stats.failedCallbacks.increment();
+        callbackReplies.fail(callback, new ExtensionException(ExtensionException.Code.NO_HANDLER,
+                "type=" + callback.getClass().getName() + " routeKey=" + callback.getRouteKey()));
     }
 }

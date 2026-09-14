@@ -4,7 +4,7 @@ import com.google.common.eventbus.SubscriberExceptionContext;
 import com.google.common.eventbus.SubscriberExceptionHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import zcd.jellyfish.api.event.callback.Callback;
+import zcd.jellyfish.api.extension.ExtensionRequest;
 
 /**
  * 订阅者异常处理器：回调通道尝试回填应答槽，通知通道只记账。
@@ -38,7 +38,7 @@ final class EventDispatchExceptionHandler implements SubscriberExceptionHandler 
 
     @Override
     public void handleException(Throwable exception, SubscriberExceptionContext eventContext) {
-        Callback<?> callback = context.current();
+        ExtensionRequest<?> callback = context.current();
         if (callback != null) {
             callbackReplies.fail(callback, exception);
             return;

@@ -4,14 +4,9 @@ import org.junit.jupiter.api.Test;
 import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.event.RegisterOptions;
 import zcd.jellyfish.api.event.Subscription;
-import zcd.jellyfish.api.event.callback.Callback;
-import zcd.jellyfish.api.event.callback.CallbackException;
-import zcd.jellyfish.api.event.callback.CallbackHandler;
-import zcd.jellyfish.api.event.callback.ExtensionPoint;
-import zcd.jellyfish.api.event.callback.ExtensionShape;
-import zcd.jellyfish.api.event.callback.PermissionCheckRequest;
-import zcd.jellyfish.api.event.callback.PermissionDecision;
-import zcd.jellyfish.api.event.callback.PluginRequest;
+import zcd.jellyfish.api.extension.ExtensionRequest;
+import zcd.jellyfish.api.extension.ExtensionHandler;
+import zcd.jellyfish.api.extension.CommandRequest;
 
 import java.util.List;
 
@@ -22,73 +17,80 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * {@link CallbackRegistry} 的单元测试：验证唯一性、覆盖、越权、回收、唯一解析与全部解析。
+ * {@link CallbackRegistry} 的单元测试：验证两条注册路径、覆盖、按来源回收与按 order 解析。
  *
  * @author zcd
  */
 class CallbackRegistryTest {
 
     /** 被测注册表。 */
-    private final CallbackRegistry registry = new CallbackRegistry(ExtensionPointRegistry.withBuiltIns());
+    private final CallbackRegistry registry = new CallbackRegistry();
 
     @Test
-    void resolveUnique_should_return_handler_when_registered() {
+    void register_should_store_handler_when_key_is_free() {
+        // When
+        registry.register("builtin", CommandRequest.class, "calc", callback -> "ok", RegisterOptions.DEFAULT);
+
+        // Then
+        List<ExtensionHandler<?, ?>> resolved = registry.resolve(new CommandRequest("calc", Object.class, null));
+        assertEquals(1, resolved.size());
+    }
+
+    @Test
+    void register_should_throw_when_key_already_occupied_without_override() {
         // Given
-        registry.register("builtin", false, PluginRequest.class, "calc", callback -> "ok", RegisterOptions.DEFAULT);
+        registry.register("builtin", CommandRequest.class, "calc", callback -> "one", RegisterOptions.DEFAULT);
 
-        // When
-        Object handler = registry.resolveUnique(new PluginRequest("calc", Object.class, null));
-
-        // Then
-        assertNotNull(handler);
+        // When / Then
+        assertThrows(JellyfishException.class, () -> registry.register("plugin-a", CommandRequest.class, "calc",
+                callback -> "two", RegisterOptions.DEFAULT));
     }
 
     @Test
-    void resolveUnique_should_throw_no_handler_when_not_registered() {
-        // When
-        CallbackException exception = assertThrows(CallbackException.class,
-                () -> registry.resolveUnique(new PluginRequest("missing", Object.class, null)));
-
-        // Then
-        assertEquals(CallbackException.Code.NO_HANDLER, exception.getCode());
-    }
-
-    @Test
-    void resolveUnique_should_throw_ambiguous_when_both_type_unique_and_route_key_match() {
+    void register_should_replace_when_override_declared() {
         // Given
-        registry.register("builtin", false, PluginRequest.class, null, callback -> "any", RegisterOptions.DEFAULT);
-        registry.register("plugin-a", true, PluginRequest.class, "calc", callback -> "one", RegisterOptions.DEFAULT);
+        registry.register("builtin", CommandRequest.class, "calc", callback -> "one", RegisterOptions.DEFAULT);
 
         // When
-        CallbackException exception = assertThrows(CallbackException.class,
-                () -> registry.resolveUnique(new PluginRequest("calc", Object.class, null)));
+        registry.register("plugin-a", CommandRequest.class, "calc", callback -> "two",
+                RegisterOptions.override(true));
 
         // Then
-        assertEquals(CallbackException.Code.AMBIGUOUS_HANDLER, exception.getCode());
+        assertTrue(registry.render().contains("overrides builtin"));
+        assertTrue(registry.render().contains("plugin-a"));
     }
 
     @Test
-    void resolveAll_should_return_empty_when_not_registered() {
-        // When
-        List<CallbackHandler<?, ?>> handlers = registry.resolveAll(new ContributionRequest());
-
-        // Then
-        assertTrue(handlers.isEmpty());
+    void register_should_throw_when_arguments_are_null() {
+        // When / Then
+        assertThrows(NullPointerException.class, () -> registry.register("builtin", null, "calc",
+                callback -> "ok", RegisterOptions.DEFAULT));
+        assertThrows(NullPointerException.class, () -> registry.register("builtin", CommandRequest.class, "calc",
+                null, RegisterOptions.DEFAULT));
+        assertThrows(NullPointerException.class, () -> registry.register("builtin", CommandRequest.class, "calc",
+                callback -> "ok", null));
     }
 
     @Test
-    void resolveAll_should_return_handlers_sorted_by_order_when_non_unique() {
+    void contribute_should_allow_multiple_handlers_for_same_type() {
+        // When
+        registry.contribute("owner-a", ContributionRequest.class, callback -> "a", RegisterOptions.DEFAULT);
+        registry.contribute("owner-b", ContributionRequest.class, callback -> "b", RegisterOptions.DEFAULT);
+
+        // Then
+        assertEquals(2, registry.resolve(new ContributionRequest()).size());
+    }
+
+    @Test
+    void resolve_should_return_all_handlers_sorted_by_order() {
         // Given
-        ExtensionPointRegistry definitions = ExtensionPointRegistry.withBuiltIns();
-        definitions.register(ContributionRequest.class);
-        CallbackRegistry nonUnique = new CallbackRegistry(definitions);
-        CallbackHandler<ContributionRequest, String> late = callback -> "late";
-        CallbackHandler<ContributionRequest, String> early = callback -> "early";
-        nonUnique.register("late-owner", false, ContributionRequest.class, null, late, RegisterOptions.order(10));
-        nonUnique.register("early-owner", false, ContributionRequest.class, null, early, RegisterOptions.order(-5));
+        ExtensionHandler<ContributionRequest, String> late = callback -> "late";
+        ExtensionHandler<ContributionRequest, String> early = callback -> "early";
+        registry.contribute("late-owner", ContributionRequest.class, late, RegisterOptions.order(10));
+        registry.contribute("early-owner", ContributionRequest.class, early, RegisterOptions.order(-5));
 
         // When
-        List<CallbackHandler<?, ?>> handlers = nonUnique.resolveAll(new ContributionRequest());
+        List<ExtensionHandler<?, ?>> handlers = registry.resolve(new ContributionRequest());
 
         // Then
         assertEquals(2, handlers.size());
@@ -97,80 +99,52 @@ class CallbackRegistryTest {
     }
 
     @Test
-    void register_should_allow_multiple_when_shape_not_unique() {
-        // Given
-        ExtensionPointRegistry definitions = ExtensionPointRegistry.withBuiltIns();
-        definitions.register(ContributionRequest.class);
-        CallbackRegistry nonUnique = new CallbackRegistry(definitions);
-
+    void resolve_should_return_empty_when_nothing_registered() {
         // When
-        nonUnique.register("owner-a", false, ContributionRequest.class, null, callback -> "a", RegisterOptions.DEFAULT);
-        nonUnique.register("owner-b", false, ContributionRequest.class, null, callback -> "b", RegisterOptions.DEFAULT);
+        List<ExtensionHandler<?, ?>> handlers = registry.resolve(new ContributionRequest());
 
         // Then
-        assertEquals(2, nonUnique.resolveAll(new ContributionRequest()).size());
+        assertTrue(handlers.isEmpty());
     }
 
     @Test
-    void register_should_throw_when_conflict_without_override() {
-        // Given
-        registry.register("builtin", false, PluginRequest.class, "calc", callback -> "one", RegisterOptions.DEFAULT);
+    void resolve_should_match_type_wide_contribution_regardless_of_route_key() {
+        // Given：类型级贡献（路由键为 null）对所有路由键都生效
+        ExtensionHandler<CommandRequest, Object> typeWide = callback -> "any";
+        registry.contribute("plugin-a", CommandRequest.class, typeWide, RegisterOptions.DEFAULT);
+        registry.register("builtin", CommandRequest.class, "calc", callback -> "calc", RegisterOptions.DEFAULT);
 
-        // When / Then
-        assertThrows(JellyfishException.class, () -> registry.register("plugin-a", true, PluginRequest.class, "calc",
-                callback -> "two", RegisterOptions.DEFAULT));
-    }
-
-    @Test
-    void register_should_replace_when_override_declared() {
-        // Given
-        registry.register("builtin", false, PluginRequest.class, "calc", callback -> "one", RegisterOptions.DEFAULT);
-
-        // When
-        registry.register("plugin-a", true, PluginRequest.class, "calc", callback -> "two",
-                RegisterOptions.override(true));
-
-        // Then
-        assertNotNull(registry.resolveUnique(new PluginRequest("calc", Object.class, null)));
-        assertTrue(registry.render().contains("overrides builtin"));
-        assertTrue(registry.render().contains("plugin-a"));
-    }
-
-    @Test
-    void register_should_throw_when_plugin_registers_non_extensible_callback() {
-        // When / Then
-        assertThrows(JellyfishException.class, () -> registry.register("plugin-a", true, PermissionCheckRequest.class,
-                null, callback -> PermissionDecision.allow("ok"), RegisterOptions.DEFAULT));
+        // Then：带路由键与不带路由键的回调都能命中类型级贡献
+        assertEquals(2, registry.resolve(new CommandRequest("calc", Object.class, null)).size());
+        assertEquals(1, registry.resolve(new CommandRequest("other", Object.class, null)).size());
     }
 
     @Test
     void unregisterAll_should_remove_registrations_of_owner() {
         // Given
-        registry.register("plugin-a", true, PluginRequest.class, "calc", callback -> "one", RegisterOptions.DEFAULT);
-        registry.register("plugin-b", true, PluginRequest.class, "other", callback -> "two", RegisterOptions.DEFAULT);
+        registry.register("plugin-a", CommandRequest.class, "calc", callback -> "one", RegisterOptions.DEFAULT);
+        registry.register("plugin-b", CommandRequest.class, "other", callback -> "two", RegisterOptions.DEFAULT);
 
         // When
         int removed = registry.unregisterAll("plugin-a");
 
         // Then
         assertEquals(1, removed);
-        assertThrows(CallbackException.class,
-                () -> registry.resolveUnique(new PluginRequest("calc", Object.class, null)));
-        assertNotNull(registry.resolveUnique(new PluginRequest("other", Object.class, null)));
+        assertTrue(registry.resolve(new CommandRequest("calc", Object.class, null)).isEmpty());
+        assertNotNull(registry.resolve(new CommandRequest("other", Object.class, null)).get(0));
     }
 
     @Test
     void subscription_close_should_remove_registration() {
         // Given
-        Subscription subscription = registry.register("plugin-a", true, PluginRequest.class, "calc",
+        Subscription subscription = registry.register("plugin-a", CommandRequest.class, "calc",
                 callback -> "one", RegisterOptions.DEFAULT);
 
         // When
         subscription.close();
 
         // Then
-        assertThrows(CallbackException.class,
-                () -> registry.resolveUnique(new PluginRequest("calc", Object.class, null)));
+        assertTrue(registry.resolve(new CommandRequest("calc", Object.class, null)).isEmpty());
     }
 
     @Test
@@ -183,7 +157,7 @@ class CallbackRegistryTest {
     @Test
     void clear_should_remove_all_registrations() {
         // Given
-        registry.register("plugin-a", true, PluginRequest.class, "calc", callback -> "one", RegisterOptions.DEFAULT);
+        registry.register("plugin-a", CommandRequest.class, "calc", callback -> "one", RegisterOptions.DEFAULT);
 
         // When
         registry.clear();
@@ -193,18 +167,15 @@ class CallbackRegistryTest {
     }
 
     /**
-     * 测试用非唯一形状回调：A 贡献（0..N + 有返回值）。
+     * 测试用收集式回调。
      *
      * @author zcd
      */
-    @ExtensionPoint(id = "test.contribute", shape = ExtensionShape.CONTRIBUTE)
-    private static final class ContributionRequest extends Callback<String> {
+    private static final class ContributionRequest extends ExtensionRequest<String> {
 
-        /**
-         * 构造测试回调。
-         */
+        /** 构造测试回调。 */
         private ContributionRequest() {
-            super(String.class, null, 0L);
+            super(String.class, null);
         }
 
         @Override

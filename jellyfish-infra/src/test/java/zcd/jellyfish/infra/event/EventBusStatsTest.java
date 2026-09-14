@@ -42,12 +42,9 @@ class EventBusStatsTest {
         assertEquals(0L, stats.getDispatchedCallbacks());
         assertEquals(0L, stats.getFailedCallbacks());
         assertEquals(0L, stats.getNoHandlerCallbacks());
-        assertEquals(0L, stats.getAmbiguousHandlerCallbacks());
         assertEquals(0L, stats.getNestingRejectedCallbacks());
         assertEquals(0L, stats.getPendingReplayed());
         assertEquals(0L, stats.getPendingOverflow());
-        assertEquals(0L, stats.getTimedOutCallbacks());
-        assertEquals(0L, stats.getRejectedCallbacks());
     }
 
     @Test
@@ -69,8 +66,6 @@ class EventBusStatsTest {
         // Given
         stats.publishedEvents.add(7L);
         stats.failedCallbacks.add(2L);
-        stats.timedOutCallbacks.add(3L);
-        stats.rejectedCallbacks.add(4L);
 
         // When
         String rendered = stats.render();
@@ -79,8 +74,6 @@ class EventBusStatsTest {
         assertTrue(rendered.startsWith("eventBusStats{"));
         assertTrue(rendered.contains("publishedEvents=7"));
         assertTrue(rendered.contains("failedCallbacks=2"));
-        assertTrue(rendered.contains("timedOutCallbacks=3"));
-        assertTrue(rendered.contains("rejectedCallbacks=4"));
     }
 
     @Test

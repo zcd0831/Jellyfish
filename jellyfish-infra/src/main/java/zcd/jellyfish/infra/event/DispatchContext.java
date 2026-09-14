@@ -1,7 +1,7 @@
 package zcd.jellyfish.infra.event;
 
-import zcd.jellyfish.api.event.callback.Callback;
-import zcd.jellyfish.api.event.callback.CallbackException;
+import zcd.jellyfish.api.extension.ExtensionRequest;
+import zcd.jellyfish.api.JellyfishException;
 
 import java.util.ArrayDeque;
 import java.util.Deque;
@@ -18,7 +18,7 @@ import java.util.Deque;
 final class DispatchContext {
 
     /** 当前线程的在途回调栈。 */
-    private final ThreadLocal<Deque<Callback<?>>> stack = ThreadLocal.withInitial(ArrayDeque::new);
+    private final ThreadLocal<Deque<ExtensionRequest<?>>> stack = ThreadLocal.withInitial(ArrayDeque::new);
 
     /** 回调嵌套深度上限。 */
     private final int maxDepth;
@@ -42,8 +42,8 @@ final class DispatchContext {
      *
      * @return 当前在途回调，调用栈为空时返回 {@code null}
      */
-    Callback<?> current() {
-        Deque<Callback<?>> current = stack.get();
+    ExtensionRequest<?> current() {
+        Deque<ExtensionRequest<?>> current = stack.get();
         return current.isEmpty() ? null : current.peek();
     }
 
@@ -51,14 +51,14 @@ final class DispatchContext {
      * 进入一次回调派发。
      *
      * @param callback 回调对象
-     * @throws CallbackException 嵌套深度超过上限时抛出
+     * @throws ExtensionException 嵌套深度超过上限时抛出
      */
-    void enter(Callback<?> callback) {
-        Deque<Callback<?>> current = stack.get();
+    void enter(ExtensionRequest<?> callback) {
+        Deque<ExtensionRequest<?>> current = stack.get();
         if (current.size() >= maxDepth) {
             stats.nestingRejectedCallbacks.increment();
-            throw new CallbackException(CallbackException.Code.NESTING_TOO_DEEP,
-                    "max depth " + maxDepth + " reached at " + callback.getRouteKey());
+            throw new JellyfishException("callback nesting too deep: max depth " + maxDepth
+                    + " reached at " + callback.getRouteKey());
         }
         current.push(callback);
     }
@@ -67,7 +67,7 @@ final class DispatchContext {
      * 退出一次回调派发。
      */
     void exit() {
-        Deque<Callback<?>> current = stack.get();
+        Deque<ExtensionRequest<?>> current = stack.get();
         if (!current.isEmpty()) {
             current.pop();
         }

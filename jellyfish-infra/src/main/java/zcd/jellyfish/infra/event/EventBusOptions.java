@@ -32,21 +32,6 @@ public final class EventBusOptions {
     /** 默认关闭等待时间（毫秒）。 */
     private static final long DEFAULT_SHUTDOWN_AWAIT_MILLIS = 5000L;
 
-    /** 默认 ISOLATED 回调线程池核心线程数。 */
-    private static final int DEFAULT_CALLBACK_CORE_POOL_SIZE = 4;
-
-    /** 默认 ISOLATED 回调线程池最大线程数。 */
-    private static final int DEFAULT_CALLBACK_MAX_POOL_SIZE = 32;
-
-    /** 默认 ISOLATED 回调线程空闲回收时间（秒）。 */
-    private static final long DEFAULT_CALLBACK_KEEP_ALIVE_SECONDS = 60L;
-
-    /** 默认 ISOLATED 回调队列容量。 */
-    private static final int DEFAULT_CALLBACK_QUEUE_CAPACITY = 256;
-
-    /** 默认单个回调处理器超时（毫秒）。 */
-    private static final long DEFAULT_CALLBACK_PER_HANDLER_TIMEOUT_MILLIS = 2000L;
-
     /** 通知线程池核心线程数。 */
     private final int corePoolSize;
 
@@ -68,21 +53,6 @@ public final class EventBusOptions {
     /** 关闭时等待线程池排空的毫秒数。 */
     private final long shutdownAwaitMillis;
 
-    /** ISOLATED 回调线程池核心线程数。 */
-    private final int callbackCorePoolSize;
-
-    /** ISOLATED 回调线程池最大线程数。 */
-    private final int callbackMaxPoolSize;
-
-    /** ISOLATED 回调线程空闲回收时间（秒）。 */
-    private final long callbackKeepAliveSeconds;
-
-    /** ISOLATED 回调队列容量，有界避免 OOM。 */
-    private final int callbackQueueCapacity;
-
-    /** 单个回调处理器超时（毫秒），仅对 ISOLATED 执行模式生效。 */
-    private final long callbackPerHandlerTimeoutMillis;
-
     /**
      * 构造参数。
      *
@@ -96,11 +66,6 @@ public final class EventBusOptions {
         this.pendingCapacity = builder.pendingCapacity;
         this.maxCallbackDepth = builder.maxCallbackDepth;
         this.shutdownAwaitMillis = builder.shutdownAwaitMillis;
-        this.callbackCorePoolSize = builder.callbackCorePoolSize;
-        this.callbackMaxPoolSize = builder.callbackMaxPoolSize;
-        this.callbackKeepAliveSeconds = builder.callbackKeepAliveSeconds;
-        this.callbackQueueCapacity = builder.callbackQueueCapacity;
-        this.callbackPerHandlerTimeoutMillis = builder.callbackPerHandlerTimeoutMillis;
     }
 
     /**
@@ -185,52 +150,7 @@ public final class EventBusOptions {
     }
 
     /**
-     * 获取 ISOLATED 回调线程池核心线程数。
-     *
-     * @return 核心线程数
-     */
-    public int getCallbackCorePoolSize() {
-        return callbackCorePoolSize;
-    }
-
-    /**
-     * 获取 ISOLATED 回调线程池最大线程数。
-     *
-     * @return 最大线程数
-     */
-    public int getCallbackMaxPoolSize() {
-        return callbackMaxPoolSize;
-    }
-
-    /**
-     * 获取 ISOLATED 回调线程空闲回收时间（秒）。
-     *
-     * @return 空闲回收时间
-     */
-    public long getCallbackKeepAliveSeconds() {
-        return callbackKeepAliveSeconds;
-    }
-
-    /**
-     * 获取 ISOLATED 回调队列容量。
-     *
-     * @return 队列容量
-     */
-    public int getCallbackQueueCapacity() {
-        return callbackQueueCapacity;
-    }
-
-    /**
-     * 获取单个回调处理器超时（毫秒）。
-     *
-     * @return 超时毫秒数
-     */
-    public long getCallbackPerHandlerTimeoutMillis() {
-        return callbackPerHandlerTimeoutMillis;
-    }
-
-    /**
-     * 事件总线参数构建器。
+     * 构造事件总线参数构建器。
      *
      * @author zcd
      */
@@ -256,21 +176,6 @@ public final class EventBusOptions {
 
         /** 关闭等待时间（毫秒）。 */
         private long shutdownAwaitMillis = DEFAULT_SHUTDOWN_AWAIT_MILLIS;
-
-        /** ISOLATED 回调线程池核心线程数。 */
-        private int callbackCorePoolSize = DEFAULT_CALLBACK_CORE_POOL_SIZE;
-
-        /** ISOLATED 回调线程池最大线程数。 */
-        private int callbackMaxPoolSize = DEFAULT_CALLBACK_MAX_POOL_SIZE;
-
-        /** ISOLATED 回调线程空闲回收时间（秒）。 */
-        private long callbackKeepAliveSeconds = DEFAULT_CALLBACK_KEEP_ALIVE_SECONDS;
-
-        /** ISOLATED 回调队列容量。 */
-        private int callbackQueueCapacity = DEFAULT_CALLBACK_QUEUE_CAPACITY;
-
-        /** 单个回调处理器超时（毫秒）。 */
-        private long callbackPerHandlerTimeoutMillis = DEFAULT_CALLBACK_PER_HANDLER_TIMEOUT_MILLIS;
 
         /**
          * 设置核心线程数。
@@ -350,61 +255,6 @@ public final class EventBusOptions {
         }
 
         /**
-         * 设置 ISOLATED 回调线程池核心线程数。
-         *
-         * @param callbackCorePoolSize 核心线程数，必须大于 0
-         * @return 构建器自身
-         */
-        public Builder callbackCorePoolSize(int callbackCorePoolSize) {
-            this.callbackCorePoolSize = callbackCorePoolSize;
-            return this;
-        }
-
-        /**
-         * 设置 ISOLATED 回调线程池最大线程数。
-         *
-         * @param callbackMaxPoolSize 最大线程数，必须不小于核心线程数
-         * @return 构建器自身
-         */
-        public Builder callbackMaxPoolSize(int callbackMaxPoolSize) {
-            this.callbackMaxPoolSize = callbackMaxPoolSize;
-            return this;
-        }
-
-        /**
-         * 设置 ISOLATED 回调线程空闲回收时间。
-         *
-         * @param callbackKeepAliveSeconds 空闲回收时间（秒），必须大于 0
-         * @return 构建器自身
-         */
-        public Builder callbackKeepAliveSeconds(long callbackKeepAliveSeconds) {
-            this.callbackKeepAliveSeconds = callbackKeepAliveSeconds;
-            return this;
-        }
-
-        /**
-         * 设置 ISOLATED 回调队列容量。
-         *
-         * @param callbackQueueCapacity 队列容量，必须大于 0
-         * @return 构建器自身
-         */
-        public Builder callbackQueueCapacity(int callbackQueueCapacity) {
-            this.callbackQueueCapacity = callbackQueueCapacity;
-            return this;
-        }
-
-        /**
-         * 设置单个回调处理器超时。
-         *
-         * @param callbackPerHandlerTimeoutMillis 超时（毫秒），必须大于 0
-         * @return 构建器自身
-         */
-        public Builder callbackPerHandlerTimeoutMillis(long callbackPerHandlerTimeoutMillis) {
-            this.callbackPerHandlerTimeoutMillis = callbackPerHandlerTimeoutMillis;
-            return this;
-        }
-
-        /**
          * 构建参数对象。
          *
          * @return 事件总线参数
@@ -418,16 +268,8 @@ public final class EventBusOptions {
             requirePositive(pendingCapacity, "pendingCapacity");
             requirePositive(maxCallbackDepth, "maxCallbackDepth");
             requirePositive(shutdownAwaitMillis, "shutdownAwaitMillis");
-            requirePositive(callbackCorePoolSize, "callbackCorePoolSize");
-            requirePositive(callbackMaxPoolSize, "callbackMaxPoolSize");
-            requirePositive(callbackKeepAliveSeconds, "callbackKeepAliveSeconds");
-            requirePositive(callbackQueueCapacity, "callbackQueueCapacity");
-            requirePositive(callbackPerHandlerTimeoutMillis, "callbackPerHandlerTimeoutMillis");
             if (maxPoolSize < corePoolSize) {
                 throw new JellyfishException("maxPoolSize must not be less than corePoolSize");
-            }
-            if (callbackMaxPoolSize < callbackCorePoolSize) {
-                throw new JellyfishException("callbackMaxPoolSize must not be less than callbackCorePoolSize");
             }
             return new EventBusOptions(this);
         }

@@ -1,60 +1,57 @@
 package zcd.jellyfish.infra.event;
 
 import zcd.jellyfish.api.JellyfishException;
-import zcd.jellyfish.api.event.callback.Callback;
-import zcd.jellyfish.api.event.callback.CallbackException;
+import zcd.jellyfish.api.extension.ExtensionRequest;
+import zcd.jellyfish.api.extension.ExtensionException;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
 /**
- * 回调应答槽：按 {@link Callback#getCallbackId()} 保管在途回调的结果。
+ * 回调应答槽：按请求对象身份保管在途回调的结果。
  * <p>
- * 应答槽从 api 的 {@link Callback} 下沉到这里，是为了让插件只看到纯请求数据，无法误用「回填结果」这类框架内部能力；
- * 索引直接复用回调自带的 {@code callbackId}，不额外引入映射层。
+ * 应答槽留在 infra 是为了让插件只看到纯请求数据，无法误用「回填结果」这类框架内部能力；
+ * 请求对象不覆写 equals/hashCode，因此直接以实例作为索引键，不需要额外的标识字段。
  * <p>
- * 与改造前的单结果应答槽相比，本类同时支持两种结果数量：
- * <ul>
- *     <li>{@link #await(Callback)}：{@code resultArity=ONE}，返回单个结果，保留原有的三道防线；</li>
- *     <li>{@link #awaitAll(Callback)}：{@code resultArity=MANY}，返回按处理器调用顺序排列的全部成功结果。</li>
- * </ul>
- * 失败语义由调用方（分发器）决定是否调用 {@link #fail(Callback, Throwable)}：fail-open 形状丢弃失败项并继续，
- * fail-closed 形状记录失败并在读取时上抛。
+ * 本机制属于过渡实现：同步派发改为「调用方持有 handler 并直接接收返回值」之后（方案 P4），
+ * 应答槽会整体删除。
+ * <p>
+ * 多个处理器依次调用时会各回填一条结果，{@link #await(ExtensionRequest)} 取首条；
+ * 失败由分发器在首个处理器失败时调用 {@link #fail(ExtensionRequest, Throwable)} 记录，读取时上抛。
  *
  * @author zcd
  */
 final class CallbackReplies {
 
-    /** 在途应答槽：回调标识 → 结果槽。 */
-    private final ConcurrentMap<String, Slot> pending = new ConcurrentHashMap<>();
+    /** 在途应答槽：请求对象 → 结果槽（请求不覆写 equals/hashCode，因此天然按实例身份索引）。 */
+    private final ConcurrentMap<ExtensionRequest<?>, Slot> pending = new ConcurrentHashMap<>();
 
     /**
      * 登记一条在途回调。
      *
      * @param callback 回调对象
      */
-    void open(Callback<?> callback) {
-        pending.put(callback.getCallbackId(), new Slot());
+    void open(ExtensionRequest<?> callback) {
+        pending.put(callback, new Slot());
     }
 
     /**
      * 回填一条结果。
      *
      * @param callback 回调对象
-     * @param result   结果对象，须满足 {@link Callback#getResultType()}
-     * @throws CallbackException 结果类型不匹配时抛出
+     * @param result   结果对象，须满足 {@link ExtensionRequest#getResultType()}
+     * @throws ExtensionException 结果类型不匹配时抛出
      */
-    void complete(Callback<?> callback, Object result) {
+    void complete(ExtensionRequest<?> callback, Object result) {
         Class<?> resultType = callback.getResultType();
         if (result != null && !resultType.isInstance(result)) {
-            throw new CallbackException(CallbackException.Code.RESULT_TYPE_MISMATCH,
+            throw new ExtensionException(ExtensionException.Code.RESULT_TYPE_MISMATCH,
                     "expected " + resultType.getName() + " but got " + result.getClass().getName()
-                            + " for callback " + callback.getCallbackId());
+                            + " for " + callback);
         }
-        Slot slot = pending.get(callback.getCallbackId());
+        Slot slot = pending.get(callback);
         if (slot != null) {
             slot.add(result);
         }
@@ -66,41 +63,28 @@ final class CallbackReplies {
      * @param callback 回调对象
      * @param cause    失败原因
      */
-    void fail(Callback<?> callback, Throwable cause) {
-        Slot slot = pending.get(callback.getCallbackId());
+    void fail(ExtensionRequest<?> callback, Throwable cause) {
+        Slot slot = pending.get(callback);
         if (slot != null) {
             slot.fail(cause);
         }
     }
 
     /**
-     * 取出单个结果。
+     * 取出回调结果。
      * <p>
      * 处理器抛出的运行时异常原样抛出；受检异常包装为 {@link JellyfishException}，因为该签名不应声明受检异常。
+     * 多个处理器依次调用时此处返回首个结果。
      *
      * @param callback 回调对象
      * @param <R>      结果类型
      * @return 回调结果
-     * @throws CallbackException 未应答时抛出
+     * @throws ExtensionException 未应答时抛出
      */
     @SuppressWarnings("unchecked")
-    <R> R await(Callback<R> callback) {
+    <R> R await(ExtensionRequest<R> callback) {
         Slot slot = requireSlot(callback);
         return (R) slot.single(callback);
-    }
-
-    /**
-     * 取出按处理器调用顺序排列的全部成功结果。
-     *
-     * @param callback 回调对象
-     * @param <R>      结果类型
-     * @return 结果列表，可能为空
-     * @throws CallbackException 未应答时抛出
-     */
-    @SuppressWarnings("unchecked")
-    <R> List<R> awaitAll(Callback<R> callback) {
-        Slot slot = requireSlot(callback);
-        return (List<R>) (List<?>) slot.all(callback);
     }
 
     /**
@@ -108,8 +92,8 @@ final class CallbackReplies {
      *
      * @param callback 回调对象
      */
-    void close(Callback<?> callback) {
-        pending.remove(callback.getCallbackId());
+    void close(ExtensionRequest<?> callback) {
+        pending.remove(callback);
     }
 
     /**
@@ -117,13 +101,12 @@ final class CallbackReplies {
      *
      * @param callback 回调对象
      * @return 结果槽
-     * @throws CallbackException 槽已回收或从未登记时抛出
+     * @throws ExtensionException 槽已回收或从未登记时抛出
      */
-    private Slot requireSlot(Callback<?> callback) {
-        Slot slot = pending.get(callback.getCallbackId());
+    private Slot requireSlot(ExtensionRequest<?> callback) {
+        Slot slot = pending.get(callback);
         if (slot == null) {
-            throw new CallbackException(CallbackException.Code.NO_RESPONSE,
-                    "reply slot missing: " + callback.getCallbackId());
+            throw new JellyfishException("reply slot missing for " + callback);
         }
         return slot;
     }
@@ -162,37 +145,20 @@ final class CallbackReplies {
         }
 
         /**
-         * 读取单个结果。
+         * 读取结果。
          *
          * @param callback 回调对象，用于异常信息
-         * @return 单个结果
-         * @throws CallbackException 未应答时抛出
+         * @return 首个结果
+         * @throws ExtensionException 未应答时抛出
          */
-        synchronized Object single(Callback<?> callback) {
+        synchronized Object single(ExtensionRequest<?> callback) {
             if (failure != null) {
                 throw rethrow(failure);
             }
             if (results.isEmpty()) {
-                throw new CallbackException(CallbackException.Code.NO_RESPONSE,
-                        "callback not answered: " + callback.getCallbackId());
+                throw new JellyfishException("callback not answered: " + callback);
             }
             return results.get(0);
-        }
-
-        /**
-         * 读取全部结果。
-         *
-         * @param callback 回调对象
-         * @return 结果快照
-         */
-        synchronized List<Object> all(Callback<?> callback) {
-            if (failure != null) {
-                throw rethrow(failure);
-            }
-            if (results.isEmpty()) {
-                return Collections.emptyList();
-            }
-            return new ArrayList<>(results);
         }
 
         /**

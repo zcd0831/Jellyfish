@@ -2,10 +2,10 @@ package zcd.jellyfish.infra.event;
 
 import org.junit.jupiter.api.Test;
 import zcd.jellyfish.api.JellyfishException;
-import zcd.jellyfish.api.event.callback.CallbackException;
-import zcd.jellyfish.api.event.callback.PluginRequest;
-import zcd.jellyfish.api.event.callback.ToolCallRequest;
-import zcd.jellyfish.api.event.callback.ToolCallResult;
+import zcd.jellyfish.api.extension.ExtensionException;
+import zcd.jellyfish.api.extension.CommandRequest;
+import zcd.jellyfish.api.extension.ToolCallRequest;
+import zcd.jellyfish.api.extension.ToolCallResult;
 
 import java.util.Collections;
 
@@ -43,10 +43,10 @@ class CallbackRepliesTest {
         replies.open(callback);
 
         // When
-        CallbackException exception = assertThrows(CallbackException.class, () -> replies.complete(callback, "not-a-result"));
+        ExtensionException exception = assertThrows(ExtensionException.class, () -> replies.complete(callback, "not-a-result"));
 
         // Then
-        assertEquals(CallbackException.Code.RESULT_TYPE_MISMATCH, exception.getCode());
+        assertEquals(ExtensionException.Code.RESULT_TYPE_MISMATCH, exception.getCode());
     }
 
     @Test
@@ -55,11 +55,8 @@ class CallbackRepliesTest {
         ToolCallRequest callback = toolCall();
         replies.open(callback);
 
-        // When
-        CallbackException exception = assertThrows(CallbackException.class, () -> replies.await(callback));
-
-        // Then
-        assertEquals(CallbackException.Code.NO_RESPONSE, exception.getCode());
+        // When / Then
+        assertThrows(JellyfishException.class, () -> replies.await(callback));
     }
 
     @Test
@@ -67,11 +64,8 @@ class CallbackRepliesTest {
         // Given
         ToolCallRequest callback = toolCall();
 
-        // When
-        CallbackException exception = assertThrows(CallbackException.class, () -> replies.await(callback));
-
-        // Then
-        assertEquals(CallbackException.Code.NO_RESPONSE, exception.getCode());
+        // When / Then
+        assertThrows(JellyfishException.class, () -> replies.await(callback));
     }
 
     @Test
@@ -125,13 +119,13 @@ class CallbackRepliesTest {
         replies.close(callback);
 
         // Then
-        assertThrows(CallbackException.class, () -> replies.await(callback));
+        assertThrows(JellyfishException.class, () -> replies.await(callback));
     }
 
     @Test
     void complete_should_allow_result_of_any_type_when_result_type_is_object() {
         // Given
-        PluginRequest callback = new PluginRequest("calculator", Object.class, null);
+        CommandRequest callback = new CommandRequest("calculator", Object.class, null);
         replies.open(callback);
 
         // When
@@ -141,61 +135,12 @@ class CallbackRepliesTest {
         assertEquals("anything", replies.await(callback));
     }
 
-    @Test
-    void awaitAll_should_return_results_in_completion_order() {
-        // Given
-        PluginRequest callback = new PluginRequest("calculator", Object.class, null);
-        replies.open(callback);
-
-        // When
-        replies.complete(callback, "first");
-        replies.complete(callback, "second");
-
-        // Then
-        assertEquals(java.util.Arrays.asList("first", "second"), replies.awaitAll(callback));
-    }
-
-    @Test
-    void awaitAll_should_return_empty_when_no_result_collected() {
-        // Given
-        PluginRequest callback = new PluginRequest("calculator", Object.class, null);
-        replies.open(callback);
-
-        // Then
-        assertEquals(java.util.Collections.emptyList(), replies.awaitAll(callback));
-    }
-
-    @Test
-    void awaitAll_should_throw_when_failed() {
-        // Given
-        PluginRequest callback = new PluginRequest("calculator", Object.class, null);
-        replies.open(callback);
-
-        // When
-        replies.fail(callback, new IllegalStateException("boom"));
-
-        // Then
-        assertThrows(IllegalStateException.class, () -> replies.awaitAll(callback));
-    }
-
-    @Test
-    void awaitAll_should_throw_no_response_when_slot_missing() {
-        // Given
-        PluginRequest callback = new PluginRequest("calculator", Object.class, null);
-
-        // When
-        CallbackException exception = assertThrows(CallbackException.class, () -> replies.awaitAll(callback));
-
-        // Then
-        assertEquals(CallbackException.Code.NO_RESPONSE, exception.getCode());
-    }
-
     /**
      * 构造工具调用命令。
      *
      * @return 工具调用命令
      */
     private static ToolCallRequest toolCall() {
-        return new ToolCallRequest("calculator", Collections.<String, Object>emptyMap(), null, 0L);
+        return new ToolCallRequest("calculator", Collections.<String, Object>emptyMap());
     }
 }

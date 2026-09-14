@@ -37,17 +37,8 @@ public final class EventBusStats {
     /** 无处理器的回调数量。 */
     final LongAdder noHandlerCallbacks = new LongAdder();
 
-    /** 处理器不唯一的回调数量。 */
-    final LongAdder ambiguousHandlerCallbacks = new LongAdder();
-
     /** 因嵌套过深被拒绝的回调数量。 */
     final LongAdder nestingRejectedCallbacks = new LongAdder();
-
-    /** ISOLATED 回调处理器超时数量。 */
-    final LongAdder timedOutCallbacks = new LongAdder();
-
-    /** ISOLATED 回调提交被拒绝数量。 */
-    final LongAdder rejectedCallbacks = new LongAdder();
 
     /** 启动期缓冲回放的通知数量。 */
     final LongAdder pendingReplayed = new LongAdder();
@@ -140,39 +131,12 @@ public final class EventBusStats {
     }
 
     /**
-     * 获取处理器不唯一的回调数量。
-     *
-     * @return 回调数量
-     */
-    public long getAmbiguousHandlerCallbacks() {
-        return ambiguousHandlerCallbacks.sum();
-    }
-
-    /**
      * 获取因嵌套过深被拒绝的回调数量。
      *
      * @return 回调数量
      */
     public long getNestingRejectedCallbacks() {
         return nestingRejectedCallbacks.sum();
-    }
-
-    /**
-     * 获取 ISOLATED 回调处理器超时数量。
-     *
-     * @return 超时数量
-     */
-    public long getTimedOutCallbacks() {
-        return timedOutCallbacks.sum();
-    }
-
-    /**
-     * 获取 ISOLATED 回调提交被拒绝数量。
-     *
-     * @return 被拒绝数量
-     */
-    public long getRejectedCallbacks() {
-        return rejectedCallbacks.sum();
     }
 
     /**
@@ -228,10 +192,7 @@ public final class EventBusStats {
                 + ", dispatchedCallbacks=" + getDispatchedCallbacks()
                 + ", failedCallbacks=" + getFailedCallbacks()
                 + ", noHandlerCallbacks=" + getNoHandlerCallbacks()
-                + ", ambiguousHandlerCallbacks=" + getAmbiguousHandlerCallbacks()
                 + ", nestingRejectedCallbacks=" + getNestingRejectedCallbacks()
-                + ", timedOutCallbacks=" + getTimedOutCallbacks()
-                + ", rejectedCallbacks=" + getRejectedCallbacks()
                 + ", pendingReplayed=" + getPendingReplayed()
                 + ", pendingOverflow=" + getPendingOverflow()
                 + ", activeThreads=" + getActiveThreads()

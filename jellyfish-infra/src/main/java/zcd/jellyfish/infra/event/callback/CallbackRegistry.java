@@ -5,9 +5,8 @@ import org.slf4j.LoggerFactory;
 import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.event.RegisterOptions;
 import zcd.jellyfish.api.event.Subscription;
-import zcd.jellyfish.api.event.callback.Callback;
-import zcd.jellyfish.api.event.callback.CallbackException;
-import zcd.jellyfish.api.event.callback.CallbackHandler;
+import zcd.jellyfish.api.extension.ExtensionRequest;
+import zcd.jellyfish.api.extension.ExtensionHandler;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -20,16 +19,16 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * 细粒度回调注册表：按 (回调类型, 路由键) 维护处理器集合，支持覆盖、顺序与按来源回收。
+ * 细粒度回调注册表：按 (回调类型, 路由键) 维护处理器，支持覆盖、顺序与按来源回收。
  * <p>
- * 与改造前的「回调注册表」相比，唯一性不再硬编码，而是由扩展点定义驱动：
+ * 两条注册路径对应两种调用面：
  * <ul>
- *     <li>{@code unique=true}（B 提供）：同一键至多一个处理器，重复注册按 {@code override} 处理，未声明即失败；</li>
- *     <li>{@code unique=false}（A 贡献 / D 拦截 / E 策略）：同一键可有 0..N 个处理器，天然不冲突。</li>
+ *     <li>{@link #register}：同键唯一，重复注册按 {@code override} 处理，未声明即失败——工具、具名命令走这里；</li>
+ *     <li>{@link #contribute}：类型级 0..N，天然不冲突——收集式贡献走这里。</li>
  * </ul>
- * 注册期 fail-fast：键冲突、插件注册未开放的类型、未声明扩展点定义的类型一律直接抛错。
- * 解析期分叉为 {@link #resolveUnique(Callback)}（0 个 {@code NO_HANDLER} / 多于 1 个 {@code AMBIGUOUS_HANDLER}）
- * 与 {@link #resolveAll(Callback)}（按 {@code order} 升序，同序按注册顺序）。
+ * 注册期 fail-fast：键冲突、占用了不存在的回调类型一律直接抛错。
+ * 解析只有一个入口 {@link #resolve(ExtensionRequest)}：按 {@code order} 升序、同序按注册顺序返回<b>全部</b>匹配项，
+ * 「唯一」不再是解析期的属性，而是调用面自己的约定。
  *
  * @author zcd
  */
@@ -38,12 +37,12 @@ public final class CallbackRegistry {
     /** 日志。 */
     private static final Logger LOG = LoggerFactory.getLogger(CallbackRegistry.class);
 
-    /** 有序形状的调用顺序比较器：order 升序，同序按注册顺序。 */
+    /** 调用顺序比较器：order 升序，同序按注册顺序。 */
     private static final Comparator<CallbackRegistration> ORDER_COMPARATOR =
             Comparator.comparingInt(CallbackRegistration::getOrder)
                     .thenComparingLong(CallbackRegistration::getSequence);
 
-    /** 注册项：键 → 处理器列表（唯一形状下长度恒为 1）。 */
+    /** 注册项：键 → 处理器列表。 */
     private final Map<CallbackKey, CopyOnWriteArrayList<CallbackRegistration>> handlers = new ConcurrentHashMap<>();
 
     /** 解析缓存：回调运行时类 → 候选注册项（已按注册顺序排序）。 */
@@ -52,91 +51,77 @@ public final class CallbackRegistry {
     /** 注册序号，保证候选顺序稳定。 */
     private final AtomicLong sequence = new AtomicLong();
 
-    /** 扩展点定义注册表，驱动唯一性与顺序语义。 */
-    private final ExtensionPointRegistry extensionPointRegistry;
-
     /**
-     * 构造回调注册表。
-     *
-     * @param extensionPointRegistry 扩展点定义注册表，不可为 {@code null}
-     */
-    public CallbackRegistry(ExtensionPointRegistry extensionPointRegistry) {
-        this.extensionPointRegistry = Objects.requireNonNull(extensionPointRegistry,
-                "extensionPointRegistry must not be null");
-    }
-
-    /**
-     * 注册回调处理器。
+     * 注册唯一处理器：同一 (回调类型, 路由键) 至多一个。
      *
      * @param owner        来源（内置组件名或 pluginId），用于诊断与回收
-     * @param fromPlugin   是否来自插件
      * @param callbackType 回调类型，不可为 {@code null}
-     * @param routeKey     路由键，{@code null} 表示类型唯一
+     * @param routeKey     路由键，不可为 {@code null}
+     * @param descriptor   处理器描述符（如工具描述符），可为 {@code null}
      * @param handler      回调处理器，不可为 {@code null}
      * @param options      注册选项，不可为 {@code null}
      * @param <C>          回调类型
      * @param <R>          结果类型
      * @return 注册句柄，关闭后解除本次注册
-     * @throws JellyfishException 键冲突且未声明覆盖、插件注册了未开放的类型、或类型未声明扩展点定义时抛出
+     * @throws JellyfishException 键已占用且未声明覆盖时抛出
      */
-    public <C extends Callback<R>, R> Subscription register(String owner, boolean fromPlugin, Class<C> callbackType,
-                                                            String routeKey, CallbackHandler<C, R> handler,
+    public <C extends ExtensionRequest<R>, R> Subscription register(String owner, Class<C> callbackType, String routeKey,
+                                                            Object descriptor, ExtensionHandler<C, R> handler,
                                                             RegisterOptions options) {
-        Objects.requireNonNull(callbackType, "callbackType must not be null");
-        Objects.requireNonNull(handler, "handler must not be null");
-        Objects.requireNonNull(options, "options must not be null");
-        @SuppressWarnings("unchecked")
-        Class<? extends Callback<?>> type = (Class<? extends Callback<?>>) (Class<?>) callbackType;
-        ExtensionPointDefinition definition = extensionPointRegistry.definitionOf(type);
-        if (fromPlugin && !definition.isPluginExtensible()) {
-            throw new JellyfishException("plugin is not allowed to register callback type: " + callbackType.getName());
-        }
-        CallbackKey key = CallbackKey.of(type, routeKey);
-        CopyOnWriteArrayList<CallbackRegistration> slot = handlers.computeIfAbsent(key,
-                ignored -> new CopyOnWriteArrayList<CallbackRegistration>());
-        CallbackRegistration registration;
-        String overriddenOwner = null;
-        synchronized (slot) {
-            if (definition.isUnique() && !slot.isEmpty()) {
-                if (!options.isOverride()) {
-                    throw new JellyfishException("callback already registered: " + key
-                            + " by " + slot.get(0).getOwner());
-                }
-                overriddenOwner = slot.get(0).getOwner();
-                registration = new CallbackRegistration(owner, type, routeKey, handler, fromPlugin,
-                        sequence.incrementAndGet(), options.getOrder(), overriddenOwner);
-                slot.set(0, registration);
-            } else {
-                registration = new CallbackRegistration(owner, type, routeKey, handler, fromPlugin,
-                        sequence.incrementAndGet(), options.getOrder(), null);
-                slot.add(registration);
-            }
-        }
-        candidates.clear();
-        if (overriddenOwner != null) {
-            LOG.info("回调处理器被覆盖: {} 从 {} 改为 {}", key, overriddenOwner, owner);
-        }
-        CallbackRegistration registered = registration;
-        return () -> unregister(key, registered);
+        return doRegister(owner, callbackType, routeKey, descriptor, handler, options, true);
     }
 
     /**
-     * 解析回调对应的唯一处理器。
+     * 注册无描述符的唯一处理器，等价于描述符传 {@code null}。
      *
-     * @param callback 回调对象，不可为 {@code null}
-     * @return 唯一命中的处理器
-     * @throws CallbackException 命中 0 个（{@code NO_HANDLER}）或多于 1 个（{@code AMBIGUOUS_HANDLER}）时抛出
+     * @param owner        来源
+     * @param callbackType 回调类型
+     * @param routeKey     路由键
+     * @param handler      回调处理器
+     * @param options      注册选项
+     * @param <C>          回调类型
+     * @param <R>          结果类型
+     * @return 注册句柄
      */
-    public CallbackHandler<?, ?> resolveUnique(Callback<?> callback) {
-        List<CallbackRegistration> matched = matched(callback);
-        if (matched.isEmpty()) {
-            throw new CallbackException(CallbackException.Code.NO_HANDLER, describe(callback));
-        }
-        if (matched.size() > 1) {
-            throw new CallbackException(CallbackException.Code.AMBIGUOUS_HANDLER, describe(callback)
-                    + " candidates=[" + matched.get(0).getOwner() + ", " + matched.get(1).getOwner() + ']');
-        }
-        return matched.get(0).getHandler();
+    public <C extends ExtensionRequest<R>, R> Subscription register(String owner, Class<C> callbackType, String routeKey,
+                                                                    ExtensionHandler<C, R> handler,
+                                                                    RegisterOptions options) {
+        return register(owner, callbackType, routeKey, null, handler, options);
+    }
+
+    /**
+     * 注册类型级贡献：同一回调类型允许 0..N 个处理器。
+     *
+     * @param owner        来源（内置组件名或 pluginId），用于诊断与回收
+     * @param callbackType 回调类型，不可为 {@code null}
+     * @param descriptor   处理器描述符，可为 {@code null}
+     * @param handler      回调处理器，不可为 {@code null}
+     * @param options      注册选项，不可为 {@code null}
+     * @param <C>          回调类型
+     * @param <R>          结果类型
+     * @return 注册句柄，关闭后解除本次注册
+     */
+    public <C extends ExtensionRequest<R>, R> Subscription contribute(String owner, Class<C> callbackType,
+                                                              Object descriptor, ExtensionHandler<C, R> handler,
+                                                              RegisterOptions options) {
+        return doRegister(owner, callbackType, null, descriptor, handler, options, false);
+    }
+
+    /**
+     * 注册类型级贡献，等价于描述符传 {@code null}。
+     *
+     * @param owner        来源
+     * @param callbackType 回调类型
+     * @param handler      回调处理器
+     * @param options      注册选项
+     * @param <C>          回调类型
+     * @param <R>          结果类型
+     * @return 注册句柄
+     */
+    public <C extends ExtensionRequest<R>, R> Subscription contribute(String owner, Class<C> callbackType,
+                                                                      ExtensionHandler<C, R> handler,
+                                                                      RegisterOptions options) {
+        return contribute(owner, callbackType, null, handler, options);
     }
 
     /**
@@ -145,30 +130,17 @@ public final class CallbackRegistry {
      * @param callback 回调对象，不可为 {@code null}
      * @return 命中的处理器列表，可能为空
      */
-    public List<CallbackHandler<?, ?>> resolveAll(Callback<?> callback) {
+    public List<ExtensionHandler<?, ?>> resolve(ExtensionRequest<?> callback) {
         List<CallbackRegistration> matched = matched(callback);
         if (matched.isEmpty()) {
             return Collections.emptyList();
         }
         matched.sort(ORDER_COMPARATOR);
-        List<CallbackHandler<?, ?>> resolved = new ArrayList<>(matched.size());
+        List<ExtensionHandler<?, ?>> resolved = new ArrayList<>(matched.size());
         for (CallbackRegistration registration : matched) {
             resolved.add(registration.getHandler());
         }
         return resolved;
-    }
-
-    /**
-     * 获取回调对象的扩展点定义。
-     *
-     * @param callback 回调对象，不可为 {@code null}
-     * @return 扩展点定义
-     */
-    public ExtensionPointDefinition definitionOf(Callback<?> callback) {
-        Objects.requireNonNull(callback, "callback must not be null");
-        @SuppressWarnings("unchecked")
-        Class<? extends Callback<?>> type = (Class<? extends Callback<?>>) callback.getClass();
-        return extensionPointRegistry.definitionOf(type);
     }
 
     /**
@@ -239,7 +211,7 @@ public final class CallbackRegistry {
             }
             for (CallbackRegistration registration : slot) {
                 builder.append("  ").append(key.getCallbackType().getSimpleName()).append("  ")
-                        .append(key.getRouteKey() == null ? "<type-unique>" : key.getRouteKey())
+                        .append(key.getRouteKey() == null ? "<type-wide>" : key.getRouteKey())
                         .append("  order=").append(registration.getOrder())
                         .append("  <- ").append(registration.getOwner());
                 if (registration.getOverriddenOwner() != null) {
@@ -249,6 +221,58 @@ public final class CallbackRegistry {
             }
         }
         return builder.toString();
+    }
+
+    /**
+     * 执行一次注册。
+     *
+     * @param owner        来源
+     * @param callbackType 回调类型
+     * @param routeKey     路由键，{@code null} 表示类型级
+     * @param descriptor   处理器描述符，可为 {@code null}
+     * @param handler      回调处理器
+     * @param options      注册选项
+     * @param unique       是否同键唯一
+     * @param <C>          回调类型
+     * @param <R>          结果类型
+     * @return 注册句柄
+     * @throws JellyfishException 唯一槽已被占用且未声明覆盖时抛出
+     */
+    private <C extends ExtensionRequest<R>, R> Subscription doRegister(String owner, Class<C> callbackType, String routeKey,
+                                                               Object descriptor, ExtensionHandler<C, R> handler,
+                                                               RegisterOptions options, boolean unique) {
+        Objects.requireNonNull(callbackType, "callbackType must not be null");
+        Objects.requireNonNull(handler, "handler must not be null");
+        Objects.requireNonNull(options, "options must not be null");
+        @SuppressWarnings("unchecked")
+        Class<? extends ExtensionRequest<?>> type = (Class<? extends ExtensionRequest<?>>) (Class<?>) callbackType;
+        CallbackKey key = CallbackKey.of(type, routeKey);
+        CopyOnWriteArrayList<CallbackRegistration> slot = handlers.computeIfAbsent(key,
+                ignored -> new CopyOnWriteArrayList<CallbackRegistration>());
+        CallbackRegistration registration;
+        String overriddenOwner = null;
+        synchronized (slot) {
+            if (unique && !slot.isEmpty()) {
+                if (!options.isOverride()) {
+                    throw new JellyfishException("callback already registered: " + key
+                            + " by " + slot.get(0).getOwner());
+                }
+                overriddenOwner = slot.get(0).getOwner();
+                registration = new CallbackRegistration(owner, type, routeKey, handler, descriptor,
+                        sequence.incrementAndGet(), options.getOrder(), overriddenOwner);
+                slot.set(0, registration);
+            } else {
+                registration = new CallbackRegistration(owner, type, routeKey, handler, descriptor,
+                        sequence.incrementAndGet(), options.getOrder(), null);
+                slot.add(registration);
+            }
+        }
+        candidates.clear();
+        if (overriddenOwner != null) {
+            LOG.info("回调处理器被覆盖: {} 从 {} 改为 {}", key, overriddenOwner, owner);
+        }
+        CallbackRegistration registered = registration;
+        return () -> unregister(key, registered);
     }
 
     /**
@@ -297,11 +321,13 @@ public final class CallbackRegistry {
 
     /**
      * 收集匹配路由键的候选注册项。
+     * <p>
+     * 路由键为 {@code null} 的注册项是类型级贡献，对所有路由键都生效；其余按精确匹配。
      *
      * @param callback 回调对象
      * @return 匹配的注册项列表
      */
-    private List<CallbackRegistration> matched(Callback<?> callback) {
+    private List<CallbackRegistration> matched(ExtensionRequest<?> callback) {
         Objects.requireNonNull(callback, "callback must not be null");
         String routeKey = callback.getRouteKey();
         List<CallbackRegistration> matched = new ArrayList<>();
@@ -311,15 +337,5 @@ public final class CallbackRegistry {
             }
         }
         return matched;
-    }
-
-    /**
-     * 生成回调的可读描述，用于异常信息。
-     *
-     * @param callback 回调对象
-     * @return 描述文本
-     */
-    private static String describe(Callback<?> callback) {
-        return "type=" + callback.getClass().getName() + " routeKey=" + callback.getRouteKey();
     }
 }

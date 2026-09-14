@@ -1,6 +1,6 @@
 package zcd.jellyfish.infra.event.callback;
 
-import zcd.jellyfish.api.event.callback.Callback;
+import zcd.jellyfish.api.extension.ExtensionRequest;
 
 import java.util.Objects;
 
@@ -14,7 +14,7 @@ import java.util.Objects;
 final class CallbackKey {
 
     /** 回调类型。 */
-    private final Class<? extends Callback<?>> callbackType;
+    private final Class<? extends ExtensionRequest<?>> callbackType;
 
     /** 路由键，{@code null} 表示类型唯一。 */
     private final String routeKey;
@@ -25,7 +25,7 @@ final class CallbackKey {
      * @param callbackType 回调类型
      * @param routeKey    路由键，可为 {@code null}
      */
-    private CallbackKey(Class<? extends Callback<?>> callbackType, String routeKey) {
+    private CallbackKey(Class<? extends ExtensionRequest<?>> callbackType, String routeKey) {
         this.callbackType = callbackType;
         this.routeKey = routeKey;
     }
@@ -37,7 +37,7 @@ final class CallbackKey {
      * @param routeKey    路由键，可为 {@code null}
      * @return 回调键
      */
-    static CallbackKey of(Class<? extends Callback<?>> callbackType, String routeKey) {
+    static CallbackKey of(Class<? extends ExtensionRequest<?>> callbackType, String routeKey) {
         return new CallbackKey(Objects.requireNonNull(callbackType, "callbackType must not be null"), routeKey);
     }
 
@@ -46,7 +46,7 @@ final class CallbackKey {
      *
      * @return 回调类型
      */
-    Class<? extends Callback<?>> getCallbackType() {
+    Class<? extends ExtensionRequest<?>> getCallbackType() {
         return callbackType;
     }
 

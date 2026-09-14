@@ -34,7 +34,7 @@
             <groupId>com.google.guava</groupId>
             <artifactId>guava</artifactId>
         </dependency>
-        <!-- SLF4J：事件总线日志与 MDC 透传 -->
+        <!-- SLF4J：事件总线与可观测性日志门面 -->
         <dependency>
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-api</artifactId>
@@ -42,6 +42,11 @@
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
+        </dependency>
+        <!-- PF4J：插件 jar 发现 / 类加载 / 描述符 / 生命周期状态机（不使用其扩展机制） -->
+        <dependency>
+            <groupId>org.pf4j</groupId>
+            <artifactId>pf4j</artifactId>
         </dependency>
         <dependency>
             <groupId>org.apache.commons</groupId>

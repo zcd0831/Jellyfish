@@ -6,14 +6,17 @@ import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.event.JellyfishEvent;
 import zcd.jellyfish.api.event.RegisterOptions;
 import zcd.jellyfish.api.event.Subscription;
-import zcd.jellyfish.api.event.callback.Callback;
-import zcd.jellyfish.api.event.callback.CallbackException;
-import zcd.jellyfish.api.event.callback.PluginRequest;
-import zcd.jellyfish.api.event.callback.ToolCallRequest;
-import zcd.jellyfish.api.event.callback.ToolCallResult;
+import zcd.jellyfish.api.extension.ExtensionRequest;
+import zcd.jellyfish.api.extension.ExtensionException;
+import zcd.jellyfish.api.extension.CommandRequest;
+import zcd.jellyfish.api.extension.ToolCallRequest;
+import zcd.jellyfish.api.extension.ToolCallResult;
 import zcd.jellyfish.api.event.notification.ConfigWarningEvent;
+import zcd.jellyfish.api.plugin.PluginContext;
+import zcd.jellyfish.api.plugin.PluginDeclaration;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -50,15 +53,26 @@ class JellyfishEventBusTest {
         return new JellyfishEventBus(EventBusOptions.defaults(), Runnable::run);
     }
 
+    /**
+     * 构造插件上下文，供各用例直接注册处理器与订阅。
+     *
+     * @param bus      事件总线
+     * @param pluginId 插件标识
+     * @return 插件上下文
+     */
+    private static PluginContext pluginContext(JellyfishEventBus bus, String pluginId) {
+        return bus.pluginContext(PluginDeclaration.of(pluginId));
+    }
+
     @Test
     void invoke_should_return_result_when_handler_registered() {
         // Given
         JellyfishEventBus bus = newBus();
         bus.start();
-        bus.pluginContext("plugin-a").commands().register("calculator", callback -> "42", RegisterOptions.DEFAULT);
+        pluginContext(bus, "plugin-a").handle(CommandRequest.class, "calculator", callback -> "42", RegisterOptions.DEFAULT);
 
         // When
-        Object result = bus.invoke(new PluginRequest("calculator", Object.class, null));
+        Object result = bus.invoke(new CommandRequest("calculator", Object.class, null));
 
         // Then
         assertEquals("42", result);
@@ -66,29 +80,26 @@ class JellyfishEventBusTest {
     }
 
     @Test
-    void invokeAll_should_return_single_result_when_arity_is_one() {
-        // Given
+    void invoke_should_call_every_matching_handler_in_order_and_return_first_result() {
+        // Given：两个插件都贡献同一回调类型，order 决定先后
         JellyfishEventBus bus = newBus();
         bus.start();
-        bus.pluginContext("plugin-a").commands().register("calculator", callback -> "42", RegisterOptions.DEFAULT);
+        List<String> invoked = new ArrayList<>();
+        pluginContext(bus, "plugin-b").contribute(CommandRequest.class, callback -> {
+            invoked.add("plugin-b");
+            return "b";
+        }, RegisterOptions.order(2));
+        pluginContext(bus, "plugin-a").contribute(CommandRequest.class, callback -> {
+            invoked.add("plugin-a");
+            return "a";
+        }, RegisterOptions.order(1));
 
         // When
-        List<Object> results = bus.invokeAll(new PluginRequest("calculator", Object.class, null));
+        Object result = bus.invoke(new CommandRequest("calculator", Object.class, null));
 
-        // Then
-        assertEquals(Collections.singletonList("42"), results);
-    }
-
-    @Test
-    void invokeAll_should_throw_no_handler_when_not_registered() {
-        // Given
-        JellyfishEventBus bus = newBus();
-        bus.start();
-
-        // When / Then
-        PluginRequest callback = new PluginRequest("missing", Object.class, null);
-        CallbackException exception = assertThrows(CallbackException.class, () -> bus.invokeAll(callback));
-        assertEquals(CallbackException.Code.NO_HANDLER, exception.getCode());
+        // Then：全部处理器按 order 依次执行，返回值取首个
+        assertEquals(Arrays.asList("plugin-a", "plugin-b"), invoked);
+        assertEquals("a", result);
     }
 
     @Test
@@ -98,11 +109,11 @@ class JellyfishEventBusTest {
         bus.start();
 
         // When
-        PluginRequest callback = new PluginRequest("missing", Object.class, null);
-        CallbackException exception = assertThrows(CallbackException.class, () -> bus.invoke(callback));
+        CommandRequest callback = new CommandRequest("missing", Object.class, null);
+        ExtensionException exception = assertThrows(ExtensionException.class, () -> bus.invoke(callback));
 
         // Then
-        assertEquals(CallbackException.Code.NO_HANDLER, exception.getCode());
+        assertEquals(ExtensionException.Code.NO_HANDLER, exception.getCode());
         assertEquals(1L, bus.stats().getNoHandlerCallbacks());
     }
 
@@ -111,12 +122,12 @@ class JellyfishEventBusTest {
         // Given
         JellyfishEventBus bus = newBus();
         bus.start();
-        bus.pluginContext("plugin-a").tools().register("calculator",
+        pluginContext(bus, "plugin-a").handle(ToolCallRequest.class, "calculator",
                 callback -> new ToolCallResult("calculator", 42));
 
         // When
         ToolCallResult result = bus.invoke(new ToolCallRequest("calculator",
-                Collections.<String, Object>emptyMap(), null, 0L));
+                Collections.<String, Object>emptyMap()));
 
         // Then
         assertEquals(42, result.getOutput());
@@ -128,12 +139,12 @@ class JellyfishEventBusTest {
         // Given
         JellyfishEventBus bus = newBus();
         bus.start();
-        bus.pluginContext("plugin-a").commands().register("calculator", callback -> {
+        pluginContext(bus, "plugin-a").handle(CommandRequest.class, "calculator", callback -> {
             throw new IllegalStateException("boom");
         }, RegisterOptions.DEFAULT);
 
         // When / Then
-        PluginRequest callback = new PluginRequest("calculator", Object.class, null);
+        CommandRequest callback = new CommandRequest("calculator", Object.class, null);
         assertThrows(IllegalStateException.class, () -> bus.invoke(callback));
         assertEquals(1L, bus.stats().getFailedCallbacks());
     }
@@ -143,12 +154,12 @@ class JellyfishEventBusTest {
         // Given
         JellyfishEventBus bus = newBus();
         bus.start();
-        bus.pluginContext("plugin-a").commands().register("calculator", callback -> {
+        pluginContext(bus, "plugin-a").handle(CommandRequest.class, "calculator", callback -> {
             throw new Exception("checked");
         }, RegisterOptions.DEFAULT);
 
         // When
-        PluginRequest callback = new PluginRequest("calculator", Object.class, null);
+        CommandRequest callback = new CommandRequest("calculator", Object.class, null);
         JellyfishException exception = assertThrows(JellyfishException.class, () -> bus.invoke(callback));
 
         // Then
@@ -161,7 +172,7 @@ class JellyfishEventBusTest {
         JellyfishEventBus bus = newBus();
 
         // When / Then
-        PluginRequest callback = new PluginRequest("calculator", Object.class, null);
+        CommandRequest callback = new CommandRequest("calculator", Object.class, null);
         assertThrows(JellyfishException.class, () -> bus.invoke(callback));
     }
 
@@ -171,15 +182,14 @@ class JellyfishEventBusTest {
         EventBusOptions options = EventBusOptions.builder().maxCallbackDepth(1).build();
         JellyfishEventBus bus = new JellyfishEventBus(options, Runnable::run);
         bus.start();
-        bus.pluginContext("plugin-a").commands().register("outer",
-                callback -> bus.invoke(new PluginRequest("inner", Object.class, null)), RegisterOptions.DEFAULT);
+        pluginContext(bus, "plugin-a").handle(CommandRequest.class, "outer",
+                callback -> bus.invoke(new CommandRequest("inner", Object.class, null)), RegisterOptions.DEFAULT);
 
         // When
-        PluginRequest callback = new PluginRequest("outer", Object.class, null);
-        CallbackException exception = assertThrows(CallbackException.class, () -> bus.invoke(callback));
+        CommandRequest callback = new CommandRequest("outer", Object.class, null);
 
         // Then
-        assertEquals(CallbackException.Code.NESTING_TOO_DEEP, exception.getCode());
+        assertThrows(JellyfishException.class, () -> bus.invoke(callback));
         assertEquals(1L, bus.stats().getNestingRejectedCallbacks());
     }
 
@@ -188,7 +198,7 @@ class JellyfishEventBusTest {
         // Given
         JellyfishEventBus bus = newBus();
         List<ConfigWarningEvent> received = new ArrayList<>();
-        bus.pluginContext("plugin-a").events().subscribe(ConfigWarningEvent.class, received::add);
+        pluginContext(bus, "plugin-a").observe(ConfigWarningEvent.class, received::add);
 
         // When
         bus.publish(new ConfigWarningEvent("path", "message"));
@@ -209,7 +219,7 @@ class JellyfishEventBusTest {
         // Given
         JellyfishEventBus bus = newBus();
         List<ConfigWarningEvent> received = new ArrayList<>();
-        bus.pluginContext("plugin-a").events().subscribe(ConfigWarningEvent.class, received::add);
+        pluginContext(bus, "plugin-a").observe(ConfigWarningEvent.class, received::add);
 
         // When
         bus.publishSync(new ConfigWarningEvent("path", "message"));
@@ -223,11 +233,11 @@ class JellyfishEventBusTest {
         // Given
         JellyfishEventBus bus = newBus();
         bus.start();
-        bus.pluginContext("plugin-a").events().subscribe(ConfigWarningEvent.class, event -> {
+        pluginContext(bus, "plugin-a").observe(ConfigWarningEvent.class, event -> {
             throw new IllegalStateException("boom");
         });
         List<ConfigWarningEvent> received = new ArrayList<>();
-        bus.pluginContext("plugin-b").events().subscribe(ConfigWarningEvent.class, received::add);
+        pluginContext(bus, "plugin-b").observe(ConfigWarningEvent.class, received::add);
 
         // When
         bus.publishSync(new ConfigWarningEvent("path", "message"));
@@ -243,7 +253,7 @@ class JellyfishEventBusTest {
         JellyfishEventBus bus = newBus();
         bus.start();
         List<JellyfishEvent> received = new ArrayList<>();
-        bus.pluginContext("plugin-a").events().subscribe(JellyfishEvent.class, received::add);
+        pluginContext(bus, "plugin-a").observe(JellyfishEvent.class, received::add);
 
         // When
         bus.publishSync(new ConfigWarningEvent("path", "message"));
@@ -292,7 +302,7 @@ class JellyfishEventBusTest {
         bus.register(subscriber);
 
         // When
-        bus.invoke(new PluginRequest("calculator", Object.class, null));
+        bus.invoke(new CommandRequest("calculator", Object.class, null));
         bus.publishSync(new ConfigWarningEvent("path", "message"));
 
         // Then
@@ -301,13 +311,41 @@ class JellyfishEventBusTest {
     }
 
     @Test
-    void pluginContext_should_reject_blank_plugin_id() {
+    void unregisterAll_should_remove_callbacks_and_subscriptions_of_owner() {
+        // Given
+        JellyfishEventBus bus = newBus();
+        bus.start();
+        pluginContext(bus, "plugin-a").handle(CommandRequest.class, "calculator", callback -> "42", RegisterOptions.DEFAULT);
+        List<ConfigWarningEvent> received = new ArrayList<>();
+        pluginContext(bus, "plugin-a").observe(ConfigWarningEvent.class, received::add);
+        bus.publishSync(new ConfigWarningEvent("path", "message"));
+        assertEquals(1, received.size());
+
+        // When
+        bus.unregisterAll("plugin-a");
+
+        // Then
+        assertThrows(ExtensionException.class,
+                () -> bus.invoke(new CommandRequest("calculator", Object.class, null)));
+        bus.publishSync(new ConfigWarningEvent("path", "message"));
+        assertEquals(1, received.size());
+    }
+
+    @Test
+    void unregisterAll_should_reject_blank_owner() {
         // Given
         JellyfishEventBus bus = newBus();
 
         // When / Then
-        assertThrows(JellyfishException.class, () -> bus.pluginContext(" "));
-        assertThrows(JellyfishException.class, () -> bus.pluginContext(null));
+        assertThrows(JellyfishException.class, () -> bus.unregisterAll(" "));
+        assertThrows(JellyfishException.class, () -> bus.unregisterAll(null));
+    }
+
+    @Test
+    void pluginContext_should_reject_blank_plugin_id() {
+        // When / Then
+        assertThrows(JellyfishException.class, () -> PluginDeclaration.of(" "));
+        assertThrows(JellyfishException.class, () -> PluginDeclaration.of(null));
     }
 
     @Test
@@ -346,10 +384,10 @@ class JellyfishEventBusTest {
     void plugin_override_should_be_visible_in_snapshot() {
         // Given
         JellyfishEventBus bus = newBus();
-        bus.pluginContext("plugin-a").commands().register("calculator", callback -> "one", RegisterOptions.DEFAULT);
+        pluginContext(bus, "plugin-a").handle(CommandRequest.class, "calculator", callback -> "one", RegisterOptions.DEFAULT);
 
         // When
-        bus.pluginContext("plugin-b").commands().register("calculator", callback -> "two",
+        pluginContext(bus, "plugin-b").handle(CommandRequest.class, "calculator", callback -> "two",
                 RegisterOptions.override(true));
 
         // Then
@@ -362,14 +400,14 @@ class JellyfishEventBusTest {
         // Given
         JellyfishEventBus bus = newBus();
         bus.start();
-        bus.pluginContext("plugin-a").commands().register("calculator", callback -> "one", RegisterOptions.DEFAULT);
+        pluginContext(bus, "plugin-a").handle(CommandRequest.class, "calculator", callback -> "one", RegisterOptions.DEFAULT);
 
         // When
         bus.close();
 
         // Then
         assertTrue(bus.snapshot().isEmpty());
-        PluginRequest callback = new PluginRequest("calculator", Object.class, null);
+        CommandRequest callback = new CommandRequest("calculator", Object.class, null);
         assertThrows(JellyfishException.class, () -> bus.invoke(callback));
     }
 
@@ -379,7 +417,7 @@ class JellyfishEventBusTest {
         EventBusOptions options = EventBusOptions.builder().pendingCapacity(1).build();
         JellyfishEventBus bus = new JellyfishEventBus(options, Runnable::run);
         List<ConfigWarningEvent> received = new ArrayList<>();
-        bus.pluginContext("plugin-a").events().subscribe(ConfigWarningEvent.class, received::add);
+        pluginContext(bus, "plugin-a").observe(ConfigWarningEvent.class, received::add);
 
         // When
         bus.publish(new ConfigWarningEvent("first", "message"));
@@ -452,7 +490,7 @@ class JellyfishEventBusTest {
         // Given
         JellyfishEventBus bus = newBus();
         List<ConfigWarningEvent> received = new ArrayList<>();
-        bus.pluginContext("plugin-a").events().subscribe(ConfigWarningEvent.class, received::add);
+        pluginContext(bus, "plugin-a").observe(ConfigWarningEvent.class, received::add);
         bus.publish(new ConfigWarningEvent("path", "message"));
 
         // When
@@ -490,7 +528,7 @@ class JellyfishEventBusTest {
             List<ConfigWarningEvent> received = new CopyOnWriteArrayList<>();
             CountDownLatch delivered = new CountDownLatch(1);
             bus.start();
-            bus.pluginContext("plugin-a").events().subscribe(ConfigWarningEvent.class, event -> {
+            pluginContext(bus, "plugin-a").observe(ConfigWarningEvent.class, event -> {
                 received.add(event);
                 delivered.countDown();
             });
@@ -542,7 +580,7 @@ class JellyfishEventBusTest {
         bus.register(new CheckedThrowingCallbackSubscriber());
 
         // When
-        PluginRequest callback = new PluginRequest("calculator", Object.class, null);
+        CommandRequest callback = new CommandRequest("calculator", Object.class, null);
         JellyfishException exception = assertThrows(JellyfishException.class, () -> bus.invoke(callback));
 
         // Then
@@ -557,7 +595,7 @@ class JellyfishEventBusTest {
         bus.register(new ErrorThrowingCallbackSubscriber());
 
         // When
-        PluginRequest callback = new PluginRequest("calculator", Object.class, null);
+        CommandRequest callback = new CommandRequest("calculator", Object.class, null);
 
         // Then
         assertThrows(AssertionError.class, () -> bus.invoke(callback));
@@ -637,7 +675,7 @@ class JellyfishEventBusTest {
          * @param callback 命令对象
          */
         @Subscribe
-        void onCallback(Callback<?> callback) {
+        void onCallback(ExtensionRequest<?> callback) {
             // 仅用于校验注册期拒绝
         }
     }
@@ -658,7 +696,7 @@ class JellyfishEventBusTest {
          * @param callback 插件命令
          */
         @Subscribe
-        void onPluginRequest(PluginRequest callback) {
+        void onCommandRequest(CommandRequest callback) {
             received.add("callback:" + callback.getName());
         }
 
@@ -765,7 +803,7 @@ class JellyfishEventBusTest {
          * @throws Exception 固定抛出，用于验证异常解包
          */
         @Subscribe
-        void onPluginRequest(PluginRequest callback) throws Exception {
+        void onCommandRequest(CommandRequest callback) throws Exception {
             throw new Exception("checked");
         }
     }
@@ -783,7 +821,7 @@ class JellyfishEventBusTest {
          * @param callback 插件命令
          */
         @Subscribe
-        void onPluginRequest(PluginRequest callback) {
+        void onCommandRequest(CommandRequest callback) {
             throw new AssertionError("fatal");
         }
     }

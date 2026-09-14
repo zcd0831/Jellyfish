@@ -5,7 +5,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import zcd.jellyfish.api.event.callback.PluginRequest;
+import zcd.jellyfish.api.extension.CommandRequest;
 import zcd.jellyfish.api.event.notification.ConfigWarningEvent;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -30,7 +30,7 @@ class EventDispatchExceptionHandlerTest {
         EventBusStats stats = new EventBusStats();
         DispatchContext context = new DispatchContext(2, stats);
         CallbackReplies replies = new CallbackReplies();
-        PluginRequest callback = new PluginRequest("calculator", Object.class, null);
+        CommandRequest callback = new CommandRequest("calculator", Object.class, null);
         replies.open(callback);
         context.enter(callback);
         EventDispatchExceptionHandler handler = new EventDispatchExceptionHandler(context, replies);

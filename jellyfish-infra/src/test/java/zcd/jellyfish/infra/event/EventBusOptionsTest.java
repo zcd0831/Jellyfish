@@ -32,11 +32,6 @@ class EventBusOptionsTest {
         assertEquals(1024, options.getPendingCapacity());
         assertEquals(16, options.getMaxCallbackDepth());
         assertEquals(5000L, options.getShutdownAwaitMillis());
-        assertEquals(4, options.getCallbackCorePoolSize());
-        assertEquals(32, options.getCallbackMaxPoolSize());
-        assertEquals(60L, options.getCallbackKeepAliveSeconds());
-        assertEquals(256, options.getCallbackQueueCapacity());
-        assertEquals(2000L, options.getCallbackPerHandlerTimeoutMillis());
     }
 
     @Test
@@ -49,12 +44,7 @@ class EventBusOptionsTest {
                 .queueCapacity(16)
                 .pendingCapacity(32)
                 .maxCallbackDepth(3)
-                .shutdownAwaitMillis(100L)
-                .callbackCorePoolSize(2)
-                .callbackMaxPoolSize(6)
-                .callbackKeepAliveSeconds(10L)
-                .callbackQueueCapacity(8)
-                .callbackPerHandlerTimeoutMillis(500L);
+                .shutdownAwaitMillis(100L);
 
         // When
         EventBusOptions options = builder.build();
@@ -67,11 +57,6 @@ class EventBusOptionsTest {
         assertEquals(32, options.getPendingCapacity());
         assertEquals(3, options.getMaxCallbackDepth());
         assertEquals(100L, options.getShutdownAwaitMillis());
-        assertEquals(2, options.getCallbackCorePoolSize());
-        assertEquals(6, options.getCallbackMaxPoolSize());
-        assertEquals(10L, options.getCallbackKeepAliveSeconds());
-        assertEquals(8, options.getCallbackQueueCapacity());
-        assertEquals(500L, options.getCallbackPerHandlerTimeoutMillis());
     }
 
     @ParameterizedTest(name = "{0}")
@@ -105,18 +90,6 @@ class EventBusOptionsTest {
                 Arguments.of("shutdownAwaitMillis=0",
                         (Consumer<EventBusOptions.Builder>) builder -> builder.shutdownAwaitMillis(0L)),
                 Arguments.of("maxPoolSize<corePoolSize",
-                        (Consumer<EventBusOptions.Builder>) builder -> builder.corePoolSize(8).maxPoolSize(2)),
-                Arguments.of("callbackCorePoolSize=0",
-                        (Consumer<EventBusOptions.Builder>) builder -> builder.callbackCorePoolSize(0)),
-                Arguments.of("callbackMaxPoolSize=0",
-                        (Consumer<EventBusOptions.Builder>) builder -> builder.callbackMaxPoolSize(0)),
-                Arguments.of("callbackKeepAliveSeconds=0",
-                        (Consumer<EventBusOptions.Builder>) builder -> builder.callbackKeepAliveSeconds(0L)),
-                Arguments.of("callbackQueueCapacity=0",
-                        (Consumer<EventBusOptions.Builder>) builder -> builder.callbackQueueCapacity(0)),
-                Arguments.of("callbackPerHandlerTimeoutMillis=0", (Consumer<EventBusOptions.Builder>) builder ->
-                        builder.callbackPerHandlerTimeoutMillis(0L)),
-                Arguments.of("callbackMaxPoolSize<callbackCorePoolSize", (Consumer<EventBusOptions.Builder>) builder ->
-                        builder.callbackCorePoolSize(8).callbackMaxPoolSize(2)));
+                        (Consumer<EventBusOptions.Builder>) builder -> builder.corePoolSize(8).maxPoolSize(2)));
     }
 }

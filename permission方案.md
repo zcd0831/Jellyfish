@@ -1,5 +1,7 @@
 # Permission 模块落地方案
 
+> 后续变更（`agent方案.md` 落地后）：AgentManager 已实现 `PermissionPolicyProvider`，`plugins` 段已真实接入 `PluginRuntimeConfig`；本文档 §4.4 / §5.1 中的示例键路径随之收敛为 `plugins.configurations.<pluginId>`（判定语义与结论不变，仅配置路径形状变化）。
+
 > 状态：**裁决已完成**（§11），待开工；含 `AGENTS.md` 同步更新（§5.1）
 > 范围：只交付 Permission 模块（api 契约 + infra 实现 + 单测 + DI 装配），**不接** `ReActLooper`、**不做** `AgentManager`、**不做** `SessionManager`、**不做**人工审批交互。
 

@@ -35,7 +35,7 @@ flowchart TB
             subgraph "内核模块<br>编译期单向依赖+构造器注入，模块互调不经扩展层"
                 direction LR
                 SessionMgr["SessionManager<br>会话隔离 / 消息列表<br>当前 agentId / 当前模型 / 会话级切换"]
-                AgentMgr["AgentManager<br>Agent 定义注册表<br>按 agentId 提供系统提示词 / 权限策略"]
+                AgentMgr["AgentManager + AgentRegistry<br>Agent 定义注册表<br>按 agentId 提供系统提示词原文 / 权限策略<br>（提示词拼装归 core/prompt）"]
                 CommandMgr["CommandManager<br>命令域服务：输入解析 / 别名 / 参数切分<br>帮助渲染 / 按类型查询注册表<br>系统命令与插件命令同源"]
                 ModelMgr["ModelManager<br>Provider/Model 注册/解析/路由<br>不持有全局当前态"]
                 LLMClient["LLMClient<br>统一 LLM 调用抽象"]
@@ -66,7 +66,8 @@ flowchart TB
 
     subgraph "外部依赖·配置"
         direction LR
-        Jelly["jellyfish.json<br>全局级 + 项目级<br>Provider/Model/插件清单"]
+        Models["models.json<br>全局级 + 项目级<br>Provider/Model"]
+        Jelly["jellyfish.json<br>全局级 + 项目级<br>插件清单等运行期设置"]
         Agents["agents.json<br>全局级 + 项目级<br>Agent 定义"]
     end
 
@@ -113,7 +114,8 @@ flowchart TB
     %% ===================== 扩展层·通知：按角色开放，内核模块作为事件发布者（点线，无返回值） =====================
     ReAct -.->|"publish：轮次开始 / 工具结果"| EventCh
     SessionMgr -.->|"publish：会话创建 / 消息追加"| EventCh
-    AgentMgr -.->|"publish：Agent 定义加载 / 变更"| EventCh
+    AgentMgr -.->|"publish：Agent 定义装载（AgentsLoadedEvent）"| EventCh
+    ModelMgr -.->|"publish：Model 索引重建（ModelsLoadedEvent）"| EventCh
     PermMgr -.->|"publish：权限审计（只发事件，不参与判定）"| EventCh
     EventCh -.->|"分发事件"| Metrics
 
@@ -139,6 +141,7 @@ flowchart TB
     Plugins -->|"handle / contribute / observe / emit"| PluginCtx
 
     %% ===================== RuntimeConfig 注入 =====================
+    Runtime -->|"读取合并, 项目级优先"| Models
     Runtime -->|"读取合并, 项目级优先"| Jelly
     Runtime -->|"读取合并, 项目级优先"| Agents
     Runtime -->|"注入 Provider/Model 配置"| ModelMgr
@@ -216,14 +219,14 @@ jellyfish-infra/src/main/java/zcd/jellyfish/infra/
 ├── extension/      # 同步派发策略 ExtensionRegistry：调用点线程内联执行、按 order 升序、取返回值、不可丢弃；查找分 handlers（只要处理器）与 bindings（连 owner 一起给，供审计归因）；需要结果或必须完成的扩展点走这里
 ├── event/          # 异步派发策略 EventChannel：线程池 + 有界队列、无返回值、可丢弃；纯通知，带白名单与限流
 ├── session/        # 会话运行态：会话隔离、消息列表，以及会话内当前 agentId 与当前模型（仅内存态）
-├── agent/          # Agent 定义注册表：从配置装载定义，按 agentId 提供提示词与权限策略
+├── agent/          # Agent 定义注册表：AgentManager（门面，implements PermissionPolicyProvider，按 agentId 提供提示词原文与权限策略）+ AgentRegistry（定义与策略的只读索引）；提示词拼装归 core/prompt，新增事件 AgentsLoadedEvent
 ├── command/        # 命令域服务 CommandManager：输入解析 / 别名 / 参数切分 / 帮助渲染，按类型查询注册表；系统命令与插件命令同源
 ├── model/          # 模型注册与路由：维护 provider/model 索引，按名字解析模型并给出 LLM 客户端（不持有全局当前态）
 ├── llm/            # LLM 调用抽象：统一的同步/流式调用接口与各厂商实现
-├── plugin/         # 插件运行时：Java 插件加载、热部署、描述符体检与上下文供给，按统一 SPI 看待桥接插件，不感知底层脚本进程
-├── permission/     # 权限控制：核心策略（agent 授权）→ PLAN 只读白名单（来自 plugins.<pluginId>.readOnlyTools）→ 插件两态拦截，判定后发审计事件；权限检查不经扩展层下发，由调用点同步询问。待落地：AgentManager 提供的权限策略源、人工审批通道（ASK 暂时降级为拒绝）
+├── plugin/         # 插件运行时：Java 插件加载、热部署、描述符体检与上下文供给，按统一 SPI 看待桥接插件，不感知底层脚本进程；装配输入 PluginRuntimeConfig 由 jellyfish.json 的 plugins 段驱动，且是「引用稳定、快照可换」的发布点
+├── permission/     # 权限控制：核心策略（agent 授权）→ PLAN 只读白名单（来自 plugins.configurations.<pluginId>.readOnlyTools）→ 插件两态拦截，判定后发审计事件；权限检查不经扩展层下发，由调用点同步询问；策略来源由 AgentManager 实现 PermissionPolicyProvider。待落地：人工审批通道（ASK 暂时降级为拒绝）
 ├── metrics/        # 可观测性：指标采集、健康检查与日志上报
-├── config/         # 配置加载：全局级 + 项目级双源读取与合并，只读
+├── config/         # 配置加载：全局级 + 项目级双源读取与合并，只读；四类配置类与文件一一对应：AppConfig(config.json) / ModelSettings(models.json) / AgentSettings(agents.json) / JellyfishSettings(jellyfish.json)
 └── support/        # 通用支撑：序列化封装、类型常量等底层工具
 
 jellyfish-core/src/main/java/zcd/jellyfish/core/
@@ -261,7 +264,7 @@ jellyfish-plugin-node/src/main/
     ├── plugin.properties        # PF4J 描述符：Plugin-Id、依赖、声明的权限
     └── scripts/                 # gateway.js 常驻网关 + 业务脚本目录
 
-src/main/resources/config.json     # 应用配置（进程名 + 各配置段的双源文件路径）
+jellyfish-cli/src/main/resources/config.json  # 应用配置（进程名 + 各配置段的双源文件路径）
 ```
 
 - **分层靠模块强制**：`core` 与 `infra` 拆开，Maven 才能在编译期守住「应用层 → 基础设施层」这条依赖方向；`api` 独立，是因为它的消费者是仓库外的插件。
@@ -276,8 +279,10 @@ src/main/resources/config.json     # 应用配置（进程名 + 各配置段的�
 ## 架构要点
 
 - **依赖注入（Dagger2）**：通过 Dagger2 进行依赖注入，对各个模块进行解耦。
-- **配置加载**：`AppConfig` 直接绑定 `classpath:config.json`，应用级配置。`SettingsReader` 会把 `${ENV_VAR}` 替换为环境变量，apiKey 通常这样注入。
-- **global/project 合并**：`RuntimeConfig` 合并两者，同名 provider 以 project 覆盖 global，默认 provider/model 同理。
+- **配置加载**：`AppConfig` 直接绑定 `classpath:config.json`，应用级配置，**只有它声明各配置文件的位置**。`SettingsReader` 会把 `${ENV_VAR}` 替换为环境变量（`\${VAR}` 转义），apiKey 通常这样注入。
+- **四份配置与四类配置类一一对应**：`config.json`→`AppConfig`、`models.json`→`ModelSettings`、`agents.json`→`AgentSettings`、`jellyfish.json`→`JellyfishSettings`；类名与文件名一致，一个文件一个根类、一个双源段。
+- **global/project 合并**：`RuntimeConfig` 合并两者，同名 provider / agent / 插件配置段以 project **整对象**覆盖 global，默认 provider/model/agent 同理；列表段（插件根目录、启用 / 禁用名单）项目级非空则**整体替换**。
+- **配置驱动的索引在启动期建立**：`ModelManager` / `AgentManager` 构造期只建空索引（那时配置还没读），真正的装载发生在 `AgentHarness.bootstrap()` 的 `runtimeConfig.refresh()` 之后；`PluginRuntimeConfig` 是「引用稳定、快照可换」的发布点，必须在 `pluginManager.bootstrap()` 之前刷新。
 - **流式调用**：`AbstractHttpLlmClient` 用 OkHttp 手写 SSE（`text/event-stream`）解析，流式请求在线程池（守护线程，名为 `llm-stream`）中执行，句柄可 `cancel()`。OpenAI 兼容协议的公共逻辑在 `AbstractOpenAiCompatibleLlmClient`。
 - **异常**：统一抛 `JellyfishException`。
 - **序列化与反序列化**: 读写统一走 `ObjectMapperWrapper`，不要直接 new `ObjectMapper`。

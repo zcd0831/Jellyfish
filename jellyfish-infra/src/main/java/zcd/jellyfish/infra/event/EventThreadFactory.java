@@ -4,7 +4,7 @@ import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * 通知通道线程工厂：命名 + 守护线程。
+ * 事件通道线程工厂：命名 + 守护线程。
  * <p>
  * 守护线程保证线程池不会阻止 JVM 退出；统一前缀便于在拒绝策略中识别「当前是否枢纽线程」。
  *

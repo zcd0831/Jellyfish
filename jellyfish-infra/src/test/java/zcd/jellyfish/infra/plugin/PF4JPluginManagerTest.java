@@ -12,8 +12,10 @@ import zcd.jellyfish.api.extension.ToolCallRequest;
 import zcd.jellyfish.api.event.notification.ConfigWarningEvent;
 import zcd.jellyfish.api.plugin.JellyfishPlugin;
 import zcd.jellyfish.api.plugin.PluginContext;
-import zcd.jellyfish.infra.event.EventBusOptions;
-import zcd.jellyfish.infra.event.JellyfishEventBus;
+import zcd.jellyfish.infra.event.EventChannel;
+import zcd.jellyfish.infra.event.EventChannelOptions;
+import zcd.jellyfish.infra.extension.ExtensionRegistry;
+import zcd.jellyfish.infra.registry.TypeRegistry;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -48,19 +50,31 @@ class PF4JPluginManagerTest {
     /** 记录插件生命周期回调，静态共享以便被插件类写入。 */
     private static final List<String> RECORDED = new CopyOnWriteArrayList<>();
 
-    /** 交互枢纽。 */
-    private JellyfishEventBus eventBus;
+    /** 共用注册表：同步处理器与事件订阅都落在这里。 */
+    private TypeRegistry registry;
+
+    /** 同步扩展点策略。 */
+    private ExtensionRegistry extensions;
+
+    /** 事件通道。 */
+    private EventChannel eventChannel;
+
+    /** 插件上下文工厂。 */
+    private PluginContextFactory contexts;
 
     @BeforeEach
     void setUp() {
         RECORDED.clear();
-        eventBus = new JellyfishEventBus(EventBusOptions.defaults());
-        eventBus.start();
+        registry = new TypeRegistry();
+        extensions = new ExtensionRegistry(registry);
+        eventChannel = new EventChannel(EventChannelOptions.defaults(), registry);
+        eventChannel.start();
+        contexts = new PluginContextFactory(extensions, eventChannel, registry);
     }
 
     @AfterEach
     void tearDown() {
-        eventBus.close();
+        eventChannel.close();
     }
 
     @Test
@@ -75,8 +89,7 @@ class PF4JPluginManagerTest {
         // Then
         assertEquals(PluginState.STARTED, manager.stateOf("sample"));
         assertTrue(RECORDED.contains("start:sample"));
-        ToolCallResult result = eventBus.invoke(new ToolCallRequest("echo",
-                Collections.<String, Object>emptyMap()));
+        ToolCallResult result = callTool("echo");
         assertEquals("ok", result.getOutput());
     }
 
@@ -133,8 +146,7 @@ class PF4JPluginManagerTest {
 
         // Then：不回滚就会留下“插件已失败、工具还能调”的幽灵注册
         assertEquals(PluginState.FAILED, manager.stateOf("broken"));
-        assertThrows(ExtensionException.class, () -> eventBus.invoke(new ToolCallRequest("half",
-                Collections.<String, Object>emptyMap())));
+        assertThrows(ExtensionException.class, () -> callTool("half"));
     }
 
     @Test
@@ -190,8 +202,7 @@ class PF4JPluginManagerTest {
 
         // Then
         assertTrue(RECORDED.contains("stop"));
-        assertThrows(ExtensionException.class, () -> eventBus.invoke(new ToolCallRequest("echo",
-                Collections.<String, Object>emptyMap())));
+        assertThrows(ExtensionException.class, () -> callTool("echo"));
     }
 
     @Test
@@ -215,6 +226,17 @@ class PF4JPluginManagerTest {
     }
 
     /**
+     * 以调用点的方式调用工具：先查找处理器，再执行它。
+     *
+     * @param toolName 工具名
+     * @return 工具调用结果
+     */
+    private ToolCallResult callTool(String toolName) {
+        ToolCallRequest request = new ToolCallRequest(toolName, Collections.<String, Object>emptyMap());
+        return extensions.invoke(extensions.handler(ToolCallRequest.class, toolName), request);
+    }
+
+    /**
      * 构造门面。
      *
      * @param enabled  启用名单，可为 {@code null}
@@ -224,7 +246,7 @@ class PF4JPluginManagerTest {
     private PF4JPluginManager newManager(Set<String> enabled, Set<String> disabled) {
         PluginRuntimeConfig config = new PluginRuntimeConfig(
                 Collections.singletonList(pluginsRoot), enabled, disabled, null);
-        return new PF4JPluginManager(eventBus, config);
+        return new PF4JPluginManager(contexts, config);
     }
 
     /**

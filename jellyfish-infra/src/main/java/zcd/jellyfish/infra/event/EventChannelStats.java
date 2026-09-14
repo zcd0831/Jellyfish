@@ -4,14 +4,17 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.atomic.LongAdder;
 
 /**
- * 事件总线指标：全部使用 {@link LongAdder} 累加。
+ * 事件通道指标：全部使用 {@link LongAdder} 累加。
  * <p>
- * <b>自身指标不通过事件总线上报</b>，避免「上报指标本身产生事件」的自指循环；
+ * <b>只统计异步侧</b>：同步派发没有超时与异常隔离，处理器失败当场抛给调用方，由调用方感知，
+ * 因此这里没有任何「派发/失败处理器」计数。
+ * <p>
+ * <b>自身指标不通过事件通道上报</b>，避免「上报指标本身产生事件」的自指循环；
  * 需要展示时由上层主动调用 {@link #render()}。
  *
  * @author zcd
  */
-public final class EventBusStats {
+public final class EventChannelStats {
 
     /** 已发布的通知数量。 */
     final LongAdder publishedEvents = new LongAdder();
@@ -19,23 +22,11 @@ public final class EventBusStats {
     /** 被丢弃的通知数量。 */
     final LongAdder droppedEvents = new LongAdder();
 
-    /** 无 dispatcher 订阅的死事件类型数量。 */
-    final LongAdder deadEventTypes = new LongAdder();
-
-    /** 有 dispatcher 但无订阅者命中的通知数量。 */
+    /** 无订阅者命中的通知数量。 */
     final LongAdder unmatchedNotifications = new LongAdder();
 
     /** 订阅者异常数量。 */
     final LongAdder subscriberErrors = new LongAdder();
-
-    /** 已派发的回调数量。 */
-    final LongAdder dispatchedCallbacks = new LongAdder();
-
-    /** 失败的回调数量。 */
-    final LongAdder failedCallbacks = new LongAdder();
-
-    /** 无处理器的回调数量。 */
-    final LongAdder noHandlerCallbacks = new LongAdder();
 
     /** 启动期缓冲回放的通知数量。 */
     final LongAdder pendingReplayed = new LongAdder();
@@ -43,13 +34,13 @@ public final class EventBusStats {
     /** 启动期缓冲溢出被丢弃的通知数量。 */
     final LongAdder pendingOverflow = new LongAdder();
 
-    /** 通知线程池，用于读取活动线程数与队列长度；未绑定时对应指标为 0。 */
+    /** 广播线程池，用于读取活动线程数与队列长度；未绑定时对应指标为 0。 */
     private volatile ThreadPoolExecutor executor;
 
     /**
-     * 绑定通知线程池。
+     * 绑定广播线程池。
      *
-     * @param executor 通知线程池
+     * @param executor 广播线程池
      */
     void bindExecutor(ThreadPoolExecutor executor) {
         this.executor = executor;
@@ -74,15 +65,6 @@ public final class EventBusStats {
     }
 
     /**
-     * 获取无 dispatcher 订阅的死事件类型数量。
-     *
-     * @return 类型数量
-     */
-    public long getDeadEventTypes() {
-        return deadEventTypes.sum();
-    }
-
-    /**
      * 获取无订阅者命中的通知数量。
      *
      * @return 通知数量
@@ -98,33 +80,6 @@ public final class EventBusStats {
      */
     public long getSubscriberErrors() {
         return subscriberErrors.sum();
-    }
-
-    /**
-     * 获取已派发的回调数量。
-     *
-     * @return 回调数量
-     */
-    public long getDispatchedCallbacks() {
-        return dispatchedCallbacks.sum();
-    }
-
-    /**
-     * 获取失败的回调数量。
-     *
-     * @return 回调数量
-     */
-    public long getFailedCallbacks() {
-        return failedCallbacks.sum();
-    }
-
-    /**
-     * 获取无处理器的回调数量。
-     *
-     * @return 回调数量
-     */
-    public long getNoHandlerCallbacks() {
-        return noHandlerCallbacks.sum();
     }
 
     /**
@@ -171,15 +126,11 @@ public final class EventBusStats {
      * @return 可读的指标文本
      */
     public String render() {
-        return "eventBusStats{"
+        return "eventChannelStats{"
                 + "publishedEvents=" + getPublishedEvents()
                 + ", droppedEvents=" + getDroppedEvents()
-                + ", deadEventTypes=" + getDeadEventTypes()
                 + ", unmatchedNotifications=" + getUnmatchedNotifications()
                 + ", subscriberErrors=" + getSubscriberErrors()
-                + ", dispatchedCallbacks=" + getDispatchedCallbacks()
-                + ", failedCallbacks=" + getFailedCallbacks()
-                + ", noHandlerCallbacks=" + getNoHandlerCallbacks()
                 + ", pendingReplayed=" + getPendingReplayed()
                 + ", pendingOverflow=" + getPendingOverflow()
                 + ", activeThreads=" + getActiveThreads()

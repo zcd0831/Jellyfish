@@ -3,13 +3,16 @@ package zcd.jellyfish.infra.event;
 import zcd.jellyfish.api.JellyfishException;
 
 /**
- * 事件总线参数：线程池、启动期缓冲与关闭等待时间。
+ * 事件通道参数：线程池、启动期缓冲与关闭等待时间。
  * <p>
- * v1 使用代码默认值，后续再补 {@code event} 双源配置段（{@code EventBusSettings}）。
+ * v1 使用代码默认值，后续再补 {@code event} 双源配置段。
+ * <p>
+ * <b>没有「嵌套深度」这类参数</b>：同步派发已改为调用点内联执行，护栏归调用方，
+ * 通道只负责异步广播的队列与生命周期。
  *
  * @author zcd
  */
-public final class EventBusOptions {
+public final class EventChannelOptions {
 
     /** 默认核心线程数。 */
     private static final int DEFAULT_CORE_POOL_SIZE = 2;
@@ -20,7 +23,7 @@ public final class EventBusOptions {
     /** 默认空闲回收时间（秒）。 */
     private static final long DEFAULT_KEEP_ALIVE_SECONDS = 60L;
 
-    /** 默认通知队列容量。 */
+    /** 默认广播队列容量。 */
     private static final int DEFAULT_QUEUE_CAPACITY = 1024;
 
     /** 默认启动期缓冲容量。 */
@@ -29,16 +32,16 @@ public final class EventBusOptions {
     /** 默认关闭等待时间（毫秒）。 */
     private static final long DEFAULT_SHUTDOWN_AWAIT_MILLIS = 5000L;
 
-    /** 通知线程池核心线程数。 */
+    /** 广播线程池核心线程数。 */
     private final int corePoolSize;
 
-    /** 通知线程池最大线程数。 */
+    /** 广播线程池最大线程数。 */
     private final int maxPoolSize;
 
     /** 线程空闲回收时间（秒）。 */
     private final long keepAliveSeconds;
 
-    /** 通知队列容量，有界避免 OOM。 */
+    /** 广播队列容量，有界避免 OOM。 */
     private final int queueCapacity;
 
     /** 启动期缓冲容量。 */
@@ -52,7 +55,7 @@ public final class EventBusOptions {
      *
      * @param builder 构建器
      */
-    private EventBusOptions(Builder builder) {
+    private EventChannelOptions(Builder builder) {
         this.corePoolSize = builder.corePoolSize;
         this.maxPoolSize = builder.maxPoolSize;
         this.keepAliveSeconds = builder.keepAliveSeconds;
@@ -66,7 +69,7 @@ public final class EventBusOptions {
      *
      * @return 默认参数
      */
-    public static EventBusOptions defaults() {
+    public static EventChannelOptions defaults() {
         return builder().build();
     }
 
@@ -107,7 +110,7 @@ public final class EventBusOptions {
     }
 
     /**
-     * 获取通知队列容量。
+     * 获取广播队列容量。
      *
      * @return 队列容量
      */
@@ -134,7 +137,7 @@ public final class EventBusOptions {
     }
 
     /**
-     * 构造事件总线参数构建器。
+     * 事件通道参数构建器。
      *
      * @author zcd
      */
@@ -149,7 +152,7 @@ public final class EventBusOptions {
         /** 空闲回收时间（秒）。 */
         private long keepAliveSeconds = DEFAULT_KEEP_ALIVE_SECONDS;
 
-        /** 通知队列容量。 */
+        /** 广播队列容量。 */
         private int queueCapacity = DEFAULT_QUEUE_CAPACITY;
 
         /** 启动期缓冲容量。 */
@@ -192,7 +195,7 @@ public final class EventBusOptions {
         }
 
         /**
-         * 设置通知队列容量。
+         * 设置广播队列容量。
          *
          * @param queueCapacity 队列容量，必须大于 0
          * @return 构建器自身
@@ -227,10 +230,10 @@ public final class EventBusOptions {
         /**
          * 构建参数对象。
          *
-         * @return 事件总线参数
+         * @return 事件通道参数
          * @throws JellyfishException 参数非法时抛出
          */
-        public EventBusOptions build() {
+        public EventChannelOptions build() {
             requirePositive(corePoolSize, "corePoolSize");
             requirePositive(maxPoolSize, "maxPoolSize");
             requirePositive(keepAliveSeconds, "keepAliveSeconds");
@@ -240,11 +243,11 @@ public final class EventBusOptions {
             if (maxPoolSize < corePoolSize) {
                 throw new JellyfishException("maxPoolSize must not be less than corePoolSize");
             }
-            return new EventBusOptions(this);
+            return new EventChannelOptions(this);
         }
 
         /**
-         * 校验长整型参数为正。
+         * 校验整型参数为正。
          *
          * @param value 参数值
          * @param name  参数名

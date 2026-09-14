@@ -12,7 +12,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import zcd.jellyfish.api.plugin.PluginContext;
 import zcd.jellyfish.api.plugin.PluginDeclaration;
-import zcd.jellyfish.infra.event.JellyfishEventBus;
 
 /**
  * PF4J 插件管理器的子类：挂载本项目的描述符解析器、插件工厂、状态提供者与版本管理器，
@@ -39,8 +38,8 @@ final class JellyfishPluginManager extends DefaultPluginManager {
     /** 日志。 */
     private static final Logger LOG = LoggerFactory.getLogger(JellyfishPluginManager.class);
 
-    /** 交互枢纽：创建能力上下文，并按 owner 回收注册。 */
-    private final JellyfishEventBus eventBus;
+    /** 插件上下文工厂：创建能力上下文，并按 owner 回收注册。 */
+    private final PluginContextFactory contexts;
 
     /** 插件运行时装配输入。 */
     private final PluginRuntimeConfig runtimeConfig;
@@ -57,13 +56,13 @@ final class JellyfishPluginManager extends DefaultPluginManager {
     /**
      * 构造管理器。
      *
-     * @param eventBus      交互枢纽，不可为 {@code null}
+     * @param contexts      插件上下文工厂，不可为 {@code null}
      * @param runtimeConfig 装配输入，不可为 {@code null}
      */
-    JellyfishPluginManager(JellyfishEventBus eventBus, PluginRuntimeConfig runtimeConfig) {
+    JellyfishPluginManager(PluginContextFactory contexts, PluginRuntimeConfig runtimeConfig) {
         super(runtimeConfig.getPluginsRoots());
         // 赋值放在 super 之后：此前 create*() 已被调用，但它们只在后续 find/create/isPluginDisabled 时才读字段
-        this.eventBus = eventBus;
+        this.contexts = contexts;
         this.runtimeConfig = runtimeConfig;
         this.statusProvider.attach(runtimeConfig);
     }
@@ -75,7 +74,7 @@ final class JellyfishPluginManager extends DefaultPluginManager {
 
     @Override
     protected PluginFactory createPluginFactory() {
-        // 工厂持有 this，只在 create() 被调用时才读 eventBus
+        // 工厂持有 this，只在 create() 被调用时才读 contexts
         return new JellyfishPluginFactory(this);
     }
 
@@ -108,7 +107,7 @@ final class JellyfishPluginManager extends DefaultPluginManager {
      * @return 能力上下文
      */
     PluginContext contextOf(PluginDeclaration declaration) {
-        return eventBus.pluginContext(declaration);
+        return contexts.create(declaration);
     }
 
     /**
@@ -161,7 +160,7 @@ final class JellyfishPluginManager extends DefaultPluginManager {
         } catch (RuntimeException | LinkageError e) {
             LOG.warn("插件启动失败后的回滚停止也失败: {}", pluginId, e);
         } finally {
-            eventBus.unregisterAll(pluginId);
+            contexts.release(pluginId);
         }
         markFailed(pluginId, cause);
     }
@@ -183,7 +182,7 @@ final class JellyfishPluginManager extends DefaultPluginManager {
             markFailed(pluginId, e);
             return PluginState.FAILED;
         } finally {
-            eventBus.unregisterAll(pluginId);
+            contexts.release(pluginId);
         }
     }
 
@@ -201,7 +200,7 @@ final class JellyfishPluginManager extends DefaultPluginManager {
             markFailed(pluginId, e);
             return false;
         } finally {
-            eventBus.unregisterAll(pluginId);
+            contexts.release(pluginId);
         }
     }
 

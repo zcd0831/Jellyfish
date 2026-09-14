@@ -15,7 +15,7 @@ import javax.inject.Singleton;
  * @author zcd
  */
 @Singleton
-@Component(modules = {ConfigModule.class, LlmModule.class, EventModule.class})
+@Component(modules = {ConfigModule.class, LlmModule.class, ExtensionModule.class, EventModule.class})
 public interface JellyfishComponent {
 
     /**

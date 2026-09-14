@@ -6,7 +6,6 @@ import org.pf4j.PluginWrapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import zcd.jellyfish.api.JellyfishException;
-import zcd.jellyfish.infra.event.JellyfishEventBus;
 
 import javax.inject.Inject;
 import java.util.ArrayList;
@@ -37,8 +36,8 @@ public final class PF4JPluginManager implements AutoCloseable {
     /** 日志。 */
     private static final Logger LOG = LoggerFactory.getLogger(PF4JPluginManager.class);
 
-    /** 交互枢纽，用于创建插件上下文与按 owner 回收注册。 */
-    private final JellyfishEventBus eventBus;
+    /** 插件上下文工厂，用于创建插件上下文与按 owner 回收注册。 */
+    private final PluginContextFactory contexts;
 
     /** 插件运行时装配输入。 */
     private final PluginRuntimeConfig runtimeConfig;
@@ -52,12 +51,12 @@ public final class PF4JPluginManager implements AutoCloseable {
     /**
      * 构造门面。
      *
-     * @param eventBus      交互枢纽，不可为 {@code null}
+     * @param contexts      插件上下文工厂，不可为 {@code null}
      * @param runtimeConfig 装配输入，不可为 {@code null}
      */
     @Inject
-    public PF4JPluginManager(JellyfishEventBus eventBus, PluginRuntimeConfig runtimeConfig) {
-        this.eventBus = Objects.requireNonNull(eventBus, "eventBus must not be null");
+    public PF4JPluginManager(PluginContextFactory contexts, PluginRuntimeConfig runtimeConfig) {
+        this.contexts = Objects.requireNonNull(contexts, "contexts must not be null");
         this.runtimeConfig = Objects.requireNonNull(runtimeConfig, "runtimeConfig must not be null");
     }
 
@@ -72,7 +71,7 @@ public final class PF4JPluginManager implements AutoCloseable {
         if (manager != null) {
             throw new JellyfishException("plugin manager already bootstrapped");
         }
-        JellyfishPluginManager created = new JellyfishPluginManager(eventBus, runtimeConfig);
+        JellyfishPluginManager created = new JellyfishPluginManager(contexts, runtimeConfig);
         manager = created;
         created.safeLoadPlugins();
         rejectBrokenDescriptors(created);

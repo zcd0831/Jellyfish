@@ -12,8 +12,10 @@ import zcd.jellyfish.api.plugin.JellyfishPlugin;
 import zcd.jellyfish.api.plugin.PluginContext;
 import zcd.jellyfish.api.extension.ToolCallRequest;
 import zcd.jellyfish.api.extension.ToolCallResult;
-import zcd.jellyfish.infra.event.EventBusOptions;
-import zcd.jellyfish.infra.event.JellyfishEventBus;
+import zcd.jellyfish.infra.event.EventChannel;
+import zcd.jellyfish.infra.event.EventChannelOptions;
+import zcd.jellyfish.infra.extension.ExtensionRegistry;
+import zcd.jellyfish.infra.registry.TypeRegistry;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -42,8 +44,11 @@ class JellyfishPluginFactoryTest {
     @TempDir
     Path pluginsRoot;
 
-    /** 交互枢纽，用于创建插件上下文。 */
-    private final JellyfishEventBus eventBus = new JellyfishEventBus(EventBusOptions.defaults());
+    /** 插件上下文工厂，用于创建插件上下文。 */
+    private final PluginContextFactory contexts = new PluginContextFactory(
+            new ExtensionRegistry(new TypeRegistry()),
+            new EventChannel(EventChannelOptions.defaults(), new TypeRegistry()),
+            new TypeRegistry());
 
     /** 记录插件生命周期回调。 */
     private static final List<String> RECORDED = new ArrayList<>();
@@ -54,7 +59,7 @@ class JellyfishPluginFactoryTest {
     @BeforeEach
     void setUp() {
         RECORDED.clear();
-        JellyfishPluginManager manager = new JellyfishPluginManager(eventBus,
+        JellyfishPluginManager manager = new JellyfishPluginManager(contexts,
                 PluginRuntimeConfig.ofRoots(pluginsRoot));
         factory = new JellyfishPluginFactory(manager);
     }

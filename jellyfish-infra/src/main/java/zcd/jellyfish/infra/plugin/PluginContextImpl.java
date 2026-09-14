@@ -1,6 +1,5 @@
 package zcd.jellyfish.infra.plugin;
 
-import zcd.jellyfish.api.event.EventPublisher;
 import zcd.jellyfish.api.event.JellyfishEvent;
 import zcd.jellyfish.api.event.RegisterOptions;
 import zcd.jellyfish.api.event.Subscription;
@@ -8,8 +7,8 @@ import zcd.jellyfish.api.extension.ExtensionHandler;
 import zcd.jellyfish.api.extension.ExtensionRequest;
 import zcd.jellyfish.api.plugin.PluginContext;
 import zcd.jellyfish.api.plugin.PluginDeclaration;
+import zcd.jellyfish.infra.event.EventChannel;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
-import zcd.jellyfish.infra.event.notification.EventRegistry;
 
 import java.util.Map;
 import java.util.function.Consumer;
@@ -24,11 +23,9 @@ import java.util.function.Predicate;
  * 「注册边界」在这里不靠清单，而靠本类暴露的入口本身：插件只能拿到 {@link PluginContext} 的四个方法，
  * 能注册什么完全取决于它拿得到哪些请求类型。核心内部使用的请求类型不外露，插件也就无从注册。
  * <p>
- * <b>为什么在 {@code infra/plugin} 而不是 {@code infra/event}</b>：本类是插件侧的能力上下文，
- * 与插件加载同属插件运行时；它只用 {@code event} 包两个注册表的公开方法，不依赖任何包级私有细节，
- * 因此可以外置。代价是 {@code infra.event} 的 {@link zcd.jellyfish.infra.event.JellyfishEventBus}
- * 需要反向引用本类来装配上下文，形成包级循环（{@code infra.event} ⇄ {@code infra.plugin}）；
- * 模块级依赖仍单向，这条循环只服务于「插件上下文装配」这一件事，不得扩散到其它协作。
+ * <b>为什么在 {@code infra/plugin} 而不是策略包里</b>：本类是插件侧的能力上下文，与插件加载同属插件运行时；
+ * 它只调用 {@link ExtensionRegistry} 与 {@link EventChannel} 的公开方法，不依赖任何包级私有细节，
+ * 因此装配入口（{@link PluginContextFactory}）可以外置而不产生包级循环。
  *
  * @author zcd
  */
@@ -40,26 +37,20 @@ public final class PluginContextImpl implements PluginContext {
     /** 同步扩展点策略（同一份 TypeRegistry 的同步视图）。 */
     private final ExtensionRegistry extensions;
 
-    /** 细粒度通知注册表。 */
-    private final EventRegistry eventRegistry;
-
-    /** 通知发布入口。 */
-    private final EventPublisher publisher;
+    /** 事件通道：插件的订阅与发布都落在这里。 */
+    private final EventChannel events;
 
     /**
      * 构造插件上下文。
      *
-     * @param declaration   插件声明，不可为 {@code null}
-     * @param extensions    同步扩展点策略，不可为 {@code null}
-     * @param eventRegistry 通知注册表，不可为 {@code null}
-     * @param publisher     通知发布入口，不可为 {@code null}
+     * @param declaration 插件声明，不可为 {@code null}
+     * @param extensions  同步扩展点策略，不可为 {@code null}
+     * @param events      事件通道，不可为 {@code null}
      */
-    public PluginContextImpl(PluginDeclaration declaration, ExtensionRegistry extensions,
-                             EventRegistry eventRegistry, EventPublisher publisher) {
+    public PluginContextImpl(PluginDeclaration declaration, ExtensionRegistry extensions, EventChannel events) {
         this.declaration = declaration;
         this.extensions = extensions;
-        this.eventRegistry = eventRegistry;
-        this.publisher = publisher;
+        this.events = events;
     }
 
     @Override
@@ -89,11 +80,11 @@ public final class PluginContextImpl implements PluginContext {
     @Override
     public <E extends JellyfishEvent> Subscription observe(Class<E> eventType, Predicate<E> filter,
                                                            Consumer<E> listener) {
-        return eventRegistry.subscribe(pluginId(), eventType, filter, listener);
+        return events.subscribe(pluginId(), eventType, filter, listener);
     }
 
     @Override
     public void emit(JellyfishEvent event) {
-        publisher.publish(event);
+        events.publish(event);
     }
 }

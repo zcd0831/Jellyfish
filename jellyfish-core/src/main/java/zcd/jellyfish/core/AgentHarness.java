@@ -1,7 +1,7 @@
 package zcd.jellyfish.core;
 
 import zcd.jellyfish.infra.config.RuntimeConfig;
-import zcd.jellyfish.infra.event.JellyfishEventBus;
+import zcd.jellyfish.infra.event.EventChannel;
 import zcd.jellyfish.infra.model.ModelManager;
 
 import javax.inject.Inject;
@@ -28,8 +28,8 @@ public class AgentHarness {
     /** 运行时配置门面，负责配置的双源读取与合并。 */
     private final RuntimeConfig runtimeConfig;
 
-    /** 事件总线门面，命令与通知的统一通道。 */
-    private final JellyfishEventBus eventBus;
+    /** 事件通道：内核向外广播通知的异步通道。 */
+    private final EventChannel eventChannel;
 
     /** 模型管理器，持有 provider / model 索引。 */
     private final ModelManager modelManager;
@@ -38,23 +38,23 @@ public class AgentHarness {
      * 构造运行时宿主。
      *
      * @param runtimeConfig 运行时配置门面
-     * @param eventBus      事件总线
+     * @param eventChannel  事件通道
      * @param modelManager  模型管理器
      */
     @Inject
-    public AgentHarness(RuntimeConfig runtimeConfig, JellyfishEventBus eventBus, ModelManager modelManager) {
+    public AgentHarness(RuntimeConfig runtimeConfig, EventChannel eventChannel, ModelManager modelManager) {
         this.runtimeConfig = runtimeConfig;
-        this.eventBus = eventBus;
+        this.eventChannel = eventChannel;
         this.modelManager = modelManager;
     }
 
     /**
-     * 启动应用：先启动事件总线，再加载运行时配置，最后重建模型索引。
+     * 启动应用：先启动事件通道，再加载运行时配置，最后重建模型索引。
      * <p>
      * 其余启动步骤（注册核心订阅者、加载插件）为占位，后续在此补充。
      */
     public void bootstrap() {
-        eventBus.start();
+        eventChannel.start();
         runtimeConfig.refresh();
         modelManager.refresh(false);
     }

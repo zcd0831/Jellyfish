@@ -5,77 +5,54 @@ import org.junit.jupiter.api.Test;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * {@link EventRejectedExecutionHandler} 的单元测试：验证非事件线程内联兜底、事件线程丢弃记账。
+ * {@link EventRejectedExecutionHandler} 的单元测试：验证「丢弃 + 计数」策略。
+ * <p>
+ * 刻意断言「任务没有在调用线程执行」：异步通道的契约是允许丢弃，不允许把订阅者拖回调用线程。
  *
  * @author zcd
  */
 class EventRejectedExecutionHandlerTest {
 
     @Test
-    void rejectedExecution_should_run_inline_when_not_event_thread() throws Exception {
+    void rejectedExecution_should_drop_and_count_without_running_inline() {
         // Given
-        EventBusStats stats = new EventBusStats();
+        EventChannelStats stats = new EventChannelStats();
         EventRejectedExecutionHandler handler = new EventRejectedExecutionHandler(stats);
-        AtomicBoolean executed = new AtomicBoolean();
-        ThreadPoolExecutor executor = newExecutor();
-        try {
-            // When
-            runInThread("junit-worker", () -> handler.rejectedExecution(() -> executed.set(true), executor));
-        } finally {
-            executor.shutdownNow();
-        }
+        ThreadPoolExecutor executor = new ThreadPoolExecutor(1, 1, 60L, TimeUnit.SECONDS,
+                new ArrayBlockingQueue<Runnable>(1), new EventThreadFactory(), handler);
+        boolean[] ran = {false};
+
+        // When
+        handler.rejectedExecution(() -> ran[0] = true, executor);
 
         // Then
-        assertTrue(executed.get());
-        assertEquals(0L, stats.getDroppedEvents());
+        assertFalse(ran[0]);
+        assertEquals(1L, stats.getDroppedEvents());
+        executor.shutdownNow();
     }
 
     @Test
-    void rejectedExecution_should_drop_and_count_when_event_thread() throws Exception {
+    void rejectedExecution_should_count_every_drop() {
         // Given
-        EventBusStats stats = new EventBusStats();
+        EventChannelStats stats = new EventChannelStats();
         EventRejectedExecutionHandler handler = new EventRejectedExecutionHandler(stats);
-        AtomicBoolean executed = new AtomicBoolean();
-        ThreadPoolExecutor executor = newExecutor();
-        try {
-            // When：线程名带事件前缀，模拟事件线程内再次提交被拒
-            runInThread(EventThreadFactory.NAME_PREFIX + "test",
-                    () -> handler.rejectedExecution(() -> executed.set(true), executor));
-        } finally {
-            executor.shutdownNow();
-        }
+        ThreadPoolExecutor executor = new ThreadPoolExecutor(1, 1, 60L, TimeUnit.SECONDS,
+                new ArrayBlockingQueue<Runnable>(1), new EventThreadFactory());
+
+        // When
+        handler.rejectedExecution(() -> {
+        }, executor);
+        handler.rejectedExecution(() -> {
+        }, executor);
 
         // Then
-        assertFalse(executed.get());
-        assertEquals(1L, stats.getDroppedEvents());
-    }
-
-    /**
-     * 在指定线程名中执行动作并等待结束。
-     *
-     * @param name   线程名
-     * @param action 待执行动作
-     * @throws InterruptedException 等待线程结束时被中断
-     */
-    private static void runInThread(String name, Runnable action) throws InterruptedException {
-        Thread thread = new Thread(action, name);
-        thread.start();
-        thread.join();
-    }
-
-    /**
-     * 创建单线程有界队列线程池，仅作为拒绝策略的入参。
-     *
-     * @return 线程池
-     */
-    private static ThreadPoolExecutor newExecutor() {
-        return new ThreadPoolExecutor(1, 1, 0L, TimeUnit.SECONDS, new ArrayBlockingQueue<Runnable>(1));
+        assertTrue(stats.getDroppedEvents() == 2L);
+        executor.shutdownNow();
     }
 }

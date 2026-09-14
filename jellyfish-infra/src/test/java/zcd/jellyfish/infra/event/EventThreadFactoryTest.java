@@ -2,45 +2,41 @@ package zcd.jellyfish.infra.event;
 
 import org.junit.jupiter.api.Test;
 
-import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * {@link EventThreadFactory} 的单元测试：验证线程命名与守护线程标记。
+ * {@link EventThreadFactory} 的单元测试：验证命名前缀与守护线程。
  *
  * @author zcd
  */
 class EventThreadFactoryTest {
 
-    @Test
-    void newThread_should_create_daemon_thread_with_prefixed_name() {
-        // Given
-        EventThreadFactory factory = new EventThreadFactory();
+    /** 被测线程工厂。 */
+    private final EventThreadFactory factory = new EventThreadFactory();
 
+    @Test
+    void newThread_should_use_prefix_and_sequence() {
         // When
-        Thread thread = factory.newThread(() -> {
-            // 仅用于校验线程属性
+        Thread first = factory.newThread(() -> {
+        });
+        Thread second = factory.newThread(() -> {
         });
 
         // Then
-        assertTrue(thread.getName().startsWith(EventThreadFactory.NAME_PREFIX));
-        assertTrue(thread.isDaemon());
+        assertNotNull(first.getName());
+        assertTrue(first.getName().startsWith(EventThreadFactory.NAME_PREFIX));
+        assertTrue(second.getName().startsWith(EventThreadFactory.NAME_PREFIX));
+        assertTrue(!first.getName().equals(second.getName()));
     }
 
     @Test
-    void newThread_should_increment_sequence_for_each_thread() {
-        // Given
-        EventThreadFactory factory = new EventThreadFactory();
-
+    void newThread_should_create_daemon_thread() {
         // When
-        Thread first = factory.newThread(() -> {
-            // 仅用于校验线程序号
-        });
-        Thread second = factory.newThread(() -> {
-            // 仅用于校验线程序号
+        Thread thread = factory.newThread(() -> {
         });
 
-        // Then
-        assertNotEquals(first.getName(), second.getName());
+        // Then：守护线程保证线程池不会阻止 JVM 退出
+        assertTrue(thread.isDaemon());
     }
 }

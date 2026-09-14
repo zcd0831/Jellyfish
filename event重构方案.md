@@ -556,5 +556,5 @@ mvn -o test                      # 报告：各模块 target/site/jacoco/index.h
 | P1 `api/extension` + `PluginContext` 描述符 + 旧包删除 | **已完成** | `api/extension/{ExtensionRequest,ExtensionHandler,ExtensionException,ToolDescriptor,ToolCallRequest,ToolCallResult,CommandRequest}`；`api/event/callback` 已删；`PluginContext` 增描述符与默认重载；`mvn -o test` 全绿（api 42 + infra 345） |
 | P2 `infra/registry` | **已完成** | `TypeRegistry`/`HandlerRegistration`/`RegistryKey`/`RegistrySnapshot` + 3 个测试类（31 例）；`mvn -o test` 全绿（418 例） |
 | P3 `infra/extension` + 同步侧切换 | **已完成** | `ExtensionRegistry`（handle/contribute/handlers/handler/invoke/descriptors）+ 24 例测试；`PluginContextImpl` 与过渡期 `JellyfishEventBus.invoke` 切到同一份 `TypeRegistry`；删除 `CallbackRegistry`/`CallbackKey`/`CallbackRegistration`/`CallbackDispatcher`/`CallbackReplies`/`DispatchContext` 与嵌套深度护栏；`mvn -o test` 全绿 |
-| P4 `infra/event` + `PluginContextFactory` | 待开始 | — |
-| P5 删旧 + DI 切换 + 去 Guava + 全量回归 | 待开始 | — |
+| P4 `infra/event` + `PluginContextFactory` + 去 Guava | **已完成** | `EventChannel`/`EventChannelOptions`/`EventChannelStats`/`EventSubscriber`/`EventSubscription`（共用同一份 `TypeRegistry`）+ `PluginContextFactory`；删除 `JellyfishEventBus`/`EventDispatcher`/`EventBusOptions`/`EventBusStats`/旧通知注册表；`AgentHarness`、`cli` DI 与插件运行时全部改依赖；Guava 依赖整体移除；`mvn -o test` 全绿（api 42 + infra 348） |
+| P5 文档收尾 + 全量回归 | 进行中 | 已同步修正 `AGENTS.md` 的同步派发表述并更新跨语言方案里的总线命名；待办：`PF4JPluginManager` 仍未接入 DI（沿用重构前状态） |

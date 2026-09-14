@@ -554,7 +554,7 @@ mvn -o test                      # 报告：各模块 target/site/jacoco/index.h
 | 阶段 | 状态 | 产出 |
 | --- | --- | --- |
 | P1 `api/extension` + `PluginContext` 描述符 + 旧包删除 | **已完成** | `api/extension/{ExtensionRequest,ExtensionHandler,ExtensionException,ToolDescriptor,ToolCallRequest,ToolCallResult,CommandRequest}`；`api/event/callback` 已删；`PluginContext` 增描述符与默认重载；`mvn -o test` 全绿（api 42 + infra 345） |
-| P2 `infra/registry` | 待开始 | — |
+| P2 `infra/registry` | **已完成** | `TypeRegistry`/`HandlerRegistration`/`RegistryKey`/`RegistrySnapshot` + 3 个测试类（31 例）；`mvn -o test` 全绿（418 例） |
 | P3 `infra/extension` | 待开始 | — |
 | P4 `infra/event` + `PluginContextFactory` | 待开始 | — |
 | P5 删旧 + DI 切换 + 去 Guava + 全量回归 | 待开始 | — |

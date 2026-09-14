@@ -70,11 +70,13 @@ echo "/help" | java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -
 ```json
 {
   "processName": "Jellyfish",
-  "model":     { "globalPath": "/etc/jellyfish/models.json",   "projectPath": "./models.json" },
-  "agent":     { "globalPath": "/etc/jellyfish/agents.json",   "projectPath": "./agents.json" },
-  "jellyfish": { "globalPath": "/etc/jellyfish/jellyfish.json", "projectPath": "./jellyfish.json" }
+  "model":     { "globalPath": "~/jellyfish/models.json",    "projectPath": "./jellyfish/models.json" },
+  "agent":     { "globalPath": "~/jellyfish/agents.json",    "projectPath": "./jellyfish/agents.json" },
+  "jellyfish": { "globalPath": "~/jellyfish/jellyfish.json", "projectPath": "./jellyfish/jellyfish.json" }
 }
 ```
+
+仓库里的 `config.json` 就是这份：**全局级约定目录 `~/jellyfish/`、项目级约定目录 `<工作目录>/jellyfish/`**，四类配置的文件名固定。要换位置只改 `config.json`。
 
 `models.json`：
 
@@ -136,16 +138,17 @@ echo "/help" | java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -
 约定：
 
 - **插值**：只有字符串值里的 `${VAR}` 会被替换为环境变量（`${VAR:-default}` 可取默认值，`\${VAR}` 转义为字面量），JSON 的 key 不替换。`systemPrompt` 是**原文**，不做模板插值。
+- **路径**：`~` 与 `~/` 展开为用户主目录（`~other/...` 这种指定其他用户的形式不展开）；两条路径都支持。项目级路径相对**进程工作目录**解析，不是相对 jar 位置。文件不存在视为「该源未配置」，静默跳过（这是 `globalPath` 与 `projectPath` 可以同时配上、缺哪份就少哪份的原因）。
 - **合并**：同名 `provider` / `agent` / 插件配置段以项目级**整对象**覆盖全局级；`defaultProvider` / `defaultModel` / `defaultAgent` 取项目级非空值，否则回退全局级；`react` 段项目级整对象覆盖全局级；插件根目录与启用 / 禁用名单项目级非空则**整体替换**（不做并集）。
 - **容错**：配置缺失或可疑只发配置告警事件，不中断启动；真正用到时才报错。
 - **不要提交密钥**：`apiKey` 等敏感值通过环境变量注入，不要落到配置文件里。
 
 ### 想真跑一轮对话
 
-仓库里的 `config.json` **默认把三份文件路径留空**，因此开箱能跑命令（如 `/help`），但一发对话就会提示没有可用模型。要真跑：
+`config.json` 默认从 `~/jellyfish/`（全局级）与 `./jellyfish/`（项目级）读取三份配置。开箱能跑命令（如 `/help`），但没有模型配置时一发对话就会提示没有可用模型。要真跑：
 
-1. 在项目根目录创建 `models.json`（格式见上方示例），apiKey 用环境变量注入：`"apiKey": "${OPENAI_API_KEY}"`；
-2. 按需创建 `agents.json`；
-3. 把 `jellyfish-cli/src/main/resources/config.json` 里的 `model.projectPath` 改成 `./models.json`（`agent.projectPath` 同理），或者写绝对路径 / 用全局级路径。
+1. 在项目根目录建 `jellyfish/models.json`（格式见上方示例），apiKey 用环境变量注入：`"apiKey": "${OPENAI_API_KEY}"`；
+2. 按需建 `jellyfish/agents.json` 与 `jellyfish/jellyfish.json`；
+3. 想让配置对**这台机器上的所有项目**生效，把同样的文件放到 `~/jellyfish/` 即可（项目级同名条目会整对象覆盖全局级）。
 
-项目级路径相对**进程工作目录**解析，不是相对 jar 位置。
+两个目录里的文件名与上方四类配置一一对应，不要改成别的名字。

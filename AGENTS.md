@@ -292,7 +292,7 @@ jellyfish-cli/src/main/resources/log4j2.xml    # 日志：root 默认 WARN、只
 - **CLI 的输出契约**：**回答与命令结果走 stdout，诊断 / 工具进度 / 日志走 stderr**，让 `jellyfish -cli -p ... > answer.txt 2> diag.txt` 拿到干净内容；**回答不逐段落盘**——`CliReActListener` 把文本按轮次缓冲、回合收敛时整体写出，中间轮次（工具调用之前）的文本作为轨迹转写 stderr，避免诊断行插进半句话、也避免同一句话在回答前后各出现一次；退出码是机器契约（`0` 成功、`2` 用法、`3` 启动、`4` 运行、`5` 模式未实现、`6` 回合未收敛）。占位模式**不启动内核**，直接退 5，避免「看起来起来了却什么都做不了」。
 - **外壳只做两件事、不自带智能**：一是把「命令还是对话」交给 `CommandManager.isCommand` 判据（单次模式与将来的 TUI / Server 共用），二是每轮**现读** `SessionManager.current()` 拿会话标识（`/new` `/resume` 改的是会话域，外壳不缓存）。启动期由 `SessionBootstrap` 保证「有当前会话」并把 `--agent` / `--model` / `--mode` 落上去。
 - **依赖注入（Dagger2）**：通过 Dagger2 进行依赖注入，对各个模块进行解耦。
-- **配置加载**：`AppConfig` 直接绑定 `classpath:config.json`，应用级配置，**只有它声明各配置文件的位置**。`SettingsReader` 会把 `${ENV_VAR}` 替换为环境变量（`\${VAR}` 转义），apiKey 通常这样注入。
+- **配置加载**：`AppConfig` 直接绑定 `classpath:config.json`，应用级配置，**只有它声明各配置文件的位置**；默认约定全局级目录 `~/jellyfish/`、项目级目录 `./jellyfish/`（`~` 与 `~/` 由 `SettingsReader` 展开为用户主目录，`~other` 不展开）。`SettingsBinder` 会把 `${ENV_VAR}` 替换为环境变量（`\${VAR}` 转义），apiKey 通常这样注入。
 - **四份配置与四类配置类一一对应**：`config.json`→`AppConfig`、`models.json`→`ModelSettings`、`agents.json`→`AgentSettings`、`jellyfish.json`→`JellyfishSettings`；类名与文件名一致，一个文件一个根类、一个双源段。
 - **global/project 合并**：`RuntimeConfig` 合并两者，同名 provider / agent / 插件配置段以 project **整对象**覆盖 global，默认 provider/model/agent 同理，`react` 段同样整对象覆盖；列表段（插件根目录、启用 / 禁用名单）项目级非空则**整体替换**。
 - **配置驱动的索引在启动期建立**：`ModelManager` / `AgentManager` 构造期只建空索引（那时配置还没读），真正的装载发生在 `AgentHarness.bootstrap()` 的 `runtimeConfig.refresh()` 之后；`PluginRuntimeConfig` 是「引用稳定、快照可换」的发布点，必须在 `pluginManager.bootstrap()` 之前刷新。

@@ -5,11 +5,11 @@
     "projectPath": "./jellyfish/models.json"
   },
   "agent": {
-    "globalPath": "~/jellyfish/models.json",
+    "globalPath": "~/jellyfish/agents.json",
     "projectPath": "./jellyfish/agents.json"
   },
   "jellyfish": {
-    "globalPath": "~/jellyfish/models.json",
+    "globalPath": "~/jellyfish/jellyfish.json",
     "projectPath": "./jellyfish/jellyfish.json"
   }
 }

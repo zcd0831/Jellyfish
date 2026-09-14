@@ -9,13 +9,16 @@ import zcd.jellyfish.api.event.EventPublisher;
 import zcd.jellyfish.api.event.JellyfishEvent;
 import zcd.jellyfish.api.event.RegisterOptions;
 import zcd.jellyfish.api.event.Subscription;
-import zcd.jellyfish.api.extension.ExtensionRequest;
+import zcd.jellyfish.api.extension.ExtensionException;
 import zcd.jellyfish.api.extension.ExtensionHandler;
+import zcd.jellyfish.api.extension.ExtensionRequest;
 import zcd.jellyfish.api.plugin.PluginContext;
 import zcd.jellyfish.api.plugin.PluginDeclaration;
-import zcd.jellyfish.infra.event.callback.CallbackRegistry;
 import zcd.jellyfish.infra.event.notification.EventRegistry;
+import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.plugin.PluginContextImpl;
+import zcd.jellyfish.infra.registry.RegistrySnapshot;
+import zcd.jellyfish.infra.registry.TypeRegistry;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -39,19 +42,18 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * 交互枢纽门面：内核与插件之间的唯一交互入口，下辖回调通道与事件通道。
+ * 交互枢纽门面：内核与插件之间的唯一交互入口，下辖同步扩展点与异步通知两条通道。
  * <p>
- * 不再自称「事件总线」：加上泛化后的回调通道，它同时承载两张表（回调、事件订阅），
- * 是内核回头找插件（回调）与插件单向观察内核（事件）的共同落点。
+ * <b>过渡状态（方案 P3）</b>：同步扩展点已切到 {@link ExtensionRegistry} + {@link TypeRegistry}
+ * 的「一份表」，异步通知暂时仍由 Guava EventBus 承载；方案 P4 会把异步侧也换成自有的
+ * {@code EventChannel}（同一份 {@link TypeRegistry} + 线程池广播），届时本类整体删除。
  * <p>
- * 内部持有单个 Guava {@code EventBus} 作为唯一注册表，两条通道的差异只在发布端体现：
- * {@link #invoke(ExtensionRequest)} 直接内联 {@code post}，
- * {@link #publish(JellyfishEvent)} 先提交线程池再 {@code post}。
- * Guava 的订阅者只有门面自己的 {@link CallbackDispatcher} / {@link EventDispatcher}，
- * 插件与核心组件一律只注册到 Level 2 细粒度注册表。
+ * {@link #invoke(ExtensionRequest)} 是过渡期的调用方：它自行遍历
+ * {@link ExtensionRegistry#handlers(Class, String)} 的结果并逐个
+ * {@link ExtensionRegistry#invoke(ExtensionHandler, ExtensionRequest)}，
+ * 编排逻辑在本类而不是注册表里——这正是方案要求的「组合规则属于调用方」。
  * <p>
- * 生命周期：{@link #start()} 之前发布的异步通知进入缓冲队列，{@code start()} 时回放；回调必须先 {@code start()}，
- * 因为回调必须有处理器、不能缓冲。
+ * 生命周期：{@link #start()} 之前发布的异步通知进入缓冲队列，{@code start()} 时回放。
  *
  * @author zcd
  */
@@ -69,23 +71,17 @@ public final class JellyfishEventBus implements EventPublisher, AutoCloseable {
     /** 通知通道线程池。 */
     private final Executor notifier;
 
-    /** 细粒度回调注册表。 */
-    private final CallbackRegistry callbackRegistry;
+    /** 共用注册表：同步扩展点与异步通知最终都会落到这一份表上。 */
+    private final TypeRegistry typeRegistry;
 
-    /** 回调应答槽。 */
-    private final CallbackReplies callbackReplies = new CallbackReplies();
+    /** 同步扩展点策略。 */
+    private final ExtensionRegistry extensionRegistry;
 
-    /** 细粒度通知注册表。 */
+    /** 细粒度通知注册表（过渡期仍由 Guava 派发）。 */
     private final EventRegistry eventRegistry = new EventRegistry();
 
     /** 指标。 */
     private final EventBusStats stats;
-
-    /** 回调派发上下文。 */
-    private final DispatchContext dispatchContext;
-
-    /** 回调分发器，Guava 订阅者之一。 */
-    private final CallbackDispatcher callbackDispatcher;
 
     /** 通知分发器，Guava 订阅者之一。 */
     private final EventDispatcher eventDispatcher;
@@ -138,39 +134,69 @@ public final class JellyfishEventBus implements EventPublisher, AutoCloseable {
         if (this.notifier instanceof ThreadPoolExecutor) {
             stats.bindExecutor((ThreadPoolExecutor) this.notifier);
         }
-        this.callbackRegistry = new CallbackRegistry();
-        this.dispatchContext = new DispatchContext(options.getMaxCallbackDepth(), stats);
-        this.callbackDispatcher = new CallbackDispatcher(callbackRegistry, callbackReplies, stats);
+        this.typeRegistry = new TypeRegistry();
+        this.extensionRegistry = new ExtensionRegistry(typeRegistry);
         this.eventDispatcher = new EventDispatcher(eventRegistry, stats);
-        this.delegate = new EventBus(new EventDispatchExceptionHandler(dispatchContext, callbackReplies));
-        this.delegate.register(callbackDispatcher);
+        this.delegate = new EventBus(new EventDispatchExceptionHandler(stats));
         this.delegate.register(eventDispatcher);
     }
 
     /**
-     * 同步调用回调并返回结果。
+     * 同步调用请求并返回首个处理器的结果（过渡期便捷入口）。
      * <p>
-     * 匹配到的处理器按 {@code order} 升序依次在调用者线程内联执行，因此同一线程内天然有序；
-     * 读到的是首个处理器的结果，需要聚合多个结果时由回调自带结果容器承接。
-     * 首个处理器异常会停止后续调用并原样回传给调用者。
+     * 编排逻辑刻意写在这里而不是注册表里：先有序查找全部命中的处理器，再在调用者线程内联逐个执行；
+     * 首个处理器抛出异常即停止后续调用并原样上抛。新代码应直接用 {@link ExtensionRegistry}
+     * 自行驱动调用顺序与结果合并，本方法只服务过渡期的既有调用点。
      *
-     * @param callback 回调对象
-     * @param <R>      结果类型
-     * @return 回调结果
-     * @throws JellyfishException 总线未启动或回调为空时抛出
+     * @param request 请求对象
+     * @param <R>     结果类型
+     * @return 首个处理器的结果
+     * @throws ExtensionException 没有任何处理器命中时抛出
+     * @throws JellyfishException 总线未启动或请求为空时抛出
      */
-    public <R> R invoke(ExtensionRequest<R> callback) {
-        Objects.requireNonNull(callback, "callback must not be null");
+    public <R> R invoke(ExtensionRequest<R> request) {
+        Objects.requireNonNull(request, "request must not be null");
         ensureStarted();
-        dispatchContext.enter(callback);
-        callbackReplies.open(callback);
-        try {
-            delegate.post(callback);
-            return callbackReplies.await(callback);
-        } finally {
-            callbackReplies.close(callback);
-            dispatchContext.exit();
+        List<ExtensionHandler<ExtensionRequest<R>, R>> handlers =
+                extensionRegistry.handlers(castType(request), request.getRouteKey());
+        if (handlers.isEmpty()) {
+            stats.noHandlerCallbacks.increment();
+            stats.failedCallbacks.increment();
+            throw new ExtensionException(ExtensionException.Code.NO_HANDLER,
+                    "type=" + request.getClass().getName() + " routeKey=" + request.getRouteKey());
         }
+        R first = null;
+        boolean answered = false;
+        for (ExtensionHandler<ExtensionRequest<R>, R> handler : handlers) {
+            R result;
+            try {
+                result = extensionRegistry.invoke(handler, request);
+            } catch (RuntimeException | Error e) {
+                stats.failedCallbacks.increment();
+                throw e;
+            }
+            stats.dispatchedCallbacks.increment();
+            if (!answered) {
+                first = result;
+                answered = true;
+            }
+        }
+        return first;
+    }
+
+    /**
+     * 把请求的运行时类转成带泛型的类型视图。
+     * <p>
+     * 索引需要 {@code Class<C>} 形态的键，而请求对象只提供 {@code getClass()}，此处做一次受限转换；
+     * 类型安全由「同一请求类型的处理器注册时即声明了结果类型」保证。
+     *
+     * @param request 请求对象
+     * @param <R>     结果类型
+     * @return 请求的运行时类型
+     */
+    @SuppressWarnings("unchecked")
+    private static <R> Class<ExtensionRequest<R>> castType(ExtensionRequest<R> request) {
+        return (Class<ExtensionRequest<R>>) (Class<?>) request.getClass();
     }
 
     /**
@@ -255,7 +281,7 @@ public final class JellyfishEventBus implements EventPublisher, AutoCloseable {
     }
 
     /**
-     * 优雅关闭：停止接收、排空线程池、清理两层注册表。
+     * 优雅关闭：停止接收、排空线程池、清理注册表。
      */
     @Override
     public void close() {
@@ -268,7 +294,7 @@ public final class JellyfishEventBus implements EventPublisher, AutoCloseable {
             pending.clear();
         }
         shutdownNotifier();
-        callbackRegistry.clear();
+        typeRegistry.clear();
         eventRegistry.clear();
         LOG.info("交互枢纽已关闭: droppedEvents={}", stats.getDroppedEvents());
     }
@@ -288,16 +314,17 @@ public final class JellyfishEventBus implements EventPublisher, AutoCloseable {
      * @return 诊断快照
      */
     public RegistrySnapshot snapshot() {
-        return RegistrySnapshot.of(callbackRegistry, eventRegistry);
+        return extensionRegistry.snapshot();
     }
 
     /**
      * 获取插件注册入口，绑定 pluginId 作为 owner。
      * <p>
-     * 注册边界由回调类型本身承载：插件拿不到的类型就注册不了，不需要额外的声明清单。
+     * 注册边界由请求类型本身承载：插件拿不到的类型就注册不了，不需要额外的声明清单。
      * <p>
      * 本方法只做装配：上下文实现属于插件运行时（{@link PluginContextImpl} 在 {@code infra/plugin}），
      * 它是 {@code infra.event} 对 {@code infra.plugin} 的唯一反向引用，新增此类引用需先确认归属。
+     * （方案 P4 会把这份装配搬进 {@code PluginContextFactory}，届时该反向引用一并消失。）
      *
      * @param declaration 插件声明，不可为 {@code null}
      * @return 插件能力上下文
@@ -305,13 +332,13 @@ public final class JellyfishEventBus implements EventPublisher, AutoCloseable {
      */
     public PluginContext pluginContext(PluginDeclaration declaration) {
         Objects.requireNonNull(declaration, "declaration must not be null");
-        return new PluginContextImpl(declaration, callbackRegistry, eventRegistry, this);
+        return new PluginContextImpl(declaration, extensionRegistry, eventRegistry, this);
     }
 
     /**
-     * 按 owner 批量回收注册：回调处理器与事件订阅一次清干净。
+     * 按 owner 批量回收注册：扩展点处理器与事件订阅一次清干净。
      * <p>
-     * 插件卸载与停止的唯一回收入口。回调与事件分属两张表，分两步清是刻意的：
+     * 插件卸载与停止的唯一回收入口。同步与异步分属两条策略，分两步清是刻意的：
      * 任何一步失败都不应该阻止另一步，否则会留下「一半还在表里」的幽灵注册。
      *
      * @param owner 来源标识，通常是 pluginId，不可为空白
@@ -321,9 +348,9 @@ public final class JellyfishEventBus implements EventPublisher, AutoCloseable {
         if (owner == null || owner.trim().isEmpty()) {
             throw new JellyfishException("owner must not be blank");
         }
-        int callbacks = callbackRegistry.unregisterAll(owner);
+        int handlers = extensionRegistry.unregisterAll(owner);
         int subscriptions = eventRegistry.unsubscribeAll(owner);
-        LOG.info("已回收注册: owner={} callbacks={} subscriptions={}", owner, callbacks, subscriptions);
+        LOG.info("已回收注册: owner={} handlers={} subscriptions={}", owner, handlers, subscriptions);
     }
 
     /**
@@ -409,23 +436,27 @@ public final class JellyfishEventBus implements EventPublisher, AutoCloseable {
     }
 
     /**
-     * 注册带注解的回调订阅者。
+     * 注册带注解的扩展点处理器。
+     * <p>
+     * 注解扫描是过渡期能力：新代码应直接持有 {@link ExtensionRegistry} 并注册类型化处理器，
+     * 只有 {@code register(Object)} 这条内核组件入口还在用 {@code @Subscribe} 标记。
      *
      * @param owner        来源
      * @param subscriber   订阅者对象
      * @param method       订阅方法
-     * @param callbackType 回调参数类型
+     * @param requestType  请求参数类型
      * @return 注册句柄
      */
-    private Subscription registerCallbackSubscriber(String owner, Object subscriber, Method method, Class<?> callbackType) {
-        if (Modifier.isAbstract(callbackType.getModifiers())) {
-            throw new JellyfishException("abstract callback subscriber is forbidden: " + method);
+    private Subscription registerCallbackSubscriber(String owner, Object subscriber, Method method, Class<?> requestType) {
+        if (Modifier.isAbstract(requestType.getModifiers())) {
+            throw new JellyfishException("abstract request subscriber is forbidden: " + method);
         }
         method.setAccessible(true);
-        ExtensionHandler<ExtensionRequest<Object>, Object> handler = callback -> invokeCallbackSubscriber(subscriber, method, callback);
+        ExtensionHandler<ExtensionRequest<Object>, Object> handler =
+                request -> invokeCallbackSubscriber(subscriber, method, request);
         @SuppressWarnings("unchecked")
-        Class<ExtensionRequest<Object>> type = (Class<ExtensionRequest<Object>>) callbackType;
-        return callbackRegistry.register(owner, type, null, handler, RegisterOptions.DEFAULT);
+        Class<ExtensionRequest<Object>> type = (Class<ExtensionRequest<Object>>) requestType;
+        return extensionRegistry.contribute(owner, type, null, handler, RegisterOptions.DEFAULT);
     }
 
     /**

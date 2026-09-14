@@ -30,7 +30,6 @@ class EventBusOptionsTest {
         assertEquals(60L, options.getKeepAliveSeconds());
         assertEquals(1024, options.getQueueCapacity());
         assertEquals(1024, options.getPendingCapacity());
-        assertEquals(16, options.getMaxCallbackDepth());
         assertEquals(5000L, options.getShutdownAwaitMillis());
     }
 
@@ -43,7 +42,6 @@ class EventBusOptionsTest {
                 .keepAliveSeconds(30L)
                 .queueCapacity(16)
                 .pendingCapacity(32)
-                .maxCallbackDepth(3)
                 .shutdownAwaitMillis(100L);
 
         // When
@@ -55,7 +53,6 @@ class EventBusOptionsTest {
         assertEquals(30L, options.getKeepAliveSeconds());
         assertEquals(16, options.getQueueCapacity());
         assertEquals(32, options.getPendingCapacity());
-        assertEquals(3, options.getMaxCallbackDepth());
         assertEquals(100L, options.getShutdownAwaitMillis());
     }
 
@@ -85,8 +82,6 @@ class EventBusOptionsTest {
                         (Consumer<EventBusOptions.Builder>) builder -> builder.queueCapacity(0)),
                 Arguments.of("pendingCapacity=0",
                         (Consumer<EventBusOptions.Builder>) builder -> builder.pendingCapacity(0)),
-                Arguments.of("maxCallbackDepth=0",
-                        (Consumer<EventBusOptions.Builder>) builder -> builder.maxCallbackDepth(0)),
                 Arguments.of("shutdownAwaitMillis=0",
                         (Consumer<EventBusOptions.Builder>) builder -> builder.shutdownAwaitMillis(0L)),
                 Arguments.of("maxPoolSize<corePoolSize",

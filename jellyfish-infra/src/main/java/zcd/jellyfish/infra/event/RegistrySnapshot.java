@@ -1,20 +1,20 @@
 package zcd.jellyfish.infra.event;
 
-import zcd.jellyfish.infra.event.callback.CallbackRegistry;
 import zcd.jellyfish.infra.event.notification.EventRegistry;
+import zcd.jellyfish.infra.extension.ExtensionRegistry;
 
 /**
  * 注册表诊断快照：回答「这个插件注册了什么」。
  * <p>
- * 供启动日志与 TUI 的 {@code /plugins} 视图使用，这是两层注册表结构相较裸用 Guava 最大的运维收益。
+ * 供启动日志与 TUI 的 {@code /plugins} 视图使用。
  * 快照在创建时刻即固定文本内容，不影响后续注册行为。
  *
  * @author zcd
  */
 public final class RegistrySnapshot {
 
-    /** 回调注册视图。 */
-    private final String callbacks;
+    /** 扩展点注册视图。 */
+    private final String handlers;
 
     /** 通知订阅视图。 */
     private final String notifications;
@@ -22,23 +22,23 @@ public final class RegistrySnapshot {
     /**
      * 构造快照。
      *
-     * @param callbacks     回调注册视图
+     * @param handlers      扩展点注册视图
      * @param notifications 通知订阅视图
      */
-    private RegistrySnapshot(String callbacks, String notifications) {
-        this.callbacks = callbacks;
+    private RegistrySnapshot(String handlers, String notifications) {
+        this.handlers = handlers;
         this.notifications = notifications;
     }
 
     /**
-     * 从两张表生成快照。
+     * 生成快照：扩展点视图来自唯一一份注册表，通知视图仍来自过渡期的通知注册表。
      *
-     * @param callbackRegistry 回调注册表
-     * @param eventRegistry    通知注册表
+     * @param extensions   同步扩展点策略
+     * @param eventRegistry 通知注册表
      * @return 诊断快照
      */
-    public static RegistrySnapshot of(CallbackRegistry callbackRegistry, EventRegistry eventRegistry) {
-        return new RegistrySnapshot(callbackRegistry.render(), eventRegistry.render());
+    public static RegistrySnapshot of(ExtensionRegistry extensions, EventRegistry eventRegistry) {
+        return new RegistrySnapshot(extensions.snapshot().render(), eventRegistry.render());
     }
 
     /**
@@ -47,7 +47,7 @@ public final class RegistrySnapshot {
      * @return 两张表都没有内容时返回 {@code true}
      */
     public boolean isEmpty() {
-        return callbacks.isEmpty() && notifications.isEmpty();
+        return handlers.isEmpty() && notifications.isEmpty();
     }
 
     /**
@@ -57,8 +57,8 @@ public final class RegistrySnapshot {
      */
     public String render() {
         if (isEmpty()) {
-            return "(no callback or notification registered)";
+            return "(no extension handler or notification registered)";
         }
-        return callbacks + notifications;
+        return handlers + notifications;
     }
 }

@@ -10,12 +10,12 @@ import zcd.jellyfish.api.extension.ToolCallRequest;
 import zcd.jellyfish.api.extension.ToolCallResult;
 import zcd.jellyfish.api.event.notification.ConfigWarningEvent;
 import zcd.jellyfish.api.plugin.PluginDeclaration;
-import zcd.jellyfish.infra.event.callback.CallbackRegistry;
 import zcd.jellyfish.infra.event.notification.EventDispatchResult;
 import zcd.jellyfish.infra.event.notification.EventRegistry;
+import zcd.jellyfish.infra.extension.ExtensionRegistry;
+import zcd.jellyfish.infra.registry.TypeRegistry;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -25,17 +25,20 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * {@link PluginContextImpl} 的单元测试：验证三个注册入口与发布入口都绑定 {@code pluginId}。
+ * {@link PluginContextImpl} 的单元测试：验证四个注册/发布入口都绑定 {@code pluginId}。
  * <p>
- * 这里使用真实注册表而非 mock，因为 {@link CallbackRegistry} 与 {@link EventRegistry} 均为 final，
- * 且本类的职责只是把 {@code pluginId} 作为 owner 透传下去。
+ * 这里使用真实注册表而非 mock：本类的职责只是把 {@code pluginId} 作为 owner 透传下去，
+ * 用真实表可以顺带验证注册真的落到了同一份 {@link TypeRegistry} 上。
  *
  * @author zcd
  */
 class PluginContextImplTest {
 
-    /** 回调注册表。 */
-    private final CallbackRegistry callbackRegistry = new CallbackRegistry();
+    /** 共用注册表。 */
+    private final TypeRegistry typeRegistry = new TypeRegistry();
+
+    /** 同步扩展点策略。 */
+    private final ExtensionRegistry extensions = new ExtensionRegistry(typeRegistry);
 
     /** 通知注册表。 */
     private final EventRegistry eventRegistry = new EventRegistry();
@@ -48,7 +51,7 @@ class PluginContextImplTest {
 
     /** 被测插件上下文。 */
     private final PluginContextImpl context = new PluginContextImpl(
-            PluginDeclaration.of("plugin-a"), callbackRegistry, eventRegistry, publisher);
+            PluginDeclaration.of("plugin-a"), extensions, eventRegistry, publisher);
 
     @Test
     void pluginId_should_come_from_declaration() {
@@ -68,7 +71,7 @@ class PluginContextImplTest {
         Map<String, Object> configuration = new LinkedHashMap<>();
         configuration.put("precision", 4);
         PluginContextImpl configured = new PluginContextImpl(
-                PluginDeclaration.of("plugin-b", configuration), callbackRegistry, eventRegistry, publisher);
+                PluginDeclaration.of("plugin-b", configuration), extensions, eventRegistry, publisher);
 
         // Then
         assertEquals(4, configured.configuration().get("precision"));
@@ -77,29 +80,28 @@ class PluginContextImplTest {
     @Test
     void handle_should_register_under_plugin_owner() {
         // Given
-        ExtensionHandler<ToolCallRequest, ToolCallResult> handler = callback -> new ToolCallResult("calculator", 42);
+        ExtensionHandler<ToolCallRequest, ToolCallResult> handler =
+                request -> new ToolCallResult("calculator", 42);
 
         // When
         context.handle(ToolCallRequest.class, "calculator", handler);
 
         // Then
-        ToolCallRequest callback = new ToolCallRequest("calculator", Collections.<String, Object>emptyMap());
-        assertSame(handler, callbackRegistry.resolve(callback).get(0));
-        assertTrue(callbackRegistry.render().contains("plugin-a"));
+        assertSame(handler, extensions.handlers(ToolCallRequest.class, "calculator").get(0));
+        assertTrue(typeRegistry.snapshot().render().contains("plugin-a"));
     }
 
     @Test
     void contribute_should_register_under_plugin_owner() {
         // Given
-        ExtensionHandler<CommandRequest, Object> handler = callback -> "42";
+        ExtensionHandler<CommandRequest, Object> handler = request -> "42";
 
         // When
         context.contribute(CommandRequest.class, handler, RegisterOptions.order(3));
 
         // Then
-        CommandRequest callback = new CommandRequest("calc", Object.class, null);
-        assertSame(handler, callbackRegistry.resolve(callback).get(0));
-        assertTrue(callbackRegistry.render().contains("plugin-a"));
+        assertSame(handler, extensions.handlers(CommandRequest.class, null).get(0));
+        assertTrue(typeRegistry.snapshot().render().contains("plugin-a"));
     }
 
     @Test

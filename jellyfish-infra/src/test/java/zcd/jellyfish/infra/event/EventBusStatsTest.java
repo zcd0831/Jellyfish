@@ -42,7 +42,6 @@ class EventBusStatsTest {
         assertEquals(0L, stats.getDispatchedCallbacks());
         assertEquals(0L, stats.getFailedCallbacks());
         assertEquals(0L, stats.getNoHandlerCallbacks());
-        assertEquals(0L, stats.getNestingRejectedCallbacks());
         assertEquals(0L, stats.getPendingReplayed());
         assertEquals(0L, stats.getPendingOverflow());
     }

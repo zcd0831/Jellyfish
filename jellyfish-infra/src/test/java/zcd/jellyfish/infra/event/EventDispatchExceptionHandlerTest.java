@@ -5,15 +5,13 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import zcd.jellyfish.api.extension.CommandRequest;
 import zcd.jellyfish.api.event.notification.ConfigWarningEvent;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.when;
 
 /**
- * {@link EventDispatchExceptionHandler} 的单元测试：验证命令通道兜底回填与通知通道记账。
+ * {@link EventDispatchExceptionHandler} 的单元测试：验证兜底异常只记账不丢失。
  *
  * @author zcd
  */
@@ -25,30 +23,10 @@ class EventDispatchExceptionHandlerTest {
     private SubscriberExceptionContext eventContext;
 
     @Test
-    void handleException_should_fail_pending_command_when_command_in_flight() {
+    void handleException_should_count_subscriber_error() {
         // Given
         EventBusStats stats = new EventBusStats();
-        DispatchContext context = new DispatchContext(2, stats);
-        CallbackReplies replies = new CallbackReplies();
-        CommandRequest callback = new CommandRequest("calculator", Object.class, null);
-        replies.open(callback);
-        context.enter(callback);
-        EventDispatchExceptionHandler handler = new EventDispatchExceptionHandler(context, replies);
-
-        // When
-        handler.handleException(new IllegalStateException("boom"), eventContext);
-
-        // Then
-        assertThrows(IllegalStateException.class, () -> replies.await(callback));
-        assertEquals(0L, stats.getSubscriberErrors());
-    }
-
-    @Test
-    void handleException_should_count_subscriber_error_when_no_command_in_flight() {
-        // Given
-        EventBusStats stats = new EventBusStats();
-        DispatchContext context = new DispatchContext(2, stats);
-        EventDispatchExceptionHandler handler = new EventDispatchExceptionHandler(context, new CallbackReplies());
+        EventDispatchExceptionHandler handler = new EventDispatchExceptionHandler(stats);
         when(eventContext.getEvent()).thenReturn(new ConfigWarningEvent("path", "message"));
 
         // When

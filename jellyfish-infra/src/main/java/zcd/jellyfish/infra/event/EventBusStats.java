@@ -37,9 +37,6 @@ public final class EventBusStats {
     /** 无处理器的回调数量。 */
     final LongAdder noHandlerCallbacks = new LongAdder();
 
-    /** 因嵌套过深被拒绝的回调数量。 */
-    final LongAdder nestingRejectedCallbacks = new LongAdder();
-
     /** 启动期缓冲回放的通知数量。 */
     final LongAdder pendingReplayed = new LongAdder();
 
@@ -131,15 +128,6 @@ public final class EventBusStats {
     }
 
     /**
-     * 获取因嵌套过深被拒绝的回调数量。
-     *
-     * @return 回调数量
-     */
-    public long getNestingRejectedCallbacks() {
-        return nestingRejectedCallbacks.sum();
-    }
-
-    /**
      * 获取启动期缓冲回放的通知数量。
      *
      * @return 通知数量
@@ -192,7 +180,6 @@ public final class EventBusStats {
                 + ", dispatchedCallbacks=" + getDispatchedCallbacks()
                 + ", failedCallbacks=" + getFailedCallbacks()
                 + ", noHandlerCallbacks=" + getNoHandlerCallbacks()
-                + ", nestingRejectedCallbacks=" + getNestingRejectedCallbacks()
                 + ", pendingReplayed=" + getPendingReplayed()
                 + ", pendingOverflow=" + getPendingOverflow()
                 + ", activeThreads=" + getActiveThreads()

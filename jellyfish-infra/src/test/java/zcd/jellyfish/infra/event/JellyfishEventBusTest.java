@@ -177,20 +177,20 @@ class JellyfishEventBusTest {
     }
 
     @Test
-    void invoke_should_reject_nesting_too_deep() {
-        // Given
-        EventBusOptions options = EventBusOptions.builder().maxCallbackDepth(1).build();
-        JellyfishEventBus bus = new JellyfishEventBus(options, Runnable::run);
+    void invoke_should_nest_when_handler_invokes_another_request() {
+        // Given：嵌套深度护栏已移除，嵌套回调必须正常返回（护栏质量归调用方）
+        JellyfishEventBus bus = newBus();
         bus.start();
-        pluginContext(bus, "plugin-a").handle(CommandRequest.class, "outer",
-                callback -> bus.invoke(new CommandRequest("inner", Object.class, null)), RegisterOptions.DEFAULT);
+        PluginContext context = pluginContext(bus, "plugin-a");
+        context.handle(CommandRequest.class, "inner", request -> "inner-result", RegisterOptions.DEFAULT);
+        context.handle(CommandRequest.class, "outer",
+                request -> bus.invoke(new CommandRequest("inner", Object.class, null)), RegisterOptions.DEFAULT);
 
         // When
-        CommandRequest callback = new CommandRequest("outer", Object.class, null);
+        Object result = bus.invoke(new CommandRequest("outer", Object.class, null));
 
         // Then
-        assertThrows(JellyfishException.class, () -> bus.invoke(callback));
-        assertEquals(1L, bus.stats().getNestingRejectedCallbacks());
+        assertEquals("inner-result", result);
     }
 
     @Test

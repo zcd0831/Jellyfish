@@ -700,7 +700,7 @@ private CommandResult dispatch(String name, CommandArguments arguments, String s
 | L6 | 每次执行与渲染都现算别名索引 | O(命令数)；命令极多时才有感知 | 人类节奏可忽略；换来热部署天然正确 |
 | L7 | 命令执行不发事件 | 无法从事件通道审计「谁执行了什么命令」 | 架构图无此边；需要时由外壳或处理器自己发 |
 | L8 | `execute` 吞掉插件异常转 `ERROR` | 插件缺陷不会让外壳崩溃，但也意味着「异常即失败」不再是硬约束（有 WARN 日志） | 与权限轮「调用点决定异常处置」一致 |
-| L9 | **系统命令（`/help` `/model` `/agent` `/mode` `/new` `/exit`）本轮不落地** | 命令域只有机制、没有一条真命令；端到端示例只能靠单测里注册的假命令 | 已裁决「后面做」：`TODO` 落在 `CommandManager` 类注释与 `AGENTS.md`；将来 `/help` 直接调 `renderHelp()`，其余由持有 `SessionManager` / `ModelManager` / `AgentManager` 的内核组件实现（owner = `"core"`） |
+| L9 | **系统命令（`/help` `/model` `/agent` `/mode` `/new` `/exit`）本轮不落地** | 命令域只有机制、没有一条真命令；端到端示例只能靠单测里注册的假命令 | **已闭环**：十条系统命令由 `core/command/SystemCommands` 以 owner = `core` 注册（react 轮），并由 CLI 外壳 `CliRunMode` 通过 `isCommand` 分流真实调用（`cli方案.md`）；`/exit` 归外壳，`/compact` 仍待落地 |
 | L10 | `CommandResult` 不带机器可读数据（Q13 推荐口径） | 结果里的标识只能靠文本；外壳需要状态时得另读域服务 | 若将来真出现「必须从结果里机器读标识」的场景，再考虑加 `data` 字段 |
 
 ## 10. 风险与缓解

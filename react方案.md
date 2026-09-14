@@ -340,7 +340,7 @@ public final class ReActResult {
 
 | # | 限制 | 影响 | 后续 |
 | --- | --- | --- | --- |
-| L1 | **无 CLI / TUI / Server 外壳** | 端到端只能靠单测与将来的外壳 | 外壳轮（`main` / `Launcher` / `mode`） |
+| L1 | **无 CLI / TUI / Server 外壳** | 端到端只能靠单测与将来的外壳 | **CLI 单次模式已由外壳轮闭环**（`main` / `Launcher` / `CliRunMode`，见 `cli方案.md`）；TUI / Server 另开轮 |
 | L2 | **无摘要式压缩** | 长会话只能机械丢弃旧消息，信息会损失 | `/compact` 轮（读法 2），依赖持久化 |
 | L3 | **无 `todo_write` 核心工具** | 模型不能自行维护待办，只能靠 `/todo` 命令 | 与 `ReadOnlyTools` 核心工具只读声明同批（预留 `plugins.configurations.core.readOnlyTools` 或把只读性迁到 `ToolDescriptor`） |
 | L4 | **无会话持久化** | `/resume` 仅进程内；进程退出即丢 | 持久化轮（同步扩展点 + 插件） |
@@ -404,5 +404,5 @@ public final class ReActResult {
 
 - `todo_write` 核心工具 + `ReadOnlyTools` 核心工具只读声明；
 - `/compact` 摘要式压缩（读法 2）；
-- CLI / TUI / Server 外壳（`main` / `Launcher` / `mode`）；
+- ~~CLI / TUI / Server 外壳~~：**CLI 单次模式已闭环**（`cli方案.md`，2026-09 外壳轮），TUI / Server 仍待落地；
 - 会话持久化同步扩展点、人工审批通道、插件配置热更新、`infra/metrics`、跨语言脚本模块。

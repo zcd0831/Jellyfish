@@ -2,6 +2,58 @@
 
 A lightweight AI agent tool developed in Java 1.8, which supports capability extension through plugins.
 
+## 运行
+
+```bash
+mvn -o clean package
+java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -cli -p "今天天气怎么样？"
+```
+
+三种启动模式共享同一个入口与同一份装配，只靠启动参数区分：
+
+| 模式 | 形态 | 示例 | 状态 |
+| --- | --- | --- | --- |
+| `-cli` | 单次调用、不交互：进一个输入，出一次结果后退出 | `jellyfish -cli -p "今天天气怎么样？"` | 已落地 |
+| `-tui` | 交互式终端界面（TamboUI） | `jellyfish -tui` | 尚未实现 |
+| `-server` | HTTP 服务（Undertow），对外暴露能力接口 | `jellyfish -server 9096` | 尚未实现 |
+
+### 参数
+
+| 参数 | 说明 |
+| --- | --- |
+| `-cli` / `-tui` / `-server` | 模式旗标，三选一且必填；`-server` 可带位置端口 |
+| `-p, --print <输入>` | 单次模式的输入；缺省时从 stdin 读到 EOF（管道可用） |
+| `--session <会话>` | 切换到已有会话（会话不持久化，单次模式下实际不可用） |
+| `--agent <agentId>` | 新建会话时绑定 agent |
+| `--model <provider/模型>` | 新建会话时指定模型，必须含 `/` |
+| `--mode <plan\|normal>` | 新建会话的权限模式（`plan` 仅允许只读工具） |
+| `--port <端口>` | 服务器端口（等价于 `-server` 的位置参数，缺省 `9096`） |
+| `--host <地址>` | 服务器绑定地址（缺省 `127.0.0.1`） |
+| `--show-thinking` | 把模型的思考过程打到 stderr |
+| `--verbose` | 日志级别降到 DEBUG（也可用 `-Djellyfish.log.level=DEBUG`） |
+| `-h, --help` / `-V, --version` | 帮助 / 版本号 |
+
+### 输出与退出码
+
+**回答与命令结果走 stdout，诊断、工具进度与日志走 stderr**，因此重定向是安全的：
+
+```bash
+java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -cli -p "总结这个项目" > answer.txt 2> diag.txt
+echo "/help" | java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -cli
+```
+
+| 退出码 | 含义 |
+| --- | --- |
+| `0` | 成功（含「未知命令」这类用户输入错误） |
+| `2` | 用法错误：参数缺失 / 未知 / 冲突，`--session` `--agent` `--model` 指向不存在的东西，或没有输入 |
+| `3` | 启动失败：配置、插件或装配出错 |
+| `4` | 运行失败：回合抛异常，或命令执行失败 |
+| `5` | 模式尚未实现（当前的 `-tui` / `-server`） |
+| `6` | 回合未收敛：达到最大轮次仍未给出最终回复 |
+
+单次模式里输入以 `/` 开头就走命令域（`/help` `/model` `/agent` `/new` …），否则走一次 LLM 对话；
+`/help` `/session` `/status` `/todo` `/model` 这些命令不需要模型配置，可以离线验证安装是否正常。
+
 ## 配置
 
 配置分四份文件，每份对应一个配置类。**文件位置只在 `config.json` 里声明**，其余文件都走「全局级 + 项目级」双源，项目级优先。
@@ -87,3 +139,13 @@ A lightweight AI agent tool developed in Java 1.8, which supports capability ext
 - **合并**：同名 `provider` / `agent` / 插件配置段以项目级**整对象**覆盖全局级；`defaultProvider` / `defaultModel` / `defaultAgent` 取项目级非空值，否则回退全局级；`react` 段项目级整对象覆盖全局级；插件根目录与启用 / 禁用名单项目级非空则**整体替换**（不做并集）。
 - **容错**：配置缺失或可疑只发配置告警事件，不中断启动；真正用到时才报错。
 - **不要提交密钥**：`apiKey` 等敏感值通过环境变量注入，不要落到配置文件里。
+
+### 想真跑一轮对话
+
+仓库里的 `config.json` **默认把三份文件路径留空**，因此开箱能跑命令（如 `/help`），但一发对话就会提示没有可用模型。要真跑：
+
+1. 在项目根目录创建 `models.json`（格式见上方示例），apiKey 用环境变量注入：`"apiKey": "${OPENAI_API_KEY}"`；
+2. 按需创建 `agents.json`；
+3. 把 `jellyfish-cli/src/main/resources/config.json` 里的 `model.projectPath` 改成 `./models.json`（`agent.projectPath` 同理），或者写绝对路径 / 用全局级路径。
+
+项目级路径相对**进程工作目录**解析，不是相对 jar 位置。

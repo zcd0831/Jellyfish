@@ -28,3 +28,6 @@ replay_pid*
 
 # Maven build output
 target/
+
+# maven-shade-plugin 生成的构建产物（createDependencyReducedPom）
+dependency-reduced-pom.xml

@@ -61,7 +61,7 @@ flowchart TB
 
     subgraph "外壳入口·jellyfish-cli"
         direction LR
-        CLI["jellyfish-cli<br>main / Launcher<br>-cli / -tui / -server 模式分发<br>Dagger 组件与 Module 装配"]
+        CLI["jellyfish-cli<br>main / Launcher / RunMode<br>-cli 已落地（单次、不交互）<br>-tui / -server 占位<br>Dagger 组件与 Module 装配"]
     end
 
     subgraph "外部依赖·配置"
@@ -200,7 +200,7 @@ flowchart LR
 | `jellyfish-api` | `zcd:jellyfish-api` | 插件作者唯一需要依赖的稳定契约：SPI 接口、扩展点/事件模型、插件上下文、统一异常 | 无 |
 | `jellyfish-infra` | `zcd:jellyfish-infra` | 架构图【基础设施层】的全部实现，含配置加载 | `jellyfish-api` |
 | `jellyfish-core` | `zcd:jellyfish-core` | 架构图【应用层】：ReAct 循环与 `AgentHarness` 门面 | `jellyfish-api`、`jellyfish-infra` |
-| `jellyfish-cli` | `zcd:jellyfish-cli` | `main`、启动参数解析、Dagger 装配、shaded 分发 | `jellyfish-api`、`jellyfish-infra`、`jellyfish-core` |
+| `jellyfish-cli` | `zcd:jellyfish-cli` | `main`、启动参数解析、启动模式分发（CLI 已实现）、Dagger 装配、shade 打成可执行 jar | `jellyfish-api`、`jellyfish-infra`、`jellyfish-core` |
 | `jellyfish-script` | `zcd:jellyfish-script` | 跨语言插件运行时（语言无关）：JSON-RPC over Stdio、常驻进程池、双向事件桥接、生命周期与安全护栏 | `jellyfish-api` |
 | `jellyfish-plugin-python` | `zcd:jellyfish-plugin-python` | Python 桥接插件：声明宿主语言与脚本目录，拉起 Python 常驻网关，代脚本操作 `PluginContext` | `jellyfish-script`、`jellyfish-api` |
 | `jellyfish-plugin-node` | `zcd:jellyfish-plugin-node` | TS/JS 桥接插件：同 Python 桥接插件，宿主 Node 常驻网关 | `jellyfish-script`、`jellyfish-api` |
@@ -239,10 +239,15 @@ jellyfish-core/src/main/java/zcd/jellyfish/core/
 └── command/                       # 内核系统命令 SystemCommands（owner=core）
 
 jellyfish-cli/src/main/java/zcd/jellyfish/cli/
-├── JellyfishApplication.java      # main：解析 -cli/-tui/-server 后交给 Launcher
-├── Launcher.java                  # 启动模式分发
-├── mode/                          # 启动模式实现：CLI 已实现，TUI / Server 预留占位
-└── di/                            # composition root：最外层负责依赖装配
+├── JellyfishApplication.java       # main：解析启动参数后交给 Launcher；-h / -V 就地返回
+├── Launcher.java                   # 启动模式选择 + 生命周期（bootstrap / shutdown hook / finally / 三类退出码）
+├── StartupOptions.java             # 启动参数不可变值对象（含 Mode 枚举）
+├── StartupOptionsParser.java       # 手写参数解析 + 用法文本（无新依赖）
+├── ExitCodes.java                  # 退出码：0 成功 / 2 用法 / 3 启动 / 4 运行 / 5 未实现 / 6 未收敛
+├── SessionBootstrap.java           # 启动期会话保证：建/切当前会话 + --agent/--model/--mode 存在性校验
+├── console/                        # 输出面：stdout = 回答，stderr = 诊断（ConsoleIO / SystemConsoleIO / CliReActListener）
+├── mode/                           # 启动模式：CliRunMode 已实现；TuiRunMode / ServerRunMode 为占位（不启动内核）
+└── di/                             # composition root：最外层负责依赖装配
     ├── JellyfishComponent.java    # Dagger2 组件定义
     └── module/                    # 各依赖域的 Dagger2 Module
 
@@ -269,6 +274,7 @@ jellyfish-plugin-node/src/main/
     └── scripts/                 # gateway.js 常驻网关 + 业务脚本目录
 
 jellyfish-cli/src/main/resources/config.json  # 应用配置（进程名 + 各配置段的双源文件路径）
+jellyfish-cli/src/main/resources/log4j2.xml    # 日志：root 默认 WARN、只写 stderr（回答走 stdout，不能被日志污染）
 ```
 
 - **分层靠模块强制**：`core` 与 `infra` 拆开，Maven 才能在编译期守住「应用层 → 基础设施层」这条依赖方向；`api` 独立，是因为它的消费者是仓库外的插件。
@@ -282,6 +288,9 @@ jellyfish-cli/src/main/resources/config.json  # 应用配置（进程名 + 各�
 
 ## 架构要点
 
+- **三种启动模式、一个内核**：`-cli`（单次调用、不交互，已落地）、`-tui`（TUI 交互、TamboUI，待落地）、`-server`（HTTP 服务、Undertow，待落地）三种外壳共用同一个 `main`、同一份 DI 装配、同一个 `AgentHarness` 与同一个 `CommandManager`，只靠启动参数区分。差异被收在 `RunMode` 实现里，`Launcher` 只负责「选实现 + 管生命周期」，因此补齐 TUI / Server 时入口与参数解析不需要改。顺序：CLI → TUI → Server；开工时分别抽 `jellyfish-tui` / `jellyfish-server` 模块。
+- **CLI 的输出契约**：**回答与命令结果走 stdout，诊断 / 工具进度 / 日志走 stderr**，让 `jellyfish -cli -p ... > answer.txt 2> diag.txt` 拿到干净内容；退出码是机器契约（`0` 成功、`2` 用法、`3` 启动、`4` 运行、`5` 模式未实现、`6` 回合未收敛）。占位模式**不启动内核**，直接退 5，避免「看起来起来了却什么都做不了」。
+- **外壳只做两件事、不自带智能**：一是把「命令还是对话」交给 `CommandManager.isCommand` 判据（单次模式与将来的 TUI / Server 共用），二是每轮**现读** `SessionManager.current()` 拿会话标识（`/new` `/resume` 改的是会话域，外壳不缓存）。启动期由 `SessionBootstrap` 保证「有当前会话」并把 `--agent` / `--model` / `--mode` 落上去。
 - **依赖注入（Dagger2）**：通过 Dagger2 进行依赖注入，对各个模块进行解耦。
 - **配置加载**：`AppConfig` 直接绑定 `classpath:config.json`，应用级配置，**只有它声明各配置文件的位置**。`SettingsReader` 会把 `${ENV_VAR}` 替换为环境变量（`\${VAR}` 转义），apiKey 通常这样注入。
 - **四份配置与四类配置类一一对应**：`config.json`→`AppConfig`、`models.json`→`ModelSettings`、`agents.json`→`AgentSettings`、`jellyfish.json`→`JellyfishSettings`；类名与文件名一致，一个文件一个根类、一个双源段。

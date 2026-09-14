@@ -32,6 +32,8 @@
         <log4j2.version>2.25.4</log4j2.version>
         <commons-lang3.version>3.18.0</commons-lang3.version>
         <maven-compiler-plugin.version>3.11.0</maven-compiler-plugin.version>
+        <!-- 打包：shade 3.5.x 是仍支持 JDK 8 + Maven 3.2.5 的版本线 -->
+        <maven-shade-plugin.version>3.5.1</maven-shade-plugin.version>
 
         <!-- 单元测试：JUnit5 + Mockito（Mockito 4.x 是最后一条支持 JDK8 的主线） -->
         <junit.version>5.10.2</junit.version>
@@ -178,6 +180,12 @@
                             </path>
                         </annotationProcessorPaths>
                     </configuration>
+                </plugin>
+                <!-- 打包：可执行 fat jar 的版本唯一定义处，最外层（jellyfish-cli）声明执行 -->
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-shade-plugin</artifactId>
+                    <version>${maven-shade-plugin.version}</version>
                 </plugin>
                 <!-- 覆盖率：版本与执行绑定的唯一定义处，子模块无需重复声明 -->
                 <plugin>

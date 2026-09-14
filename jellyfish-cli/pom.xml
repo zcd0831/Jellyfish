@@ -36,11 +36,79 @@
             <artifactId>dagger</artifactId>
         </dependency>
 
-        <!-- 单元测试：DI Module 的装配契约 -->
+        <!-- 日志：SLF4J 门面绑到 Log4j2（桥接 + 实现），使内核的 WARN/ERROR 不再是无底洞 -->
+        <dependency>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-slf4j-impl</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-core</artifactId>
+        </dependency>
+
+        <!-- 单元测试：DI Module 的装配契约（JUnit5 + Mockito，版本由父 POM 的 BOM 统一管理） -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
+
+    <build>
+        <plugins>
+            <!-- 打包：产出可直接 java -jar 的可执行 jar。
+                 ManifestResourceTransformer 写 Main-Class；ServicesResourceTransformer 保留
+                 META-INF/services（Jackson / OkHttp / PF4J 都依赖它）。 -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>shade-executable-jar</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>shade</goal>
+                        </goals>
+                        <configuration>
+                            <createDependencyReducedPom>true</createDependencyReducedPom>
+                            <transformers>
+                                <transformer
+                                        implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                                    <mainClass>zcd.jellyfish.cli.JellyfishApplication</mainClass>
+                                    <manifestEntries>
+                                        <!-- 版本号只写 manifest：JellyfishApplication.version() 从 Package 读，
+                                             刻意不用资源过滤（那会把 ${} 替换规则扩散到 config.json） -->
+                                        <Implementation-Version>${project.version}</Implementation-Version>
+                                    </manifestEntries>
+                                </transformer>
+                                <transformer
+                                        implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+                            </transformers>
+                            <filters>
+                                <filter>
+                                    <artifact>*:*</artifact>
+                                    <excludes>
+                                        <!-- 依赖 jar 的签名残留会让合并后的 jar 启动失败 -->
+                                        <exclude>META-INF/*.SF</exclude>
+                                        <exclude>META-INF/*.DSA</exclude>
+                                        <exclude>META-INF/*.RSA</exclude>
+                                    </excludes>
+                                </filter>
+                            </filters>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
 </project>

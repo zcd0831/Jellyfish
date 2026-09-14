@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  外壳的日志配置。
+  设计要点：
+  1. 只写 stderr：stdout 是「回答」这条机器可读的流，日志混进去会让输出重定向拿到的内容废掉；
+  2. 默认 WARN：正常一次对话不该有任何日志噪音，verbose 开关或 -Djellyfish.log.level=DEBUG 才放开；
+  3. 级别经系统属性读取：业务代码里不出现任何日志框架的实现类（见 JellyfishApplication.applyVerbosity）。
+  注意：XML 注释里不能出现连续两个减号，因此本文件不写任何命令行参数原样示例。
+-->
+<Configuration>
+    <Properties>
+        <Property name="logLevel">${sys:jellyfish.log.level:-WARN}</Property>
+    </Properties>
+    <Appenders>
+        <Console name="Stderr" target="SYSTEM_ERR">
+            <PatternLayout pattern="%d{HH:mm:ss.SSS} %-5level %logger{36} - %msg%n"/>
+        </Console>
+    </Appenders>
+    <Loggers>
+        <Root level="${logLevel}">
+            <AppenderRef ref="Stderr"/>
+        </Root>
+    </Loggers>
+</Configuration>

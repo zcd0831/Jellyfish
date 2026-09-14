@@ -8,6 +8,7 @@ import zcd.jellyfish.infra.config.RuntimeConfig;
 import zcd.jellyfish.infra.llm.LlmClientFactory;
 import zcd.jellyfish.infra.model.ModelManager;
 import zcd.jellyfish.infra.permission.PermissionManager;
+import zcd.jellyfish.infra.session.SessionManager;
 
 import javax.inject.Singleton;
 
@@ -69,11 +70,22 @@ public interface JellyfishComponent {
     /**
      * 获取命令域服务。
      * <p>
-     * 当前尚无外壳调用点（CLI / TUI / Server / Web 都未落地），此处先暴露装配结果：
-     * 任一外壳都可以用它解析并执行命令，或取结构化清单自行渲染菜单。
+     * 调用点是外壳：{@code CliRunMode} 用它做「命令还是对话」的分流并执行命令，
+     * 将来的 TUI / Server 走同一条路径。
+     * <p>
      * 内核系统命令已由 {@code core/command/SystemCommands} 在 {@code AgentHarness.bootstrap()} 里注册。
      *
      * @return CommandManager
      */
     CommandManager commandManager();
+
+    /**
+     * 获取会话域服务。
+     * <p>
+     * 调用点是外壳：启动期由 {@code SessionBootstrap} 保证「有当前会话」，运行期由各模式每轮现读
+     * {@code current()} 拿会话标识（命令会改写当前会话，因此外壳不缓存 sessionId）。
+     *
+     * @return SessionManager
+     */
+    SessionManager sessionManager();
 }

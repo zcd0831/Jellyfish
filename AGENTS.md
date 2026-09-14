@@ -61,7 +61,7 @@ flowchart TB
 
     subgraph "外壳入口·jellyfish-cli"
         direction LR
-        CLI["jellyfish-cli<br>main / Launcher / RunMode<br>-cli 已落地（单次、不交互）<br>-tui / -server 占位<br>Dagger 组件与 Module 装配"]
+        CLI["jellyfish-cli<br>main / Launcher / RunMode<br>-cli 已落地（单次、不交互）<br>-tui 已落地（交互式，见 jellyfish-tui）<br>-server 占位<br>Dagger 组件与 Module 装配"]
     end
 
     subgraph "外部依赖·配置"
@@ -180,6 +180,7 @@ flowchart LR
     NODE["jellyfish-plugin-node<br>PF4J 桥接插件（TS/JS）"]
     INFRA["jellyfish-infra<br>【基础设施层】"]
     CORE["jellyfish-core<br>【应用层】"]
+    TUI["jellyfish-tui<br>TUI 外壳：TamboUI 界面"]
     CLI["jellyfish-cli<br>入口 + DI 装配 + 分发"]
 
     PY --> SCRIPT
@@ -188,9 +189,13 @@ flowchart LR
     CORE --> API
     CORE --> INFRA
     INFRA --> API
+    TUI --> CORE
+    TUI --> INFRA
+    TUI --> API
     CLI --> CORE
     CLI --> INFRA
     CLI --> API
+    CLI --> TUI
 ```
 
 跨语言桥接插件与内核之间没有编译期依赖：它们由 `PF4JPluginManager` 在运行时从 `plugins/` 目录加载，因此不出现在上面的依赖链里。
@@ -200,7 +205,8 @@ flowchart LR
 | `jellyfish-api` | `zcd:jellyfish-api` | 插件作者唯一需要依赖的稳定契约：SPI 接口、扩展点/事件模型、插件上下文、统一异常 | 无 |
 | `jellyfish-infra` | `zcd:jellyfish-infra` | 架构图【基础设施层】的全部实现，含配置加载 | `jellyfish-api` |
 | `jellyfish-core` | `zcd:jellyfish-core` | 架构图【应用层】：ReAct 循环与 `AgentHarness` 门面 | `jellyfish-api`、`jellyfish-infra` |
-| `jellyfish-cli` | `zcd:jellyfish-cli` | `main`、启动参数解析、启动模式分发（CLI 已实现）、Dagger 装配、shade 打成可执行 jar | `jellyfish-api`、`jellyfish-infra`、`jellyfish-core` |
+| `jellyfish-tui` | `zcd:jellyfish-tui` | TUI 外壳：TamboUI 声明式界面、视图投影与滚动、TUI 版 `ReActListener` 与跨线程契约 | `jellyfish-api`、`jellyfish-infra`、`jellyfish-core` |
+| `jellyfish-cli` | `zcd:jellyfish-cli` | `main`、启动参数解析、启动模式分发（CLI / TUI 已实现）、Dagger 装配、shade 打成可执行 jar | `jellyfish-api`、`jellyfish-infra`、`jellyfish-core`、`jellyfish-tui` |
 | `jellyfish-script` | `zcd:jellyfish-script` | 跨语言插件运行时（语言无关）：JSON-RPC over Stdio、常驻进程池、双向事件桥接、生命周期与安全护栏 | `jellyfish-api` |
 | `jellyfish-plugin-python` | `zcd:jellyfish-plugin-python` | Python 桥接插件：声明宿主语言与脚本目录，拉起 Python 常驻网关，代脚本操作 `PluginContext` | `jellyfish-script`、`jellyfish-api` |
 | `jellyfish-plugin-node` | `zcd:jellyfish-plugin-node` | TS/JS 桥接插件：同 Python 桥接插件，宿主 Node 常驻网关 | `jellyfish-script`、`jellyfish-api` |
@@ -246,10 +252,28 @@ jellyfish-cli/src/main/java/zcd/jellyfish/cli/
 ├── ExitCodes.java                  # 退出码：0 成功 / 2 用法 / 3 启动 / 4 运行 / 5 未实现 / 6 未收敛
 ├── SessionBootstrap.java           # 启动期会话保证：建/切当前会话 + --agent/--model/--mode 存在性校验
 ├── console/                        # 输出面：stdout = 回答，stderr = 诊断（ConsoleIO / SystemConsoleIO / CliReActListener）
-├── mode/                           # 启动模式：CliRunMode 已实现；TuiRunMode / ServerRunMode 为占位（不启动内核）
+├── mode/                           # 启动模式：CliRunMode / TuiRunMode 已实现；ServerRunMode 为占位（不启动内核）
 └── di/                             # composition root：最外层负责依赖装配
     ├── JellyfishComponent.java    # Dagger2 组件定义
     └── module/                    # 各依赖域的 Dagger2 Module
+
+jellyfish-tui/src/main/java/zcd/jellyfish/tui/
+├── TuiApp.java                     # 唯一入口：装配 ToolkitRunner、按键路由、回合与命令分流
+├── ChatShell.java                  # 版式：DockElement 三段式 + 视觉行转 TamboUI Line 的唯一转换点
+├── ChatState.java                  # 视图状态：滚动窗口切片、智能跟随、外壳提示缓冲
+├── InflightTurn.java               # 进行中回合的暂存区（有界）：唯一一处「尚未成为会话消息」的数据
+├── TranscriptProjector.java        # 纯函数投影：会话消息 + 暂存区 → 视觉行序列
+├── ChatInputView.java              # 多行输入元素：自己渲染 TextArea 部件、自带键位归属
+├── InputKeyMapper.java             # 按键判定（Ctrl+S 发送 / Ctrl+C 退出 / Esc 中断 / 滚动键）
+├── InputAction.java                # 按键动作枚举：判定与执行分离，判定是纯函数
+├── StatusBarView.java              # 状态栏：agent · provider/model · 权限模式 · token 用量
+├── ShellCommand.java               # 外壳自有命令 /exit：不进内核命令注册表
+├── TuiReActListener.java           # ReActListener 的 TUI 实现（react 线程 → 暂存区）
+└── text/                           # 文本布局原语（与 TamboUI 解耦，可单测）
+    ├── DisplayWidth.java           # CJK 感知的显示宽度
+    ├── StyledSegment.java          # 带样式的文本段
+    ├── VisualLine.java             # 视觉行 = 若干样式段
+    └── LineWrapper.java            # 前缀 + 换行：逻辑行 → 视觉行
 
 jellyfish-script/src/main/java/zcd/jellyfish/script/
 ├── ScriptGateway.java             # 单例门面：常驻进程池、按 language + method 路由、订阅记录、生命周期
@@ -288,9 +312,16 @@ jellyfish-cli/src/main/resources/log4j2.xml    # 日志：root 默认 WARN、只
 
 ## 架构要点
 
-- **三种启动模式、一个内核**：`-cli`（单次调用、不交互，已落地）、`-tui`（TUI 交互、TamboUI，待落地）、`-server`（HTTP 服务、Undertow，待落地）三种外壳共用同一个 `main`、同一份 DI 装配、同一个 `AgentHarness` 与同一个 `CommandManager`，只靠启动参数区分。差异被收在 `RunMode` 实现里，`Launcher` 只负责「选实现 + 管生命周期」，因此补齐 TUI / Server 时入口与参数解析不需要改。顺序：CLI → TUI → Server；开工时分别抽 `jellyfish-tui` / `jellyfish-server` 模块。
+- **三种启动模式、一个内核**：`-cli`（单次调用、不交互，已落地）、`-tui`（交互式界面、TamboUI，已落地）、`-server`（HTTP 服务、Undertow，待落地）三种外壳共用同一个 `main`、同一份 DI 装配、同一个 `AgentHarness` 与同一个 `CommandManager`，只靠启动参数区分。差异被收在 `RunMode` 实现里，`Launcher` 只负责「选实现 + 管生命周期」，因此补齐 Server 时入口与参数解析不需要改。顺序：CLI → TUI → Server；`jellyfish-tui` 已抽，开工 Server 时再抽 `jellyfish-server`。界面层放在 `jellyfish-tui`，`TuiRunMode` 只做「三门面接线 + 异常收敛成退出码」，与 `CliRunMode` 对称（实现放进 `jellyfish-tui` 会形成 `cli → tui → cli` 循环依赖）。
 - **CLI 的输出契约**：**回答与命令结果走 stdout，诊断 / 工具进度 / 日志走 stderr**，让 `jellyfish -cli -p ... > answer.txt 2> diag.txt` 拿到干净内容；**回答不逐段落盘**——`CliReActListener` 把文本按轮次缓冲、回合收敛时整体写出，中间轮次（工具调用之前）的文本作为轨迹转写 stderr，避免诊断行插进半句话、也避免同一句话在回答前后各出现一次；退出码是机器契约（`0` 成功、`2` 用法、`3` 启动、`4` 运行、`5` 模式未实现、`6` 回合未收敛）。占位模式**不启动内核**，直接退 5，避免「看起来起来了却什么都做不了」。
-- **外壳只做两件事、不自带智能**：一是把「命令还是对话」交给 `CommandManager.isCommand` 判据（单次模式与将来的 TUI / Server 共用），二是每轮**现读** `SessionManager.current()` 拿会话标识（`/new` `/resume` 改的是会话域，外壳不缓存）。启动期由 `SessionBootstrap` 保证「有当前会话」并把 `--agent` / `--model` / `--mode` 落上去。
+- **外壳只做两件事、不自带智能**：一是把「命令还是对话」交给 `CommandManager.isCommand` 判据（CLI 与 TUI 共用），二是每轮**现读** `SessionManager.current()` 拿会话标识（`/new` `/resume` 改的是会话域，外壳不缓存）。启动期由 `SessionBootstrap` 保证「有当前会话」并把 `--agent` / `--model` / `--mode` 落上去。
+- **TUI 的视图 = 会话投影 + 进行中回合暂存区**：屏幕上的消息区**不持有第二份会话消息列表**，它每次由 `SessionManager` 的消息**投影**得出（`TranscriptProjector` 是纯函数），因此插件写入历史、命令改写会话都会自动反映到屏幕。唯一的例外是 `InflightTurn`：会话是按**轮**落库的（`ReActLooper` 只在每轮模型响应聚合完成后才 `appendMessage`），流式进行中当前轮的增量在会话里**不存在**，必须暂存；它随回合终结即清空，且**有界**（超限保留尾部并标记截断）。工具轨迹**不**进暂存区——`onToolCallStarted` 发生在 assistant 消息落库之后，轨迹直接由会话投影得出。
+- **TUI 的线程契约**：`ReActListener` 的 7 个回调全部发生在 `react` 池线程，而界面状态只允许在渲染线程变更。契约是「**react 线程只往线程安全的暂存区追加字节并置 volatile 脏标记；所有界面状态变更都发生在渲染线程**」。中断（`Esc`）由渲染线程直接调 `ReActTurn.cancel()`，不依赖 react 线程投递——否则用户按下后界面没有立刻可见的反应，与卡死无法区分。
+- **TUI 的渲染载体是「单个 RichText」而不是「每条消息一个元素」**（实测结论）：布局容器的子元素在约 120～180 个处出现性能断崖（38ms/帧 → >3000ms/帧），而单个 `richText` 承载 3000 行仅约 1.96ms/帧。因此消息区把整份可见内容压成一个元素，滚动偏移是 `ChatState` 自己的字段（框架的 `ScrollableElement` 做不到「每帧内容都变 + 滚动位置保留」）。
+- **TUI 的日志必须与终端隔离**：TUI 独占备用屏，任何写向 stderr 的字节都会糊在画面上。因此 `-tui` 在**参数解析之后、DI 装配之前**把 `log4j.configurationFile` 切到 `log4j2-tui.xml`（root 写文件）——必须在第一个 `Logger` 被创建之前设置，否则不生效。
+- **TUI 的输入元素是自己实现的**（实测结论）：`EventRouter.addGlobalHandler` 排在聚焦元素**之后**、按键是**冒泡**的（父级无法抢先）、且 `StyledElement.onKeyEvent` 对 `TextAreaElement` 是死钩子（它重写 `handleKeyEvent` 时不调 `super`）。因此 `ChatInputView` 直接渲染 `TextArea` 部件、自己决定键位归属，编辑原语仍复用 `TextAreaState`。
+- **TUI 键位是反转的：`Enter` 换行、`Ctrl+S` 发送**（实测结论）：框架的键盘解码器不解析任何修饰键编码，`Shift+Enter`（`ESC \r`）、CSI-u（`ESC [13;2u`）、CSI-27（`ESC [27;2;13~`）一律落成 `UNKNOWN`，`hasShift()`/`hasAlt()` **永远是 false**；而裸 `\r` 与 `\n` 都解码成同一种无修饰 `ENTER`。所以「`Enter` 发送 + 修饰键换行」在**所有**终端上都不可实现，只能让别的键承担发送。`Ctrl+字母` 一律解码成 `CHAR` + `ctrl` + 字母码点，没有专用 `KeyCode`，判定只能比码点（`InputKeyMapper`）。换行/发送这两个键位**不要**改成修饰键方案。
+- **TUI 的鼠标捕获刻意关闭**：滚轮属于鼠标捕获，开启后终端的选择复制会被应用截走（复制文本需按住修饰键）。因此**滚轮不可用是有意为之**，消息区滚动只靠 `PageUp`/`PageDown`/`End`，不要"顺手"打开 `mouseCapture`。反过来，**括号粘贴必须打开**（`TuiConfig.bracketedPaste(true)`）：默认 `false` 时终端不包裹粘贴内容，而 `\r`/`\n` 都是 `ENTER`，一次多行粘贴会被拆成多次提交。
 - **依赖注入（Dagger2）**：通过 Dagger2 进行依赖注入，对各个模块进行解耦。
 - **配置加载**：`AppConfig` 直接绑定 `classpath:config.json`，应用级配置，**只有它声明各配置文件的位置**；默认约定全局级目录 `~/jellyfish/`、项目级目录 `./jellyfish/`（`~` 与 `~/` 由 `SettingsReader` 展开为用户主目录，`~other` 不展开）。`SettingsBinder` 会把 `${ENV_VAR}` 替换为环境变量（`\${VAR}` 转义），apiKey 通常这样注入。
 - **四份配置与四类配置类一一对应**：`config.json`→`AppConfig`、`models.json`→`ModelSettings`、`agents.json`→`AgentSettings`、`jellyfish.json`→`JellyfishSettings`；类名与文件名一致，一个文件一个根类、一个双源段。

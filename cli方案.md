@@ -34,6 +34,7 @@
 - **与内核的关系**：与 CLI 完全一致——同一份 `AgentHarness.chat`、同一份 `CommandManager`、同一个「每轮现读当前会话」的规则；差别只在渲染层与输入循环。
 - **本轮不动**：只保留 `TuiRunMode` 占位，打一行「尚未实现，请用 -cli」到 stderr，退出码 5，**不启动内核**。
 - **开工前必须先冒烟**：TamboUI 目前只有 **snapshot 构建**且官方标注 experimental；先验证 JDK 1.8 下 `tamboui-tui` + `tamboui-jline3-backend` 能编译运行，再谈界面（见 §9 R2）。
+  **→ 冒烟已完成且通过，结论与实测数据见 `tui方案.md` §1.1 / §1.4；TUI 已落地，实施记录见 `tui方案.md` §11。**
 
 ### 0.3 `-server`：HTTP 服务、Undertow、自定义端口
 
@@ -48,7 +49,7 @@
 ### 0.4 模式与模块的演进约定
 
 - 三种模式**同属 `jellyfish-cli`**：`main` / 参数解析 / `Launcher` / 模式分发 / DI 装配都在这里。
-- **开工 TUI 时抽 `jellyfish-tui`，开工 Server 时抽 `jellyfish-server`**（沿 AGENTS.md「等真正开工再抽模块」的口径）。届时 `jellyfish-cli` 只多两条依赖，`Launcher` 与参数解析**零改动**——这正是本轮把 `RunMode` 抽成接口的目的。
+- **开工 TUI 时抽 `jellyfish-tui`**（**已执行**），**开工 Server 时抽 `jellyfish-server`**（沿 AGENTS.md「等真正开工再抽模块」的口径）。届时 `jellyfish-cli` 只多两条依赖，`Launcher` 与参数解析**零改动**——这正是本轮把 `RunMode` 抽成接口的目的。
 - 三种模式都不允许绕开 `AgentHarness.chat`（唯一智能入口）与 `CommandManager`（唯一命令入口）。
 
 ---

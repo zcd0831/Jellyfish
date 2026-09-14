@@ -34,7 +34,7 @@ flowchart TB
 
             subgraph "内核模块<br>编译期单向依赖+构造器注入，模块互调不经扩展层"
                 direction LR
-                SessionMgr["SessionManager<br>会话隔离 / 消息列表<br>当前 agentId / 当前模型 / 会话级切换"]
+                SessionMgr["SessionManager<br>会话隔离 / 消息列表 / token 统计<br>当前 agentId / 当前模型 / 权限模式<br>会话级切换"]
                 AgentMgr["AgentManager + AgentRegistry<br>Agent 定义注册表<br>按 agentId 提供系统提示词原文 / 权限策略<br>（提示词拼装归 core/prompt）"]
                 CommandMgr["CommandManager<br>命令域服务：输入解析 / 别名 / 参数切分<br>帮助渲染 / 按类型查询注册表<br>系统命令与插件命令同源"]
                 ModelMgr["ModelManager<br>Provider/Model 注册/解析/路由<br>不持有全局当前态"]
@@ -95,7 +95,7 @@ flowchart TB
     CommandMgr ==>|"命令执行结果"| CLI
 
     %% ===================== 内核内部：接口 + 构造器注入（细实线） =====================
-    ReAct -->|"消息列表 / 上下文 / 当前 agentId / 当前模型"| SessionMgr
+    ReAct -->|"消息列表 / 上下文 / 当前 agentId / 当前模型 / 权限模式 / token 统计"| SessionMgr
     ReAct -->|"getCurrentLlmClient"| ModelMgr
     ReAct -->|"调用 LLM"| LLMClient
     ReAct -->|"同步权限检查"| PermMgr
@@ -106,7 +106,7 @@ flowchart TB
     %% ===================== 扩展层·同步派发：需要结果或必须完成（粗线） =====================
     ReAct ==>|"list：可用工具清单（LlmTool 描述符）"| ExtReg
     ReAct ==>|"ToolCallRequest（工具名 + 参数）"| ExtReg
-    SessionMgr ==>|"会话持久化 / 待办插入（无返回值但不可丢）"| ExtReg
+    SessionMgr ==>|"会话持久化 / pending todo 注入（无返回值但不可丢）"| ExtReg
     AgentMgr ==>|"提示词修改（链式，取返回值）"| ExtReg
     PermMgr ==>|"权限拦截（返回两态拦截裁定：不拦截 / 拦截，插件无法返回 ASK）"| ExtReg
     ExtReg ==>|"ExtensionResult / 贡献结果"| ReAct
@@ -148,7 +148,6 @@ flowchart TB
     Runtime -->|"注入 Agent 定义"| AgentMgr
     Runtime -->|"注入插件配置"| PluginMgr
     Runtime -->|"注入权限配置"| PermMgr
-    Runtime -->|"注入会话配置"| SessionMgr
     Runtime -->|"注入事件配置（白名单 / 队列）"| EventCh
 
     classDef app fill:#E9F7EF,stroke:#2E8B57,color:#123
@@ -218,7 +217,7 @@ jellyfish-infra/src/main/java/zcd/jellyfish/infra/
 ├── registry/       # 注册表底座 TypeRegistry：按「类型 + 路由键 → 有序 handler 集合」存储，同键唯一、描述符随 handler 一起存；同步与异步两侧共用，不依赖任何第三方事件总线
 ├── extension/      # 同步派发策略 ExtensionRegistry：调用点线程内联执行、按 order 升序、取返回值、不可丢弃；查找分 handlers（只要处理器）与 bindings（连 owner 一起给，供审计归因）；需要结果或必须完成的扩展点走这里
 ├── event/          # 异步派发策略 EventChannel：线程池 + 有界队列、无返回值、可丢弃；纯通知，带白名单与限流
-├── session/        # 会话运行态：会话隔离、消息列表，以及会话内当前 agentId 与当前模型（仅内存态）
+├── session/        # 会话运行态：会话隔离、消息列表、token 统计，以及会话内当前 agentId / 当前模型 / 权限模式（仅内存态；无配置段，持久化由插件经同步扩展点完成）
 ├── agent/          # Agent 定义注册表：AgentManager（门面，implements PermissionPolicyProvider，按 agentId 提供提示词原文与权限策略）+ AgentRegistry（定义与策略的只读索引）；提示词拼装归 core/prompt，新增事件 AgentsLoadedEvent
 ├── command/        # 命令域服务 CommandManager：输入解析 / 别名 / 参数切分 / 帮助渲染，按类型查询注册表；系统命令与插件命令同源
 ├── model/          # 模型注册与路由：维护 provider/model 索引，按名字解析模型并给出 LLM 客户端（不持有全局当前态）
@@ -288,6 +287,7 @@ jellyfish-cli/src/main/resources/config.json  # 应用配置（进程名 + 各�
 - **序列化与反序列化**: 读写统一走 `ObjectMapperWrapper`，不要直接 new `ObjectMapper`。
 - **请求/消息模型**：`LlmRequest`、`LlmMessage`、`LlmTool` 是与厂商无关的统一模型，`LlmRequest` 用 builder 构建。
 - **配置类型**：应用内部配置类（即项目代码里的配置，不会暴露给用户）用`Config`结尾，提供用用户的配置类用`Settings`结尾。
+- **会话状态一律归 `Session`，进程内没有全局当前态**：当前 agentId / 当前 provider / 当前 model / 权限模式都是**会话字段**，由 `SessionManager` 统一读写（唯一变更入口），因此同一进程内的不同会话可以各用各的；`ModelManager` 只做解析与路由。会话是**纯内存运行态**：不当配置、不建索引，持久化由插件经同步扩展点完成，其配置随插件走 `jellyfish.json` 的 `plugins.configurations.<pluginId>`，因此**不设 `session` 配置段**。
 - **一份注册表 + 两种派发策略**：内核与插件之间只有两个能力面——`ExtensionRegistry`（同步派发）与 `EventChannel`（异步派发），两者共用**同一份内核自有类型注册表**（`infra/registry` 内实现，不依赖任何第三方事件总线）。差异只在派发策略：同步策略在调用点线程内联调用、按 `order` 升序、取返回值、异常原样上抛；异步策略先入有界队列再由订阅者线程派发、无返回值、可丢弃。
 - **选择哪个能力面的判据是「能否丢弃」，不是「有没有返回值」**：需要同步参与结果或必须完成的（工具调用、提示词修改、权限拦截、会话持久化）走 `ExtensionRegistry`——即使没有返回值也不能丢；只是通知的（轮次开始、工具结果、指标、审计）走 `EventChannel`，允许异步、允许丢弃。因此 `Metrics` 是 best-effort 订阅者，不承担审计级可靠性。
 - **类型即地址**：扩展点请求没有 ID、没有需要事前声明的清单——**请求类型本身就是那层身份**。内核在指定调用点构造请求子类（如 `ToolCallRequest` 带工具名与参数）交给注册表，注册表按「类型 + 路由键」找出处理器。插件拿不到的类型就注册不了，注册边界由类型可见性天然承载。

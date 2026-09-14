@@ -858,7 +858,7 @@ public final class AgentModule {
 
 | # | 限制 | 影响 | 后续 |
 | --- | --- | --- | --- |
-| L1 | 「会话创建时自动绑定默认 agent」的**调用点**本轮不落地 | `resolveDefault()` 已就绪但无人调用 | `SessionManager` 落地时接入；**本轮按要求在依赖它的实现处留 `TODO` 注释**（不在 `SessionManager` 里写占位实现），见 §3.2 |
+| L1 | 「会话创建时自动绑定默认 agent」的**调用点**本轮不落地 | `resolveDefault()` 已就绪但无人调用 | **已由 session 轮闭环**：`SessionManager.create(...)` 在 agentId 空白时调用 `resolveDefault()` 并写入会话的当前 agentId（无 agent 时仍为 `null`，fail-open 不变）；本轮按要求只在依赖它的实现处留 `TODO` 注释（不在 `SessionManager` 里写占位实现），见 §3.2 |
 | L2 | 无配置热更新 | 只能靠显式 `refresh(true)` | 与 `ModelManager` 一起做文件监听 |
 | L3 | 装载事件不代表「配置变更」 | 无法区分首次装载与热更新 | 需要保存上一份快照做 diff |
 | L4 | Agent 定义不校验工具是否存在 | 配了不存在的工具名不会报错 | 归 `ReActLooper` / `ToolCallRequest` 的 `NO_HANDLER` |
@@ -914,7 +914,7 @@ Q1～Q13 已全部裁决，已按 §7 全部落地，记录见 §12。
 | 2 | `AgentPermissions` / `AgentDefinition` / `AgentSettings` / `JellyfishSettings` / `PluginsSettings` | **已完成**，均不可变、缺省即空集合 |
 | 3 | `AppConfig` 加 `agent` / `jellyfish` 两段；`ModelSettings` 改挂 `models.json`；`RuntimeSnapshot` / `RuntimeConfig` 接 agent 与插件段 | **已完成**；`override` 泛型化，新增 `listOverride`（列表段项目级非空整体替换） |
 | 4 | `PluginRuntimeConfig` 改「引用稳定、快照可换」+ `ReadOnlyTools` 按快照引用缓存 | **已完成**；顺带修掉「白名单恒为空 / 永不刷新」的隐患 |
-| 5 | `AgentRegistry` + `AgentManager` | **已完成**；`resolveDefault()` 按 Q12 留 `TODO`，未写占位实现 |
+| 5 | `AgentRegistry` + `AgentManager` | **已完成**；`resolveDefault()` 按 Q12 留 `TODO`，未写占位实现；该 `TODO` 已于 session 轮闭环（见 §9 L1） |
 | 6 | DI：`AgentModule`、删 `PermissionModule` 占位、`PluginModule` 配置驱动、组件 getter | **已完成**；`PermissionModuleTest` 随之删除（模块已无 `@Provides` 可测） |
 | 7 | `AgentHarness` 装配时序 + `AgentHarnessTest` | **已完成**，用 `InOrder` 钉住六步顺序 |
 | 8 | 文档与自查 | **已完成**：`AGENTS.md`、`README.md`（新增「配置」一节）、`permission方案.md` 注记、`PluginProperties` / `PermissionSettings` 注释 |

@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+         http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>zcd</groupId>
+        <artifactId>jellyfish-plugins</artifactId>
+        <version>0.0.1-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>jellyfish-plugin-tools</artifactId>
+    <name>Jellyfish Plugin Tools</name>
+    <description>官方工具插件：文件读取 / 写入 / 编辑、目录列举与文本搜索。</description>
+
+    <dependencies>
+        <!-- 内核契约：必须是 provided —— PF4J 的插件类加载器是子优先，
+             插件自带 zcd/jellyfish/api 会遮蔽父加载器的同名类，破坏类型同一性；
+             内核的 PluginClasspathGuard 会在加载期直接拒绝这种插件包。 -->
+        <dependency>
+            <groupId>zcd</groupId>
+            <artifactId>jellyfish-api</artifactId>
+            <version>${project.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- 单测：工具实现只依赖 JDK 与内核契约，因此测试也不需要第三方库 -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- 仅测试期使用：插件加载链路的端到端验证需要真实的 PF4J 管理器与注册表。
+             插件本身只依赖 jellyfish-api，绝不可把这一条升为 compile。 -->
+        <dependency>
+            <groupId>zcd</groupId>
+            <artifactId>jellyfish-infra</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

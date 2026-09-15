@@ -2,6 +2,7 @@ package zcd.jellyfish.infra.config;
 
 import org.apache.commons.lang3.StringUtils;
 import zcd.jellyfish.api.JellyfishException;
+import zcd.jellyfish.infra.support.HomePaths;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
@@ -19,7 +20,7 @@ import java.nio.file.Paths;
  * <p>
  * 只负责「路径 → 文本」；环境变量占位符的替换由 {@link SettingsBinder} 在解析后进行，
  * 因此这里不做任何内容加工。唯一例外是行首的 `~`：那是文件系统语义而非内容加工，
- * 由 {@link #expandHome(String)} 在这里展开。
+ * 由 {@link HomePaths#expand(String)} 在这里展开。
  * <p>
  * 设计为只读且无写入能力：运行时不允许回写用户配置，apiKey 等敏感值通过环境变量注入而非落盘。
  * 以可注入的实例形式提供，便于在测试中替换读取行为。
@@ -31,9 +32,6 @@ public class SettingsReader {
 
     /** classpath 路径前缀。 */
     private static final String CLASSPATH_PREFIX = "classpath:";
-
-    /** 用户主目录占位前缀（仅支持 `~` 与 `~/` / `~\` 两种形式）。 */
-    private static final String HOME_PREFIX = "~";
 
     private static final int BUFFER_SIZE = 1024;
 
@@ -71,7 +69,7 @@ public class SettingsReader {
      * @throws JellyfishException 路径为目录或读取失败时抛出
      */
     private String readFileContent(String path) {
-        Path filePath = Paths.get(expandHome(path));
+        Path filePath = Paths.get(HomePaths.expand(path));
         if (Files.isDirectory(filePath)) {
             throw new JellyfishException("settings path is a directory: " + path);
         }
@@ -82,33 +80,6 @@ public class SettingsReader {
         } catch (IOException e) {
             throw new JellyfishException("failed to read settings file: " + path, e);
         }
-    }
-
-    /**
-     * 展开行首的 {@code ~} 为用户主目录。
-     * <p>
-     * 只认 {@code ~} 与 {@code ~/}（或 {@code ~\}）两种形式：{@code ~other/x.json} 需要解析其他用户的
-     * 主目录，那是 shell 的能力，内核不猜——原样交给 {@link Paths} 当作相对路径处理。
-     * {@code user.home} 缺失（极端受限的运行环境）时同样原样返回，不把路径改坏。
-     *
-     * @param path 原始路径
-     * @return 展开后的路径；无需展开时原样返回
-     */
-    private static String expandHome(String path) {
-        if (!path.startsWith(HOME_PREFIX)) {
-            return path;
-        }
-        if (path.length() > 1) {
-            char next = path.charAt(1);
-            if (next != '/' && next != '\\') {
-                return path;
-            }
-        }
-        String home = System.getProperty("user.home");
-        if (StringUtils.isBlank(home)) {
-            return path;
-        }
-        return path.length() == 1 ? home : home + path.substring(1);
     }
 
     /**

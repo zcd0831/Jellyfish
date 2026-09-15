@@ -14,8 +14,10 @@ import zcd.jellyfish.api.event.notification.SessionMessageAppendedEvent;
 import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.config.AgentDefinition;
+import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.llm.LlmMessage;
 import zcd.jellyfish.infra.llm.LlmUsage;
+import zcd.jellyfish.infra.registry.TypeRegistry;
 
 import java.util.List;
 
@@ -56,13 +58,25 @@ class SessionManagerTest {
     @Mock
     private EventPublisher events;
 
+    /** 同步扩展点策略：用真实实例（该类是 final，且无需 mock 行为），本类只关心「有没有插件要落盘」。 */
+    private final ExtensionRegistry extensions = new ExtensionRegistry(new TypeRegistry());
+
+    /**
+     * 构造被测会话域服务。
+     *
+     * @return 会话域服务
+     */
+    private SessionManager manager() {
+        return new SessionManager(agentManager, events, extensions);
+    }
+
     @Test
     void create_should_bind_default_agent_when_agent_id_blank() {
         // Given
         when(agentManager.resolveDefault()).thenReturn(definition(CODER));
 
         // When
-        Session session = new SessionManager(agentManager, events).create(null, null, null, null);
+        Session session = manager().create(null, null, null, null);
 
         // Then
         assertEquals(CODER, session.getAgentId());
@@ -74,7 +88,7 @@ class SessionManagerTest {
         when(agentManager.resolveDefault()).thenReturn(null);
 
         // When
-        Session session = new SessionManager(agentManager, events).create("  ", null, null, null);
+        Session session = manager().create("  ", null, null, null);
 
         // Then
         assertNull(session.getAgentId());
@@ -83,7 +97,7 @@ class SessionManagerTest {
     @Test
     void create_should_prefer_explicit_agent_over_default() {
         // When
-        Session session = new SessionManager(agentManager, events).create("writer", null, null, null);
+        Session session = manager().create("writer", null, null, null);
 
         // Then
         assertEquals("writer", session.getAgentId());
@@ -92,7 +106,7 @@ class SessionManagerTest {
     @Test
     void create_should_keep_explicit_model_and_permission_mode() {
         // When
-        Session session = new SessionManager(agentManager, events)
+        Session session = manager()
                 .create(CODER, "openai", "gpt-4o", PermissionMode.PLAN);
 
         // Then
@@ -105,7 +119,7 @@ class SessionManagerTest {
     @Test
     void create_should_generate_session_id_and_register_it() {
         // When
-        SessionManager manager = new SessionManager(agentManager, events);
+        SessionManager manager = manager();
         Session session = manager.create(CODER, null, null, null);
 
         // Then
@@ -118,7 +132,7 @@ class SessionManagerTest {
     void create_should_publish_session_created_event_with_bound_agent() {
         // Given
         when(agentManager.resolveDefault()).thenReturn(definition(CODER));
-        SessionManager manager = new SessionManager(agentManager, events);
+        SessionManager manager = manager();
 
         // When
         Session session = manager.create(null, null, null, null);
@@ -132,7 +146,7 @@ class SessionManagerTest {
     @Test
     void create_should_not_change_current_session() {
         // When
-        SessionManager manager = new SessionManager(agentManager, events);
+        SessionManager manager = manager();
         manager.create(CODER, null, null, null);
 
         // Then：并发创建不应互相抢占当前指针
@@ -142,7 +156,7 @@ class SessionManagerTest {
     @Test
     void createDefault_should_create_session_with_normal_mode() {
         // When
-        Session session = new SessionManager(agentManager, events).createDefault();
+        Session session = manager().createDefault();
 
         // Then
         assertEquals(PermissionMode.NORMAL, session.getPermissionMode());
@@ -153,25 +167,25 @@ class SessionManagerTest {
     @Test
     void require_should_throw_when_session_id_blank() {
         // When / Then
-        assertThrows(JellyfishException.class, () -> new SessionManager(agentManager, events).require(" "));
+        assertThrows(JellyfishException.class, () -> manager().require(" "));
     }
 
     @Test
     void require_should_throw_when_session_not_found() {
         // When / Then
-        assertThrows(JellyfishException.class, () -> new SessionManager(agentManager, events).require("missing"));
+        assertThrows(JellyfishException.class, () -> manager().require("missing"));
     }
 
     @Test
     void current_should_return_null_when_no_session() {
         // When / Then
-        assertNull(new SessionManager(agentManager, events).current());
+        assertNull(manager().current());
     }
 
     @Test
     void switchTo_should_make_session_current() {
         // Given
-        SessionManager manager = new SessionManager(agentManager, events);
+        SessionManager manager = manager();
         Session first = manager.create(CODER, null, null, null);
         Session second = manager.create(CODER, null, null, null);
 
@@ -186,13 +200,13 @@ class SessionManagerTest {
     @Test
     void switchTo_should_throw_when_session_not_found() {
         // When / Then
-        assertThrows(JellyfishException.class, () -> new SessionManager(agentManager, events).switchTo("missing"));
+        assertThrows(JellyfishException.class, () -> manager().switchTo("missing"));
     }
 
     @Test
     void close_should_remove_session_and_publish_snapshot() {
         // Given
-        SessionManager manager = new SessionManager(agentManager, events);
+        SessionManager manager = manager();
         Session session = manager.create(CODER, null, null, null);
         manager.appendMessage(session.getSessionId(), LlmMessage.user("hi"), null);
 
@@ -212,7 +226,7 @@ class SessionManagerTest {
     @Test
     void close_should_clear_current_when_current_session_closed() {
         // Given
-        SessionManager manager = new SessionManager(agentManager, events);
+        SessionManager manager = manager();
         Session session = manager.create(CODER, null, null, null);
         manager.switchTo(session.getSessionId());
 
@@ -226,7 +240,7 @@ class SessionManagerTest {
     @Test
     void close_should_keep_current_when_other_session_closed() {
         // Given
-        SessionManager manager = new SessionManager(agentManager, events);
+        SessionManager manager = manager();
         Session first = manager.create(CODER, null, null, null);
         Session second = manager.create(CODER, null, null, null);
         manager.switchTo(second.getSessionId());
@@ -241,7 +255,7 @@ class SessionManagerTest {
     @Test
     void close_should_be_idempotent_when_session_not_found() {
         // Given
-        SessionManager manager = new SessionManager(agentManager, events);
+        SessionManager manager = manager();
 
         // When / Then：关闭路径上重复关闭不该抛错
         assertNull(manager.close(null));
@@ -252,13 +266,13 @@ class SessionManagerTest {
     void appendMessage_should_throw_when_session_not_found() {
         // When / Then
         assertThrows(JellyfishException.class,
-                () -> new SessionManager(agentManager, events).appendMessage("missing", LlmMessage.user("hi"), null));
+                () -> manager().appendMessage("missing", LlmMessage.user("hi"), null));
     }
 
     @Test
     void appendMessage_should_accumulate_usage_and_publish_event() {
         // Given
-        SessionManager manager = new SessionManager(agentManager, events);
+        SessionManager manager = manager();
         Session session = manager.create(CODER, null, null, null);
 
         // When
@@ -278,7 +292,7 @@ class SessionManagerTest {
     @Test
     void appendMessage_should_publish_user_role_for_user_message() {
         // Given
-        SessionManager manager = new SessionManager(agentManager, events);
+        SessionManager manager = manager();
         Session session = manager.create(CODER, null, null, null);
 
         // When
@@ -292,7 +306,7 @@ class SessionManagerTest {
     void appendMessage_should_keep_session_change_when_publish_fails() {
         // Given：通知是可丢弃通道，发不出去不该影响会话状态
         doThrow(new IllegalStateException("channel closed")).when(events).publish(any());
-        SessionManager manager = new SessionManager(agentManager, events);
+        SessionManager manager = manager();
         Session session = manager.create(CODER, null, null, null);
 
         // When
@@ -305,7 +319,7 @@ class SessionManagerTest {
     @Test
     void messagesOf_should_return_unmodifiable_snapshot() {
         // Given
-        SessionManager manager = new SessionManager(agentManager, events);
+        SessionManager manager = manager();
         Session session = manager.create(CODER, null, null, null);
         manager.appendMessage(session.getSessionId(), LlmMessage.user("hi"), null);
 
@@ -321,7 +335,7 @@ class SessionManagerTest {
     @Test
     void llmMessagesOf_should_project_message_bodies() {
         // Given
-        SessionManager manager = new SessionManager(agentManager, events);
+        SessionManager manager = manager();
         Session session = manager.create(CODER, null, null, null);
         manager.appendMessage(session.getSessionId(), LlmMessage.user("hi"), null);
         manager.appendMessage(session.getSessionId(), LlmMessage.assistant("hello"), null);
@@ -338,13 +352,13 @@ class SessionManagerTest {
     @Test
     void llmMessagesOf_should_throw_when_session_not_found() {
         // When / Then
-        assertThrows(JellyfishException.class, () -> new SessionManager(agentManager, events).llmMessagesOf("missing"));
+        assertThrows(JellyfishException.class, () -> manager().llmMessagesOf("missing"));
     }
 
     @Test
     void updateTitle_should_only_affect_target_session() {
         // Given
-        SessionManager manager = new SessionManager(agentManager, events);
+        SessionManager manager = manager();
         Session first = manager.create(CODER, null, null, null);
         Session second = manager.create(CODER, null, null, null);
 
@@ -359,7 +373,7 @@ class SessionManagerTest {
     @Test
     void bindAgent_should_only_affect_target_session() {
         // Given
-        SessionManager manager = new SessionManager(agentManager, events);
+        SessionManager manager = manager();
         Session first = manager.create(CODER, null, null, null);
         Session second = manager.create(CODER, null, null, null);
 
@@ -374,7 +388,7 @@ class SessionManagerTest {
     @Test
     void switchModel_should_only_affect_target_session() {
         // Given
-        SessionManager manager = new SessionManager(agentManager, events);
+        SessionManager manager = manager();
         Session first = manager.create(CODER, null, null, null);
         Session second = manager.create(CODER, null, null, null);
 
@@ -390,7 +404,7 @@ class SessionManagerTest {
     @Test
     void setPermissionMode_should_only_affect_target_session() {
         // Given
-        SessionManager manager = new SessionManager(agentManager, events);
+        SessionManager manager = manager();
         Session first = manager.create(CODER, null, null, null);
         Session second = manager.create(CODER, null, null, null);
 
@@ -405,7 +419,7 @@ class SessionManagerTest {
     @Test
     void sessions_should_be_isolated_from_each_other() {
         // Given
-        SessionManager manager = new SessionManager(agentManager, events);
+        SessionManager manager = manager();
         Session first = manager.create(CODER, null, null, null);
         Session second = manager.create(CODER, null, null, null);
 
@@ -428,7 +442,7 @@ class SessionManagerTest {
     @Test
     void all_should_return_unmodifiable_collection() {
         // Given
-        SessionManager manager = new SessionManager(agentManager, events);
+        SessionManager manager = manager();
         manager.create(CODER, null, null, null);
 
         // When / Then
@@ -438,7 +452,7 @@ class SessionManagerTest {
     @Test
     void addTodo_should_persist_into_session() {
         // Given
-        SessionManager manager = new SessionManager(agentManager, events);
+        SessionManager manager = manager();
         Session session = manager.create(CODER, null, null, null);
 
         // When
@@ -453,7 +467,7 @@ class SessionManagerTest {
     @Test
     void completeTodo_should_flow_status_through_session() {
         // Given
-        SessionManager manager = new SessionManager(agentManager, events);
+        SessionManager manager = manager();
         Session session = manager.create(CODER, null, null, null);
         PendingTodo todo = manager.addTodo(session.getSessionId(), "写文档");
 
@@ -466,7 +480,7 @@ class SessionManagerTest {
     @Test
     void clearTodos_should_empty_session_todos() {
         // Given
-        SessionManager manager = new SessionManager(agentManager, events);
+        SessionManager manager = manager();
         Session session = manager.create(CODER, null, null, null);
         manager.addTodo(session.getSessionId(), "a");
         manager.addTodo(session.getSessionId(), "b");
@@ -482,7 +496,7 @@ class SessionManagerTest {
     @Test
     void todo_entry_points_should_throw_when_session_missing() {
         // Given
-        SessionManager manager = new SessionManager(agentManager, events);
+        SessionManager manager = manager();
 
         // When / Then
         assertThrows(JellyfishException.class, () -> manager.addTodo("missing", "a"));
@@ -494,7 +508,7 @@ class SessionManagerTest {
     @Test
     void todos_should_be_isolated_per_session() {
         // Given
-        SessionManager manager = new SessionManager(agentManager, events);
+        SessionManager manager = manager();
         Session first = manager.create(CODER, null, null, null);
         Session second = manager.create(CODER, null, null, null);
 

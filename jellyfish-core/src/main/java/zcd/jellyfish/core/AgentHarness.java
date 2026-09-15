@@ -7,6 +7,7 @@ import zcd.jellyfish.infra.event.EventChannel;
 import zcd.jellyfish.infra.model.ModelManager;
 import zcd.jellyfish.infra.plugin.PF4JPluginManager;
 import zcd.jellyfish.infra.plugin.PluginRuntimeConfig;
+import zcd.jellyfish.infra.session.SessionManager;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
@@ -17,9 +18,9 @@ import javax.inject.Singleton;
  * 目前落地了启动时序里与配置加载、索引建立、核心命令注册相关的一环：
  * <ul>
  *     <li>已在实现：启动事件总线 → 注册核心系统命令 → 加载运行时配置 → 重建模型 / agent 索引 →
- *     刷新插件配置 → 启动插件运行时，保证启动期配置告警不丢失、各注册表在配置就绪后再建索引、
- *     插件在拿到最终的扫描目录与启用名单后启动；核心命令先于插件注册，插件要覆盖同名命令必须显式
- *     声明 {@code override}；</li>
+ *     刷新插件配置 → 启动插件运行时 → 向插件恢复历史会话，保证启动期配置告警不丢失、各注册表在配置就绪后
+ *     再建索引、插件在拿到最终的扫描目录与启用名单后启动、会话在插件注册好处理器之后才被问；核心命令
+ *     先于插件注册，插件要覆盖同名命令必须显式声明 {@code override}；</li>
  *     <li>已在实现：驱动 ReAct 循环（{@link #chat} 委托 {@link ReActLooper}）；关闭时优雅收敛。</li>
  * </ul>
  * 启动顺序有意固定为「先 {@code eventChannel.start()} → 再注册核心命令 → 再 {@code runtimeConfig.refresh()} →
@@ -61,6 +62,9 @@ public class AgentHarness {
     /** 内核系统命令注册器：{@code /help} 等。 */
     private final SystemCommands systemCommands;
 
+    /** 会话域服务：启动末期向插件要回历史会话。 */
+    private final SessionManager sessionManager;
+
     /**
      * 构造运行时宿主。
      *
@@ -72,11 +76,13 @@ public class AgentHarness {
      * @param pluginManager        插件运行时门面
      * @param reActLooper          ReAct 循环器
      * @param systemCommands       内核系统命令注册器
+     * @param sessionManager       会话域服务
      */
     @Inject
     public AgentHarness(RuntimeConfig runtimeConfig, EventChannel eventChannel, ModelManager modelManager,
                         AgentManager agentManager, PluginRuntimeConfig pluginRuntimeConfig,
-                        PF4JPluginManager pluginManager, ReActLooper reActLooper, SystemCommands systemCommands) {
+                        PF4JPluginManager pluginManager, ReActLooper reActLooper, SystemCommands systemCommands,
+                        SessionManager sessionManager) {
         this.runtimeConfig = runtimeConfig;
         this.eventChannel = eventChannel;
         this.modelManager = modelManager;
@@ -85,14 +91,18 @@ public class AgentHarness {
         this.pluginManager = pluginManager;
         this.reActLooper = reActLooper;
         this.systemCommands = systemCommands;
+        this.sessionManager = sessionManager;
     }
 
     /**
      * 启动应用：启动事件通道 → 注册核心命令 → 加载运行时配置 → 重建模型索引 → 重建 agent 索引 →
-     * 刷新插件配置 → 启动插件运行时。
+     * 刷新插件配置 → 启动插件运行时 → 向插件要回历史会话。
      * <p>
      * 核心命令先于插件注册：插件若要覆盖同名系统命令，必须显式声明 {@code override}，
      * 否则会在插件启动时以 {@code DUPLICATE_HANDLER} 当场暴露，而不是静默地两套并存。
+     * <p>
+     * 会话恢复必须在 {@code pluginManager.bootstrap()} <b>之后</b>：插件要先注册恢复处理器，
+     * 才可能被问到。
      */
     public void bootstrap() {
         eventChannel.start();
@@ -101,8 +111,10 @@ public class AgentHarness {
         modelManager.refresh(false);
         agentManager.refresh(false);
         // 必须在插件启动前：插件运行时此刻才读扫描目录与启用 / 禁用名单
-        pluginRuntimeConfig.refresh(runtimeConfig.getPluginsSettings());
+        pluginRuntimeConfig.refresh(runtimeConfig.getPluginRoots(), runtimeConfig.getPluginsSettings());
         pluginManager.bootstrap();
+        // 必须在插件启动后：插件此刻才注册好恢复处理器
+        sessionManager.restore();
     }
 
     /**

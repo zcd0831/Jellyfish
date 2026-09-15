@@ -10,10 +10,12 @@ import zcd.jellyfish.infra.config.Model;
 import zcd.jellyfish.infra.config.Provider;
 import zcd.jellyfish.infra.config.ReactSettings;
 import zcd.jellyfish.infra.config.RuntimeConfig;
+import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.llm.LlmMessage;
 import zcd.jellyfish.infra.llm.LlmRequest;
 import zcd.jellyfish.infra.llm.LlmTool;
 import zcd.jellyfish.infra.model.ResolvedModel;
+import zcd.jellyfish.infra.registry.TypeRegistry;
 import zcd.jellyfish.infra.session.Session;
 import zcd.jellyfish.infra.session.SessionManager;
 
@@ -66,7 +68,7 @@ class PromptAssemblerTest {
         // Given
         when(agentManager.systemPromptOf(null)).thenReturn("你是助手");
         PromptAssembler assembler = newAssembler();
-        SessionManager manager = new SessionManager(agentManager, events);
+        SessionManager manager = new SessionManager(agentManager, events, new ExtensionRegistry(new TypeRegistry()));
         Session session = manager.createDefault();
         manager.addTodo(session.getSessionId(), "写文档");
         manager.addTodo(session.getSessionId(), "跑测试");
@@ -86,7 +88,7 @@ class PromptAssemblerTest {
         // Given
         when(agentManager.systemPromptOf(null)).thenReturn("你是助手");
         PromptAssembler assembler = newAssembler();
-        SessionManager manager = new SessionManager(agentManager, events);
+        SessionManager manager = new SessionManager(agentManager, events, new ExtensionRegistry(new TypeRegistry()));
         Session session = manager.createDefault();
         String todoId = manager.addTodo(session.getSessionId(), "写文档").getId();
         manager.completeTodo(session.getSessionId(), todoId);
@@ -105,7 +107,7 @@ class PromptAssemblerTest {
         when(toolCatalog.tools()).thenReturn(
                 Collections.singletonList(new LlmTool("read", "读文件", null, null)));
         PromptAssembler assembler = newAssembler();
-        SessionManager manager = new SessionManager(agentManager, events);
+        SessionManager manager = new SessionManager(agentManager, events, new ExtensionRegistry(new TypeRegistry()));
         Session session = manager.createDefault();
         manager.appendMessage(session.getSessionId(), LlmMessage.user("你好"), null);
         ResolvedModel resolvedModel = resolvedModel(0, 4096);
@@ -153,7 +155,7 @@ class PromptAssemblerTest {
      * @return 会话运行态
      */
     private Session newSession() {
-        return new SessionManager(agentManager, events).createDefault();
+        return new SessionManager(agentManager, events, new ExtensionRegistry(new TypeRegistry())).createDefault();
     }
 
     /**

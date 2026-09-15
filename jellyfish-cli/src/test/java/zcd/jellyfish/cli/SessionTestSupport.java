@@ -4,6 +4,8 @@ import org.mockito.Mockito;
 import zcd.jellyfish.api.event.EventPublisher;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.session.Session;
+import zcd.jellyfish.infra.extension.ExtensionRegistry;
+import zcd.jellyfish.infra.registry.TypeRegistry;
 import zcd.jellyfish.infra.session.SessionManager;
 
 /**
@@ -41,6 +43,6 @@ public final class SessionTestSupport {
         EventPublisher silentPublisher = event -> {
             // 会话事件在外壳测试里没有订阅者，发出去也没人听
         };
-        return new SessionManager(Mockito.mock(AgentManager.class), silentPublisher);
+        return new SessionManager(Mockito.mock(AgentManager.class), silentPublisher, new ExtensionRegistry(new TypeRegistry()));
     }
 }

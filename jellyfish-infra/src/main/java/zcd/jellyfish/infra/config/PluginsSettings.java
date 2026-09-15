@@ -10,13 +10,18 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * {@code jellyfish.json} 的 {@code plugins} 段：插件根目录、启用 / 禁用名单与各插件配置段。
+ * {@code jellyfish.json} 的 {@code plugins} 段：启用 / 禁用名单与各插件配置段。
  * <p>
  * 这是<b>用户可见</b>的配置结构（以 {@code Settings} 结尾），只承载单份文件的内容；
  * 内核内部那份「插件管理器真正认的」不可变装配输入是 {@code PluginRuntimeConfig}，
  * 由装配根在两份配置合并后组装，因此插件运行时不需要认识本类之外的配置类型。
  * <p>
- * 三段保留键（{@code roots} / {@code enabled} / {@code disabled}）与各插件配置段刻意分开放：
+ * <b>本段不含扫描目录</b>：扫描目录是「内核去哪找插件 jar」的部署事实，与 {@code models.json} /
+ * {@code agents.json} 的文件路径同性质，因此写在 {@code config.json}（{@link PluginPaths}）；
+ * 本段只承载「加载之后怎么用」的运行期设置。这也让 {@code jellyfish.json} 的插件段不再混有
+ * 「路径」与「开关」两种语义。
+ * <p>
+ * 两个保留键（{@code enabled} / {@code disabled}）与各插件配置段刻意分开放：
  * {@code configurations.<pluginId>}。插件标识由插件作者自由取名，若与保留键同级，
  * 撞名时既没有报错也没有优先级约定。
  * <p>
@@ -26,9 +31,6 @@ import java.util.Map;
  * @author zcd
  */
 public class PluginsSettings {
-
-    /** 插件根目录。 */
-    private final List<String> roots;
 
     /** 启用名单，空表示不额外限定。 */
     private final List<String> enabled;
@@ -42,31 +44,19 @@ public class PluginsSettings {
     /**
      * 反序列化与合并共用的构造器。
      *
-     * @param roots          插件根目录，可为 {@code null}
      * @param enabled        启用名单，可为 {@code null}
      * @param disabled       禁用名单，可为 {@code null}
      * @param configurations pluginId 到插件配置段的映射，可为 {@code null}
      */
     @JsonCreator
-    public PluginsSettings(@JsonProperty("roots") List<String> roots,
-                           @JsonProperty("enabled") List<String> enabled,
+    public PluginsSettings(@JsonProperty("enabled") List<String> enabled,
                            @JsonProperty("disabled") List<String> disabled,
                            @JsonProperty("configurations") Map<String, Map<String, Object>> configurations) {
-        this.roots = copyOf(roots);
         this.enabled = copyOf(enabled);
         this.disabled = copyOf(disabled);
         this.configurations = configurations == null
                 ? Collections.<String, Map<String, Object>>emptyMap()
                 : Collections.unmodifiableMap(new LinkedHashMap<>(configurations));
-    }
-
-    /**
-     * 获取插件根目录。
-     *
-     * @return 不可修改列表，未配置时为空列表而非 {@code null}
-     */
-    public List<String> getRoots() {
-        return roots;
     }
 
     /**
@@ -99,10 +89,10 @@ public class PluginsSettings {
     /**
      * 判断是否未配置任何插件设置。
      *
-     * @return 四段都为空返回 {@code true}
+     * @return 三段都为空返回 {@code true}
      */
     public boolean isEmpty() {
-        return roots.isEmpty() && enabled.isEmpty() && disabled.isEmpty() && configurations.isEmpty();
+        return enabled.isEmpty() && disabled.isEmpty() && configurations.isEmpty();
     }
 
     /**

@@ -30,7 +30,7 @@ class JellyfishSettingsTest {
     @Test
     void getPlugins_should_return_same_instance_when_given() {
         // Given
-        PluginsSettings plugins = new PluginsSettings(Collections.singletonList("plugins"), null, null, null);
+        PluginsSettings plugins = new PluginsSettings(Collections.singletonList("plugin-a"), null, null);
 
         // When
         JellyfishSettings settings = new JellyfishSettings(plugins, null);

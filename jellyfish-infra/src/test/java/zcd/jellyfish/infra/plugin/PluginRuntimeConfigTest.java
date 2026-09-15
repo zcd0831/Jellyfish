@@ -22,6 +22,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * {@link PluginRuntimeConfig} 的单元测试：验证缺省语义、快照替换与「同一快照期内引用稳定」这条
  * 供 {@code ReadOnlyTools} 依赖的约定。
+ * <p>
+ * 扫描目录与名单来自两个不同来源（{@code config.json} 与 {@code jellyfish.json}），
+ * 因此 {@code refresh} 是两个入参；目录条目的清洗（展开 {@code ~}、丢弃空白）归 {@code RuntimeConfig}，
+ * 本类只按给定顺序原样发布。
  *
  * @author zcd
  */
@@ -68,8 +72,8 @@ class PluginRuntimeConfigTest {
         configurations.put("plugin-a", Collections.<String, Object>singletonMap("k", "v"));
 
         // When
-        config.refresh(new PluginsSettings(Arrays.asList("root-a", "root-b"), Arrays.asList("enabled-a"),
-                Arrays.asList("disabled-a"), configurations));
+        config.refresh(Arrays.asList(Paths.get("root-a"), Paths.get("root-b")),
+                new PluginsSettings(Arrays.asList("enabled-a"), Arrays.asList("disabled-a"), configurations));
 
         // Then
         assertEquals(Arrays.asList(Paths.get("root-a"), Paths.get("root-b")), config.getPluginsRoots());
@@ -79,14 +83,14 @@ class PluginRuntimeConfigTest {
     }
 
     @Test
-    void refresh_should_fall_back_to_defaults_when_settings_null() {
+    void refresh_should_fall_back_to_defaults_when_both_inputs_null() {
         // Given
         PluginRuntimeConfig config = new PluginRuntimeConfig(Collections.singletonList(Paths.get("custom")),
                 Collections.singleton("enabled-a"), Collections.singleton("disabled-a"),
                 Collections.singletonMap("plugin-a", Collections.<String, Object>emptyMap()));
 
         // When
-        config.refresh(null);
+        config.refresh(null, null);
 
         // Then
         assertEquals(PluginRuntimeConfig.DEFAULT_PLUGINS_ROOT, config.getPluginsRoots().get(0).toString());
@@ -96,27 +100,29 @@ class PluginRuntimeConfigTest {
     }
 
     @Test
-    void refresh_should_skip_blank_root_and_fall_back_when_no_valid_root() {
+    void refresh_should_fall_back_to_default_root_when_roots_empty() {
         // Given
-        PluginRuntimeConfig config = PluginRuntimeConfig.defaults();
+        PluginRuntimeConfig config = PluginRuntimeConfig.ofRoots(Paths.get("custom"));
 
-        // When
-        config.refresh(new PluginsSettings(Arrays.asList(" ", ""), null, null, null));
+        // When：目录为空但名单仍给出，目录必须回退、名单必须生效
+        config.refresh(Collections.<Path>emptyList(),
+                new PluginsSettings(Collections.singletonList("enabled-a"), null, null));
 
         // Then
         assertEquals(PluginRuntimeConfig.DEFAULT_PLUGINS_ROOT, config.getPluginsRoots().get(0).toString());
+        assertEquals(new LinkedHashSet<>(Collections.singletonList("enabled-a")), config.getEnabledPluginIds());
     }
 
     @Test
-    void refresh_should_trim_root_and_skip_blank_entries() {
+    void refresh_should_keep_roots_when_settings_null() {
         // Given
         PluginRuntimeConfig config = PluginRuntimeConfig.defaults();
 
-        // When
-        config.refresh(new PluginsSettings(Arrays.asList(" root-a ", "  ", "root-b"), null, null, null));
+        // When：名单缺省不应把已给出的扫描目录一起清掉
+        config.refresh(Collections.singletonList(Paths.get("root-a")), null);
 
         // Then
-        assertEquals(Arrays.asList(Paths.get("root-a"), Paths.get("root-b")), config.getPluginsRoots());
+        assertEquals(Collections.singletonList(Paths.get("root-a")), config.getPluginsRoots());
     }
 
     @Test
@@ -127,7 +133,7 @@ class PluginRuntimeConfigTest {
         // When
         Map<String, Map<String, Object>> first = config.getPluginConfigurations();
         Map<String, Map<String, Object>> second = config.getPluginConfigurations();
-        config.refresh(new PluginsSettings(null, null, null,
+        config.refresh(null, new PluginsSettings(null, null,
                 Collections.singletonMap("plugin-a", Collections.<String, Object>emptyMap())));
         Map<String, Map<String, Object>> third = config.getPluginConfigurations();
 

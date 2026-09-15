@@ -10,8 +10,14 @@ import zcd.jellyfish.api.event.notification.SessionClosedEvent;
 import zcd.jellyfish.api.event.notification.SessionCreatedEvent;
 import zcd.jellyfish.api.event.notification.SessionMessageAppendedEvent;
 import zcd.jellyfish.api.extension.PermissionMode;
+import zcd.jellyfish.api.extension.SessionPersistRequest;
+import zcd.jellyfish.api.extension.SessionRestoreRequest;
+import zcd.jellyfish.api.extension.SessionRestoreResult;
+import zcd.jellyfish.api.extension.SessionSnapshot;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.config.AgentDefinition;
+import zcd.jellyfish.infra.extension.ExtensionRegistry;
+import zcd.jellyfish.infra.extension.HandlerBinding;
 import zcd.jellyfish.infra.llm.LlmMessage;
 import zcd.jellyfish.infra.llm.LlmUsage;
 
@@ -34,19 +40,20 @@ import java.util.concurrent.atomic.AtomicReference;
  * 本类是<b>可变运行态</b>——不读配置、不建索引、不广播装载事件，只维护「sessionId → Session」表与一个
  * 进程内的当前会话指针。
  * <p>
- * <b>唯一变更入口</b>：所有会话运行态变更（追加消息 / 改标题 / 绑 agent / 切模型 / 切权限模式）都必须
- * 经本类。因为这些变更要连带做两件横切的事——广播通知、将来的同步扩展点落盘（架构图
- * {@code SessionMgr ==> ExtReg}）——集中在一处才不会每个调用点各写一遍。
+ * <b>唯一变更入口</b>：所有会话运行态变更（追加消息 / 改标题 / 绑 agent / 切模型 / 切权限模式 / 待办）
+ * 都必须经本类。因为这些变更要连带做两件横切的事——广播通知、同步落盘扩展点
+ * （架构图 {@code SessionMgr ==> ExtReg}）——集中在一处才不会每个调用点各写一遍。
+ * <p>
+ * <b>持久化是一等职责而非旁路</b>：每次状态变更（含创建与关闭）都会同步派发
+ * {@link SessionPersistRequest}，处理器抛出的异常<b>原样上抛</b>——那一刻起「状态已变」与「状态已落盘」
+ * 必须同生共死。落盘的是整个会话快照，因此上一次失败的状态会在下一次任何变更时被一并补上。
+ * 启动期则由 {@link #restore()} 反向向插件要回会话。
  * <p>
  * <b>不持有全局模型状态</b>：当前模型是会话字段，本类只做读写转发；解析与路由仍归 {@code ModelManager}，
  * 因此同一进程内的不同会话可以各用各的模型。
  * <p>
- * <b>本轮不做</b>：
- * <ul>
- *     <li>持久化：由插件经{@code ExtensionRegistry} 同步扩展点完成，落点见 {@link #appendMessage} 的 TODO；
- *     待办变更同样属于将来要落盘的范围，目前仅内存态。</li>
- *     <li>上下文裁剪与 token 预算：归 {@code core/prompt}，本类只做计量；</li>
- * </ul>
+ * <b>本轮不做</b>：上下文裁剪与 token 预算——归 {@code core/prompt}，本类只做计量。
+ * <p>
  * <b>已落地</b>：会话级待办运行态（{@code /todo} 命令与 {@code core/prompt} 的注入都读这里），
  * 注入发生在构建上下文时且不写回消息历史（见 session 方案 §4.5）。
  *
@@ -64,6 +71,9 @@ public class SessionManager {
     /** 通知发布入口，用于广播会话生命周期通知。 */
     private final EventPublisher events;
 
+    /** 同步扩展点策略，会话持久化与恢复的唯一通道。 */
+    private final ExtensionRegistry extensions;
+
     /** 会话表：sessionId → 会话运行态。 */
     private final Map<String, Session> sessions = new ConcurrentHashMap<String, Session>();
 
@@ -75,11 +85,13 @@ public class SessionManager {
      *
      * @param agentManager agent 门面，用于解析会话创建时的默认 agent
      * @param events       通知发布入口
+     * @param extensions   同步扩展点策略，用于派发持久化与恢复请求
      */
     @Inject
-    public SessionManager(AgentManager agentManager, EventPublisher events) {
+    public SessionManager(AgentManager agentManager, EventPublisher events, ExtensionRegistry extensions) {
         this.agentManager = agentManager;
         this.events = events;
+        this.extensions = extensions;
     }
 
     /**
@@ -105,6 +117,8 @@ public class SessionManager {
         String boundAgentId = StringUtils.isBlank(agentId) ? resolveDefaultAgentId() : agentId;
         Session session = new Session(UUID.randomUUID().toString(), boundAgentId, provider, model,
                 permissionMode, System.currentTimeMillis());
+        // 先落盘再入表：落盘失败时那次创建就不算发生，而不是「能看见但没存下」
+        persist(session);
         sessions.put(session.getSessionId(), session);
         publish(new SessionCreatedEvent(boundAgentId, session.getSessionId()));
         return session;
@@ -176,13 +190,47 @@ public class SessionManager {
         if (sessionId == null) {
             return null;
         }
-        Session session = sessions.remove(sessionId);
+        Session session = sessions.get(sessionId);
         if (session == null) {
             return null;
         }
+        // 先落最后一次快照再移除：落盘失败时宁可不关，也不要留下「已关闭但没存下」的会话
+        persist(session);
+        sessions.remove(sessionId);
         currentSessionId.compareAndSet(sessionId, null);
         publish(new SessionClosedEvent(sessionId, session.getAgentId(), session.size()));
         return session;
+    }
+
+    /**
+     * 启动期恢复会话：向所有注册了恢复处理器的插件要回会话快照并导入。
+     * <p>
+     * 必须在插件启动<b>之后</b>调用——插件要先注册处理器，才可能被问到。
+     * <p>
+     * <b>失败语义与落盘相反</b>：单个插件读不出自己的备份只记告警并跳过，不阻断启动。
+     * 理由是不对称的——落盘失败会丢新数据，而恢复失败只是回到「从零开始」，后者不该让进程起不来。
+     * <p>
+     * 恢复的会话同样广播 {@code SessionCreatedEvent}：对订阅者而言它确实是刚出现在本进程里的会话。
+     *
+     * @return 实际导入的会话数
+     */
+    public int restore() {
+        int imported = 0;
+        for (HandlerBinding<SessionRestoreRequest, SessionRestoreResult> binding
+                : extensions.bindings(SessionRestoreRequest.class, null)) {
+            SessionRestoreResult result;
+            try {
+                result = extensions.invoke(binding.getHandler(), new SessionRestoreRequest());
+            } catch (RuntimeException e) {
+                LOG.warn("会话恢复失败，跳过该来源: owner={}", binding.getOwner(), e);
+                continue;
+            }
+            imported += importSnapshots(result);
+        }
+        if (imported > 0) {
+            LOG.info("已从插件恢复会话: count={}", imported);
+        }
+        return imported;
     }
 
     /**
@@ -195,13 +243,13 @@ public class SessionManager {
     }
 
     /**
-     * 追加一条消息并累加 token 用量，随后广播 {@link SessionMessageAppendedEvent}。
+     * 追加一条消息并累加 token 用量，随后同步落盘并广播 {@link SessionMessageAppendedEvent}。
      * <p>
-     * 先落会话、再发通知：通知订阅者据 {@code messageId} 回查时，消息一定已经可见。
+     * 先落会话、再落盘、最后发通知：通知订阅者据 {@code messageId} 回查时，消息一定已经可见；
+     * 落盘必须在通知之前，否则「已落盘的会话」会少掉订阅者已经看到的那条消息。
      * <p>
-     * TODO 会话持久化未落地：持久化由插件经 {@code ExtensionRegistry} 同步扩展点完成（架构图
-     *      {@code SessionMgr ==> ExtReg}，无返回值但不可丢）。落地时在本方法内、广播通知之后加一次同步
-     *      派发，且派发失败必须上抛——那一刻起「消息已追加」与「消息已落盘」必须同生共死。
+     * 落盘失败时异常上抛（同步侧无护栏，处置是调用点的责任）：调用方应当让本次回合失败。
+     * 已入内存的这条消息不会被回滚——落盘写的是整个会话快照，下一次成功落盘会把它一并补上。
      *
      * @param sessionId 会话标识，不可为空白
      * @param message   消息本体，不可为 {@code null}
@@ -213,6 +261,7 @@ public class SessionManager {
         Session session = require(sessionId);
         SessionMessage sessionMessage = SessionMessage.of(message, usage);
         session.append(sessionMessage);
+        persist(session);
         publish(new SessionMessageAppendedEvent(session.getSessionId(), sessionMessage.getMessageId(),
                 sessionMessage.getRole()));
         return sessionMessage;
@@ -229,6 +278,7 @@ public class SessionManager {
     public Session updateTitle(String sessionId, String title) {
         Session session = require(sessionId);
         session.setTitle(title);
+        persist(session);
         return session;
     }
 
@@ -243,6 +293,7 @@ public class SessionManager {
     public Session bindAgent(String sessionId, String agentId) {
         Session session = require(sessionId);
         session.setAgentId(agentId);
+        persist(session);
         return session;
     }
 
@@ -258,6 +309,7 @@ public class SessionManager {
     public Session switchModel(String sessionId, String provider, String model) {
         Session session = require(sessionId);
         session.setModel(provider, model);
+        persist(session);
         return session;
     }
 
@@ -272,6 +324,7 @@ public class SessionManager {
     public Session setPermissionMode(String sessionId, PermissionMode permissionMode) {
         Session session = require(sessionId);
         session.setPermissionMode(permissionMode);
+        persist(session);
         return session;
     }
 
@@ -311,7 +364,10 @@ public class SessionManager {
      * @throws JellyfishException 会话不存在或内容为空白时抛出
      */
     public PendingTodo addTodo(String sessionId, String content) {
-        return require(sessionId).addTodo(content);
+        Session session = require(sessionId);
+        PendingTodo todo = session.addTodo(content);
+        persist(session);
+        return todo;
     }
 
     /**
@@ -325,7 +381,13 @@ public class SessionManager {
      * @throws JellyfishException 会话不存在时抛出
      */
     public boolean completeTodo(String sessionId, String todoId) {
-        return require(sessionId).completeTodo(todoId);
+        Session session = require(sessionId);
+        boolean changed = session.completeTodo(todoId);
+        if (changed) {
+            // 幂等调用（编号不存在或已完成）没有改变任何状态，不需要落盘
+            persist(session);
+        }
+        return changed;
     }
 
     /**
@@ -336,7 +398,12 @@ public class SessionManager {
      * @throws JellyfishException 会话不存在时抛出
      */
     public int clearTodos(String sessionId) {
-        return require(sessionId).clearTodos();
+        Session session = require(sessionId);
+        int cleared = session.clearTodos();
+        if (cleared > 0) {
+            persist(session);
+        }
+        return cleared;
     }
 
     /**
@@ -358,6 +425,54 @@ public class SessionManager {
     private String resolveDefaultAgentId() {
         AgentDefinition definition = agentManager.resolveDefault();
         return definition == null ? null : definition.getAgentId();
+    }
+
+    /**
+     * 同步派发会话持久化：无返回值，但不可丢。
+     * <p>
+     * 走类型级贡献而不是具名处理器：同一份会话可以同时落文件、写数据库、推给远端，这些是「都做」。
+     * <p>
+     * 没有插件注册时直接返回，不做任何快照构造——没有持久化插件是合法状态，不该自担开销。
+     * 处理器抛出的异常原样上抛，处置由各调用点自己决定（见各变更方法的注释）。
+     *
+     * @param session 待落盘的会话运行态
+     */
+    private void persist(Session session) {
+        List<HandlerBinding<SessionPersistRequest, Void>> bindings =
+                extensions.bindings(SessionPersistRequest.class, null);
+        if (bindings.isEmpty()) {
+            return;
+        }
+        SessionPersistRequest request = new SessionPersistRequest(SessionSnapshots.capture(session));
+        for (HandlerBinding<SessionPersistRequest, Void> binding : bindings) {
+            extensions.invoke(binding.getHandler(), request);
+        }
+    }
+
+    /**
+     * 导入一批会话快照。
+     * <p>
+     * 已存在的会话标识一律保留内存里那一份：恢复只负责「把不认识的会话带回来」，
+     * 而不是覆盖运行期已经开始的会话。
+     *
+     * @param result 恢复结果，可为 {@code null}
+     * @return 实际导入的会话数
+     */
+    private int importSnapshots(SessionRestoreResult result) {
+        if (result == null) {
+            return 0;
+        }
+        int imported = 0;
+        for (SessionSnapshot snapshot : result.getSessions()) {
+            Session session = Session.restore(snapshot);
+            if (sessions.putIfAbsent(session.getSessionId(), session) != null) {
+                LOG.warn("会话已存在，跳过恢复: sessionId={}", session.getSessionId());
+                continue;
+            }
+            publish(new SessionCreatedEvent(session.getAgentId(), session.getSessionId()));
+            imported++;
+        }
+        return imported;
     }
 
     /**

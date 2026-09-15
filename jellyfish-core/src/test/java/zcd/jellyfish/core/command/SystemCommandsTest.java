@@ -71,7 +71,7 @@ class SystemCommandsTest {
     void setUp() {
         ExtensionRegistry extensions = new ExtensionRegistry(new TypeRegistry());
         commandManager = new CommandManager(extensions);
-        sessionManager = new SessionManager(agentManager, events);
+        sessionManager = new SessionManager(agentManager, events, extensions);
         systemCommands = new SystemCommands(extensions, commandManager, sessionManager, modelManager, agentManager);
         systemCommands.register();
     }

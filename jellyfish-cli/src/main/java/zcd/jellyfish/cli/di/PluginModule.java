@@ -19,8 +19,10 @@ import javax.inject.Singleton;
  * （能力上下文与回收）→ {@link PF4JPluginManager}（加载、体检、热部署）。插件管理器因此只依赖
  * 「会造上下文、会回收」这一个协作者，不感知注册表与事件通道。
  * <p>
- * {@link PluginRuntimeConfig} 由配置驱动：先从 {@link RuntimeConfig} 的合并快照读出插件段，
- * 再刷进去。真正的生效时刻是 {@code AgentHarness.bootstrap()} 里的又一次 {@code refresh}——
+ * {@link PluginRuntimeConfig} 由配置驱动：扫描目录来自
+ * {@link RuntimeConfig#getPluginRoots()}（{@code config.json} 的 {@code plugins.roots}），
+ * 启用 / 禁用名单与各插件配置段来自 {@link RuntimeConfig#getPluginsSettings()}，
+ * 两者一起刷进去。真正的生效时刻是 {@code AgentHarness.bootstrap()} 里的又一次 {@code refresh}——
  * 本对象在构造期就被注入插件管理器，而配置要到那时才加载完毕，因此它是「引用稳定、快照可换」的。
  *
  * @author zcd
@@ -44,7 +46,7 @@ public final class PluginModule {
     @Singleton
     static PluginRuntimeConfig providePluginRuntimeConfig(RuntimeConfig runtimeConfig) {
         PluginRuntimeConfig config = PluginRuntimeConfig.defaults();
-        config.refresh(runtimeConfig.getPluginsSettings());
+        config.refresh(runtimeConfig.getPluginRoots(), runtimeConfig.getPluginsSettings());
         return config;
     }
 

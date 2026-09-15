@@ -110,8 +110,8 @@ class ReActLooperTest {
     @BeforeEach
     void setUp() {
         executor = Executors.newSingleThreadExecutor();
-        sessionManager = new SessionManager(agentManager, events);
         extensions = new ExtensionRegistry(new TypeRegistry());
+        sessionManager = new SessionManager(agentManager, events, extensions);
         promptAssembler = new PromptAssembler(agentManager, new ToolCatalog(extensions), runtimeConfig);
         // 这两个桩是共享前置条件：个别用例（会话不存在 / 提前取消）走不到这两步，用 lenient 避免误报
         lenient().when(modelManager.resolveDefault()).thenReturn(resolvedModel());

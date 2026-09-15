@@ -16,6 +16,8 @@
         <module>jellyfish-core</module>
         <module>jellyfish-tui</module>
         <module>jellyfish-cli</module>
+        <!-- 官方插件：不在内核依赖链上，只经 jellyfish-api 与内核交互 -->
+        <module>jellyfish-plugins</module>
     </modules>
 
     <properties>
@@ -173,6 +175,12 @@
                     <artifactId>maven-compiler-plugin</artifactId>
                     <version>${maven-compiler-plugin.version}</version>
                     <configuration>
+                        <!-- 保留构造器参数名（MethodParameters 属性）。
+                             这不是「为了调试方便」：jellyfish-api 的扩展点载荷（会话快照等）是
+                             「全字段构造器 + 无 setter」的不可变类型，插件侧用 Jackson 反序列化时
+                             只能靠构造器参数名把 JSON 字段对上。去掉它，会话持久化插件会在运行时
+                             「写得出、读不回」，而编译与大部分单测依然全绿。 -->
+                        <parameters>true</parameters>
                         <annotationProcessorPaths>
                             <path>
                                 <groupId>com.google.dagger</groupId>

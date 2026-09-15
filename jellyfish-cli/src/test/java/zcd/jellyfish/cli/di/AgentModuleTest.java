@@ -73,7 +73,7 @@ class AgentModuleTest {
      * @return AgentManager 实例
      */
     private AgentManager newAgentManager(ConfigPaths agentPaths) {
-        AppConfig appConfig = new AppConfig(null, new ConfigPaths(), agentPaths, new ConfigPaths());
+        AppConfig appConfig = new AppConfig(null, new ConfigPaths(), agentPaths, new ConfigPaths(), null);
         RuntimeConfig runtimeConfig = new RuntimeConfig(appConfig,
                 new ConfigLoader(new SettingsReader(), new SettingsBinder()), event -> {
                 });

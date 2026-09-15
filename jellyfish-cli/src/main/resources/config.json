@@ -11,5 +11,8 @@
   "jellyfish": {
     "globalPath": "~/jellyfish/jellyfish.json",
     "projectPath": "./jellyfish/jellyfish.json"
+  },
+  "plugins": {
+    "roots": ["~/jellyfish/plugins/"]
   }
 }

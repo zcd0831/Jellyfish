@@ -1,6 +1,9 @@
 package zcd.jellyfish.infra.session;
 
 import zcd.jellyfish.api.extension.PermissionMode;
+import zcd.jellyfish.api.extension.SessionMessageSnapshot;
+import zcd.jellyfish.api.extension.SessionSnapshot;
+import zcd.jellyfish.api.extension.SessionTodoSnapshot;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -84,6 +87,33 @@ public final class Session {
         this.permissionMode = permissionMode == null ? PermissionMode.NORMAL : permissionMode;
         this.createdAt = createdAt;
         this.updatedAt = createdAt;
+    }
+
+    /**
+     * 由快照还原会话运行态，仅供 {@link SessionManager} 在启动期恢复时调用。
+     * <p>
+     * 直接写入私有字段而不是走 {@code append} / {@code addTodo}：还原是一次「把已有状态放回去」，
+     * 不该产生新的时间戳、也不该重新分配编号；走变更路径反而会把历史改掉（例如把 {@code updatedAt}
+     * 刷成当前时间）。
+     *
+     * @param snapshot api 侧的会话快照，不可为 {@code null}
+     * @return 还原出的会话运行态
+     */
+    static Session restore(SessionSnapshot snapshot) {
+        Session session = new Session(snapshot.getSessionId(), snapshot.getAgentId(), snapshot.getProvider(),
+                snapshot.getModel(), snapshot.getPermissionMode(), snapshot.getCreatedAt());
+        session.title = snapshot.getTitle();
+        session.updatedAt = snapshot.getUpdatedAt();
+        session.usage = SessionSnapshots.toSessionUsage(snapshot.getUsage());
+        for (SessionMessageSnapshot message : snapshot.getMessages()) {
+            session.messages.add(SessionSnapshots.toMessage(message));
+        }
+        for (SessionTodoSnapshot todo : snapshot.getTodos()) {
+            session.todos.add(SessionSnapshots.toTodo(todo));
+        }
+        // 编号序列必须推到已有编号之后，否则下一次 addTodo 会分出一个已被占用的编号
+        session.todoSequence = SessionSnapshots.restoreTodoSequence(snapshot.getTodos());
+        return session;
     }
 
     /**

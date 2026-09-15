@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+         http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>zcd</groupId>
+        <artifactId>jellyfish</artifactId>
+        <version>0.0.1-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>jellyfish-plugins</artifactId>
+    <packaging>pom</packaging>
+    <name>Jellyfish Plugins</name>
+    <description>官方插件聚合：每个子模块产出一个独立插件 jar，放在 plugins/ 下由 PF4J 加载。</description>
+
+    <!-- 每个 PF4J 插件是「一个 jar 一个 plugin.properties」，因此一个插件一个子模块，
+         这里只做聚合与版本继承，不产出任何构件。 -->
+    <modules>
+        <module>jellyfish-plugin-tools</module>
+        <module>jellyfish-plugin-session-file</module>
+    </modules>
+</project>

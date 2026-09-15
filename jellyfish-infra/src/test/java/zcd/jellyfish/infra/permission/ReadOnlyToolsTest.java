@@ -146,7 +146,7 @@ class ReadOnlyToolsTest {
         assertEquals(Collections.singleton("read_file"), tools.names());
 
         // When：配置刷新后快照换新，白名单必须跟着换
-        config.refresh(new PluginsSettings(null, null, null,
+        config.refresh(null, new PluginsSettings(null, null,
                 Collections.singletonMap("plugin-a", declaration(Collections.singletonList("grep")))));
 
         // Then
@@ -164,7 +164,7 @@ class ReadOnlyToolsTest {
         assertEquals(Collections.singleton("read_file"), tools.names());
 
         // When
-        config.refresh(null);
+        config.refresh(null, null);
 
         // Then
         assertTrue(tools.names().isEmpty());

@@ -33,5 +33,9 @@ replay_pid*
 # Maven build output
 target/
 
+# 插件安装目录：PF4J 从工作目录下的 plugins/ 加载插件 jar，
+# 它是本地装配产物（由 mvn package 后手工复制得到），不入版本库
+/plugins/
+
 # maven-shade-plugin 生成的构建产物（createDependencyReducedPom）
 dependency-reduced-pom.xml

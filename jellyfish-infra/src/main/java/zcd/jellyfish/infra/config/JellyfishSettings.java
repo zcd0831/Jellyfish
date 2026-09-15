@@ -35,7 +35,7 @@ public class JellyfishSettings {
     @JsonCreator
     public JellyfishSettings(@JsonProperty("plugins") PluginsSettings plugins,
                              @JsonProperty("react") ReactSettings react) {
-        this.plugins = plugins == null ? new PluginsSettings(null, null, null, null) : plugins;
+        this.plugins = plugins == null ? new PluginsSettings(null, null, null) : plugins;
         this.react = react == null ? new ReactSettings() : react;
     }
 

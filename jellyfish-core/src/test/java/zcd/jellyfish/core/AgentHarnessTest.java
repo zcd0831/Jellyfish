@@ -14,6 +14,11 @@ import zcd.jellyfish.infra.event.EventChannel;
 import zcd.jellyfish.infra.model.ModelManager;
 import zcd.jellyfish.infra.plugin.PF4JPluginManager;
 import zcd.jellyfish.infra.plugin.PluginRuntimeConfig;
+import zcd.jellyfish.infra.session.SessionManager;
+
+import java.nio.file.Path;
+import java.util.Collections;
+import java.util.List;
 
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.verify;
@@ -59,6 +64,10 @@ class AgentHarnessTest {
     @Mock
     private ReActLooper reActLooper;
 
+    /** 会话域服务：启动末期由它向插件要回历史会话。 */
+    @Mock
+    private SessionManager sessionManager;
+
     /** 内核系统命令注册器。 */
     @Mock
     private SystemCommands systemCommands;
@@ -66,36 +75,42 @@ class AgentHarnessTest {
     @Test
     void bootstrap_should_start_in_fixed_order() {
         // Given
-        PluginsSettings plugins = new PluginsSettings(null, null, null, null);
+        PluginsSettings plugins = new PluginsSettings(null, null, null);
+        List<Path> roots = Collections.emptyList();
         when(runtimeConfig.getPluginsSettings()).thenReturn(plugins);
+        when(runtimeConfig.getPluginRoots()).thenReturn(roots);
         AgentHarness harness = newHarness();
 
         // When
         harness.bootstrap();
 
-        // Then：事件订阅者就绪 → 注册核心命令 → 配置 → 各索引 → 插件配置 → 插件启动
+        // Then：事件订阅者就绪 → 注册核心命令 → 配置 → 各索引 → 插件配置 → 插件启动 → 会话恢复
         InOrder order = inOrder(eventChannel, systemCommands, runtimeConfig, modelManager, agentManager,
-                pluginRuntimeConfig, pluginManager);
+                pluginRuntimeConfig, pluginManager, sessionManager);
         order.verify(eventChannel).start();
         order.verify(systemCommands).register();
         order.verify(runtimeConfig).refresh();
         order.verify(modelManager).refresh(false);
         order.verify(agentManager).refresh(false);
-        order.verify(pluginRuntimeConfig).refresh(plugins);
+        order.verify(pluginRuntimeConfig).refresh(roots, plugins);
         order.verify(pluginManager).bootstrap();
+        // 恢复必须排在插件启动之后：插件此刻才注册好恢复处理器
+        order.verify(sessionManager).restore();
     }
 
     @Test
     void bootstrap_should_refresh_plugin_config_with_latest_snapshot() {
         // Given
-        PluginsSettings plugins = new PluginsSettings(null, null, null, null);
+        PluginsSettings plugins = new PluginsSettings(null, null, null);
+        List<Path> roots = Collections.emptyList();
         when(runtimeConfig.getPluginsSettings()).thenReturn(plugins);
+        when(runtimeConfig.getPluginRoots()).thenReturn(roots);
 
         // When
         newHarness().bootstrap();
 
-        // Then
-        verify(pluginRuntimeConfig).refresh(plugins);
+        // Then：扫描目录与名单必须来自同一轮配置读取
+        verify(pluginRuntimeConfig).refresh(roots, plugins);
     }
 
     @Test
@@ -138,6 +153,6 @@ class AgentHarnessTest {
      */
     private AgentHarness newHarness() {
         return new AgentHarness(runtimeConfig, eventChannel, modelManager, agentManager, pluginRuntimeConfig,
-                pluginManager, reActLooper, systemCommands);
+                pluginManager, reActLooper, systemCommands, sessionManager);
     }
 }

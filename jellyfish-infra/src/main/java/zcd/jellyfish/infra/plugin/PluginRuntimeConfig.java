@@ -15,17 +15,18 @@ import java.util.Set;
 /**
  * 插件运行时的装配输入：插件根目录、启用 / 禁用名单、各插件配置段。
  * <p>
- * 这是<b>内核内部</b>的配置载体（用户写 {@code jellyfish.json} 的 {@code plugins} 段），因此以
- * {@code Config} 结尾；插件管理器只认本对象，不感知配置层的读取与合并逻辑（只依赖纯数据载体
- * {@link PluginsSettings}）。
+ * 这是<b>内核内部</b>的配置载体，由两个来源组装：扫描目录来自 {@code config.json} 的
+ * {@code plugins.roots}（已由 {@code RuntimeConfig} 展开 {@code ~} 并丢弃空白），
+ * 启用 / 禁用名单与各插件配置段来自 {@code jellyfish.json} 的 {@code plugins} 段
+ * （{@link PluginsSettings}）。插件管理器只认本对象，不感知配置层的读取与合并逻辑。
  * <p>
  * <b>引用稳定、快照可换</b>：本对象在构造期就被注入 {@code PF4JPluginManager} 与
  * {@code ReadOnlyTools}，而配置要到 {@code runtimeConfig.refresh()} 之后才可用（那时这些协作者
- * 早已构造完毕）。因此不靠「重建对象」发布新值，而是让 {@link #refresh(PluginsSettings)}
+ * 早已构造完毕）。因此不靠「重建对象」发布新值，而是让 {@link #refresh(List, PluginsSettings)}
  * 整体替换内部那份不可变快照——与 {@code RuntimeConfig} + {@code RuntimeSnapshot} 同款做法。
  * <p>
  * 一句话记住使用方式：<b>它不是一个线程安全的可变配置对象，只是一个快照发布点</b>；
- * 写入口只有 {@link #refresh(PluginsSettings)} 一个。
+ * 写入口只有 {@link #refresh(List, PluginsSettings)} 一个。
  *
  * @author zcd
  */
@@ -80,16 +81,18 @@ public final class PluginRuntimeConfig {
      * 用最新配置整体替换快照。
      * <p>
      * 必须在插件运行时 {@code bootstrap()} 之前调用：扫描根目录与启用 / 禁用种子都是那一刻读取的。
-     * 空配置（{@code null} 或各段都为空）等价于 {@link #defaults()}。
+     * 空配置（两个入参均为 {@code null} 或等价的空值）等价于 {@link #defaults()}：
+     * 扫描目录回退 {@link #DEFAULT_PLUGINS_ROOT}，名单与配置段置空。
      *
-     * @param settings 合并后的插件段配置，可为 {@code null}
+     * @param pluginsRoots 插件扫描根目录，为 {@code null} 或空时回退到 {@link #DEFAULT_PLUGINS_ROOT}
+     * @param settings     合并后的插件段配置（名单 + 各插件配置段），可为 {@code null}
      */
-    public void refresh(PluginsSettings settings) {
+    public void refresh(List<Path> pluginsRoots, PluginsSettings settings) {
         if (settings == null) {
-            this.snapshot = Snapshot.of(null, null, null, null);
+            this.snapshot = Snapshot.of(pluginsRoots, null, null, null);
             return;
         }
-        this.snapshot = Snapshot.of(toRoots(settings.getRoots()), new LinkedHashSet<>(settings.getEnabled()),
+        this.snapshot = Snapshot.of(pluginsRoots, new LinkedHashSet<>(settings.getEnabled()),
                 new LinkedHashSet<>(settings.getDisabled()), settings.getConfigurations());
     }
 
@@ -144,25 +147,6 @@ public final class PluginRuntimeConfig {
      */
     public Map<String, Map<String, Object>> getPluginConfigurations() {
         return snapshot.pluginConfigurations;
-    }
-
-    /**
-     * 把配置里的根目录字符串转成路径列表，非法项跳过。
-     *
-     * @param roots 根目录字符串列表，可为 {@code null}
-     * @return 路径列表；没有任何有效项时返回空列表（由快照回退默认目录）
-     */
-    private static List<Path> toRoots(List<String> roots) {
-        if (roots == null || roots.isEmpty()) {
-            return Collections.emptyList();
-        }
-        List<Path> paths = new ArrayList<>(roots.size());
-        for (String root : roots) {
-            if (root != null && !root.trim().isEmpty()) {
-                paths.add(Paths.get(root.trim()));
-            }
-        }
-        return paths;
     }
 
     /**

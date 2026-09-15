@@ -14,6 +14,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -344,13 +345,12 @@ class RuntimeConfigTest {
 
     @Test
     void refresh_should_merge_plugins_and_expose_plugins_settings() throws IOException {
-        // Given
+        // Given：扫描目录已迁到 config.json，jellyfish.json 的 plugins 段只剩名单与插件配置段
         Path global = writeFile("jellyfish-global.json",
-                "{\"plugins\":{\"roots\":[\"global-plugins\"],\"enabled\":[\"a\",\"b\"],"
+                "{\"plugins\":{\"enabled\":[\"a\",\"b\"],"
                         + "\"configurations\":{\"p1\":{\"readOnlyTools\":[\"x\"]},\"p2\":{\"k\":\"global\"}}}}");
         Path project = writeFile("jellyfish-project.json",
-                "{\"plugins\":{\"roots\":[\"project-plugins\"],"
-                        + "\"configurations\":{\"p2\":{\"k\":\"project\"}}}}");
+                "{\"plugins\":{\"configurations\":{\"p2\":{\"k\":\"project\"}}}}");
 
         // When
         RuntimeConfig runtimeConfig = newRuntimeConfig(pathsTo(null, null), pathsTo(null, null),
@@ -358,13 +358,44 @@ class RuntimeConfigTest {
 
         // Then：列表段项目级非空则整体替换，为空则回退全局级
         PluginsSettings plugins = runtimeConfig.getPluginsSettings();
-        assertEquals(Collections.singletonList("project-plugins"), plugins.getRoots());
         assertEquals(Arrays.asList("a", "b"), plugins.getEnabled());
         // Then：配置段同名整对象替换、不同 key 追加
         assertEquals(Collections.singletonList("x"), plugins.getConfigurations().get("p1").get("readOnlyTools"));
         assertEquals("project", plugins.getConfigurations().get("p2").get("k"));
         // Then：转发入口与快照一致
         assertSame(plugins, runtimeConfig.getJellyfishSettings().getPlugins());
+    }
+
+    @Test
+    void getPluginRoots_should_expand_tilde_and_skip_blank_entries() {
+        // When
+        RuntimeConfig runtimeConfig = newRuntimeConfigWithPlugins(new ConfigPaths(), new ConfigPaths(),
+                new ConfigPaths(), new PluginPaths(Arrays.asList(" plugins ", "  ", "~/extra")));
+
+        // Then：~ 展开、空白条目丢弃，非空白条目按顺序保留
+        String home = System.getProperty("user.home");
+        assertEquals(Arrays.asList(Paths.get("plugins"), Paths.get(home, "extra")), runtimeConfig.getPluginRoots());
+    }
+
+    @Test
+    void getPluginRoots_should_return_empty_list_when_not_configured() {
+        // When
+        RuntimeConfig runtimeConfig = newRuntimeConfigWithPlugins(new ConfigPaths(), new ConfigPaths(),
+                new ConfigPaths(), null);
+
+        // Then：空列表交给 PluginRuntimeConfig 回退默认扫描目录
+        assertTrue(runtimeConfig.getPluginRoots().isEmpty());
+    }
+
+    @Test
+    void getPluginRoots_should_return_unmodifiable_list() {
+        // When
+        RuntimeConfig runtimeConfig = newRuntimeConfigWithPlugins(new ConfigPaths(), new ConfigPaths(),
+                new ConfigPaths(), new PluginPaths(Collections.singletonList("plugins")));
+
+        // Then
+        assertThrows(UnsupportedOperationException.class,
+                () -> runtimeConfig.getPluginRoots().add(Paths.get("other")));
     }
 
     @Test
@@ -464,6 +495,28 @@ class RuntimeConfigTest {
         when(appConfig.getModel()).thenReturn(model);
         when(appConfig.getAgent()).thenReturn(agent);
         when(appConfig.getJellyfish()).thenReturn(jellyfish);
+        RuntimeConfig runtimeConfig = new RuntimeConfig(appConfig,
+                new ConfigLoader(new SettingsReader(), new SettingsBinder()),
+                new RecordingPublisher());
+        runtimeConfig.refresh();
+        return runtimeConfig;
+    }
+
+    /**
+     * 构造被测对象，并让 {@link AppConfig} 返回含插件扫描目录的完整四段配置。
+     *
+     * @param model     模型配置段的双源路径
+     * @param agent     agent 配置段的双源路径
+     * @param jellyfish 运行期设置段的双源路径
+     * @param plugins   插件扫描段，可为 {@code null}（视为未配置）
+     * @return 已加载一次配置的 {@link RuntimeConfig}
+     */
+    private RuntimeConfig newRuntimeConfigWithPlugins(ConfigPaths model, ConfigPaths agent, ConfigPaths jellyfish,
+                                                      PluginPaths plugins) {
+        when(appConfig.getModel()).thenReturn(model);
+        when(appConfig.getAgent()).thenReturn(agent);
+        when(appConfig.getJellyfish()).thenReturn(jellyfish);
+        when(appConfig.getPlugins()).thenReturn(plugins);
         RuntimeConfig runtimeConfig = new RuntimeConfig(appConfig,
                 new ConfigLoader(new SettingsReader(), new SettingsBinder()),
                 new RecordingPublisher());

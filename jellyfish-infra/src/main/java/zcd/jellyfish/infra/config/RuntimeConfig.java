@@ -4,9 +4,14 @@ import org.apache.commons.lang3.StringUtils;
 import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.event.EventPublisher;
 import zcd.jellyfish.api.event.notification.ConfigWarningEvent;
+import zcd.jellyfish.infra.support.HomePaths;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -28,6 +33,10 @@ import java.util.function.Function;
  *     <li>同名 provider 以项目级<b>整对象</b>替换全局级，避免同一 provider 的字段散落在两份文件中；</li>
  *     <li>默认 provider / model 以项目级非空值覆盖全局级，项目级未配置时回退全局级。</li>
  * </ul>
+ * 此外它还承载一份<b>不来自任一配置文件片段</b>的派生值：插件扫描根目录。它写在
+ * {@code classpath:config.json}（{@link AppConfig} 的 {@link PluginPaths} 段）而不是
+ * {@code jellyfish.json}，因为「去哪找插件 jar」与「去哪个文件读配置」属于同一类部署事实。
+ * <p>
  * 配置内容在 {@link #refresh()} 时整体重建，并通过单个 {@code volatile} 字段一次性发布
  * {@link RuntimeSnapshot}，因此读取方看到的所有值必然来自同一份快照，不存在「新 provider + 旧默认值」的中间态。
  * <p>
@@ -84,7 +93,8 @@ public class RuntimeConfig {
         notifyIfInvalid(mergedModel);
         notifyIfInvalid(mergedAgents);
         notifyIfInvalid(mergedJellyfish);
-        this.snapshot = RuntimeSnapshot.of(mergedModel, mergedAgents, mergedJellyfish);
+        this.snapshot = RuntimeSnapshot.of(mergedModel, mergedAgents, mergedJellyfish,
+                pluginRootsOf(appConfig.getPlugins()));
     }
 
     /**
@@ -192,6 +202,19 @@ public class RuntimeConfig {
      */
     public PluginsSettings getPluginsSettings() {
         return snapshot.getJellyfishSettings().getPlugins();
+    }
+
+    /**
+     * 获取插件扫描根目录。
+     * <p>
+     * 来源是 {@code config.json} 的 {@code plugins.roots}，不经双源合并；条目行首的 {@code ~}
+     * 在这里展开为用户主目录（与 {@code models.json} / {@code agents.json} 的路径同一套规则）。
+     * 空白条目在此处丢弃。
+     *
+     * @return 不可变目录列表；未配置或全为空白时为空列表，由 {@code PluginRuntimeConfig} 回退默认目录
+     */
+    public List<Path> getPluginRoots() {
+        return snapshot.getPluginRoots();
     }
 
     /**
@@ -353,10 +376,31 @@ public class RuntimeConfig {
         // 同名插件配置段整对象替换：`readOnlyTools` 这类声明必须整段生效或整段不生效，不能半新半旧
         putPluginConfigurations(configurations, project);
         return new PluginsSettings(
-                listOverride(project, global, PluginsSettings::getRoots),
                 listOverride(project, global, PluginsSettings::getEnabled),
                 listOverride(project, global, PluginsSettings::getDisabled),
                 configurations);
+    }
+
+    /**
+     * 把 {@code config.json} 的插件扫描目录转成路径列表，展开 {@code ~} 并丢弃空白条目。
+     * <p>
+     * 与双源配置段不同，这里不做合并：{@code plugins.roots} 只写在 {@code config.json} 一处，
+     * 天然只有一份真相。
+     *
+     * @param plugins 插件扫描段，可为 {@code null}（视为未配置）
+     * @return 不可变路径列表；未配置或全为空白时为空列表
+     */
+    private static List<Path> pluginRootsOf(PluginPaths plugins) {
+        if (plugins == null || plugins.getRoots().isEmpty()) {
+            return Collections.emptyList();
+        }
+        List<Path> roots = new ArrayList<>(plugins.getRoots().size());
+        for (String root : plugins.getRoots()) {
+            if (root != null && !root.trim().isEmpty()) {
+                roots.add(Paths.get(HomePaths.expand(root.trim())));
+            }
+        }
+        return roots.isEmpty() ? Collections.<Path>emptyList() : Collections.unmodifiableList(roots);
     }
 
     /**
@@ -404,8 +448,7 @@ public class RuntimeConfig {
      * @param global   全局级插件段，可为 {@code null}
      * @param accessor 取值函数
      * @return 项目级非空列表，否则全局级列表
-     */
-    private static List<String> listOverride(PluginsSettings project, PluginsSettings global,
+     */    private static List<String> listOverride(PluginsSettings project, PluginsSettings global,
                                              Function<PluginsSettings, List<String>> accessor) {
         List<String> projectValue = project == null ? null : accessor.apply(project);
         if (projectValue != null && !projectValue.isEmpty()) {

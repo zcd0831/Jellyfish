@@ -9,6 +9,7 @@ import zcd.jellyfish.api.plugin.PluginDeclaration;
 import zcd.jellyfish.infra.config.AppConfig;
 import zcd.jellyfish.infra.config.ConfigLoader;
 import zcd.jellyfish.infra.config.ConfigPaths;
+import zcd.jellyfish.infra.config.PluginPaths;
 import zcd.jellyfish.infra.config.RuntimeConfig;
 import zcd.jellyfish.infra.config.SettingsBinder;
 import zcd.jellyfish.infra.config.SettingsReader;
@@ -47,16 +48,17 @@ class PluginModuleTest {
     Path tempDir;
 
     @Test
-    void providePluginRuntimeConfig_should_apply_plugins_section_from_config() throws IOException {
-        // Given
+    void providePluginRuntimeConfig_should_apply_roots_and_plugins_section_from_config() throws IOException {
+        // Given：扫描目录在 config.json，名单与插件配置段在 jellyfish.json
         Path jellyfish = tempDir.resolve("jellyfish.json");
-        Files.write(jellyfish, ("{\"plugins\":{\"roots\":[\"custom-plugins\"],\"enabled\":[\"plugin-a\"],"
+        Files.write(jellyfish, ("{\"plugins\":{\"enabled\":[\"plugin-a\"],"
                 + "\"disabled\":[\"plugin-b\"],"
                 + "\"configurations\":{\"plugin-a\":{\"readOnlyTools\":[\"read_file\"]}}}}")
                 .getBytes(StandardCharsets.UTF_8));
 
         // When
-        PluginRuntimeConfig config = PluginModule.providePluginRuntimeConfig(runtimeConfigOf(pathsTo(jellyfish)));
+        PluginRuntimeConfig config = PluginModule.providePluginRuntimeConfig(
+                runtimeConfigOf(pathsTo(jellyfish), new PluginPaths(Collections.singletonList("custom-plugins"))));
 
         // Then
         assertEquals(Collections.singletonList(Paths.get("custom-plugins")), config.getPluginsRoots());
@@ -67,9 +69,25 @@ class PluginModuleTest {
     }
 
     @Test
+    void providePluginRuntimeConfig_should_expand_tilde_in_roots() throws IOException {
+        // Given
+        Path jellyfish = tempDir.resolve("jellyfish.json");
+        Files.write(jellyfish, "{}".getBytes(StandardCharsets.UTF_8));
+
+        // When
+        PluginRuntimeConfig config = PluginModule.providePluginRuntimeConfig(
+                runtimeConfigOf(pathsTo(jellyfish), new PluginPaths(Collections.singletonList("~/extra"))));
+
+        // Then
+        assertEquals(Collections.singletonList(Paths.get(System.getProperty("user.home"), "extra")),
+                config.getPluginsRoots());
+    }
+
+    @Test
     void providePluginRuntimeConfig_should_scan_default_plugins_root_when_config_empty() {
         // When
-        PluginRuntimeConfig config = PluginModule.providePluginRuntimeConfig(runtimeConfigOf(new ConfigPaths()));
+        PluginRuntimeConfig config = PluginModule.providePluginRuntimeConfig(
+                runtimeConfigOf(new ConfigPaths(), new PluginPaths(null)));
 
         // Then
         assertEquals(1, config.getPluginsRoots().size());
@@ -110,7 +128,8 @@ class PluginModuleTest {
 
         // When
         PF4JPluginManager manager = PluginModule.providePluginManager(factory,
-                PluginModule.providePluginRuntimeConfig(runtimeConfigOf(new ConfigPaths())));
+                PluginModule.providePluginRuntimeConfig(
+                        runtimeConfigOf(new ConfigPaths(), new PluginPaths(null))));
 
         // Then：未 bootstrap 时不触发任何插件扫描
         assertNotNull(manager);
@@ -124,13 +143,14 @@ class PluginModuleTest {
     }
 
     /**
-     * 构造已加载一次配置的 {@link RuntimeConfig}（只配置插件段路径）。
+     * 构造已加载一次配置的 {@link RuntimeConfig}（只配置插件段路径与扫描目录）。
      *
      * @param jellyfishPaths 运行期设置段的双源路径
+     * @param plugins        插件扫描目录，可为 {@code null}
      * @return 运行时配置门面
      */
-    private static RuntimeConfig runtimeConfigOf(ConfigPaths jellyfishPaths) {
-        AppConfig appConfig = new AppConfig(null, new ConfigPaths(), new ConfigPaths(), jellyfishPaths);
+    private static RuntimeConfig runtimeConfigOf(ConfigPaths jellyfishPaths, PluginPaths plugins) {
+        AppConfig appConfig = new AppConfig(null, new ConfigPaths(), new ConfigPaths(), jellyfishPaths, plugins);
         RuntimeConfig runtimeConfig = new RuntimeConfig(appConfig,
                 new ConfigLoader(new SettingsReader(), new SettingsBinder()), event -> {
                 });

@@ -2,8 +2,6 @@ package zcd.jellyfish.tui;
 
 import zcd.jellyfish.core.ReActTurn;
 import zcd.jellyfish.infra.session.SessionMessage;
-import zcd.jellyfish.tui.text.LineWrapper;
-import zcd.jellyfish.tui.text.StyledSegment;
 import zcd.jellyfish.tui.text.VisualLine;
 
 import java.util.ArrayList;
@@ -67,37 +65,58 @@ public final class ChatState {
     /** 最近一次投影时的提示版本号。 */
     private int lastNoticeVersion = -1;
 
+    /** 最近一次投影使用的启动提示，用于缓存判据。 */
+    private String lastStartupHint;
+
     /** 最近一次投影的结果，作为「什么都没变」时的复用对象。 */
     private List<VisualLine> projected = Collections.emptyList();
 
-    /** 外壳提示缓冲（命令结果等），附在会话投影之后。 */
-    private final List<Notice> notices = new ArrayList<Notice>();
+    /** 外壳提示缓冲（命令结果等），参与投影时按时间戳与会话消息归并。 */
+    private final List<ShellNotice> notices = new ArrayList<ShellNotice>();
 
     /** 提示缓冲版本号，参与投影缓存判据。 */
     private int noticeVersion;
+
+    /**
+     * 启动提示正文，{@code null} 表示不显示。
+     * <p>
+     * 它不进会话历史（否则会污染发给模型的历史），也不属于命令输出，
+     * 因此由外壳单独特有；投影器把它渲染成助手消息的样子（见 {@link TranscriptProjector}）。
+     */
+    private String startupHint;
 
     /** 提示条数上限：它是附属于界面的反馈，不应无界增长。 */
     static final int MAX_NOTICES = 50;
 
     /**
-     * 追加一条外壳提示（命令结果 / 状态反馈）。
+     * 追加一条带命令原文的外壳提示（命令结果）。
      * <p>
-     * 只由渲染线程调用。提示附在会话投影之后而不是中间：命令输出与对话历史在时间上确实交错，
-     * 但会话里根本没有这些条目，强行按时间穿插需要一个我们无法维护的一致时标。
-     * 位置上的这点妥协换的是「不把界面状态写成会话的副本」。
+     * 只由渲染线程调用。提示不进会话（见 {@link ShellNotice}），但带自己的时间戳参与投影：
+     * 它因此出现在实际发生的时刻上，而不是永远贴在屏幕底部。
      *
-     * @param text  提示文本，{@code null} 或空白忽略
-     * @param error 是否为错误
+     * @param command 触发本提示的命令原文，可为 {@code null} 或空白（不回显命令）
+     * @param text    提示文本，{@code null} 或空白忽略
+     * @param kind    提示语义，不可为 {@code null}
      */
-    public void appendNotice(String text, boolean error) {
+    public void appendNotice(String command, String text, ShellNotice.Kind kind) {
         if (text == null || text.trim().isEmpty()) {
             return;
         }
         if (notices.size() >= MAX_NOTICES) {
             notices.remove(0);
         }
-        notices.add(new Notice(text, error));
+        notices.add(new ShellNotice(System.currentTimeMillis(), command, text, kind));
         noticeVersion++;
+    }
+
+    /**
+     * 追加一条无命令可回显的外壳提示（状态反馈）。
+     *
+     * @param text 提示文本，{@code null} 或空白忽略
+     * @param kind 提示语义，不可为 {@code null}
+     */
+    public void appendNotice(String text, ShellNotice.Kind kind) {
+        appendNotice(null, text, kind);
     }
 
     /**
@@ -109,6 +128,17 @@ public final class ChatState {
         }
         notices.clear();
         noticeVersion++;
+    }
+
+    /**
+     * 设置启动提示。
+     * <p>
+     * 与外壳提示缓冲一样只由渲染线程调用。传 {@code null} 或空白即清掉。
+     *
+     * @param text 启动提示正文，可为 {@code null}
+     */
+    public void setStartupHint(String text) {
+        this.startupHint = text == null || text.trim().isEmpty() ? null : text;
     }
 
     /**
@@ -295,6 +325,7 @@ public final class ChatState {
                 && lastMaxMessages == maxMessages
                 && lastMessageCount == source.size()
                 && lastNoticeVersion == noticeVersion
+                && Objects.equals(lastStartupHint, startupHint)
                 && Objects.equals(lastMessageId, lastId)
                 && Objects.equals(lastSessionId, sessionId)
                 && !inflight.isDirty();
@@ -306,46 +337,15 @@ public final class ChatState {
         // 而流式结束时通常不再有下一次追加，屏幕上会永久少了最后一截。
         inflight.clearDirty();
         InflightTurn.Snapshot snapshot = inflight.snapshot();
-        projected = TranscriptProjector.project(source, snapshot, width, maxMessages);
-        if (!notices.isEmpty()) {
-            List<VisualLine> withNotices = new ArrayList<VisualLine>(projected);
-            for (Notice notice : notices) {
-                withNotices.addAll(TranscriptProjector.notice(notice.text, notice.error, width));
-            }
-            projected = withNotices;
-        }
+        projected = TranscriptProjector.project(source, notices, startupHint, snapshot, width, maxMessages);
         lastWidth = width;
         lastMaxMessages = maxMessages;
         lastMessageCount = source.size();
         lastMessageId = lastId;
         lastSessionId = sessionId;
         lastNoticeVersion = noticeVersion;
+        lastStartupHint = startupHint;
         totalRows = projected.size();
-    }
-
-    /**
-     * 一条外壳提示。
-     *
-     * @author zcd
-     */
-    private static final class Notice {
-
-        /** 提示文本。 */
-        private final String text;
-
-        /** 是否为错误。 */
-        private final boolean error;
-
-        /**
-         * 构造提示。
-         *
-         * @param text  提示文本
-         * @param error 是否为错误
-         */
-        Notice(String text, boolean error) {
-            this.text = text;
-            this.error = error;
-        }
     }
 
     /**

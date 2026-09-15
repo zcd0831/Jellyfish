@@ -8,21 +8,30 @@ import dev.tamboui.toolkit.event.GlobalEventHandler;
 import dev.tamboui.toolkit.event.KeyEventHandler;
 import dev.tamboui.tui.TuiConfig;
 import dev.tamboui.tui.event.Event;
-import dev.tamboui.tui.event.KeyCode;
 import dev.tamboui.tui.event.KeyEvent;
+import dev.tamboui.tui.event.MouseEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import zcd.jellyfish.api.JellyfishException;
+import zcd.jellyfish.api.extension.CommandChoice;
+import zcd.jellyfish.api.extension.CommandDescriptor;
 import zcd.jellyfish.api.extension.CommandResult;
 import zcd.jellyfish.core.AgentHarness;
 import zcd.jellyfish.core.ReActTurn;
+import zcd.jellyfish.infra.command.CommandInfo;
 import zcd.jellyfish.infra.command.CommandManager;
 import zcd.jellyfish.infra.model.ModelManager;
 import zcd.jellyfish.infra.model.ResolvedModel;
 import zcd.jellyfish.infra.session.Session;
 import zcd.jellyfish.infra.session.SessionManager;
+import zcd.jellyfish.infra.session.SessionMessage;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 
 /**
  * TUI 外壳：交互式终端界面的组装与事件循环。
@@ -69,6 +78,24 @@ public final class TuiApp extends ToolkitApp {
     /** 视图状态。 */
     private final ChatState chatState = new ChatState();
 
+    /** 命令补全状态：只由渲染线程读写。 */
+    private final CommandCompletion completion = new CommandCompletion();
+
+    /** 二级选择页状态：只由渲染线程读写。 */
+    private final CommandChoicePicker picker = new CommandChoicePicker();
+
+    /** 外壳自有命令在补全清单里的条目：命令名不含前缀，与命令域清单同构。 */
+    private static final CommandInfo EXIT_INFO = new CommandInfo(ShellCommand.EXIT_NAME,
+            new CommandDescriptor("退出 jellyfish", null, null));
+
+    /**
+     * 鼠标捕获的逃生门系统属性。
+     * <p>
+     * 置为 {@code false} 时退回「不捕获鼠标」的旧行为：滚轮不再能滚消息区，
+     * 但终端本地的鼠标选中/复制不再被打断（见 {@link #configure()}）。
+     */
+    static final String MOUSE_CAPTURE_PROPERTY = "jellyfish.tui.mouseCapture";
+
     /** 输入区视图。 */
     private final ChatInputView input;
 
@@ -78,7 +105,7 @@ public final class TuiApp extends ToolkitApp {
     /** 输入框的按键截胡处理器：输入元素是聚焦元素，按键必经它，因此发送与中断都挂在这里。 */
     private final InputKeys inputKeys = new InputKeys();
 
-    /** 上一帧显示的会话标识，用于识别会话切换并清掉属于旧会话的提示。 */
+    /** 上一帧显示的会话标识，用于识别会话切换：清掉旧会话的提示并按需重新贴出启动提示。 */
     private String renderedSessionId;
 
     /**
@@ -99,24 +126,45 @@ public final class TuiApp extends ToolkitApp {
     }
 
     /**
-     * 调整终端能力开关。
+     * 调整终端能力开关：括号粘贴与鼠标捕获都开，鼠标移动仍关。
      * <p>
-     * <b>只开括号粘贴，刻意不开鼠标捕获</b>（实测结论）：
-     * <ul>
-     *     <li>{@code bracketedPaste} 默认 {@code false}，此时终端不把粘贴内容包起来，
-     *     而 {@code \r} 与 {@code \n} 都被解码成裸 {@code ENTER}——粘贴一段多行文本
-     *     会把每个换行变成一次操作，等于把一次粘贴拆成多条消息。开启后
-     *     {@code PasteEvent} 一次送达完整文本，换行不再被当按键；</li>
-     *     <li>{@code mouseCapture} / {@code mouseMotion} 保持关闭：开启后终端的鼠标选择会被应用截走，
-     *     用户复制屏幕上文本必须按住修饰键（macOS 为 Option）。<b>滚轮滚动是刻意的功能缺口</b>，
-     *     代价是换来的选择自由太大。消息区滚动只靠 {@code PageUp} / {@code PageDown} / {@code End}。</li>
-     * </ul>
+     * <b>括号粘贴必须开</b>：{@code bracketedPaste} 默认 {@code false}，此时终端不把粘贴内容包起来，
+     * 而 {@code \r} 与 {@code \n} 都被解码成裸 {@code ENTER}——粘贴一段多行文本
+     * 会把每个换行变成一次操作，等于把一次粘贴拆成多条消息。开启后
+     * {@code PasteEvent} 一次送达完整文本，换行不再被当按键。
+     * <p>
+     * <b>鼠标捕获为什么开</b>：滚轮事件属于鼠标捕获，关着就<b>根本到不了应用</b>
+     * （未捕获时不少终端会把备用屏下的滚轮翻译成 {@code ↑}/{@code ↓}，而这两个键归补全导航，
+     * 面板没弹时落回输入框，在单行输入上表现为「滚轮毫无反应」）。开启后滚轮由
+     * {@link MouseScrollMapper} 认领，点击 / 拖动等其它鼠标事件原样放行。
+     * <p>
+     * <b>代价与逃生门</b>：捕获开启后终端把鼠标交给应用，屏幕文本的本地选中/复制必须按住修饰键
+     * （macOS 为 Option）。不能接受这个代价时用 {@code -D}{@link #MOUSE_CAPTURE_PROPERTY}{@code =false}
+     * 退回旧行为，消息区滚动仍可用 {@code PageUp} / {@code PageDown} / {@code End}。
+     * <p>
+     * <b>为什么 {@code mouseMotion} 仍为 {@code false}</b>：本轮没有任何「悬停 / 拖动」语义，
+     * 开启只会让终端把每一次指针移动都发过来；滚轮与按键事件不依赖它。
      *
      * @return 终端配置
      */
     @Override
     protected TuiConfig configure() {
-        return TuiConfig.builder().bracketedPaste(true).build();
+        return TuiConfig.builder()
+                .bracketedPaste(true)
+                .mouseCapture(mouseCaptureEnabled())
+                .build();
+    }
+
+    /**
+     * 判断本进程是否开启鼠标捕获。
+     * <p>
+     * 只有显式置为 {@code false} 才关闭：读取失败（未设置）时保持开启，
+     * 因为滚轮滚动是默认行为，逃生门是例外而非常态。
+     *
+     * @return 开启返回 {@code true}
+     */
+    static boolean mouseCaptureEnabled() {
+        return !"false".equalsIgnoreCase(System.getProperty(MOUSE_CAPTURE_PROPERTY));
     }
 
     @Override
@@ -131,13 +179,18 @@ public final class TuiApp extends ToolkitApp {
         Session session = sessions.current();
         Size size = runner().tuiRunner().terminal().size();
         int width = ChatShell.messageAreaWidth(size.width());
-        int rows = ChatShell.messageAreaRows(size.height(), input.panelRows());
+
+        // 补全每帧现算：命令清单不缓存（插件热部署后立刻可见），输入文本随按键而变
+        completion.refresh(input.text(), availableCommands());
+        Overlay overlay = buildOverlay(width);
+        int rows = ChatShell.messageAreaRows(size.height(), input.panelRows(), ChatShell.overlayRows(overlay));
 
         String sessionId = session == null ? null : session.getSessionId();
-        syncSession(sessionId);
+        // 每帧只取一次消息快照：Session.getMessages() 返回防御性副本，重复调用会白白多分配一份
+        List<SessionMessage> messages = session == null ? null : session.getMessages();
+        syncSession(sessionId, messages);
 
-        ChatState.View view = chatState.view(sessionId,
-                session == null ? null : session.getMessages(), width, rows,
+        ChatState.View view = chatState.view(sessionId, messages, width, rows,
                 TranscriptProjector.DEFAULT_MAX_MESSAGES);
 
         String status = StatusBarView.render(session, null, contextLengthOf(session));
@@ -147,22 +200,91 @@ public final class TuiApp extends ToolkitApp {
             // 额外加一行会把最新的一行挤出可视区——而「跟随底部」时用户最想看的正是那一行
             status = status + "   " + hint;
         }
-        return shell.render(view, title(session), status);
+        return shell.render(view, title(session), status, overlay);
     }
 
     /**
-     * 识别会话切换并清掉属于旧会话的外壳提示。
+     * 生成本帧的浮层面板。
+     * <p>
+     * 二级选择页优先于补全面板：选择页是「命令已经发出、正在挑参数」的模态交互，
+     * 而补全面板是「还没发出」的输入辅助，两者不应同屏。
+     *
+     * @param width 面板可用列数
+     * @return 浮层；两者都没内容时返回空浮层
+     */
+    private Overlay buildOverlay(int width) {
+        if (picker.isActive()) {
+            return new Overlay(" " + picker.getBaseCommand() + " ",
+                    CommandChoicePickerView.render(picker, width));
+        }
+        return ChatShell.completionOverlay(CommandCompletionView.render(completion, width));
+    }
+
+    /**
+     * 取全部可用命令，供补全过滤。
+     * <p>
+     * 在外壳自有命令之外追加一条 {@code /exit}：它不进内核命令注册表（见 {@link ShellCommand}），
+     * 但用户敲补全时应该看得到它。追加后重排序，保持清单整体按命令名升序。
+     *
+     * @return 命令清单；读取失败时返回空列表（补全不可用不应影响输入）
+     */
+    private List<CommandInfo> availableCommands() {
+        try {
+            List<CommandInfo> infos = new ArrayList<CommandInfo>(commands.commands());
+            infos.add(EXIT_INFO);
+            infos.sort(Comparator.comparing(CommandInfo::getName));
+            return infos;
+        } catch (RuntimeException e) {
+            LOG.warn("读取命令清单失败，补全本次不可用：{}", e.getMessage());
+            return Collections.emptyList();
+        }
+    }
+
+    /**
+     * 查询一条命令的只读候选（不执行命令）。
+     *
+     * @param commandName 命令名
+     * @return 候选清单；查询失败或无候选时为空列表
+     */
+    private List<CommandChoice> optionsOf(String commandName) {
+        try {
+            return commands.options(commandName, currentSessionId());
+        } catch (RuntimeException e) {
+            LOG.warn("查询命令候选失败：{}", e.getMessage());
+            return Collections.emptyList();
+        }
+    }
+
+    /**
+     * 识别会话切换：清掉属于旧会话的外壳提示，并给「全新空会话」贴上启动提示。
      * <p>
      * 提示是「外壳刚刚说过的话」，属于上一次交互的上下文；换了会话还留着，会让用户以为那是新会话的一部分。
      * 消息区本身由投影自动跟随，不需要在这里做任何事——这正是「视图 = 会话投影」的好处。
+     * <p>
+     * <b>启动提示只在全新空会话贴出</b>：{@code /resume} 打开的是已有历史，用户想看的是对话本身，
+     * 底部再压一条用法说明反而碍事；只有「什么都不存在」的页面才需要它来告知怎么用。
+     * 它是外壳持有的独立状态（不是外壳提示），投影时渲染成助手消息的样子；
+     * 每次会话切换都显式置一次，反复渲染同一会话只判一次，不会重复追加。
      *
      * @param sessionId 当前会话标识，可为 {@code null}
+     * @param messages  当前会话消息快照，可为 {@code null}
      */
-    private void syncSession(String sessionId) {
+    private void syncSession(String sessionId, List<SessionMessage> messages) {
         if (!Objects.equals(renderedSessionId, sessionId)) {
             chatState.clearNotices();
+            chatState.setStartupHint(isBrandNewSession(messages) ? StartupHint.text() : null);
             renderedSessionId = sessionId;
         }
+    }
+
+    /**
+     * 判断当前页面是否为「全新空会话」。
+     *
+     * @param messages 当前会话消息快照，可为 {@code null}
+     * @return 没有历史消息返回 {@code true}
+     */
+    static boolean isBrandNewSession(List<SessionMessage> messages) {
+        return messages != null && messages.isEmpty();
     }
 
     /**
@@ -173,7 +295,7 @@ public final class TuiApp extends ToolkitApp {
             return;
         }
         if (chatState.isTurnRunning()) {
-            chatState.appendNotice("回合进行中：按 Esc 可中断。", false);
+            chatState.appendNotice("回合进行中：按 Esc 可中断。", ShellNotice.Kind.INFO);
             return;
         }
         String text = input.takeText();
@@ -191,7 +313,7 @@ public final class TuiApp extends ToolkitApp {
     }
 
     /**
-     * 执行一条命令，并把结果作为外壳提示贴上屏幕。
+     * 执行一条命令：带候选时打开二级选择页，否则把结果作为外壳提示贴上屏幕。
      *
      * @param text      命令原文
      * @param sessionId 当前会话标识
@@ -199,10 +321,58 @@ public final class TuiApp extends ToolkitApp {
     private void executeCommand(String text, String sessionId) {
         try {
             CommandResult result = commands.execute(text, sessionId);
-            chatState.appendNotice(result.getOutput(), result.getKind() == CommandResult.Kind.ERROR);
+            if (result.hasChoices()) {
+                // 命令要求挑一个取值：打开二级选择页，不再把列表文本重复贴到屏幕上
+                picker.open(text.trim(), result.getChoices());
+                return;
+            }
+            chatState.appendNotice(text, result.getOutput(), kindOf(result.getKind()));
         } catch (JellyfishException e) {
             LOG.warn("TUI 命令执行失败：{}", e.getMessage());
-            chatState.appendNotice("命令执行失败：" + e.getMessage(), true);
+            chatState.appendNotice(text, "命令执行失败：" + e.getMessage(), ShellNotice.Kind.ERROR);
+        }
+    }
+
+    /**
+     * 确认二级选择页的选中项：拼出「命令原文 + 取值」并执行。
+     * <p>
+     * 用原文而不是规范命令名拼接：别名同样能被命令域解析（{@code /a coder}），
+     * 因此不需要在这里做一次名字解析。
+     */
+    private void confirmChoice() {
+        CommandChoice choice = picker.selected();
+        String baseCommand = picker.getBaseCommand();
+        picker.dismiss();
+        if (choice == null) {
+            return;
+        }
+        String text = baseCommand + " " + choice.getValue();
+        try {
+            executeCommand(text, currentSessionId());
+        } catch (JellyfishException e) {
+            LOG.warn("二级选择页执行失败：{}", e.getMessage());
+            chatState.appendNotice(text, "命令执行失败：" + e.getMessage(), ShellNotice.Kind.ERROR);
+        }
+    }
+
+    /**
+     * 把命令结果状态映射成外壳提示语义。
+     * <p>
+     * 三态分开是为了「看得懂哪里出了错」：{@code UNKNOWN}（没有这条命令）不是失败，
+     * 它只需要提醒用户看 {@code /help}，因此用警示色而不是错误色；
+     * 若把它归到 {@code INFO}，敲错命令时的提示会和正常输出长得一模一样。
+     *
+     * @param kind 命令结果状态，不可为 {@code null}
+     * @return 提示语义
+     */
+    private static ShellNotice.Kind kindOf(CommandResult.Kind kind) {
+        switch (kind) {
+            case ERROR:
+                return ShellNotice.Kind.ERROR;
+            case UNKNOWN:
+                return ShellNotice.Kind.WARN;
+            default:
+                return ShellNotice.Kind.INFO;
         }
     }
 
@@ -282,69 +452,221 @@ public final class TuiApp extends ToolkitApp {
      * 全局处理器只能看到没人要的键（例如 {@code ESCAPE}）。因此发送与中断必须挂在
      * {@link ChatInputView} 上，它在输入框<b>之前</b>拿到按键。
      * <p>
-     * <b>Enter 为什么不在拦截名单里</b>：T5 采用<b>反转键位</b>——{@code Enter} 换行、
+     * <b>Enter 的双重含义</b>：T5 采用<b>反转键位</b>——面板没弹时 {@code Enter} 换行、
      * {@code Ctrl+S} 发送。原因是框架的键盘解码器不解析任何修饰键编码（见
      * {@link InputKeyMapper} 类注释），{@code Shift+Enter} / {@code Alt+Enter} 一律落成
      * {@code UNKNOWN}，所以「{@code Enter} 发送 + 修饰键换行」在<b>所有</b>终端上都不可实现。
-     * 反转之后 {@code Enter} 结果落到 {@link InputAction#EDIT}，交给输入框当换行。
+     * 而补全面板可见时，外壳把这一个键截下来当「选中」；面板没弹时原样放行，
+     * 由输入框当换行——两种含义靠「面板是否可见」区分，不需要修饰键。
      * <p>
      * 滚动键也放这里而不是全局处理器：{@code PageUp} 可能被输入框内部滚动消费掉，
      * 放在截胡位置才能保证「消息区滚动」优先于「输入框内部滚动」。焦点常驻输入框（T8.6），
      * 消息区不是可聚焦元素，所以这是它唯一的入口。
+     * <p>
+     * <b>滚轮不在这里</b>：鼠标事件根本不进元素路由的键盘路径，而是先到
+     * {@link ScrollFallback}（{@code EventRouter} 对 {@code MouseEvent} 就是先跑全局处理器）。
+     * 两条路径最终都进 {@link TuiApp#applyScroll}，因此滚动语义只有一份。
      */
     private final class InputKeys implements KeyEventHandler {
 
         @Override
         public EventResult handle(KeyEvent key) {
-            switch (InputKeyMapper.map(key)) {
+            InputAction action = InputKeyMapper.map(key);
+            if (picker.isActive()) {
+                return handlePicker(action);
+            }
+            if (action == InputAction.COMPLETE_PREV
+                    || action == InputAction.COMPLETE_NEXT
+                    || action == InputAction.COMPLETE_ACCEPT) {
+                return handleCompletion(action);
+            }
+            if (applyScroll(action)) {
+                return EventResult.HANDLED;
+            }
+            switch (action) {
                 case SEND:
                     submit();
                     return EventResult.HANDLED;
                 case CANCEL:
+                    // 先收起补全面板再谈中断：无进行中回合时 cancelTurn 是空操作，两者可以共存
+                    completion.dismiss();
                     chatState.cancelTurn();
                     return EventResult.HANDLED;
                 case QUIT:
                     quit();
-                    return EventResult.HANDLED;
-                case PAGE_UP:
-                    chatState.pageUp();
-                    return EventResult.HANDLED;
-                case PAGE_DOWN:
-                    chatState.pageDown();
-                    return EventResult.HANDLED;
-                case TO_BOTTOM:
-                    chatState.toBottom();
                     return EventResult.HANDLED;
                 default:
                     // EDIT：交给输入框，不在这里处理键位细节
                     return EventResult.UNHANDLED;
             }
         }
+
+        /**
+         * 处理补全导航与接受。
+         * <p>
+         * <b>面板没弹时一律返回 {@code UNHANDLED}</b>：{@code ↑}/{@code ↓} 要落回输入框做光标移动，
+         * 否则输入框里就再也无法上下移动光标了。
+         *
+         * @param action 补全动作
+         * @return 处理结果
+         */
+        private EventResult handleCompletion(InputAction action) {
+            completion.refresh(input.text(), availableCommands());
+            // 无候选时一并不接管这三个键：否则光标会被「无匹配命令」的占位行锁住动不了
+            if (!completion.isActive() || completion.getCandidates().isEmpty()) {
+                return EventResult.UNHANDLED;
+            }
+            switch (action) {
+                case COMPLETE_PREV:
+                    completion.moveUp();
+                    return EventResult.HANDLED;
+                case COMPLETE_NEXT:
+                    completion.moveDown();
+                    return EventResult.HANDLED;
+                case COMPLETE_ACCEPT:
+                    return acceptCandidate();
+                default:
+                    return EventResult.UNHANDLED;
+            }
+        }
+
+        /**
+         * 确认补全面板的选中项。
+         * <p>
+         * <b>有候选 → 直接进二级选择页</b>（只读查询，不执行命令，因此不会误触发 {@code /new} 这类副作用）；
+         * <b>无候选 → 保持原行为回填命令名</b>，用户接着敲参数或发送。
+         *
+         * @return 处理结果
+         */
+        private EventResult acceptCandidate() {
+            CommandInfo candidate = completion.selected();
+            if (candidate == null) {
+                return EventResult.UNHANDLED;
+            }
+            List<CommandChoice> options = optionsOf(candidate.getName());
+            if (!options.isEmpty()) {
+                // 清掉已敲的命令词：选择页确认后会按「命令名 + 取值」重新执行，半截输入留着只会造成误解
+                input.takeText();
+                completion.dismiss();
+                picker.open(CommandCompletion.PREFIX + candidate.getName(), options);
+                return EventResult.HANDLED;
+            }
+            String accepted = completion.accept();
+            if (accepted != null) {
+                input.replaceText(accepted);
+                // 接受后收起并记住新命令词：否则候选只剩刚选中的那一条，看起来像没生效
+                completion.refresh(accepted, availableCommands());
+                completion.dismiss();
+            }
+            return EventResult.HANDLED;
+        }
+
+        /**
+         * 处理二级选择页的按键。
+         * <p>
+         * <b>选择页是模态的</b>（保持页面直到 {@code Esc}）：除导航、确认、取消与外壳级快捷键外，
+         * 其余按键一律吞掉，页面不因输入框内容变化而关闭。
+         *
+         * @param action 按键动作
+         * @return 处理结果
+         */
+        private EventResult handlePicker(InputAction action) {
+            if (applyScroll(action)) {
+                return EventResult.HANDLED;
+            }
+            switch (action) {
+                case COMPLETE_PREV:
+                    picker.moveUp();
+                    return EventResult.HANDLED;
+                case COMPLETE_NEXT:
+                    picker.moveDown();
+                    return EventResult.HANDLED;
+                case COMPLETE_ACCEPT:
+                    confirmChoice();
+                    return EventResult.HANDLED;
+                case CANCEL:
+                    picker.dismiss();
+                    return EventResult.HANDLED;
+                case QUIT:
+                    quit();
+                    return EventResult.HANDLED;
+                default:
+                    // 其余键吞掉：选择页保持到 Esc，输入框不会在模态页面背后被改动
+                    return EventResult.HANDLED;
+            }
+        }
     }
 
     /**
-     * 滚动键的兼底处理：只处理没人要的滚动键，不碰发送与中断。
+     * 滚动键与滚轮的兼底处理：只处理滚动事件，不碰发送与中断。
+     * <p>
+     * <b>鼠标事件必须先于元素路由到达这里</b>：实测 {@code EventRouter.route} 对 {@code MouseEvent}
+     * 是先跑全局处理器、再从坐标找元素，因此滚轮不必挂在某个元素上（消息区本来也不是可聚焦元素）。
+     * <p>
+     * <b>非滚轮的鼠标事件为什么要吞掉而不是放行</b>：放行会落到框架的鼠标路由里，而它对「点在没有元素命中的位置」
+     * 的处理是 {@code focusManager.clearFocus()}——点一下消息区就会丢掉输入框焦点，下一帧才被框架重新挑回。
+     * 输入框是唯一的可聚焦元素，鼠标本来也做不了别的事，因此这里一律吞掉，把「焦点常驻输入框」（T8.6）
+     * 变成确定性行为。将来若要支持点击元素，需要在这里放行非滚轮事件，并同时接受上述焦点语义。
      */
     private final class ScrollFallback implements GlobalEventHandler {
 
         @Override
         public EventResult handle(Event event) {
-            if (!(event instanceof KeyEvent)) {
-                return EventResult.UNHANDLED;
+            if (event instanceof MouseEvent) {
+                return handleMouse((MouseEvent) event);
             }
-            switch (InputKeyMapper.map((KeyEvent) event)) {
-                case PAGE_UP:
-                    chatState.pageUp();
-                    return EventResult.HANDLED;
-                case PAGE_DOWN:
-                    chatState.pageDown();
-                    return EventResult.HANDLED;
-                case TO_BOTTOM:
-                    chatState.toBottom();
-                    return EventResult.HANDLED;
-                default:
-                    return EventResult.UNHANDLED;
+            if (event instanceof KeyEvent) {
+                return applyScroll(InputKeyMapper.map((KeyEvent) event))
+                        ? EventResult.HANDLED
+                        : EventResult.UNHANDLED;
             }
+            return EventResult.UNHANDLED;
+        }
+
+        /**
+         * 处理鼠标事件：滚轮滚消息区，其余吞掉。
+         *
+         * @param event 鼠标事件
+         * @return 处理结果
+         */
+        private EventResult handleMouse(MouseEvent event) {
+            Optional<InputAction> action = MouseScrollMapper.map(event);
+            if (action.isPresent()) {
+                applyScroll(action.get());
+            }
+            return EventResult.HANDLED;
+        }
+    }
+
+    /**
+     * 应用一条滚动动作。
+     * <p>
+     * 键盘路径（{@link InputKeys} / {@link ScrollFallback}）与鼠标路径（{@link MouseScrollMapper}）
+     * 共用这里，因此「翻页 / 滚轮 / 回底」的语义只有一份：全部落在 {@link ChatState} 的滚动状态上，
+     * 跟随与回底的行为天然一致。
+     *
+     * @param action 按键或滚轮判定出的动作
+     * @return 动作归滚动管返回 {@code true}；其余动作返回 {@code false} 且无副作用
+     */
+    private boolean applyScroll(InputAction action) {
+        switch (action) {
+            case PAGE_UP:
+                chatState.pageUp();
+                return true;
+            case PAGE_DOWN:
+                chatState.pageDown();
+                return true;
+            case SCROLL_UP:
+                chatState.scrollUp(MouseScrollMapper.WHEEL_STEP_ROWS);
+                return true;
+            case SCROLL_DOWN:
+                chatState.scrollDown(MouseScrollMapper.WHEEL_STEP_ROWS);
+                return true;
+            case TO_BOTTOM:
+                chatState.toBottom();
+                return true;
+            default:
+                return false;
         }
     }
 }

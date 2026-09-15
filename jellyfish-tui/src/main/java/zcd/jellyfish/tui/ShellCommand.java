@@ -15,8 +15,11 @@ package zcd.jellyfish.tui;
  */
 public final class ShellCommand {
 
+    /** 退出命令名（不含前缀），供外壳补全清单使用。 */
+    public static final String EXIT_NAME = "exit";
+
     /** 退出命令名。 */
-    public static final String EXIT = "/exit";
+    public static final String EXIT = "/" + EXIT_NAME;
 
     /** 退出命令的别名。 */
     private static final String QUIT = "/quit";

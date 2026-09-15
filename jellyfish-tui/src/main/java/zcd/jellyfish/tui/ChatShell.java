@@ -57,6 +57,9 @@ public final class ChatShell {
     /** 输入区标题。 */
     private static final String INPUT_TITLE = " 输入 ";
 
+    /** 补全面板标题。 */
+    private static final String COMPLETION_TITLE = " 命令 ";
+
     /** 输入区视图。 */
     private final ChatInputView input;
 
@@ -82,34 +85,74 @@ public final class ChatShell {
     /**
      * 计算消息区内容行数。
      *
-     * @param terminalHeight   终端总行数
-     * @param inputPanelRows   输入面板占用行数（含边框）
+     * @param terminalHeight     终端总行数
+     * @param inputPanelRows     输入面板占用行数（含边框）
+     * @param overlayPanelRows   浮层面板占用行数（含边框），无面板时为 0
      * @return 内容行数，最小为 1
      */
-    public static int messageAreaRows(int terminalHeight, int inputPanelRows) {
-        int chrome = STATUS_ROWS + inputPanelRows + BORDER_SIZE * 2;
+    public static int messageAreaRows(int terminalHeight, int inputPanelRows, int overlayPanelRows) {
+        int chrome = STATUS_ROWS + inputPanelRows + Math.max(0, overlayPanelRows) + BORDER_SIZE * 2;
         return Math.max(1, terminalHeight - chrome);
+    }
+
+    /**
+     * 计算浮层面板占用行数。
+     * <p>
+     * 这是高度账本的一环：{@link #messageAreaRows} 必须把它的结果算进去，
+     * 否则面板出现时会把消息区内容顶掉一行。
+     *
+     * @param overlay 浮层内容，可为 {@code null}
+     * @return 面板行数；没有内容时为 0
+     */
+    public static int overlayRows(Overlay overlay) {
+        return overlay == null || overlay.isEmpty()
+                ? 0
+                : overlay.getLines().size() + BORDER_SIZE * 2;
+    }
+
+    /**
+     * 构造补全面板的浮层。
+     *
+     * @param completionLines 补全内容行，可为 {@code null} 或空
+     * @return 浮层；无内容时返回空浮层
+     */
+    public static Overlay completionOverlay(List<VisualLine> completionLines) {
+        if (completionLines == null || completionLines.isEmpty()) {
+            return Overlay.none();
+        }
+        return new Overlay(COMPLETION_TITLE, completionLines);
     }
 
     /**
      * 渲染一帧。
      *
-     * @param view       本帧消息区窗口，不可为 {@code null}
-     * @param title      消息区标题文本，可为 {@code null}
-     * @param statusLine 状态栏文本，可为 {@code null}
+     * @param view            本帧消息区窗口，不可为 {@code null}
+     * @param title           消息区标题文本，可为 {@code null}
+     * @param statusLine      状态栏文本，可为 {@code null}
+     * @param overlay         输入框上方的浮层面板，可为 {@code null} 或空（不显示）
      * @return 根元素，保证非 {@code null}
      */
-    public Element render(ChatState.View view, String title, String statusLine) {
+    public Element render(ChatState.View view, String title, String statusLine, Overlay overlay) {
         int inputPanelRows = input.panelRows();
+        int overlayRows = overlayRows(overlay);
         Element body = richText(Text.from(toLines(view.getLines(), null)));
         Element messagePanel = title == null || title.isEmpty()
                 ? panel(body).rounded()
                 : panel(title, body).rounded();
-        Element bottom = column(
-                panel(INPUT_TITLE, input).rounded(),
-                text(statusLine == null ? "" : statusLine).dim());
+        List<Element> bottomParts = new ArrayList<Element>(3);
+        if (overlayRows > 0) {
+            // 浮层面板放在输入框上方：它和输入内容强相关，贴在一起才不会看起来像消息区的尾行
+            Element overlayBody = richText(Text.from(toLines(overlay.getLines(), null)));
+            String overlayTitle = overlay.getTitle();
+            bottomParts.add(overlayTitle == null || overlayTitle.isEmpty()
+                    ? panel(overlayBody).rounded()
+                    : panel(overlayTitle, overlayBody).rounded());
+        }
+        bottomParts.add(panel(INPUT_TITLE, input).rounded());
+        bottomParts.add(text(statusLine == null ? "" : statusLine).dim());
+        Element bottom = column(bottomParts.toArray(new Element[0]));
         return dock()
-                .bottom(bottom, length(inputPanelRows + STATUS_ROWS))
+                .bottom(bottom, length(inputPanelRows + STATUS_ROWS + overlayRows))
                 .center(messagePanel);
     }
 

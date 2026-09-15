@@ -36,7 +36,7 @@ flowchart TB
                 direction LR
                 SessionMgr["SessionManager<br>会话隔离 / 消息列表 / token 统计<br>当前 agentId / 当前模型 / 权限模式<br>会话级切换"]
                 AgentMgr["AgentManager + AgentRegistry<br>Agent 定义注册表<br>按 agentId 提供系统提示词原文 / 权限策略<br>（提示词拼装归 core/prompt）"]
-                CommandMgr["CommandManager<br>命令域服务：解析 / 别名 / 分发 / 结构化清单 / 帮助<br>不注册处理器 · 不持有会话 · 无缓存<br>系统命令与插件命令同源（系统命令由 core/command 注册）"]
+                CommandMgr["CommandManager<br>命令域服务：解析 / 别名 / 分发 / 结构化清单 / 帮助 / 只读候选查询<br>不注册处理器 · 不持有会话 · 无缓存<br>系统命令与插件命令同源（系统命令由 core/command 注册）"]
                 ModelMgr["ModelManager<br>Provider/Model 注册/解析/路由<br>不持有全局当前态"]
                 LLMClient["LLMClient<br>统一 LLM 调用抽象"]
                 PermMgr["PermissionManager<br>Agent 粒度权限控制<br>核心策略 → PLAN 白名单 → 插件拦截<br>判定由调用点同步询问"]
@@ -226,7 +226,7 @@ jellyfish-infra/src/main/java/zcd/jellyfish/infra/
 ├── event/          # 异步派发策略 EventChannel：线程池 + 有界队列、无返回值、可丢弃；纯通知，带白名单与限流
 ├── session/        # 会话运行态：会话隔离、消息列表、token 统计、pending todo，以及会话内当前 agentId / 当前模型 / 权限模式（仅内存态；无配置段，持久化由插件经同步扩展点完成）
 ├── agent/          # Agent 定义注册表：AgentManager（门面，implements PermissionPolicyProvider，按 agentId 提供提示词原文与权限策略）+ AgentRegistry（定义与策略的只读索引）；提示词拼装归 core/prompt，新增事件 AgentsLoadedEvent
-├── command/        # 命令域服务 CommandManager：输入解析 / 别名解析 / 分发 / 结构化清单（CommandInfo）/ 帮助渲染，按类型查询注册表；只注入 ExtensionRegistry，对外壳（cli / tui / server）中立；系统命令与插件命令同源，系统命令由 core/command/SystemCommands 以 owner=core 注册（/compact 等仍待落地）
+├── command/        # 命令域服务 CommandManager：输入解析 / 别名解析 / 分发 / 结构化清单（CommandInfo）/ 帮助渲染 / 只读候选查询（options → CommandOptionRequest → CommandOptions，供「选中命令即弹选择页」且不执行命令），按类型查询注册表；只注入 ExtensionRegistry，对外壳（cli / tui / server）中立；系统命令与插件命令同源，系统命令由 core/command/SystemCommands 以 owner=core 注册（/compact 等仍待落地）
 ├── model/          # 模型注册与路由：维护 provider/model 索引，按名字解析模型并给出 LLM 客户端（不持有全局当前态）
 ├── llm/            # LLM 调用抽象：统一的同步/流式调用接口与各厂商实现
 ├── plugin/         # 插件运行时：Java 插件加载、热部署、描述符体检与上下文供给，按统一 SPI 看待桥接插件，不感知底层脚本进程；装配输入 PluginRuntimeConfig 由 jellyfish.json 的 plugins 段驱动，且是「引用稳定、快照可换」的发布点
@@ -260,14 +260,21 @@ jellyfish-cli/src/main/java/zcd/jellyfish/cli/
 jellyfish-tui/src/main/java/zcd/jellyfish/tui/
 ├── TuiApp.java                     # 唯一入口：装配 ToolkitRunner、按键路由、回合与命令分流
 ├── ChatShell.java                  # 版式：DockElement 三段式 + 视觉行转 TamboUI Line 的唯一转换点
-├── ChatState.java                  # 视图状态：滚动窗口切片、智能跟随、外壳提示缓冲
+├── ChatState.java                  # 视图状态：滚动窗口切片、智能跟随、外壳提示缓冲（带时间戳，参与投影排序）
 ├── InflightTurn.java               # 进行中回合的暂存区（有界）：唯一一处「尚未成为会话消息」的数据
-├── TranscriptProjector.java        # 纯函数投影：会话消息 + 暂存区 → 视觉行序列
+├── TranscriptProjector.java        # 纯函数投影：会话消息 + 外壳提示 + 暂存区 → 视觉行序列（按时间戳归并）
+├── ShellNotice.java                # 外壳提示（命令回显 + 输出 + 三态）：带时间戳，不进会话，按时间戳插进消息流
 ├── ChatInputView.java              # 多行输入元素：自己渲染 TextArea 部件、自带键位归属
 ├── InputKeyMapper.java             # 按键判定（Ctrl+S 发送 / Ctrl+C 退出 / Esc 中断 / 滚动键）
+├── MouseScrollMapper.java          # 滚轮判定：鼠标事件 → 滚动动作（只认上下滚轮，其余吞掉以保住焦点）
 ├── InputAction.java                # 按键动作枚举：判定与执行分离，判定是纯函数
 ├── StatusBarView.java              # 状态栏：agent · provider/model · 权限模式 · token 用量
 ├── ShellCommand.java               # 外壳自有命令 /exit：不进内核命令注册表
+├── CommandCompletion.java          # 命令补全状态：激活判定 / 前缀过滤 / 选中 / 接受 / 收起（纯逻辑）
+├── CommandCompletionView.java      # 补全面板渲染：候选 → 视觉行（纯函数，CJK 宽度安全）
+├── CommandChoicePicker.java        # 二级选择页状态：命令候选 / 选中 / 上下移动 / 确认 / 收起（纯逻辑）
+├── CommandChoicePickerView.java    # 二级选择页渲染：候选 → 视觉行（纯函数，CJK 宽度安全）
+├── Overlay.java                    # 输入框上方浮层面板：标题 + 视觉行（补全面板与选择页共用）
 ├── TuiReActListener.java           # ReActListener 的 TUI 实现（react 线程 → 暂存区）
 └── text/                           # 文本布局原语（与 TamboUI 解耦，可单测）
     ├── DisplayWidth.java           # CJK 感知的显示宽度
@@ -322,7 +329,9 @@ jellyfish-cli/src/main/resources/log4j2.xml    # 日志：root 默认 WARN、只
 - **TUI 的输入元素是自己实现的**（实测结论）：`EventRouter.addGlobalHandler` 排在聚焦元素**之后**、按键是**冒泡**的（父级无法抢先）、且 `StyledElement.onKeyEvent` 对 `TextAreaElement` 是死钩子（它重写 `handleKeyEvent` 时不调 `super`）。因此 `ChatInputView` 直接渲染 `TextArea` 部件、自己决定键位归属，编辑原语仍复用 `TextAreaState`。
 - **TUI 键位是反转的：`Enter` 换行、`Ctrl+S` 发送**（实测结论）：框架的键盘解码器不解析任何修饰键编码，`Shift+Enter`（`ESC \r`）、CSI-u（`ESC [13;2u`）、CSI-27（`ESC [27;2;13~`）一律落成 `UNKNOWN`，`hasShift()`/`hasAlt()` **永远是 false**；而裸 `\r` 与 `\n` 都解码成同一种无修饰 `ENTER`。所以「`Enter` 发送 + 修饰键换行」在**所有**终端上都不可实现，只能让别的键承担发送。`Ctrl+字母` 一律解码成 `CHAR` + `ctrl` + 字母码点，没有专用 `KeyCode`，判定只能比码点（`InputKeyMapper`）。换行/发送这两个键位**不要**改成修饰键方案。
 - **TUI 启动前必须做终端前置检查**：没有可交互终端时 TamboUI **不报错而是永久挂住**（退化到 dumb 终端后 `TuiRunner.pollEvent` 等一个永远不来的事件）。判据用 `System.console() == null`（实测：PTY 下非 null、管道下 null），检查挂在 `RunMode.checkEnvironment`（默认空实现，`TuiRunMode` 覆写），由 `Launcher` 在**启动内核之前**调用，不满足返回 `3`；逃生门是 `-Djellyfish.tui.skipTerminalCheck=true`。注意 JDK 8 下 `stdin`/`stdout` 任一被重定向都会判为无终端。
-- **TUI 的鼠标捕获刻意关闭**：滚轮属于鼠标捕获，开启后终端的选择复制会被应用截走（复制文本需按住修饰键）。因此**滚轮不可用是有意为之**，消息区滚动只靠 `PageUp`/`PageDown`/`End`，不要"顺手"打开 `mouseCapture`。反过来，**括号粘贴必须打开**（`TuiConfig.bracketedPaste(true)`）：默认 `false` 时终端不包裹粘贴内容，而 `\r`/`\n` 都是 `ENTER`，一次多行粘贴会被拆成多次提交。
+- **TUI 开鼠标捕获以支持滚轮，代价是终端选择需按住修饰键**：滚轮事件属于鼠标捕获，关着就**根本到不了应用**（未捕获时不少终端把备用屏下的滚轮翻译成 `↑`/`↓`，而这两个键归补全导航，在单行输入上表现为「滚轮毫无反应」）。因此 `TuiConfig.mouseCapture(true)` 是默认行为，滚轮由 `MouseScrollMapper` 认领，**非滚轮的鼠标事件一律吞掉**——放行会触发框架的 `focusManager.clearFocus()`（点在消息区就丢焦点），吞掉才能让「焦点常驻输入框」成为确定性行为。`mouseMotion` 仍为 `false`（无悬停/拖动语义）。代价：终端把鼠标交给应用，屏幕文本的本地选择/复制必须按住修饰键（macOS 为 Option）；不能接受时用 `-Djellyfish.tui.mouseCapture=false` 退回，消息区滚动仍可用 `PageUp`/`PageDown`/`End`。**括号粘贴必须保持打开**（`TuiConfig.bracketedPaste(true)`）：默认 `false` 时终端不包裹粘贴内容，而 `\r`/`\n` 都是 `ENTER`，一次多行粘贴会被拆成多次提交。
+- **TUI 的命令输出按时间戳插进消息流，不贴在投影末尾**：命令输出不是会话消息（进会话会污染发给模型的历史），但它是「在某个时刻发生的事」，因此 `ShellNotice` 自带时间戳，投影时与会话消息按时间戳归并（同毫秒时消息在前）；比投影窗口更旧的提示直接丢弃。若把它整体拼在投影之后，它会永远贴在屏幕底部、且排在比它更晚的对话之前——即「命令输出在尾部堆积」。**外观上它是一个块**：命令原文回显成一行 `❯ /help`，输出块首行带 `⎿ `/`! `/`✗ `（`INFO`/`WARN`/`ERROR` 三态），续行用 6 列悬挂缩进并保留原始缩进；**不要**给它套 `dim` 或工具轨迹前缀——那是「模型做的事」的视觉，而命令输出是「用户主动要的结果」。
+- **TUI 的启动提示不经过 LLM，也不进会话**：**只在「全新空会话」**（`Session.getMessages()` 为空）由外壳贴出一条固定文案（`StartupHint`：自我介绍 + `Ctrl+S` 发送 / `Enter` 换行 / `Esc` 中断 / `Ctrl+C` 退出 / `/help` / 滚动键），让空页面不再是一片空白；`/resume` 打开的已有历史不贴，底部压一条用法说明只会碍事。它**不是** `ShellNotice`：外壳提示带 `⎿ ` 块前缀与命令回显，那是「用户主动要的命令结果」的视觉，而启动提示是外壳以 agent 身份先说的话，因此由 `ChatState` 单独持有，投影时复用助手消息的样子（`⏺ jellyfish` 表头 + 正文缩进，`TranscriptProjector.appendStartupHint`），排在投影最前。它必须走外壳渲染态而不是会话消息——落进会话会被后续每一轮请求当作历史发给模型，既污染 prompt 又让模型以为自己说过这段话；写入点只有 `TuiApp.syncSession` 一处，且判据固定，反复渲染同一会话不会重复追加。
 - **依赖注入（Dagger2）**：通过 Dagger2 进行依赖注入，对各个模块进行解耦。
 - **配置加载**：`AppConfig` 直接绑定 `classpath:config.json`，应用级配置，**只有它声明各配置文件的位置**；默认约定全局级目录 `~/jellyfish/`、项目级目录 `./jellyfish/`（`~` 与 `~/` 由 `SettingsReader` 展开为用户主目录，`~other` 不展开）。`SettingsBinder` 会把 `${ENV_VAR}` 替换为环境变量（`\${VAR}` 转义），apiKey 通常这样注入。
 - **四份配置与四类配置类一一对应**：`config.json`→`AppConfig`、`models.json`→`ModelSettings`、`agents.json`→`AgentSettings`、`jellyfish.json`→`JellyfishSettings`；类名与文件名一致，一个文件一个根类、一个双源段。
@@ -343,7 +352,7 @@ jellyfish-cli/src/main/resources/log4j2.xml    # 日志：root 默认 WARN、只
 - **调用语义由入口与方法表达**：`PluginContext.handle` 同键唯一（工具、命令，描述符随 handler 一起存），`PluginContext.contribute` 类型级 0..N（收集式），两者都写进同一份类型注册表——工具与命令只是类型不同，不存在第二份注册表。同步侧只提供**有序查找**（`ExtensionRegistry.handlers` 返回按 `order` 升序的处理器列表；`handler` 是「此处恰好一个」的 fail-fast 版本，0 个 `NO_HANDLER`、多个 `AMBIGUOUS_HANDLER`）与**单处理器执行**（`invoke(handler, request)` 在调用点线程内联执行并返回其结果），注册表自身**不做任何编排**。需要审计归因的调用点改用 `bindings`：与 `handlers` 语义一致、只是连 owner 一起给，例如权限审计要记录「是哪个插件拦的」。需要**清单**（而不是执行）的调用点改用 `descriptorBindings`：连 `routeKey` 与 owner 一起给出描述符，且**描述符为空的注册也返回**，例如命令帮助与菜单必须列出「没写名片但可执行」的命令。
 - **同步派发的护栏由调用方负责**：`ExtensionRegistry` 在调用点线程内联执行 handler，没有超时、没有白名单、没有异常隔离——这是刻意的，因为调用方需要拿到确定结果。调用方若不能容忍插件阻塞或抛错，必须自己在调用点设超时 / 捕获；`EventChannel` 侧的白名单 / 限流 / 有界队列不能替代同步侧。
 - **组合规则属于调用方**：注册表只保证**有序查找**，调用几个、按什么顺序、什么时候停止、结果怎么合并都由内核在各调用点自己决定（写出显式的循环），不存在按类型硬编码的调度参数。等到需要「跳过某个处理器也不能算失败」「同一个处理器失败要换个策略」这类规则时，改动只会落在调用点。
-- **命令域只解析与分发，不拥有命令**：`CommandManager` 不注册处理器、不持有会话、不发事件、不缓存索引（每次现算，插件热部署后立刻可见）；命令名即路由键，别名与用法来自随 handler 落表的 `CommandDescriptor`（名片不含名字，避免「名片上的名字 ≠ 路由键」）。原文入口（输入框）与结构化入口（Web/TUI 直接给命令名 + 参数）共用同一条分发路径，且**对外壳中立**——cli / tui / server 谁调都一样；结果只有三态 + 文本，命令的副作用写回对应域服务，外壳执行后读域服务拿状态。内核系统命令（`/help` `/new` `/session` `/resume` `/model` `/agent` `/mode` `/status` `/usage` `/todo`）由 `core/command/SystemCommands` 以 owner=`core` 注册进同一份注册表，`/exit` 归外壳。
+- **命令域只解析与分发，不拥有命令**：`CommandManager` 不注册处理器、不持有会话、不发事件、不缓存索引（每次现算，插件热部署后立刻可见）；命令名即路由键，别名与用法来自随 handler 落表的 `CommandDescriptor`（名片不含名字，避免「名片上的名字 ≠ 路由键」）。原文入口（输入框）与结构化入口（Web/TUI 直接给命令名 + 参数）共用同一条分发路径，且**对外壳中立**——cli / tui / server 谁调都一样；结果只有三态 + 文本，命令的副作用写回对应域服务，外壳执行后读域服务拿状态。内核系统命令（`/help` `/new` `/session` `/resume` `/model` `/agent` `/mode` `/status` `/usage` `/todo`）由 `core/command/SystemCommands` 以 owner=`core` 注册进同一份注册表，`/exit` 归外壳。**候选查询是与执行平行的一条只读路径**：需要用户挑参数的命令（`/agent` `/model` `/mode` `/resume`）额外注册 `CommandOptionRequest` → `CommandOptions` 处理器，外壳选中命令时先查候选、有候选就弹二级选择页——不执行命令，因此不会误触 `/new` 这类副作用；`CommandResult` 的 choices 仅用于「直接发送无参命令」这条路径。
 - **权限判定的三层与 fail-open 的适用域**：`PermissionManager` 依次走「核心策略（普通 Java 代码）→ PLAN 只读白名单 → 插件拦截（两态、只收紧）」，再统一处理 ASK 与审计。fail-open 只覆盖「取不到策略」（未绑定 agent、无策略）；策略一旦生效，它的否定结论就是硬结论，否则 PLAN 模式形同虚设。插件侧结果类型独立为两态 `PermissionVeto`，因此「插件只能 Deny、不能要求人工审批」是编译期约束，不靠运行期判定。
 - **插件模型**：Java 插件与跨语言桥接插件在 `PF4JPluginManager` 眼里完全同构，都只经 `PluginContext`（`handle` / `contribute` / `observe` / `emit`）与内核交互：前两者写同一份类型注册表，后两者读写事件通道；脚本进程只是桥接插件背后的一台「无状态计算器」。
 - **跨语言通信**：JSON-RPC 2.0 over Stdio，每行一个 JSON；每种语言最多一个常驻进程（单进程多路复用），请求统一经 `ScriptGateway` 路由，脚本不直接管理进程。

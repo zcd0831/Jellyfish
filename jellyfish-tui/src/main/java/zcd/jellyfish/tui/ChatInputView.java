@@ -187,6 +187,30 @@ public final class ChatInputView implements Element {
     }
 
     /**
+     * 取出输入内容（不清空、不修剪）。
+     * <p>
+     * 供补全判定读取：它需要看原文里有没有空白／换行，因此这里不做 {@link #takeText()} 那样的修剪。
+     *
+     * @return 输入框原文，保证非 {@code null}
+     */
+    public String text() {
+        String text = state.text();
+        return text == null ? "" : text;
+    }
+
+    /**
+     * 整体替换输入内容，并把光标移到末尾。
+     * <p>
+     * 供补全接受候选后回填：命令名可能比已输入的片段长，逐字符插入无法保证结果正确。
+     *
+     * @param text 新内容，不可为 {@code null}
+     */
+    public void replaceText(String text) {
+        state.setText(text);
+        state.moveCursorToEnd();
+    }
+
+    /**
      * 取出输入内容并清空输入框。
      *
      * @return 去除首尾空白后的内容，保证非 {@code null}

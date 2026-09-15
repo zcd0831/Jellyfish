@@ -14,7 +14,7 @@ import java.util.List;
 /**
  * 投影器：把「会话历史 + 进行中回合」渲染成终端视觉行序列。
  * <p>
- * <b>这是一个纯函数</b>：输入是（消息列表、暂存区快照、可用列数、投影上限），输出是视觉行列表，
+ * <b>这是一个纯函数</b>：输入是（消息列表、外壳提示列表、暂存区快照、可用列数、投影上限），输出是视觉行列表，
  * 不读时钟、不碰终端、不改任何状态。因此它的全部行为都能在单测里断言，包括中文换行、
  * 角色层级、工具轨迹折叠这些最容易出错的部分。
  * <p>
@@ -58,6 +58,21 @@ public final class TranscriptProjector {
     /** 提示行前缀（中断 / 错误 / 截断）。 */
     static final String NOTICE_PREFIX = "      \u23bf ";
 
+    /** 命令回显前缀：命令是用户敲的，回显成一行用户消息（与 {@link #USER_PREFIX} 同形）最易读。 */
+    static final String SHELL_COMMAND_PREFIX = USER_PREFIX;
+
+    /** 外壳提示块的正文前缀（6 列）：只在块首行出现，续行用 {@link #SHELL_INDENT}。 */
+    static final String SHELL_PREFIX = "    \u23bf ";
+
+    /** 外壳提示块的警告前缀（未知命令等，6 列）。 */
+    static final String SHELL_WARN_PREFIX = "    ! ";
+
+    /** 外壳提示块的失败前缀（6 列）。 */
+    static final String SHELL_ERROR_PREFIX = "    \u2717 ";
+
+    /** 外壳提示块的续行缩进，与三种块前缀等宽（6 列），保证显式换行与自动换行的缩进一致。 */
+    static final String SHELL_INDENT = "      ";
+
     /** 默认投影的消息条数上限（T8.8）。每帧投影是 O(总行数)，必须有界。 */
     public static final int DEFAULT_MAX_MESSAGES = 500;
 
@@ -91,35 +106,78 @@ public final class TranscriptProjector {
     /** 处理中提示样式。 */
     private static final Style PENDING_STYLE = Style.EMPTY.dim();
 
+    /**
+     * 外壳提示正文样式。
+     * <p>
+     * 刻意<b>不用</b> {@link #TRACE_STYLE}：暗色是为「不想细读的工具轨迹」设的，
+     * 而命令输出是用户主动要的结果（{@code /help} 的列表、{@code /status} 的当前态），应当与正文同权重。
+     */
+    private static final Style SHELL_STYLE = Style.EMPTY;
+
+    /** 外壳提示的警告样式（未知命令：不是失败，但要看得见）。 */
+    private static final Style WARN_STYLE = Style.EMPTY.yellow();
+
     private TranscriptProjector() {
     }
 
     /**
      * 投影出完整视觉行序列。
+     * <p>
+     * <b>外壳提示按时间戳归并进消息流</b>：命令输出是外壳状态而不是会话消息（见 {@link ShellNotice}），
+     * 但它发生在一个确定的时刻上，因此它应当出现在那个时刻对应的消息之间。此前「投影完再整体拼接」的做法
+     * 会让它永远贴在屏幕最底部，后发生的对话反而显示在它上面。
+     * <p>
+     * 归并规则：提示插在「第一条时间戳严格大于它的消息」之前（同毫秒时消息在前，提示排在触发它的那条之后）。
+     * <b>比投影窗口更旧的提示直接丢弃</b>：它们的位置在「已折叠」行之前，显示出来只会错位。
      *
      * @param messages    会话消息列表，可为 {@code null}（当作空）
+     * @param notices     外壳提示列表（按插入顺序，时间戳非递减），可为 {@code null}（当作空）
      * @param inflight    进行中回合快照，不可为 {@code null}
      * @param width       可用列数，小于 1 时按 1 处理
      * @param maxMessages 参与投影的最近消息条数上限；小于 1 时使用 {@link #DEFAULT_MAX_MESSAGES}
      * @return 视觉行列表，保证非 {@code null}
      */
-    public static List<VisualLine> project(List<SessionMessage> messages, InflightTurn.Snapshot inflight,
+    public static List<VisualLine> project(List<SessionMessage> messages, List<ShellNotice> notices,
+                                           InflightTurn.Snapshot inflight, int width, int maxMessages) {
+        return project(messages, notices, null, inflight, width, maxMessages);
+    }
+
+    /**
+     * 投影出完整视觉行序列，并在最前插入启动提示。
+     *
+     * @param messages    会话消息列表，可为 {@code null}（当作空）
+     * @param notices     外壳提示列表（按插入顺序，时间戳非递减），可为 {@code null}（当作空）
+     * @param startupHint 启动提示正文，可为 {@code null} 或空白（不显示）
+     * @param inflight    进行中回合快照，不可为 {@code null}
+     * @param width       可用列数，小于 1 时按 1 处理
+     * @param maxMessages 参与投影的最近消息条数上限；小于 1 时使用 {@link #DEFAULT_MAX_MESSAGES}
+     * @return 视觉行列表，保证非 {@code null}
+     */
+    public static List<VisualLine> project(List<SessionMessage> messages, List<ShellNotice> notices,
+                                           String startupHint, InflightTurn.Snapshot inflight,
                                            int width, int maxMessages) {
         List<SessionMessage> source = messages == null ? Collections.<SessionMessage>emptyList() : messages;
+        List<ShellNotice> noticeSource = notices == null ? Collections.<ShellNotice>emptyList() : notices;
         int limit = maxMessages < 1 ? DEFAULT_MAX_MESSAGES : maxMessages;
         int start = Math.max(0, source.size() - limit);
         int folded = start;
 
         List<VisualLine> out = new ArrayList<VisualLine>();
+        // 启动提示排在一切之前，并复用助手消息的样子：它是外壳以 agent 身份先说的话，
+        // 而不是命令的返回值——用 ⎿ 块会让它看起来像某条命令的输出
+        boolean insideAssistantBlock = appendStartupHint(out, startupHint, width);
+        long noticeCutoff = Long.MIN_VALUE;
         if (folded > 0) {
             // 用与其它提示行相同的前缀，保持左侧缩进一致；用裸空前缀会让这行顶到最左边
             out.addAll(LineWrapper.wrap(new StyledSegment(NOTICE_PREFIX, FOLDED_STYLE),
                     folded + " 条更早的消息已折叠", width));
+            noticeCutoff = source.get(start).getTimestamp();
         }
 
-        boolean insideAssistantBlock = false;
+        int noticeIndex = firstVisibleNotice(noticeSource, noticeCutoff);
         for (int i = start; i < source.size(); i++) {
             SessionMessage message = source.get(i);
+            noticeIndex = appendNoticesBefore(out, noticeSource, noticeIndex, message.getTimestamp(), width);
             String role = message.getRole();
             String content = contentOf(message);
             if (LlmMessage.ROLE_USER.equals(role)) {
@@ -132,31 +190,164 @@ public final class TranscriptProjector {
             }
             // 其余角色（如 system）不进消息列表；即便进了也不显示，避免泄漏系统提示词
         }
+        // 时间戳比最后一条消息还晚的提示（含同毫秒的）落在会话之后
+        while (noticeIndex < noticeSource.size()) {
+            out.addAll(notice(noticeSource.get(noticeIndex), width));
+            noticeIndex++;
+        }
         appendInflight(out, inflight, width);
         return out;
     }
 
     /**
-     * 构造一条外壳提示行（命令结果 / 状态反馈）。
+     * 把启动提示渲染成助手消息的样子。
+     * <p>
+     * 复用 {@link #appendAssistant} 的视觉语法（{@code ⏺ jellyfish} 表头 + 正文缩进），
+     * 与真实助手消息完全同构：用户在空会话里看到的第一条内容就是「agent 先说的话」。
+     *
+     * @param out          输出列表
+     * @param startupHint  启动提示正文，可为 {@code null} 或空白（不显示）
+     * @param width        可用列数
+     * @return 是否已进入助手块（用于与后续消息共用表头）
+     */
+    private static boolean appendStartupHint(List<VisualLine> out, String startupHint, int width) {
+        if (isBlank(startupHint)) {
+            return false;
+        }
+        return appendAssistant(out, false, startupHint, width);
+    }
+
+    /**
+     * 找出第一条不在投影窗口之前的提示。
+     *
+     * @param notices 提示列表（按插入顺序）
+     * @param cutoff  投影窗口最早一条消息的时间戳；没有折叠时传 {@link Long#MIN_VALUE}
+     * @return 第一条可见提示的下标
+     */
+    private static int firstVisibleNotice(List<ShellNotice> notices, long cutoff) {
+        int index = 0;
+        while (index < notices.size() && notices.get(index).getTimestamp() < cutoff) {
+            index++;
+        }
+        return index;
+    }
+
+    /**
+     * 投影所有时间戳严格早于给定消息的提示。
+     * <p>
+     * 用严格小于而不是小于等于：时间戳相同时消息在前，因为提示是「对刚发生的事的反馈」。
+     *
+     * @param out       输出列表
+     * @param notices   提示列表（按插入顺序）
+     * @param from      起始下标
+     * @param timestamp 消息时间戳
+     * @param width     可用列数
+     * @return 未投影的第一条提示的下标
+     */
+    private static int appendNoticesBefore(List<VisualLine> out, List<ShellNotice> notices,
+                                           int from, long timestamp, int width) {
+        int index = from;
+        while (index < notices.size() && notices.get(index).getTimestamp() < timestamp) {
+            out.addAll(notice(notices.get(index), width));
+            index++;
+        }
+        return index;
+    }
+
+    /**
+     * 投影一条外壳提示（命令结果 / 状态反馈）。
      * <p>
      * <b>为什么提示行不进会话</b>：命令的副作用写回各自的域服务，「命令输出文本」不是会话消息。
      * 把它塞进会话会污染发给模型的历史（模型会以为自己说过 {@code /help} 的返回值）。
-     * 因此它由外壳持有、附在投影之后，生命周期与界面一致而与会话无关。
+     * 因此它由外壳持有，进入投影时由 {@link #project} 按时间戳排到正确位置。
+     * <p>
+     * <b>块的形态</b>（§2.3）：
+     * <pre>
+     *   ❯ /help                          ← 命令原文回显（用户消息同形）
+     *     ⎿ 可用命令（2 条）：              ← 块首行带前缀
+     *         /agent  切换 agent          ← 续行 6 列悬挂缩进 + 原始缩进
+     *         /help   查看帮助
+     * </pre>
+     * 三条渲染规则各有原因：
+     * <ul>
+     *     <li><b>只首行带前缀</b>：逐行重复 {@code ⎿} 会把多行输出变成一摧箭头，左边界被吃掉一大截；</li>
+     *     <li><b>续行悬挂缩进而不是继续缩进</b>：提示是一个整体，逐层缩进会让它看起来属于上一条助手消息；</li>
+     *     <li><b>原始行首空格并入前缀</b>：{@code LineWrapper} 会丢弃正文行首空格，
+     *     而 {@code /help} 这类输出靠它表达列表层级——丢了就和标题平齐了。</li>
+     * </ul>
      *
-     * @param text  提示文本，不可为 {@code null}；可含 {@code '\n'}
-     * @param error 是否为错误（决定颜色）
-     * @param width 可用列数
-     * @return 视觉行列表，保证非 {@code null}
+     * @param notice 外壳提示，不可为 {@code null}
+     * @param width  可用列数
+     * @return 视觉行列表，保证非 {@code null}（块首有一个空行）
      */
-    public static List<VisualLine> notice(String text, boolean error, int width) {
-        Style style = error ? ERROR_STYLE : TRACE_STYLE;
+    public static List<VisualLine> notice(ShellNotice notice, int width) {
         List<VisualLine> out = new ArrayList<VisualLine>();
-        String[] rawLines = text.split("\n", -1);
-        for (String rawLine : rawLines) {
-            out.addAll(LineWrapper.wrap(new StyledSegment(TRACE_PREFIX, style),
-                    Collections.singletonList(new StyledSegment(rawLine, style)), width));
+        // 块前空行：多条命令连续执行时，没有它就糊成一片，看不出上一块输出到哪里结束
+        out.add(VisualLine.EMPTY);
+        String command = notice.getCommand();
+        if (command != null && !command.trim().isEmpty()) {
+            out.addAll(LineWrapper.wrap(new StyledSegment(SHELL_COMMAND_PREFIX, USER_PREFIX_STYLE),
+                    wrapBody(command, USER_STYLE), width));
+        }
+        String marker = markerOf(notice.getKind());
+        Style style = styleOf(notice.getKind());
+        boolean first = true;
+        for (String rawLine : notice.getText().split("\n", -1)) {
+            String lead = leadingSpaces(rawLine);
+            String prefix = (first ? marker : SHELL_INDENT) + lead;
+            out.addAll(LineWrapper.wrap(new StyledSegment(prefix, style),
+                    wrapBody(rawLine.substring(lead.length()), style), width));
+            first = false;
         }
         return out;
+    }
+
+    /**
+     * 取一种提示语义对应的块前缀。
+     *
+     * @param kind 提示语义
+     * @return 块前缀（三种等宽，均为 6 列）
+     */
+    private static String markerOf(ShellNotice.Kind kind) {
+        switch (kind) {
+            case WARN:
+                return SHELL_WARN_PREFIX;
+            case ERROR:
+                return SHELL_ERROR_PREFIX;
+            default:
+                return SHELL_PREFIX;
+        }
+    }
+
+    /**
+     * 取一种提示语义对应的样式。
+     *
+     * @param kind 提示语义
+     * @return 样式
+     */
+    private static Style styleOf(ShellNotice.Kind kind) {
+        switch (kind) {
+            case WARN:
+                return WARN_STYLE;
+            case ERROR:
+                return ERROR_STYLE;
+            default:
+                return SHELL_STYLE;
+        }
+    }
+
+    /**
+     * 取一行文本开头的空格。
+     *
+     * @param line 一行文本
+     * @return 开头连续空格，可能为空串
+     */
+    private static String leadingSpaces(String line) {
+        int index = 0;
+        while (index < line.length() && line.charAt(index) == ' ') {
+            index++;
+        }
+        return line.substring(0, index);
     }
 
     /**

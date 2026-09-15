@@ -13,6 +13,10 @@ import dev.tamboui.tui.event.KeyEvent;
  * 而裸 {@code \r} 与 {@code \n} 都解码成不带修饰符的 {@link KeyCode#ENTER}。
  * 所以「{@code Enter} 发送 + 修饰键换行」在<b>所有</b>终端上都不可实现。
  * <p>
+ * <b>{@code Enter} 为什么可以当选中键</b>：它只在浮层面板（补全 / 二级选择页）可见时被外壳截走。
+ * 面板没弹时外壳把这一个键原样放行，输入框照旧把它当换行——两者互不干扰。
+ * {@code Tab} 不再是补全键（已被取消）：它落回输入框，不再参与外壳键位。
+ *
  * <b>{@code Ctrl+字母} 的编码怪癖</b>：它们解码成 {@link KeyCode#CHAR} + {@code ctrl} 标记 + 字母码点
  * （实测 {@code Ctrl+C} 得到码点 {@code 99}、{@code Ctrl+S} 得到 {@code 115}），
  * 没有专用的 {@link KeyCode} 可用，只能自己比对码点。
@@ -52,6 +56,17 @@ final class InputKeyMapper {
         }
         if (key.isKey(KeyCode.END)) {
             return InputAction.TO_BOTTOM;
+        }
+        // 补全导航：映射是纯函数，弹不弹面板由外壳按补全状态决定；
+        // 面板没弹时外壳返回 UNHANDLED，这两个键就落回输入框做光标移动
+        if (key.isKey(KeyCode.UP)) {
+            return InputAction.COMPLETE_PREV;
+        }
+        if (key.isKey(KeyCode.DOWN)) {
+            return InputAction.COMPLETE_NEXT;
+        }
+        if (key.isKey(KeyCode.ENTER)) {
+            return InputAction.COMPLETE_ACCEPT;
         }
         return InputAction.EDIT;
     }

@@ -52,16 +52,19 @@ class InputKeyMapperTest {
     }
 
     @Test
-    @DisplayName("Enter 应判定为编辑（换行），不归外壳管")
-    void map_should_returnEdit_when_enter() {
-        assertEquals(InputAction.EDIT, InputKeyMapper.map(KeyEvent.ofKey(KeyCode.ENTER)));
+    @DisplayName("Enter 应判定为补全接受；面板没弹时由外壳放行，另行当换行")
+    void map_should_returnCompleteAccept_when_enter() {
+        assertEquals(InputAction.COMPLETE_ACCEPT, InputKeyMapper.map(KeyEvent.ofKey(KeyCode.ENTER)));
     }
 
     @Test
-    @DisplayName("Shift+Enter 与 Alt+Enter 也应判定为编辑，不得误判为发送")
-    void map_should_returnEdit_when_modifiedEnter() {
-        assertEquals(InputAction.EDIT, InputKeyMapper.map(KeyEvent.ofKey(KeyCode.ENTER, KeyModifiers.SHIFT)));
-        assertEquals(InputAction.EDIT, InputKeyMapper.map(KeyEvent.ofKey(KeyCode.ENTER, KeyModifiers.ALT)));
+    @DisplayName("Shift+Enter 与 Alt+Enter 也不得误判为发送")
+    void map_should_notReturnSend_when_modifiedEnter() {
+        // 框架不解析修饰键编码，Shift/Alt 会落成同一种 ENTER，因此两者与裸回车同判
+        assertNotEquals(InputAction.SEND,
+                InputKeyMapper.map(KeyEvent.ofKey(KeyCode.ENTER, KeyModifiers.SHIFT)));
+        assertNotEquals(InputAction.SEND,
+                InputKeyMapper.map(KeyEvent.ofKey(KeyCode.ENTER, KeyModifiers.ALT)));
     }
 
     @Test
@@ -84,9 +87,22 @@ class InputKeyMapperTest {
     }
 
     @Test
+    @DisplayName("上下键应判定为补全动作，由外壳按面板是否弹出决定归属")
+    void map_should_returnCompletionActions_when_navigationKeys() {
+        assertEquals(InputAction.COMPLETE_PREV, InputKeyMapper.map(KeyEvent.ofKey(KeyCode.UP)));
+        assertEquals(InputAction.COMPLETE_NEXT, InputKeyMapper.map(KeyEvent.ofKey(KeyCode.DOWN)));
+    }
+
+    @Test
+    @DisplayName("Tab 已取消，应判定为编辑，不再归外壳")
+    void map_should_returnEdit_when_tab() {
+        assertEquals(InputAction.EDIT, InputKeyMapper.map(KeyEvent.ofKey(KeyCode.TAB)));
+    }
+
+    @Test
     @DisplayName("其它控制键应判定为编辑，不被外壳误拦")
     void map_should_returnEdit_when_otherKeys() {
-        assertEquals(InputAction.EDIT, InputKeyMapper.map(KeyEvent.ofKey(KeyCode.UP)));
+        assertEquals(InputAction.EDIT, InputKeyMapper.map(KeyEvent.ofKey(KeyCode.LEFT)));
         assertEquals(InputAction.EDIT, InputKeyMapper.map(KeyEvent.ofKey(KeyCode.BACKSPACE)));
         assertEquals(InputAction.EDIT, InputKeyMapper.map(KeyEvent.ofKey(KeyCode.HOME)));
     }

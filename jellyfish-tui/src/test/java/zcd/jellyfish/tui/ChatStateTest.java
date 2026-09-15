@@ -10,6 +10,7 @@ import zcd.jellyfish.infra.session.SessionMessage;
 import zcd.jellyfish.tui.text.VisualLine;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
@@ -256,6 +257,46 @@ class ChatStateTest {
         assertTrue(texts(view).contains("    第二回合"), "新回合正文必须可见");
     }
 
+    @Test
+    @DisplayName("命令输出按时间戳插到消息之间，而不是永远贴在投影末尾")
+    void view_should_interleave_notice_by_timestamp() {
+        long base = System.currentTimeMillis();
+        state.appendNotice("/help", "/help 输出", ShellNotice.Kind.INFO);
+        List<SessionMessage> messages = Arrays.asList(
+                message("m1", base - 1000L, "旧"),
+                message("m2", base + 10_000L, "新"));
+
+        List<String> body = texts(view(messages, 20));
+
+        int older = body.indexOf("  \u276f 旧");
+        int notice = body.indexOf("    \u23bf /help 输出");
+        int newer = body.indexOf("  \u276f 新");
+        assertTrue(older >= 0 && notice >= 0 && newer >= 0, "三行都应出现，实际：" + body);
+        assertTrue(older < notice && notice < newer,
+                "命令输出应落在它发生的那一刻，实际顺序：" + body);
+        assertTrue(body.contains("  \u276f /help"), "命令原文应回显，实际：" + body);
+        assertEquals("  \u276f 新", body.get(body.size() - 1), "最后一行应是提示之后的消息");
+    }
+
+    @Test
+    @DisplayName("外壳提示有界：超出上限丢弃最旧的")
+    void view_should_bound_notices() {
+        for (int i = 0; i < ChatState.MAX_NOTICES + 10; i++) {
+            state.appendNotice("n" + i, ShellNotice.Kind.INFO);
+        }
+
+        List<String> blocks = new ArrayList<String>();
+        for (String line : texts(view(messages(), 400))) {
+            if (!line.trim().isEmpty()) {
+                blocks.add(line);
+            }
+        }
+
+        assertEquals(ChatState.MAX_NOTICES, blocks.size(), "提示块数应被上限封顶");
+        assertFalse(blocks.contains("    \u23bf n0"), "最旧的提示应已被丢弃");
+        assertTrue(blocks.contains("    \u23bf n" + (ChatState.MAX_NOTICES + 9)), "最新的提示必须保留");
+    }
+
     /**
      * 以默认宽度与上限执行一次 view。
      *
@@ -291,6 +332,18 @@ class ChatStateTest {
             list.add(SessionMessage.of(LlmMessage.user(content)));
         }
         return list;
+    }
+
+    /**
+     * 构造一条带显式时间戳的用户消息。
+     *
+     * @param id      消息标识
+     * @param timestamp 时间戳
+     * @param content 正文
+     * @return 会话消息
+     */
+    private static SessionMessage message(String id, long timestamp, String content) {
+        return new SessionMessage(id, timestamp, LlmMessage.user(content), null);
     }
 
     /**

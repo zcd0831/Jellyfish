@@ -7,6 +7,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.event.EventPublisher;
+import zcd.jellyfish.api.extension.CommandChoice;
 import zcd.jellyfish.api.extension.CommandResult;
 import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.infra.agent.AgentManager;
@@ -150,6 +151,23 @@ class SystemCommandsTest {
     }
 
     @Test
+    void resume_without_argument_should_offer_session_choices() {
+        // Given：两个会话，当前为第二个
+        Session first = sessionManager.createDefault();
+        commandManager.execute("/new");
+
+        // When
+        CommandResult result = commandManager.execute("/resume");
+
+        // Then
+        assertEquals(CommandResult.Kind.OK, result.getKind());
+        assertTrue(result.hasChoices());
+        assertEquals(2, result.getChoices().size());
+        assertEquals(first.getSessionId(), result.getChoices().get(0).getValue());
+        assertTrue(result.getChoices().get(1).isCurrent());
+    }
+
+    @Test
     void model_without_argument_should_list_models() {
         // Given
         when(modelManager.getProviders()).thenReturn(
@@ -161,6 +179,8 @@ class SystemCommandsTest {
         // Then
         assertEquals(CommandResult.Kind.OK, result.getKind());
         assertTrue(result.getOutput().contains("openai/gpt-4o"));
+        assertTrue(result.hasChoices());
+        assertEquals("openai/gpt-4o", result.getChoices().get(0).getValue());
     }
 
     @Test
@@ -200,6 +220,9 @@ class SystemCommandsTest {
         assertEquals(CommandResult.Kind.OK, result.getKind());
         assertTrue(result.getOutput().contains("coder"));
         assertTrue(result.getOutput().contains("[默认]"));
+        assertTrue(result.hasChoices());
+        assertEquals("coder", result.getChoices().get(0).getValue());
+        assertTrue(result.getChoices().get(0).getDescription().contains("默认"));
     }
 
     @Test
@@ -231,6 +254,9 @@ class SystemCommandsTest {
 
         // Then
         assertTrue(show.getOutput().contains("normal"));
+        assertTrue(show.hasChoices());
+        assertEquals("normal", show.getChoices().get(1).getValue());
+        assertTrue(show.getChoices().get(1).isCurrent());
         assertEquals(PermissionMode.PLAN, sessionManager.current().getPermissionMode());
         assertEquals(CommandResult.Kind.ERROR, invalid.getKind());
     }
@@ -296,6 +322,69 @@ class SystemCommandsTest {
         assertEquals(CommandResult.Kind.ERROR, commandManager.execute("/todo").getKind());
         assertEquals(CommandResult.Kind.ERROR, commandManager.execute("/mode").getKind());
         assertNull(sessionManager.current());
+    }
+
+    @Test
+    void options_should_expose_agent_choices() {
+        // Given
+        when(agentManager.all()).thenReturn(Collections.singletonList(definition("coder")));
+        when(agentManager.getDefaultAgentId()).thenReturn("coder");
+
+        // When
+        List<CommandChoice> options = commandManager.options("agent", null);
+
+        // Then
+        assertEquals(1, options.size());
+        assertEquals("coder", options.get(0).getValue());
+        assertTrue(options.get(0).getDescription().contains("默认"));
+    }
+
+    @Test
+    void options_should_expose_model_choices() {
+        // Given
+        when(modelManager.getProviders()).thenReturn(
+                Collections.singletonList(provider("openai", "gpt-4o")));
+
+        // When
+        List<CommandChoice> options = commandManager.options("model", null);
+
+        // Then
+        assertEquals(1, options.size());
+        assertEquals("openai/gpt-4o", options.get(0).getValue());
+    }
+
+    @Test
+    void options_should_expose_mode_choices_with_current_mode_marked() {
+        // Given
+        commandManager.execute("/new");
+
+        // When
+        List<CommandChoice> options = commandManager.options("mode", null);
+
+        // Then：plan(0) / normal(1)，新会话默认 normal
+        assertEquals(2, options.size());
+        assertEquals("plan", options.get(0).getValue());
+        assertTrue(options.get(1).isCurrent());
+    }
+
+    @Test
+    void options_should_expose_session_choices() {
+        // Given
+        commandManager.execute("/new");
+
+        // When
+        List<CommandChoice> options = commandManager.options("resume", null);
+
+        // Then
+        assertEquals(1, options.size());
+        assertTrue(options.get(0).isCurrent());
+    }
+
+    @Test
+    void options_should_be_empty_for_command_without_options() {
+        // When / Then
+        assertTrue(commandManager.options("help", null).isEmpty());
+        assertTrue(commandManager.options("ghost", null).isEmpty());
     }
 
     /**

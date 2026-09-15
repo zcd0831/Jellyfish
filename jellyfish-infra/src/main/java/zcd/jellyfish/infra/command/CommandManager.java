@@ -3,7 +3,10 @@ package zcd.jellyfish.infra.command;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import zcd.jellyfish.api.extension.CommandArguments;
+import zcd.jellyfish.api.extension.CommandChoice;
 import zcd.jellyfish.api.extension.CommandDescriptor;
+import zcd.jellyfish.api.extension.CommandOptionRequest;
+import zcd.jellyfish.api.extension.CommandOptions;
 import zcd.jellyfish.api.extension.CommandRequest;
 import zcd.jellyfish.api.extension.CommandResult;
 import zcd.jellyfish.api.extension.ExtensionException;
@@ -110,6 +113,49 @@ public class CommandManager {
         }
         infos.sort(Comparator.comparing(CommandInfo::getName));
         return Collections.unmodifiableList(infos);
+    }
+
+    /**
+     * 查询命令的候选清单：只读，不执行命令。
+     * <p>
+     * 给「选中命令就弹二级选择页」的外壳用：执行命令可能有副作用（如 {@code /new} 建会话），
+     * 而用户刚选中命令、还没决定参数时不应该有任何副作用。因此候选查询走独立扩展点
+     * {@link CommandOptionRequest}，没注册候选处理的命令返回空列表。
+     * <p>
+     * 公共入口不抛异常：未知名、清单读不出、候选处理器不唯一都当作「没有候选」返回空列表（另打 WARN），
+     * 因为候选只是输入辅助，不应影响用户继续输入。
+     *
+     * @param nameOrAlias 命令名或别名，可为 {@code null}
+     * @param sessionId   会话标识，可为 {@code null}
+     * @return 不可变候选清单，保证非 {@code null}；无候选时为空列表
+     */
+    public List<CommandChoice> options(String nameOrAlias, String sessionId) {
+        List<CommandInfo> matched;
+        try {
+            matched = match(nameOrAlias);
+        } catch (RuntimeException e) {
+            LOG.warn("读取命令清单失败: command={}", nameOrAlias, e);
+            return Collections.emptyList();
+        }
+        if (matched.size() != 1) {
+            return Collections.emptyList();
+        }
+        String canonical = matched.get(0).getName();
+        List<ExtensionHandler<CommandOptionRequest, CommandOptions>> handlers =
+                extensions.handlers(CommandOptionRequest.class, canonical);
+        if (handlers.size() != 1) {
+            // 0 个表示该命令没有可选值；多个属于注册缺陷，但对用户而言同样是「没有候选」
+            return Collections.emptyList();
+        }
+        try {
+            CommandOptions result = extensions.invoke(handlers.get(0),
+                    new CommandOptionRequest(canonical, sessionId));
+            return result == null ? Collections.<CommandChoice>emptyList() : result.getChoices();
+        } catch (RuntimeException e) {
+            // 同步侧刻意没有护栏，异常处置是调用点（这里）的责任
+            LOG.warn("查询命令候选失败: command={} sessionId={}", canonical, sessionId, e);
+            return Collections.emptyList();
+        }
     }
 
     /**

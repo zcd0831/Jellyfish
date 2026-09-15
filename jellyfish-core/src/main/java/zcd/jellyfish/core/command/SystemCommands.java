@@ -5,7 +5,10 @@ import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.event.RegisterOptions;
 import zcd.jellyfish.api.event.Subscription;
 import zcd.jellyfish.api.extension.CommandArguments;
+import zcd.jellyfish.api.extension.CommandChoice;
 import zcd.jellyfish.api.extension.CommandDescriptor;
+import zcd.jellyfish.api.extension.CommandOptionRequest;
+import zcd.jellyfish.api.extension.CommandOptions;
 import zcd.jellyfish.api.extension.CommandRequest;
 import zcd.jellyfish.api.extension.CommandResult;
 import zcd.jellyfish.api.extension.ExtensionHandler;
@@ -135,6 +138,11 @@ public class SystemCommands {
                 this::usage));
         subscriptions.add(register("todo", new CommandDescriptor("查看或管理待办", "[add|done|clear]", null),
                 this::todo));
+        // 只读候选查询：与执行处理器平行，外壳「选中命令就弹选择页」时走这条路径，不产生任何副作用
+        subscriptions.add(registerOptions("resume", this::resumeOptions));
+        subscriptions.add(registerOptions("model", this::modelOptions));
+        subscriptions.add(registerOptions("agent", this::agentOptions));
+        subscriptions.add(registerOptions("mode", this::modeOptions));
     }
 
     /**
@@ -158,6 +166,60 @@ public class SystemCommands {
     private Subscription register(String name, CommandDescriptor descriptor,
                                   ExtensionHandler<CommandRequest, CommandResult> handler) {
         return extensions.handle(OWNER, CommandRequest.class, name, descriptor, handler, RegisterOptions.DEFAULT);
+    }
+
+    /**
+     * 注册一条命令的只读候选处理器。
+     * <p>
+     * 与执行处理器同路由键、异请求类型，因此互不覆盖；候选处理器没有名片（名片属于命令本身）。
+     *
+     * @param name    命令名（路由键）
+     * @param handler 候选处理器
+     * @return 注册句柄
+     */
+    private Subscription registerOptions(String name, ExtensionHandler<CommandOptionRequest, CommandOptions> handler) {
+        return extensions.handle(OWNER, CommandOptionRequest.class, name, null, handler, RegisterOptions.DEFAULT);
+    }
+
+    /**
+     * {@code /resume} 的只读候选：可切换的会话。
+     *
+     * @param request 候选查询请求
+     * @return 候选结果
+     */
+    private CommandOptions resumeOptions(CommandOptionRequest request) {
+        return CommandOptions.of(sessionChoices(sortedSessions()));
+    }
+
+    /**
+     * {@code /model} 的只读候选：可用模型。
+     *
+     * @param request 候选查询请求
+     * @return 候选结果
+     */
+    private CommandOptions modelOptions(CommandOptionRequest request) {
+        return CommandOptions.of(modelChoices());
+    }
+
+    /**
+     * {@code /agent} 的只读候选：可绑定的 agent。
+     *
+     * @param request 候选查询请求
+     * @return 候选结果
+     */
+    private CommandOptions agentOptions(CommandOptionRequest request) {
+        return CommandOptions.of(agentChoices());
+    }
+
+    /**
+     * {@code /mode} 的只读候选：两种权限模式。
+     *
+     * @param request 候选查询请求
+     * @return 候选结果；没有当前会话时为空
+     */
+    private CommandOptions modeOptions(CommandOptionRequest request) {
+        Session session = sessionManager.current();
+        return session == null ? CommandOptions.empty() : CommandOptions.of(modeChoices(session.getPermissionMode()));
     }
 
     /**
@@ -193,13 +255,32 @@ public class SystemCommands {
      * @return 结果
      */
     private CommandResult listSessions(CommandRequest request) {
+        List<Session> sessions = sortedSessions();
+        return CommandResult.ok(renderSessions(sessions));
+    }
+
+    /**
+     * 取全部会话并按创建时间升序排列。
+     *
+     * @return 排序后的会话列表
+     */
+    private List<Session> sortedSessions() {
         List<Session> sessions = new ArrayList<Session>(sessionManager.all());
-        if (sessions.isEmpty()) {
-            return CommandResult.ok("当前没有任何会话，可用 /new 新建。");
-        }
         sessions.sort(Comparator.comparingLong(Session::getCreatedAt));
-        Session current = sessionManager.current();
-        String currentId = current == null ? null : current.getSessionId();
+        return sessions;
+    }
+
+    /**
+     * 渲染会话清单，当前会话带 {@code *} 标记。
+     *
+     * @param sessions 已排序的会话列表
+     * @return 文本
+     */
+    private String renderSessions(List<Session> sessions) {
+        if (sessions.isEmpty()) {
+            return "当前没有任何会话，可用 /new 新建。";
+        }
+        String currentId = currentSessionId();
         StringBuilder text = new StringBuilder("会话列表：");
         for (Session session : sessions) {
             text.append('\n').append(session.getSessionId().equals(currentId) ? "* " : "  ")
@@ -208,7 +289,26 @@ public class SystemCommands {
                     .append("，model=").append(modelLabel(session))
                     .append("，消息=").append(session.size()).append('）');
         }
-        return CommandResult.ok(text.toString());
+        return text.toString();
+    }
+
+    /**
+     * 构造会话候选：选中后追加为 {@code /resume <sessionId>} 的参数。
+     *
+     * @param sessions 已排序的会话列表
+     * @return 候选清单
+     */
+    private List<CommandChoice> sessionChoices(List<Session> sessions) {
+        String currentId = currentSessionId();
+        List<CommandChoice> choices = new ArrayList<CommandChoice>(sessions.size());
+        for (Session session : sessions) {
+            String sessionId = session.getSessionId();
+            String description = "agent=" + nullToDash(session.getAgentId())
+                    + "，model=" + modelLabel(session)
+                    + "，消息=" + session.size();
+            choices.add(new CommandChoice(sessionId, sessionId, description, sessionId.equals(currentId)));
+        }
+        return choices;
     }
 
     /**
@@ -218,6 +318,10 @@ public class SystemCommands {
      * @return 结果
      */
     private CommandResult resume(CommandRequest request) {
+        if (request.getArguments().isEmpty()) {
+            List<Session> sessions = sortedSessions();
+            return CommandResult.choices(renderSessions(sessions), sessionChoices(sessions));
+        }
         if (request.getArguments().size() != 1) {
             return CommandResult.error("用法：/resume <sessionId>");
         }
@@ -238,7 +342,7 @@ public class SystemCommands {
      */
     private CommandResult model(CommandRequest request) {
         if (request.getArguments().isEmpty()) {
-            return CommandResult.ok(renderModels());
+            return CommandResult.choices(renderModels(), modelChoices());
         }
         if (request.getArguments().size() != 1) {
             return CommandResult.error("用法：/model [provider/model]");
@@ -275,7 +379,7 @@ public class SystemCommands {
      */
     private CommandResult agent(CommandRequest request) {
         if (request.getArguments().isEmpty()) {
-            return CommandResult.ok(renderAgents());
+            return CommandResult.choices(renderAgents(), agentChoices());
         }
         if (request.getArguments().size() != 1) {
             return CommandResult.error("用法：/agent [agentId]");
@@ -306,7 +410,8 @@ public class SystemCommands {
             return CommandResult.error("当前没有会话，可用 /new 新建。");
         }
         if (request.getArguments().isEmpty()) {
-            return CommandResult.ok("当前权限模式：" + session.getPermissionMode().name().toLowerCase());
+            return CommandResult.choices("当前权限模式：" + session.getPermissionMode().name().toLowerCase(),
+                    modeChoices(session.getPermissionMode()));
         }
         if (request.getArguments().size() != 1) {
             return CommandResult.error("用法：/mode [plan|normal]");
@@ -447,6 +552,77 @@ public class SystemCommands {
             }
         }
         return text.toString();
+    }
+
+    /**
+     * 构造模型候选：选中后追加为 {@code /model <provider>/<model>} 的参数。
+     *
+     * @return 候选清单
+     */
+    private List<CommandChoice> modelChoices() {
+        Session session = sessionManager.current();
+        List<CommandChoice> choices = new ArrayList<CommandChoice>();
+        for (Provider provider : modelManager.getProviders()) {
+            for (Model model : provider.getModels()) {
+                String value = provider.getName() + "/" + model.getName();
+                boolean selected = session != null && provider.getName().equals(session.getProvider())
+                        && model.getName().equals(session.getModel());
+                choices.add(new CommandChoice(value, value, null, selected));
+            }
+        }
+        return choices;
+    }
+
+    /**
+     * 构造 agent 候选：选中后追加为 {@code /agent <agentId>} 的参数。
+     *
+     * @return 候选清单
+     */
+    private List<CommandChoice> agentChoices() {
+        Session session = sessionManager.current();
+        String boundAgentId = session == null ? null : session.getAgentId();
+        String defaultAgentId = agentManager.getDefaultAgentId();
+        List<CommandChoice> choices = new ArrayList<CommandChoice>();
+        for (AgentDefinition definition : agentManager.all()) {
+            String agentId = definition.getAgentId();
+            choices.add(new CommandChoice(agentId, agentId, agentDescription(definition, defaultAgentId),
+                    agentId.equals(boundAgentId)));
+        }
+        return choices;
+    }
+
+    /**
+     * 拼出 agent 候选的补充说明：描述与「默认」标记合并成一行。
+     *
+     * @param definition    agent 定义
+     * @param defaultAgentId 默认 agent 标识，可为 {@code null}
+     * @return 说明文本；两者都为空时返回 {@code null}
+     */
+    private static String agentDescription(AgentDefinition definition, String defaultAgentId) {
+        StringBuilder description = new StringBuilder();
+        if (definition.getDescription() != null) {
+            description.append(definition.getDescription());
+        }
+        if (definition.getAgentId().equals(defaultAgentId)) {
+            if (description.length() > 0) {
+                description.append('，');
+            }
+            description.append("默认");
+        }
+        return description.length() == 0 ? null : description.toString();
+    }
+
+    /**
+     * 构造权限模式候选：选中后追加为 {@code /mode <plan|normal>} 的参数。
+     *
+     * @param mode 当前权限模式
+     * @return 候选清单
+     */
+    private static List<CommandChoice> modeChoices(PermissionMode mode) {
+        List<CommandChoice> choices = new ArrayList<CommandChoice>(2);
+        choices.add(new CommandChoice(MODE_PLAN, MODE_PLAN, "仅只读工具可用", mode == PermissionMode.PLAN));
+        choices.add(new CommandChoice(MODE_NORMAL, MODE_NORMAL, "常规模式（可写）", mode == PermissionMode.NORMAL));
+        return choices;
     }
 
     /**

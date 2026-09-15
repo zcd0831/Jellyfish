@@ -3,7 +3,10 @@ package zcd.jellyfish.infra.command;
 import org.junit.jupiter.api.Test;
 import zcd.jellyfish.api.event.RegisterOptions;
 import zcd.jellyfish.api.extension.CommandArguments;
+import zcd.jellyfish.api.extension.CommandChoice;
 import zcd.jellyfish.api.extension.CommandDescriptor;
+import zcd.jellyfish.api.extension.CommandOptionRequest;
+import zcd.jellyfish.api.extension.CommandOptions;
 import zcd.jellyfish.api.extension.CommandRequest;
 import zcd.jellyfish.api.extension.CommandResult;
 import zcd.jellyfish.api.extension.ExtensionHandler;
@@ -428,5 +431,89 @@ class CommandManagerTest {
     private void register(String owner, String name, CommandDescriptor descriptor,
                           ExtensionHandler<CommandRequest, CommandResult> handler) {
         extensions.handle(owner, CommandRequest.class, name, descriptor, handler, RegisterOptions.DEFAULT);
+    }
+
+    @Test
+    void options_should_return_choices_without_executing_the_command() {
+        // Given：执行处理器与候选处理器分开注册，执行处理器绝不该被调用
+        AtomicInteger executed = new AtomicInteger();
+        register("plugin-a", "agent", new CommandDescriptor("切 agent", "[agentId]", Arrays.asList("a")),
+                request -> {
+                    executed.incrementAndGet();
+                    return CommandResult.ok("切了");
+                });
+        registerOptions("plugin-a", "agent", request -> CommandOptions.of(Arrays.asList(
+                new CommandChoice("coder", "coder", "写代码", true),
+                new CommandChoice("writer", "writer", null, false))));
+
+        // When
+        List<CommandChoice> options = manager.options("agent", "session-1");
+
+        // Then
+        assertEquals(2, options.size());
+        assertEquals("coder", options.get(0).getValue());
+        assertTrue(options.get(0).isCurrent());
+        assertEquals(0, executed.get());
+    }
+
+    @Test
+    void options_should_resolve_alias() {
+        // Given
+        register("plugin-a", "agent", new CommandDescriptor("切 agent", null, Arrays.asList("a")),
+                request -> CommandResult.ok("ok"));
+        registerOptions("plugin-a", "agent", request -> CommandOptions.of(Arrays.asList(
+                new CommandChoice("coder", "coder"))));
+
+        // When / Then
+        assertEquals(1, manager.options("a", null).size());
+    }
+
+    @Test
+    void options_should_be_empty_when_no_option_handler_registered() {
+        // Given
+        register("plugin-a", "help", null, request -> CommandResult.ok("help"));
+
+        // When / Then：候选只是输入辅助，没有就是空列表
+        assertTrue(manager.options("help", null).isEmpty());
+        assertTrue(manager.options("missing", null).isEmpty());
+        assertTrue(manager.options(null, null).isEmpty());
+    }
+
+    @Test
+    void options_should_be_empty_when_option_handler_throws() {
+        // Given
+        register("plugin-a", "agent", null, request -> CommandResult.ok("ok"));
+        registerOptions("plugin-a", "agent", request -> {
+            throw new IllegalStateException("炸了");
+        });
+
+        // When / Then：同步侧没有护栏，调用点把异常当成「没有候选」而不是上抛
+        assertTrue(manager.options("agent", null).isEmpty());
+    }
+
+    @Test
+    void options_should_be_empty_when_option_handler_is_ambiguous() {
+        // Given：具名候选 + 类型级贡献，查找会多命中
+        register("plugin-a", "agent", null, request -> CommandResult.ok("ok"));
+        registerOptions("plugin-a", "agent", request -> CommandOptions.of(Arrays.asList(
+                new CommandChoice("coder", "coder"))));
+        extensions.contribute("plugin-b", CommandOptionRequest.class, null,
+                request -> CommandOptions.of(Arrays.asList(new CommandChoice("wide", "wide"))),
+                RegisterOptions.DEFAULT);
+
+        // When / Then：多命中属于注册缺陷，当作「没有候选」而不是任选一个
+        assertTrue(manager.options("agent", null).isEmpty());
+    }
+
+    /**
+     * 注册一条命令的只读候选处理器。
+     *
+     * @param owner   来源
+     * @param name    命令名
+     * @param handler 候选处理器
+     */
+    private void registerOptions(String owner, String name,
+                                 ExtensionHandler<CommandOptionRequest, CommandOptions> handler) {
+        extensions.handle(owner, CommandOptionRequest.class, name, null, handler, RegisterOptions.DEFAULT);
     }
 }

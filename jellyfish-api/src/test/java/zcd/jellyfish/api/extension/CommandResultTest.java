@@ -1,10 +1,15 @@
 package zcd.jellyfish.api.extension;
 
 import org.junit.jupiter.api.Test;
+import zcd.jellyfish.api.JellyfishException;
+
+import java.util.Arrays;
+import java.util.Collections;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -57,5 +62,42 @@ class CommandResultTest {
     void toString_should_render_kind_only() {
         // When / Then：整篇帮助文本不该混进日志行
         assertEquals("CommandResult{kind=OK}", CommandResult.ok("第一行\n第二行").toString());
+    }
+
+    @Test
+    void factories_without_choices_should_have_empty_choices() {
+        // When / Then
+        assertTrue(CommandResult.ok("文本").getChoices().isEmpty());
+        assertFalse(CommandResult.ok("文本").hasChoices());
+        assertTrue(CommandResult.error("文本").getChoices().isEmpty());
+        assertTrue(CommandResult.unknown("文本").getChoices().isEmpty());
+    }
+
+    @Test
+    void choices_should_carry_output_and_choices() {
+        // When
+        CommandResult result = CommandResult.choices("可用 agent：",
+                Arrays.asList(new CommandChoice("coder", "coder"), new CommandChoice("writer", "writer")));
+
+        // Then
+        assertEquals(CommandResult.Kind.OK, result.getKind());
+        assertEquals("可用 agent：", result.getOutput());
+        assertTrue(result.hasChoices());
+        assertEquals(2, result.getChoices().size());
+        assertFalse(result.isError());
+    }
+
+    @Test
+    void choices_should_become_empty_when_null_or_empty() {
+        // When / Then
+        assertFalse(CommandResult.choices("文本", null).hasChoices());
+        assertFalse(CommandResult.choices("文本", Collections.<CommandChoice>emptyList()).hasChoices());
+    }
+
+    @Test
+    void choices_should_reject_null_element() {
+        // When / Then
+        assertThrows(JellyfishException.class,
+                () -> CommandResult.choices("文本", Arrays.asList(new CommandChoice("a", "a"), null)));
     }
 }

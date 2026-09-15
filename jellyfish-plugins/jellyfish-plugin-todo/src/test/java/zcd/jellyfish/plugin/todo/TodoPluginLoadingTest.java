@@ -8,6 +8,7 @@ import org.junit.jupiter.api.io.TempDir;
 import org.pf4j.PluginState;
 import zcd.jellyfish.api.extension.CommandDescriptor;
 import zcd.jellyfish.api.extension.CommandRequest;
+import zcd.jellyfish.api.extension.PanelContributionRequest;
 import zcd.jellyfish.api.extension.PromptContributionRequest;
 import zcd.jellyfish.api.extension.StatusLineContributionRequest;
 import zcd.jellyfish.api.extension.ToolCallRequest;
@@ -33,7 +34,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * 待办插件的加载链路端到端测试：用真实的 {@code plugin.properties} 与真实的插件类跑一遍
- * 「加载 → 描述符体检 → 启动 → 三个面（命令 / 工具 / 提示词贡献）都可路由」。
+ * 「加载 → 描述符体检 → 启动 → 五个面（命令 / 工具 / 提示词贡献 / 状态栏 / 面板）都可路由」。
  * <p>
  * <b>为什么要这么测</b>：单元测试只能证明「注册调用发生了」，证明不了这条插件真的能被内核加载——
  * 描述符少一个键、插件包自带内核契约、入口类没有公开无参构造器，任何一项出错都会让插件在运行时
@@ -55,7 +56,7 @@ class TodoPluginLoadingTest {
     /** 共用注册表。 */
     private TypeRegistry registry;
 
-    /** 同步扩展点策略，三个面的注册落点。 */
+    /** 同步扩展点策略，五个面的注册落点。 */
     private ExtensionRegistry extensions;
 
     /** 事件通道，插件上下文装配需要。 */
@@ -92,8 +93,8 @@ class TodoPluginLoadingTest {
     }
 
     @Test
-    @DisplayName("启动后 /todo 命令、todo_write 工具、提示词贡献与状态栏贡献都应可路由")
-    void bootstrap_should_registerAllThreeCapabilities() throws IOException {
+    @DisplayName("启动后 /todo 命令、todo_write 工具、提示词贡献、状态栏贡献与面板贡献都应可路由")
+    void bootstrap_should_registerAllCapabilities() throws IOException {
         installPlugin();
 
         manager = newManager();
@@ -117,10 +118,11 @@ class TodoPluginLoadingTest {
         assertTrue(tools.contains(TodoWriteTool.NAME), tools.toString());
 
         assertEquals(1, extensions.handlers(PromptContributionRequest.class, null).size());
+        assertEquals(1, extensions.handlers(PanelContributionRequest.class, null).size());
     }
 
     @Test
-    @DisplayName("插件卸载后三个面的注册都应被按 owner 全部回收")
+    @DisplayName("插件卸载后五个面的注册都应被按 owner 全部回收")
     void close_should_unregisterAllCapabilities() throws IOException {
         installPlugin();
 
@@ -133,6 +135,7 @@ class TodoPluginLoadingTest {
         assertTrue(extensions.handlers(CommandRequest.class, "todo").isEmpty());
         assertTrue(extensions.handlers(PromptContributionRequest.class, null).isEmpty());
         assertTrue(extensions.handlers(StatusLineContributionRequest.class, null).isEmpty());
+        assertTrue(extensions.handlers(PanelContributionRequest.class, null).isEmpty());
     }
 
     /**

@@ -113,7 +113,7 @@ final class TodoText {
      * @param item 待办项，不可为 {@code null}
      * @return 标记文本
      */
-    private static String mark(TodoItem item) {
+    static String mark(TodoItem item) {
         return item.done() ? DONE_MARK : PENDING_MARK;
     }
 }

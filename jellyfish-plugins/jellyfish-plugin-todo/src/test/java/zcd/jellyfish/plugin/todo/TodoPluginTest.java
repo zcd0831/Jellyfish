@@ -8,6 +8,7 @@ import org.junit.jupiter.api.io.TempDir;
 import zcd.jellyfish.api.event.notification.UiInvalidatedEvent;
 import zcd.jellyfish.api.extension.CommandRequest;
 import zcd.jellyfish.api.extension.ExtensionHandler;
+import zcd.jellyfish.api.extension.PanelContributionRequest;
 import zcd.jellyfish.api.extension.PromptContributionRequest;
 import zcd.jellyfish.api.extension.StatusLineContributionRequest;
 import zcd.jellyfish.api.extension.ToolCallRequest;
@@ -74,12 +75,13 @@ class TodoPluginTest {
     }
 
     @Test
-    @DisplayName("四个面各注册一次：命令 / 工具 / 提示词注入 / 状态栏")
-    void start_should_registerAllFourCapabilities() {
+    @DisplayName("五个面各注册一次：命令 / 工具 / 提示词注入 / 状态栏 / 面板")
+    void start_should_registerAllCapabilities() {
         assertEquals(1, extensions.bindings(CommandRequest.class, "todo").size());
         assertEquals(1, extensions.bindings(ToolCallRequest.class, TodoWriteTool.NAME).size());
         assertEquals(1, extensions.bindings(PromptContributionRequest.class, null).size());
         assertEquals(1, extensions.bindings(StatusLineContributionRequest.class, null).size());
+        assertEquals(1, extensions.bindings(PanelContributionRequest.class, null).size());
     }
 
     @Test

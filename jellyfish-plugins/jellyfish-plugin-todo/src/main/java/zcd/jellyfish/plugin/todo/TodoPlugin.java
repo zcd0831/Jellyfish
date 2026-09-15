@@ -6,6 +6,7 @@ import zcd.jellyfish.api.event.notification.UiInvalidatedEvent;
 import zcd.jellyfish.api.extension.CommandDescriptor;
 import zcd.jellyfish.api.extension.CommandRequest;
 import zcd.jellyfish.api.extension.ExtensionHandler;
+import zcd.jellyfish.api.extension.PanelContributionRequest;
 import zcd.jellyfish.api.extension.PromptContributionRequest;
 import zcd.jellyfish.api.extension.StatusLineContributionRequest;
 import zcd.jellyfish.api.extension.ToolCallRequest;
@@ -18,12 +19,13 @@ import java.nio.file.Path;
 /**
  * 官方待办插件：把会话待办做成插件能力，内核不再持有该领域。
  * <p>
- * <b>四个面各占一个扩展点，且都不需要新扩展点</b>：
+ * <b>五个面各占一个扩展点，且都不需要新扩展点</b>：
  * <ul>
  *     <li>{@code todo_write} 工具 → {@link ToolCallRequest}，模型写待办的唯一入口；</li>
  *     <li>{@code /todo} 命令 → {@link CommandRequest}，给人看的只读清单；</li>
  *     <li>待办注入 system prompt → {@link PromptContributionRequest}，让模型每轮都看得见自己的计划；</li>
- *     <li>状态栏进度 → {@link StatusLineContributionRequest}，让人不敲命令也能看到还剩几件事。</li>
+ *     <li>状态栏进度 → {@link StatusLineContributionRequest}，不敲命令也能看到还剩几件事；</li>
+ *     <li>待办面板 → {@link PanelContributionRequest}，在侧栏常驻显示完整清单。</li>
  * </ul>
  * <p>
  * <b>插件为什么能拥有这份状态</b>：待办只需 {@code sessionId} 作为归属，而命令与工具请求都带它；
@@ -49,6 +51,7 @@ public final class TodoPlugin implements JellyfishPlugin {
                 new CommandDescriptor("查看当前会话待办", null, null), new TodoCommand(store));
         context.contribute(PromptContributionRequest.class, new TodoPromptContribution(store));
         context.contribute(StatusLineContributionRequest.class, new TodoStatusLine(store));
+        context.contribute(PanelContributionRequest.class, new TodoPanel(store));
         registerWriteTool(context, store);
         LOG.info("待办插件已启动: dir={}", directory);
     }

@@ -53,7 +53,7 @@ echo "/help" | java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -
 | `6` | 回合未收敛：达到最大轮次仍未给出最终回复 |
 
 单次模式里输入以 `/` 开头就走命令域（`/help` `/model` `/agent` `/new` …），否则走一次 LLM 对话；
-`/help` `/session` `/status` `/todo` `/model` 这些命令不需要模型配置，可以离线验证安装是否正常。
+`/help` `/session` `/status` `/model` 这些命令不需要模型配置，可以离线验证安装是否正常（`/todo` 由待办插件提供）。
 
 ### TUI 模式
 
@@ -117,6 +117,11 @@ CSI-u 等所有「带修饰的 Enter」编码都无法被底层框架区分（�
 **已知限制**：界面滚动到内容末尾时自动跟随；用户上翻后不再打扰，状态栏出现 `↓ N 行`（生成中则显示 `↓ 正在生成…`）。
 消息区只投影最近 500 条消息，更早的以 `⎿ N 条更早的消息已折叠` 占位。
 编辑器的「光标到行尾」不可用（`End` 归消息区）；`\r\n` 输入会变成两个换行。
+
+**插件片段**：状态栏尾部可以显示插件贡献的一小段内容（例如待办插件的 `待办 2/5`）。
+插件**不能自己布局界面**——它只能贡献纯文本片段，由外壳按显示宽度拼接、并从最后一个片段起**整块丢弃**超宽的部分。
+外壳**不**每帧询问插件（那样空闲时也在反复调用处理器），只在失效时收集一次：会话切换、回合开始或结束、
+命令执行后、插件加载卸载、以及插件自己发布 UI 失效事件。
 
 ## 配置
 
@@ -199,7 +204,7 @@ CSI-u 等所有「带修饰的 Enter」编码都无法被底层框架区分（�
 }
 ```
 
-`react` 段控制 ReAct 循环：`maxRounds` 是单回合最大轮数；`contextReserveTokens` 是上下文预算里为系统提示词 / 待办注入预留的 token；`maxToolOutputChars` 是单个工具输出回灌模型前的截断长度。缺省值即为上表；非法值（非正数）回退到缺省值。
+`react` 段控制 ReAct 循环：`maxRounds` 是单回合最大轮数；`contextReserveTokens` 是上下文预算里为系统提示词 / 插件注入的上下文预留的 token；`maxToolOutputChars` 是单个工具输出回灌模型前的截断长度。缺省值即为上表；非法值（非正数）回退到缺省值。
 
 约定：
 
@@ -227,6 +232,7 @@ CSI-u 等所有「带修饰的 Enter」编码都无法被底层框架区分（�
 | --- | --- | --- |
 | `jellyfish-plugin-tools` | `jellyfish-tools` | 五个文件工具：`read_file`、`write_file`、`edit_file`、`list_dir`、`grep_files` |
 | `jellyfish-plugin-session-file` | `jellyfish-session-file` | 会话持久化：一个会话一个 JSON 文件，并用 git 管理历史 |
+| `jellyfish-plugin-todo` | `jellyfish-todo` | 会话待办：模型可写的 `todo_write` 工具 + 只读 `/todo` + 注入 system prompt |
 
 `jellyfish-tools` 的五个工具：
 
@@ -245,6 +251,7 @@ mvn -q package -DskipTests
 mkdir -p plugins
 cp jellyfish-plugins/jellyfish-plugin-tools/target/jellyfish-plugin-tools-*.jar plugins/
 cp jellyfish-plugins/jellyfish-plugin-session-file/target/jellyfish-plugin-session-file-*.jar plugins/
+cp jellyfish-plugins/jellyfish-plugin-todo/target/jellyfish-plugin-todo-*.jar plugins/
 ```
 
 插件配置写在 `jellyfish.json` 的 `plugins.configurations.<pluginId>` 段：
@@ -259,6 +266,10 @@ cp jellyfish-plugins/jellyfish-plugin-session-file/target/jellyfish-plugin-sessi
       "jellyfish-session-file": {
         "sessionDir": "~/jellyfish/sessions",
         "gitEnabled": true
+      },
+      "jellyfish-todo": {
+        "todoDir": "~/jellyfish/todos",
+        "readOnlyTools": ["todo_write"]
       }
     }
   }
@@ -268,5 +279,21 @@ cp jellyfish-plugins/jellyfish-plugin-session-file/target/jellyfish-plugin-sessi
 - `readOnlyTools` 是**跨插件的约定键**（`jellyfish.json` 里位于插件配置段下）：PLAN 模式下只有列在这里的工具能执行。没列的工具在 PLAN 模式一律拒绝。
 - `sessionDir`（默认 `~/jellyfish/sessions`）：会话文件目录。会话是跨项目的运行态数据，因此默认放全局级目录。
 - `gitEnabled`（默认 `true`）：首次落盘时在 `sessionDir` 里 `git init`，此后**每次内容变化的落盘留一次提交**（内容没变则不写文件、也不提交）。机器上没有 git 时只告警，文件照常落盘。
+- `todoDir`（默认 `~/jellyfish/todos`）：待办文件目录，一个会话一个 JSON 文件，空表会删掉文件。
+
+### 待办（jellyfish-todo）
+
+待办是模型的计划草稿，由插件自己持有（内核不再有会话待办字段、也没有 `/todo` 系统命令）：
+
+| 面 | 扩展点 | 说明 |
+| --- | --- | --- |
+| `todo_write` 工具 | `ToolCallRequest` | 模型写待办的唯一入口。**整表覆盖**：传完整的新列表，上次列过而这次没列出的项视为删除，空数组表示清空；状态只有 `pending` / `completed`，缺省按 `pending` 处理 |
+| `/todo` 命令 | `CommandRequest` | 只读地列出当前会话待办（写入只走 `todo_write`，不给同一份状态第二套写入语义） |
+| 上下文注入 | `PromptContributionRequest` | 每轮把待办块注入 system prompt，模型始终看得见自己的计划；没有待办时不注入 |
+| 状态栏进度 | `StatusLineContributionRequest` | 状态栏尾部显示 `待办 2/5`，不敲命令也能看到还剩几件事；没有待办时不占位 |
+
+参数非法（`todos` 不是数组、项不是对象、`content` 为空、`status` 不在取值内）会**当场报错**，并作为工具结果回灌给模型让它自己改，而不是静默落盘一份坏数据。待办写完会广播一次 UI 失效事件，因此状态栏进度不必等回合结束就更新。
+
+`todo_write` 是写操作，PLAN 模式下默认被权限拒绝；上面配置里的 `readOnlyTools: ["todo_write"]` 就是「计划模式下也允许维护计划」的声明，不需要可以去掉。
 
 会话恢复：启动时内核向所有注册了恢复处理器的插件要回会话，因此上次退出前的会话在下次启动时立即可见（`/session` 会列出来）。

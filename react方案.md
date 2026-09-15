@@ -392,6 +392,13 @@ public final class ReActResult {
 | P6 | `AgentHarness` 注入 `ReActLooper` / `SystemCommands`、`chat` 门面、启动注册与关闭回收；`AGENTS.md` / `README.md` / 类注释同步 | 完成；`AgentHarnessTest` 全绿 |
 | P7 | 全量 `mvn -o clean test` | 全绿：api 101 + infra 609 + core 53 + cli 11 = **774** 个用例，0 失败 |
 
+### 后续调整（待办迁出内核）
+
+P2 落地的 `PendingTodo` / `Session` 待办字段与 `SessionManager` 的四个待办入口，以及 §3.5 定义的「pending todo 注入」，
+已在「待办插件轮」**整体移除**：待办改由 `jellyfish-plugin-todo` 自持（`<todoDir>/<sessionId>.json`），
+经 `PromptContributionRequest` 注入 system prompt，写入走 `todo_write` 工具，`/todo` 退化为插件提供的只读命令。
+因此上表 P2 与 §2.2 / §3.2 / §3.5 / §3.6 中关于待办的部分只作历史记录；当前的扩展点与插件边界见 `AGENTS.md`。
+
 ### 与文档的偏差（已确认口径一致）
 
 1. **执行器不走 Dagger**：`ReActLooper` 自持专用守护线程池（线程名 `react`），未新增 `CoreModule`；理由见 §3.3。

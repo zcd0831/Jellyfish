@@ -759,6 +759,10 @@ public final class SessionMessageAppendedEvent extends AbstractJellyfishEvent {
 
 ### 4.5 pending todo 注入（本轮只定义语义，Q16 = 不落字段）
 
+> **后续调整（待办插件轮）**：待办最终没留在会话里。`react` 轮一度落了 `Session.todos` / `PendingTodo`
+> 与会话快照字段，但随后整体移除，改由 `jellyfish-plugin-todo` 自持（一个会话一个文件），
+> 经 `PromptContributionRequest` 注入 system prompt。本节只作当初的语义记录。
+
 **定义**：会话在构建「本轮上下文」时，把**尚未完成的待办项（pending todo）**渲染成一条消息追加进送给 LLM 的消息序列，使模型在多轮之间记得还有哪些事没做完。
 
 **边界（写进方案与代码注释，本轮不落字段）**：

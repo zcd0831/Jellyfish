@@ -263,6 +263,7 @@ CSI-u 等所有「带修饰的 Enter」编码都无法被底层框架区分（�
 | `jellyfish-plugin-tools` | `jellyfish-tools` | 五个文件工具：`read_file`、`write_file`、`edit_file`、`list_dir`、`grep_files` |
 | `jellyfish-plugin-session-file` | `jellyfish-session-file` | 会话持久化：一个会话一个 JSON 文件，并用 git 管理历史 |
 | `jellyfish-plugin-todo` | `jellyfish-todo` | 会话待办：模型可写的 `todo_write` 工具 + 只读 `/todo` + 注入 system prompt + 状态栏进度 + 侧栏清单面板 |
+| `jellyfish-plugin-project` | `jellyfish-project` | 项目约定：探测工作目录下的 `AGENTS.md`，在 system prompt 里给出**路径指引**（不注入全文） |
 
 `jellyfish-tools` 的五个工具：
 
@@ -282,6 +283,7 @@ mkdir -p plugins
 cp jellyfish-plugins/jellyfish-plugin-tools/target/jellyfish-plugin-tools-*.jar plugins/
 cp jellyfish-plugins/jellyfish-plugin-session-file/target/jellyfish-plugin-session-file-*.jar plugins/
 cp jellyfish-plugins/jellyfish-plugin-todo/target/jellyfish-plugin-todo-*.jar plugins/
+cp jellyfish-plugins/jellyfish-plugin-project/target/jellyfish-plugin-project-*.jar plugins/
 ```
 
 插件配置写在 `jellyfish.json` 的 `plugins.configurations.<pluginId>` 段：
@@ -310,6 +312,7 @@ cp jellyfish-plugins/jellyfish-plugin-todo/target/jellyfish-plugin-todo-*.jar pl
 - `sessionDir`（默认 `~/jellyfish/sessions`）：会话文件目录。会话是跨项目的运行态数据，因此默认放全局级目录。
 - `gitEnabled`（默认 `true`）：首次落盘时在 `sessionDir` 里 `git init`，此后**每次内容变化的落盘留一次提交**（内容没变则不写文件、也不提交）。机器上没有 git 时只告警，文件照常落盘。
 - `todoDir`（默认 `~/jellyfish/todos`）：待办文件目录，一个会话一个 JSON 文件，空表会删掉文件。
+- `jellyfish-project` **没有配置项**：约定文件名固定为 `AGENTS.md`，查找基准固定为进程工作目录。
 
 ### 待办（jellyfish-todo）
 
@@ -330,3 +333,17 @@ cp jellyfish-plugins/jellyfish-plugin-todo/target/jellyfish-plugin-todo-*.jar pl
 `todo_write` 是写操作，PLAN 模式下默认被权限拒绝；上面配置里的 `readOnlyTools: ["todo_write"]` 就是「计划模式下也允许维护计划」的声明，不需要可以去掉。
 
 会话恢复：启动时内核向所有注册了恢复处理器的插件要回会话，因此上次退出前的会话在下次启动时立即可见（`/session` 会列出来）。
+
+### 项目约定（jellyfish-project）
+
+`AGENTS.md` 是仓库里的项目约定（构建命令、编码规范、提交格式、模块边界）。这个插件让模型知道**当前工作目录里有这份文件**：
+
+- **只给路径，不给正文**。注入的是一小段 `[项目约定]` 指引（约 6 行），内容是「工作目录下有 `AGENTS.md`，动手前先读它」。
+  原因有两个：约定文件可能有几十上百 KB（本仓库这份就是 67KB），全文注入会每一轮都付这份 token；
+  而仓库内容按「工具结果」的身份进入上下文是**数据**，塞进 system prompt 就变成了指令。
+- **只查进程工作目录**，不向上查找父目录、也不查用户主目录：与文件工具的相对路径基准保持一致。
+- **文件名不可配**，固定 `AGENTS.md`：这已是各家编码 agent 共同的约定，做成配置项只会多一个会填错的旋钮。
+- **空文件不算命中**（指向它只会白费一次工具调用）；文件不存在时插件完全不注入，system prompt 里连空标题都不会出现。
+- 因为走的是插件而不是内置提示词，**对所有 agent 生效**——用 `/agent` 换成自定义 agent 也照常。
+
+代价是模型确实会去读那个文件（这是它遵守约定的前提），读进来的内容占多少上下文在 `/status` 里看得见，必要时 `/compact`。

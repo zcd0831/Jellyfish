@@ -78,7 +78,7 @@ flowchart TB
 
     subgraph "外部依赖·插件与脚本"
         direction LR
-        Plugins["PF4J 插件<br>官方: tools / session-file<br>Java: 工具/记忆/横切<br>桥接: Python / TS 语言适配"]
+        Plugins["PF4J 插件<br>官方: tools / session-file / todo / project<br>Java: 工具/记忆/横切<br>桥接: Python / TS 语言适配"]
         Scripts["脚本插件进程<br>Python 常驻网关 / TS·JS 常驻网关<br>单进程多路复用"]
     end
 
@@ -175,7 +175,7 @@ Maven 多模块。模块边界与「整体架构图」的两层 + 对外契约�
 ```mermaid
 flowchart LR
     API["jellyfish-api<br>插件 SPI + 扩展点/事件模型 + 统一异常"]
-    PLUGINS["jellyfish-plugins<br>官方插件聚合：tools / session-file / todo"]
+    PLUGINS["jellyfish-plugins<br>官方插件聚合：tools / session-file / todo / project"]
     SCRIPT["jellyfish-script<br>跨语言插件运行时（语言无关）"]
     PY["jellyfish-plugin-python<br>PF4J 桥接插件"]
     NODE["jellyfish-plugin-node<br>PF4J 桥接插件（TS/JS）"]
@@ -216,6 +216,7 @@ flowchart LR
 | `jellyfish-plugin-tools` | `zcd:jellyfish-plugin-tools` | 官方工具插件：`read_file` / `write_file` / `edit_file` / `list_dir` / `grep_files` | `jellyfish-api`（provided） |
 | `jellyfish-plugin-session-file` | `zcd:jellyfish-plugin-session-file` | 官方会话持久化插件：一个会话一个 JSON 文件 + git 管理历史 | `jellyfish-api`（provided） |
 | `jellyfish-plugin-todo` | `zcd:jellyfish-plugin-todo` | 官方待办插件：模型可写的 `todo_write` 工具 + 只读 `/todo` 命令 + system prompt 注入 | `jellyfish-api`（provided） |
+| `jellyfish-plugin-project` | `zcd:jellyfish-plugin-project` | 官方项目约定插件：探测工作目录下的 `AGENTS.md`，在 system prompt 里给出**路径指引**（不注入全文） | `jellyfish-api`（provided） |
 
 包名一律全小写。
 
@@ -362,6 +363,14 @@ jellyfish-plugins/                        # 官方插件聚合（packaging=pom�
             ├── TodoJson.java             # 待办 JSON 读写（自带 Jackson，显式注解不靠 -parameters）
             ├── TodoText.java             # 四种渲染（提示词块 / 只读清单 / 工具确认 / 状态栏进度）集中一处
             └── PluginConfig.java         # todoDir，含 ~ 展开（插件自己展开）
+└── jellyfish-plugin-project/
+    ├── pom.xml                           # 只依赖 jellyfish-api（provided）+ 测试期 infra；无第三方依赖，因此不需要 shade
+    └── src/main/
+        ├── resources/plugin.properties
+        └── java/zcd/jellyfish/plugin/project/
+            ├── ProjectPlugin.java                # 一个插件只占一个扩展点：注册提示词贡献
+            ├── ConventionFiles.java              # 固定名 AGENTS.md 的存在性探测（常规文件且非空；空文件不算）
+            └── ProjectPromptContribution.java    # [项目约定] 路径指引块；只给路径不给正文，未命中时空贡献
 
 jellyfish-cli/src/main/resources/config.json       # 应用配置（进程名 + 各配置段的双源文件路径）
 jellyfish-cli/src/main/resources/default-agent.json  # 内置系统默认 agent（不走双源）
@@ -430,7 +439,7 @@ jellyfish-cli/src/main/resources/log4j2.xml           # 日志：root 默认 WAR
 - **权限判定的三层与 fail-open 的适用域**：`PermissionManager` 依次走「核心策略（普通 Java 代码）→ PLAN 只读白名单 → 插件拦截（两态、只收紧）」，再统一处理 ASK 与审计。fail-open 只覆盖「取不到策略」（未绑定 agent、无策略）；策略一旦生效，它的否定结论就是硬结论，否则 PLAN 模式形同虚设。插件侧结果类型独立为两态 `PermissionVeto`，因此「插件只能 Deny、不能要求人工审批」是编译期约束，不靠运行期判定。
 - **插件模型**：Java 插件与跨语言桥接插件在 `PF4JPluginManager` 眼里完全同构，都只经 `PluginContext`（`handle` / `contribute` / `observe` / `emit`）与内核交互：前两者写同一份类型注册表，后两者读写事件通道；脚本进程只是桥接插件背后的一台「无状态计算器」。
 - **插件碰不到会话、也拿不到工作目录**：`PluginContext` 只有身份与四个注册订阅方法，`ToolCallRequest` / `CommandRequest` 只带 `sessionId` 这类标识。两个直接后果：插件读写不了会话内部结构（消息列表、权限模式）；工具的相对路径只能按**进程工作目录**解析（`ToolPaths` 把这个基准集中在一处，将来补会话级 cwd 只改那里）。这不是缺陷而是边界——**只要一份状态能按 `sessionId` 归属，插件就完全能自己持有它**：`jellyfish-plugin-todo` 就是这样把待办从内核搬走的（自持文件 + 提示词贡献），内核不用新增会话字段，也不必为它保留任何调用点。
-- **官方插件**：`jellyfish-plugin-tools` 提供文件读写/编辑、目录列举与文本搜索五个工具（只读工具靠 `plugins.configurations.jellyfish-tools.readOnlyTools` 声明，供 PLAN 白名单）；`jellyfish-plugin-session-file` 把会话写成「一个会话一个 JSON 文件」并用 git 管理历史，并处理 `SessionDeleteRequest`（删文件，提交复用落盘那条路径——`git add` 对已删除的路径本来就记录删除）。**该插件的失败语义是分层的**：文件落盘失败上抛（文件是真相，对应内核的「不可丢」），git 与单个坏文件只记告警（git 只是附加的版本化层，机器没装 git 不该升级成「不能说话」；一个坏文件不该拖累同目录其它会话）。目录默认 `~/jellyfish/sessions`，首次落盘时 `git init`，提交身份用 `git -c user.name/user.email` 临时指定（新机器没有全局 git 配置也能提交，且不会把用户身份写进本仓库）；只认会话目录自己的 `.git`，绝不向上寻找父仓库。`jellyfish-plugin-todo` 承载会话待办：`todo_write` 工具整表覆盖（参数非法当场抛错，由 ReAct 转成 tool 结果回灌给模型）、只读 `/todo`、经 `PromptContributionRequest` 注入 system prompt、经 `StatusLineContributionRequest` 在状态栏显示 `待办 2/5`、经 `PanelContributionRequest` 在侧栏常驻显示完整清单（已完成项整行变暗；建议右栏但可被忽略），并在写成功后广播 `UiInvalidatedEvent` 让状态栏与面板不必等回合结束就刷新；状态落在 `<todoDir>/<sessionId>.json`（默认 `~/jellyfish/todos`，空表删文件）；待办只按 `sessionId` 归属，因此它不需要任何会话内部结构；并处理 `SessionDeleteRequest` 清掉本会话待办文件，不留孤儿。
+- **官方插件**：`jellyfish-plugin-tools` 提供文件读写/编辑、目录列举与文本搜索五个工具（只读工具靠 `plugins.configurations.jellyfish-tools.readOnlyTools` 声明，供 PLAN 白名单）；`jellyfish-plugin-session-file` 把会话写成「一个会话一个 JSON 文件」并用 git 管理历史，并处理 `SessionDeleteRequest`（删文件，提交复用落盘那条路径——`git add` 对已删除的路径本来就记录删除）。**该插件的失败语义是分层的**：文件落盘失败上抛（文件是真相，对应内核的「不可丢」），git 与单个坏文件只记告警（git 只是附加的版本化层，机器没装 git 不该升级成「不能说话」；一个坏文件不该拖累同目录其它会话）。目录默认 `~/jellyfish/sessions`，首次落盘时 `git init`，提交身份用 `git -c user.name/user.email` 临时指定（新机器没有全局 git 配置也能提交，且不会把用户身份写进本仓库）；只认会话目录自己的 `.git`，绝不向上寻找父仓库。`jellyfish-plugin-todo` 承载会话待办：`todo_write` 工具整表覆盖（参数非法当场抛错，由 ReAct 转成 tool 结果回灌给模型）、只读 `/todo`、经 `PromptContributionRequest` 注入 system prompt、经 `StatusLineContributionRequest` 在状态栏显示 `待办 2/5`、经 `PanelContributionRequest` 在侧栏常驻显示完整清单（已完成项整行变暗；建议右栏但可被忽略），并在写成功后广播 `UiInvalidatedEvent` 让状态栏与面板不必等回合结束就刷新；状态落在 `<todoDir>/<sessionId>.json`（默认 `~/jellyfish/todos`，空表删文件）；待办只按 `sessionId` 归属，因此它不需要任何会话内部结构；并处理 `SessionDeleteRequest` 清掉本会话待办文件，不留孤儿。`jellyfish-plugin-project` 只做一件事：探测**进程工作目录**下有没有 `AGENTS.md`（常规文件且非空），有则经 `PromptContributionRequest` 在 system prompt 里给出一段 `[项目约定]` **路径指引**（不注入全文），没有则空贡献。指引里**只有路径没有正文**是两个考虑叠加：原文可能几十上百 KB，全文注入会每轮都付这份 token 并挤占 `ContextWindow` 里历史消息的预算；而仓库内容按「工具结果」进去是数据，塞进 system prompt 就变成了「第三方仓库以最高优先级说话」。查找基准与 `ToolPaths` 同一处（进程工作目录），否则会出现「工具按 A 解析、约定按 B 解析」的错位。
 - **跨语言通信**：JSON-RPC 2.0 over Stdio，每行一个 JSON；每种语言最多一个常驻进程（单进程多路复用），请求统一经 `ScriptGateway` 路由，脚本不直接管理进程。
 - **跨语言事件桥接**：内核通知经 `EventBridge` 推给脚本，脚本 `emit_event` 反向回 `EventChannel`；脚本来源事件带来源标记避免回推，事件类型走白名单、负载限 1MB、队列有界。
 

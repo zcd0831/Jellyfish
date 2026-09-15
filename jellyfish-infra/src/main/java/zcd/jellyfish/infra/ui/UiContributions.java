@@ -6,6 +6,8 @@ import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.event.Subscription;
 import zcd.jellyfish.api.event.notification.PluginStateChangedEvent;
 import zcd.jellyfish.api.event.notification.UiInvalidatedEvent;
+import zcd.jellyfish.api.extension.PanelContribution;
+import zcd.jellyfish.api.extension.PanelContributionRequest;
 import zcd.jellyfish.api.extension.StatusLineContribution;
 import zcd.jellyfish.api.extension.StatusLineContributionRequest;
 import zcd.jellyfish.infra.event.EventChannel;
@@ -24,6 +26,9 @@ import java.util.Set;
  * <p>
  * <b>为什么要有这一层</b>：外壳只应认识「给我一份内容」这个动作，不应该认识 {@code ExtensionRegistry}
  * 与 {@code EventChannel}——与 {@code CommandManager} 是同一条口径（注册表与派发策略是 infra 的事）。
+ * <p>
+ * <b>两类贡献的区别只在「能否共存」</b>：状态栏片段是拼接型（多插件共存，去重后拼接），
+ * 面板是独占型（一块区域同时只显示一个，因此带上 owner 交给外壳／用户仲裁）。
  * <p>
  * <b>调用模型是「失效时收集」而不是「每帧收集」</b>：插件处理器只在缓存失效时被调用，
  * 因此空闲时为零调用。代价是「漏一个失效触发源 = 内容永久陈旧」，所以外壳必须把
@@ -77,9 +82,10 @@ public final class UiContributions implements AutoCloseable {
     }
 
     /**
-     * 收集一次某会话的全部 UI 贡献。
+     * 收集一次某会话的全部 UI 贡献（状态栏片段 + 面板）。
      * <p>
      * 在调用点线程内联执行插件处理器，因此外壳只应在渲染线程调用；处理器抛错只记告警并跳过。
+     * 结果里<b>不做区域仲裁</b>：哪个插件的面板显示在哪里还要考虑用户的 {@code /ui} 选择，那是外壳的状态。
      *
      * @param sessionId 会话标识，可为 {@code null}
      * @return 快照，保证非 {@code null}
@@ -87,8 +93,7 @@ public final class UiContributions implements AutoCloseable {
     public UiSnapshot collect(String sessionId) {
         collecting = true;
         try {
-            List<String> fragments = statusFragments(sessionId);
-            return fragments.isEmpty() ? UiSnapshot.empty() : UiSnapshot.of(fragments);
+            return UiSnapshot.of(statusFragments(sessionId), panels(sessionId));
         } finally {
             collecting = false;
         }
@@ -149,6 +154,62 @@ public final class UiContributions implements AutoCloseable {
         } catch (RuntimeException e) {
             LOG.warn("UI 贡献失效监听器失败：{}", e.getMessage());
         }
+    }
+
+    /**
+     * 收集面板贡献。
+     * <p>
+     * <b>每个插件至多保留一块</b>：同一插件注册多个面板处理器时只取 {@code order} 最小的一个，
+     * 其余记告警。注册表已按 {@code order} 升序给出绑定，因此「先到者胜」就是「order 最小者胜」。
+     * 这条约束比「每个区域至多一块」更严（不区分区域）：面板是独占型资源，一个插件想同时占两块，
+     * 用户就要用 {@code /ui} 逐个切换，而 {@code /ui} 的抽象是「区域 ← 插件」——
+     * 同一个 pluginId 跨区域重复出现只会让清单读起来像两份配置。
+     * <p>
+     * 落位不在这里做：哪个插件的面板显示在哪个区域还要考虑用户的 {@code /ui} 选择，那是外壳的交互状态。
+     *
+     * @param sessionId 会话标识，可为 {@code null}
+     * @return 面板列表（按 {@code order} 升序），无贡献时为空列表
+     */
+    private List<OwnedPanel> panels(String sessionId) {
+        List<HandlerBinding<PanelContributionRequest, PanelContribution>> bindings =
+                extensions.bindings(PanelContributionRequest.class, null);
+        if (bindings.isEmpty()) {
+            return Collections.emptyList();
+        }
+        // 同一个请求对象复用给全部处理器：载荷只有 sessionId，处理器只读
+        PanelContributionRequest request = new PanelContributionRequest(sessionId);
+        List<OwnedPanel> result = new ArrayList<OwnedPanel>(bindings.size());
+        Set<String> owners = new HashSet<String>();
+        for (HandlerBinding<PanelContributionRequest, PanelContribution> binding : bindings) {
+            if (!owners.add(binding.getOwner())) {
+                LOG.warn("插件 {} 注册了不止一个面板贡献，只保留 order 最小的那个", binding.getOwner());
+                continue;
+            }
+            PanelContribution contribution = panelOf(binding, request);
+            if (contribution != null) {
+                result.add(new OwnedPanel(binding.getOwner(), contribution));
+            }
+        }
+        return result;
+    }
+
+    /**
+     * 执行单个面板贡献处理器并取出内容。
+     *
+     * @param binding 处理器绑定（含 owner，供告警归因）
+     * @param request 贡献请求
+     * @return 面板内容；无贡献或处理失败时返回 {@code null}
+     */
+    private PanelContribution panelOf(HandlerBinding<PanelContributionRequest, PanelContribution> binding,
+                                      PanelContributionRequest request) {
+        PanelContribution contribution;
+        try {
+            contribution = extensions.invoke(binding.getHandler(), request);
+        } catch (RuntimeException e) {
+            LOG.warn("插件 {} 的面板贡献失败，本次跳过：{}", binding.getOwner(), e.getMessage());
+            return null;
+        }
+        return contribution == null || contribution.isEmpty() ? null : contribution;
     }
 
     /**

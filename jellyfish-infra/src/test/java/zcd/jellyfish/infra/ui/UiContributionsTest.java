@@ -9,8 +9,13 @@ import zcd.jellyfish.api.event.RegisterOptions;
 import zcd.jellyfish.api.event.notification.PluginStateChangedEvent;
 import zcd.jellyfish.api.event.notification.UiInvalidatedEvent;
 import zcd.jellyfish.api.extension.ExtensionHandler;
+import zcd.jellyfish.api.extension.PanelContribution;
+import zcd.jellyfish.api.extension.PanelContributionRequest;
 import zcd.jellyfish.api.extension.StatusLineContribution;
 import zcd.jellyfish.api.extension.StatusLineContributionRequest;
+import zcd.jellyfish.api.ui.UiLine;
+import zcd.jellyfish.api.ui.UiRegion;
+import zcd.jellyfish.api.ui.UiSegment;
 import zcd.jellyfish.infra.event.EventChannel;
 import zcd.jellyfish.infra.event.EventChannelOptions;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
@@ -18,6 +23,7 @@ import zcd.jellyfish.infra.registry.TypeRegistry;
 
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -153,6 +159,99 @@ class UiContributionsTest {
     }
 
     @Test
+    @DisplayName("面板按 order 升序收集，并带上 owner 供 /ui 归因")
+    void collect_should_orderPanelsWithOwner() {
+        registerPanel("late", 10, UiRegion.DOCK, "B");
+        registerPanel("early", -10, UiRegion.LEFT, "A");
+
+        List<OwnedPanel> panels = contributions.collect("s-1").getPanels();
+
+        assertEquals(2, panels.size());
+        assertEquals("early", panels.get(0).getOwner());
+        assertEquals("late", panels.get(1).getOwner());
+    }
+
+    @Test
+    @DisplayName("面板内容与建议区域原样透传：外壳可以忽略建议，但不能替插件改写")
+    void collect_should_passPanelContent() {
+        registerPanel("jellyfish-todo", 0, UiRegion.LEFT, "待办 2/5");
+
+        OwnedPanel panel = contributions.collect("s-1").getPanels().get(0);
+
+        assertEquals("待办", panel.getContribution().getTitle());
+        assertEquals(UiRegion.LEFT, panel.getContribution().getPreferredRegion());
+        assertEquals("待办 2/5", panel.getContribution().getLines().get(0).text());
+    }
+
+    @Test
+    @DisplayName("同一插件注册多块面板时只保留第一块：否则一个插件就能把界面刷满")
+    void collect_should_keepFirstPanel_when_sameOwnerRegistersTwice() {
+        registerPanel("greedy", 0, UiRegion.DOCK, "first");
+        registerPanel("greedy", 1, UiRegion.LEFT, "second");
+
+        List<OwnedPanel> panels = contributions.collect("s-1").getPanels();
+
+        assertEquals(1, panels.size());
+        assertEquals("first", panels.get(0).getContribution().getLines().get(0).text());
+    }
+
+    @Test
+    @DisplayName("空面板贡献不占位：面板要抢一整个区域，没内容就不该抢")
+    void collect_should_skipEmptyPanel() {
+        extensions.contribute("silent", PanelContributionRequest.class, null,
+                request -> PanelContribution.empty(), RegisterOptions.DEFAULT);
+        registerPanel("loud", 1, UiRegion.DOCK, "X");
+
+        List<OwnedPanel> panels = contributions.collect("s-1").getPanels();
+
+        assertEquals(1, panels.size());
+        assertEquals("loud", panels.get(0).getOwner());
+    }
+
+    @Test
+    @DisplayName("一个插件面板抛错只跳过它自己，其余插件正常出内容")
+    void collect_should_isolateFailingPanelHandler() {
+        ExtensionHandler<PanelContributionRequest, PanelContribution> failing = request -> {
+            throw new IllegalStateException("boom");
+        };
+        extensions.contribute("broken", PanelContributionRequest.class, null, failing, RegisterOptions.DEFAULT);
+        registerPanel("healthy", 1, UiRegion.DOCK, "ok");
+
+        List<OwnedPanel> panels = contributions.collect("s-1").getPanels();
+
+        assertEquals(1, panels.size());
+        assertEquals("healthy", panels.get(0).getOwner());
+    }
+
+    @Test
+    @DisplayName("面板请求也带上会话标识")
+    void collect_should_passSessionIdToPanel() {
+        final StringBuilder seen = new StringBuilder();
+        extensions.contribute("probe", PanelContributionRequest.class, null,
+                request -> {
+                    seen.append(request.getSessionId());
+                    return PanelContribution.empty();
+                }, RegisterOptions.DEFAULT);
+
+        contributions.collect("s-42");
+
+        assertEquals("s-42", seen.toString());
+    }
+
+    @Test
+    @DisplayName("片段与面板可以同时存在：两者是独立贡献通道")
+    void collect_should_returnBothKindsOfContribution() {
+        register("status", 0, "待办 2/5");
+        registerPanel("panel", 1, UiRegion.DOCK, "明细");
+
+        UiSnapshot snapshot = contributions.collect("s-1");
+
+        assertEquals(Collections.singletonList("待办 2/5"), snapshot.getStatusFragments());
+        assertEquals(1, snapshot.getPanels().size());
+        assertTrue(!snapshot.isEmpty());
+    }
+
+    @Test
     @DisplayName("插件发布失效事件时通知监听器：这是插件主动刷新界面的唯一通道")
     void onInvalidated_should_notify_when_uiInvalidatedEventPublished() {
         AtomicInteger notifications = new AtomicInteger();
@@ -230,6 +329,22 @@ class UiContributionsTest {
     private void register(String owner, int order, final String text) {
         extensions.contribute(owner, StatusLineContributionRequest.class, null,
                 request -> StatusLineContribution.of(text), RegisterOptions.order(order));
+    }
+
+    /**
+     * 注册一块面板贡献。
+     *
+     * @param owner  来源标识
+     * @param order  调用顺序
+     * @param region 建议落位区域
+     * @param body   正文第一行的内容
+     */
+    private void registerPanel(String owner, int order, UiRegion region, final String body) {
+        extensions.contribute(owner, PanelContributionRequest.class, null,
+                request -> PanelContribution.of("待办",
+                        Collections.singletonList(UiLine.of(UiSegment.of(body))),
+                        region),
+                RegisterOptions.order(order));
     }
 
     /**

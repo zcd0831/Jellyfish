@@ -971,3 +971,50 @@ T2.1 端到端冒烟时发现原 T5 键位**不可实现**，停下来求证后�
 
 **未变的部分**：消息区仍是**单个 `richText`**（子元素过百的断崖结论不变）、滚动仍只发生在消息区、
 `Overlay`（模态浮层）与新增的 `DockPanel`（常驻面板）仍是两个类型。
+
+---
+
+## 12. 首页与延迟建会话（T9，**已落地**）
+
+> 起因：每次进 TUI 都会新建一个 session，哪怕一句话都没说，导致 `~/jellyfish/sessions/` 里堆满空会话文件
+> （会话持久化是 `SessionManager.create` 的一等职责，建了就一定落盘 + 一次 git 提交）。
+> 本节的裁决**均由用户逐条确认**。
+
+### 12.1 口径
+
+| 编号 | 议题 | 裁决 |
+| --- | --- | --- |
+| **T9.1** | 首页 | 裸 `-tui` 进**首页**（无当前会话），消息区居中显示加粗字标 `Jellyfish`；用户真正要用时才建会话 |
+| **T9.2** | 首页上的命令分流 | 除 `-tui` 裸启动外，**任何输入都会进会话页**。`/new` `/resume` `/delete` **不预先建会话**（它们自己就会建 / 切 / 删；预先建只会多出一条空会话，或让 `/delete` 净效果为零），其余命令（含 `/session` `/help`）与普通文本**先建会话再执行** |
+| **T9.3** | 外壳自有命令 | `/exit` `/ui` 不需要会话，不建会话 |
+| **T9.4** | 启动参数 | `--session <id>` 直接进该会话页（不存在 → 退出码 2）；给了 `--agent/--model/--mode` 则**启动即建会话**进会话页（因此不需要「暂存覆盖项」这条路） |
+| **T9.5** | 首页状态栏 | 显示「将要使用的」默认 agent（`AgentManager.getDefaultAgentId()`）与默认模型（`ModelManager.resolveDefault()`），权限模式按 `NORMAL`——与 `createDefault()` 建出来的会话一致 |
+| **T9.6** | 字标 | 多行 ASCII 改为**一行加粗 `Jellyfish`**，按显示宽度居中，超宽裁切不折行 |
+| **T9.7** | 用法说明 | `StartupHint` 不再是启动提示，改名 `ShellUsage`，改为追加在**无参 `/help`** 的输出之后（只在 TUI 侧追加，不污染 `-cli` / `-server` 的 `/help`） |
+| **T9.8** | 删除会话 | 新增内核命令 **`/delete <sessionId>`**（别名 `rm`，注册只读候选以弹二级选择页）。只删内存没意义——`session-file` 下次启动会恢复回来，因此走新的同步扩展点 `SessionDeleteRequest` |
+| **T9.9** | 不做 | 不做「空会话不落盘」兜底，不清理已存在的历史空文件 |
+
+### 12.2 关键实现
+
+- **内核侧**：`SessionBootstrap.ensureCurrentSession` 只多一条分支——`mode == TUI && 无 --session && 无覆盖项` 时
+  **只做存在性校验、不建会话**，返回 `null`；其余三种模式与路径行为不变（CLI 必须启动即有会话）。
+- **删除的三处**：`api/SessionDeleteRequest`（类型级，`Void`，失败上抛）→ `SessionManager.delete()`
+  （**先派发删除、成功后才移出会话表并清当前指针**，删不掉就当没删）→ `session-file` 删文件 + 复用
+  `GitRepository.commit()`（`git add` 对已删除路径本就记录删除）、`todo` 删本会话待办文件（不留孤儿）。
+  `close()` 与 `delete()` 分工：前者结束运行态但保留磁盘内容，后者是「不要了」。
+- **外壳侧**：`ChatState` 在 `sessionId == null` 时走 `TranscriptProjector.home()`（字标 + 外壳提示，
+  `/resume` 报错之类必须能在首页看见）；`TuiApp.currentSessionIdOrNull()` 取代了原来「无会话即抛错」的
+  `currentSessionId()`（补全、候选查询、命令分发都可能在首页发生）。
+- **两个易错点（已修 + 有测试）**：
+  1. `submit()` 里判「是不是会话域命令」必须**要求 `/` 前缀**，否则用户把 `resume this` 当普通对话发出时
+     会被当成命令、跳过建会话；
+  2. 命令改变了当前会话（`/new` `/resume` `/delete`）后，`executeCommand` 要**先把会话切换的副作用落实
+     （`syncSession`）再贴结果提示**，否则下一帧 `syncSession` 会把刚贴的命令结果当成旧会话遗留清掉。
+
+### 12.3 与本文档前文的差异
+
+| 原文位置 | 现在的口径 |
+| --- | --- |
+| §4.1 / §11 的 `StartupHint.java` | 删除，改为 `HomeSplash.java`（字标）+ `ShellUsage.java`（用法说明） |
+| §3.2「视图 = 会话投影」 | 不变；新增「首页」只是 `sessionId == null` 时的另一种投影，仍是同一条渲染路径 |
+| §2.2「本方案不动内核生产代码」 | T9 起不再成立：`SessionBootstrap` 加了一条 TUI 延迟建会话分支，`api` 新增 `SessionDeleteRequest` |

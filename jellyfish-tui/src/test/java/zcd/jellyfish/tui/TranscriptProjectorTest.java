@@ -349,27 +349,23 @@ class TranscriptProjectorTest {
     }
 
     @Test
-    @DisplayName("启动提示渲染成助手消息：⏺ jellyfish 表头 + 正文缩进，不用外壳提示块前缀")
-    void project_should_render_startup_hint_as_assistant_message() {
-        List<VisualLine> lines = TranscriptProjector.project(Collections.<SessionMessage>emptyList(),
-                Collections.<ShellNotice>emptyList(), "你好，我是你的终端助手", completed(), WIDE,
-                TranscriptProjector.DEFAULT_MAX_MESSAGES);
+    @DisplayName("首页投影：居中字标，不带消息表头")
+    void home_should_renderCenteredLogo() {
+        List<String> body = texts(TranscriptProjector.home(Collections.<ShellNotice>emptyList(), WIDE));
 
-        List<String> body = texts(lines);
-        assertEquals(3, body.size(), "空行 + 表头 + 正文，实际：" + body);
-        assertEquals("  \u23fa jellyfish", body.get(1));
-        assertEquals("    你好，我是你的终端助手", body.get(2));
-        assertFalse(body.contains("    \u23bf 你好，我是你的终端助手"), "不得再用外壳提示块前缀");
+        assertEquals(2, body.size(), "空行 + 字标，实际：" + body);
+        assertEquals("", body.get(0));
+        assertEquals(HomeSplash.LOGO, body.get(1).trim());
+        assertTrue(body.get(1).startsWith(" "), "必须居中，实际：" + body);
     }
 
     @Test
-    @DisplayName("没有启动提示时不占任何行")
-    void project_should_addNothing_when_startupHintIsBlank() {
-        List<String> body = texts(TranscriptProjector.project(Collections.<SessionMessage>emptyList(),
-                Collections.<ShellNotice>emptyList(), "   ", completed(), WIDE,
-                TranscriptProjector.DEFAULT_MAX_MESSAGES));
+    @DisplayName("首页投影：外壳提示仍然可见（如 /resume 报错）")
+    void home_should_renderNotices() {
+        ShellNotice notice = new ShellNotice(1L, "/resume missing", "会话不存在：missing", ShellNotice.Kind.ERROR);
+        List<String> body = texts(TranscriptProjector.home(Collections.singletonList(notice), WIDE));
 
-        assertTrue(body.isEmpty(), "空白启动提示不应产生任何行，实际：" + body);
+        assertTrue(body.contains("    \u2717 会话不存在：missing"), "首页上必须能看到错误提示，实际：" + body);
     }
 
     /**

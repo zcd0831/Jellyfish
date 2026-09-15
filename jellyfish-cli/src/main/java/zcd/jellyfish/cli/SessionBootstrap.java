@@ -9,12 +9,16 @@ import zcd.jellyfish.infra.session.SessionManager;
 import java.util.Objects;
 
 /**
- * 启动期会话保证：让外壳在进入主流程前一定有一个「当前会话」，并把启动参数里的覆盖项落上去。
+ * 启动期会话保证：让外壳在进入主流程前拿到「当前会话」，并把启动参数里的覆盖项落上去。
  * <p>
  * <b>为什么需要这一步</b>：三种模式的所有智能入口（{@code AgentHarness.chat}）与大部分系统命令
  * （{@code /model} {@code /agent} {@code /mode} {@code /status}）都要求「当前会话」存在，
  * 而会话是纯内存运行态、进程启动时一个都没有。把「建第一个会话」放在 {@code Launcher} 这一层，
  * 三种模式共享同一条规则，模式实现本身不必关心自己是不是第一个。
+ * <p>
+ * <b>TUI 是唯一可以「暂时不建」的模式</b>：它先进首页（没有当前会话），等用户真正发起对话或执行命令时
+ * 才建会话——否则每次「进去看看」都会留下一个空会话文件（会话持久化是 create 的一等职责，建了就一定落盘）。
+ * CLI 是单次调用，没有首页这个概念，因此始终在启动期建会话。详见 {@link #deferCreation(StartupOptions)}。
  * <p>
  * <b>为什么参数校验放在这里而不是解析器</b>：{@code --agent} / {@code --model} 的合法性要靠内核索引判断，
  * 而解析阶段不加载配置（帮助与版本必须能在零配置下工作）。因此「语法」在解析器校验、
@@ -51,9 +55,12 @@ public final class SessionBootstrap {
 
     /**
      * 保证当前会话存在，并把启动参数里的覆盖项应用到它上面。
+     * <p>
+     * <b>返回值可为 {@code null}</b>：只有「TUI 且无 {@code --session}、无任何覆盖项」这一种情况返回
+     * {@code null}，表示「先不建会话、进首页」。其余情况都保证有当前会话。
      *
      * @param options 启动参数，不可为 {@code null}
-     * @return 当前会话，保证非 {@code null}
+     * @return 当前会话；刻意不建会话时（TUI 首页）返回 {@code null}
      * @throws JellyfishException {@code --session} 指向不存在的会话、或 {@code --agent} / {@code --model} 不存在时抛出
      */
     public Session ensureCurrentSession(StartupOptions options) {
@@ -67,10 +74,34 @@ public final class SessionBootstrap {
         if (current != null) {
             return applyOverrides(options, current);
         }
+        if (deferCreation(options)) {
+            // 刻意不建：外壳要先显示首页，等用户真正要用了再建（见类注释）
+            return null;
+        }
         Session created = sessions.create(options.getAgentId(), options.getProvider(), options.getModel(),
                 options.getPermissionMode());
         sessions.switchTo(created.getSessionId());
         return created;
+    }
+
+    /**
+     * 判断本次启动是否刻意不建会话。
+     * <p>
+     * 只有 TUI 模式且<b>既没指定会话、也没有任何覆盖项</b>时才会走到这里：那种情况下外壳先显示首页
+     * （无当前会话），用户真正发起对话或执行命令时才建会话。
+     * <p>
+     * 反过来，只要带了覆盖项，就说明用户已经明确指定了要跑的东西，此时「先建会话把覆盖项落上去」
+     * 比「暂存覆盖项、等首条输入再应用」简单得多，也不会出现覆盖项静默丢失。
+     *
+     * @param options 启动参数
+     * @return 不建会话返回 {@code true}
+     */
+    private static boolean deferCreation(StartupOptions options) {
+        return options.getMode() == StartupOptions.Mode.TUI
+                && options.getAgentId() == null
+                && options.getProvider() == null
+                && options.getModel() == null
+                && options.getPermissionMode() == null;
     }
 
     /**

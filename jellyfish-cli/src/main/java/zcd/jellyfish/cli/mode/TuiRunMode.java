@@ -7,6 +7,7 @@ import zcd.jellyfish.cli.ExitCodes;
 import zcd.jellyfish.cli.StartupOptions;
 import zcd.jellyfish.cli.console.ConsoleIO;
 import zcd.jellyfish.core.AgentHarness;
+import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.command.CommandManager;
 import zcd.jellyfish.infra.event.EventChannel;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
@@ -65,6 +66,9 @@ public final class TuiRunMode implements RunMode {
     /** 模型门面：状态栏展示上下文长度用。 */
     private final ModelManager models;
 
+    /** agent 门面：首页（无会话）时状态栏展示默认 agent 用。 */
+    private final AgentManager agents;
+
     /** 同步扩展点策略：构造 UI 贡献门面用。 */
     private final ExtensionRegistry extensions;
 
@@ -81,16 +85,19 @@ public final class TuiRunMode implements RunMode {
      * @param commands   命令域服务，不可为 {@code null}
      * @param sessions   会话域服务，不可为 {@code null}
      * @param models     模型门面，不可为 {@code null}
+     * @param agents     agent 门面，不可为 {@code null}
      * @param extensions 同步扩展点策略，不可为 {@code null}
      * @param events     事件通道，不可为 {@code null}
      * @param console    输出面板，不可为 {@code null}
      */
     public TuiRunMode(AgentHarness harness, CommandManager commands, SessionManager sessions,
-                      ModelManager models, ExtensionRegistry extensions, EventChannel events, ConsoleIO console) {
+                      ModelManager models, AgentManager agents, ExtensionRegistry extensions,
+                      EventChannel events, ConsoleIO console) {
         this.harness = Objects.requireNonNull(harness, "harness must not be null");
         this.commands = Objects.requireNonNull(commands, "commands must not be null");
         this.sessions = Objects.requireNonNull(sessions, "sessions must not be null");
         this.models = Objects.requireNonNull(models, "models must not be null");
+        this.agents = Objects.requireNonNull(agents, "agents must not be null");
         this.extensions = Objects.requireNonNull(extensions, "extensions must not be null");
         this.events = Objects.requireNonNull(events, "events must not be null");
         this.console = Objects.requireNonNull(console, "console must not be null");
@@ -122,7 +129,7 @@ public final class TuiRunMode implements RunMode {
         // （单例不会被组件自动关闭，订阅就会一直挂着）。
         UiContributions uiContributions = new UiContributions(extensions, events, UI_OWNER);
         try {
-            new TuiApp(harness, commands, sessions, models, uiContributions).run();
+            new TuiApp(harness, commands, sessions, models, agents, uiContributions).run();
             return ExitCodes.OK;
         } catch (JellyfishException e) {
             // 回合未收敛仍然只算正常结束：它是「答完了但没收敛」，不是执行失败。

@@ -121,6 +121,28 @@ public final class TranscriptProjector {
     }
 
     /**
+     * 首页投影：没有当前会话时消息区显示的内容。
+     * <p>
+     * 只有字标与外壳提示两类：首页上还没有会话，自然没有消息可投影，也没有「进行中回合」。
+     * 保留外壳提示是因为首页上仍可能发生「命令报错」这类反馈（例如 {@code /resume} 指向不存在的会话、
+     * {@code /delete} 删不掉），它必须在首页上看得见，否则用户会以为按键没生效。
+     *
+     * @param notices 外壳提示列表（按插入顺序，时间戳非递减），可为 {@code null}（当作空）
+     * @param width   可用列数，小于 1 时按 1 处理
+     * @return 视觉行列表，保证非 {@code null}
+     */
+    public static List<VisualLine> home(List<ShellNotice> notices, int width) {
+        List<VisualLine> out = new ArrayList<VisualLine>();
+        out.addAll(HomeSplash.lines(width));
+        if (notices != null) {
+            for (ShellNotice notice : notices) {
+                out.addAll(notice(notice, width));
+            }
+        }
+        return out;
+    }
+
+    /**
      * 投影出完整视觉行序列。
      * <p>
      * <b>外壳提示按时间戳归并进消息流</b>：命令输出是外壳状态而不是会话消息（见 {@link ShellNotice}），
@@ -139,23 +161,6 @@ public final class TranscriptProjector {
      */
     public static List<VisualLine> project(List<SessionMessage> messages, List<ShellNotice> notices,
                                            InflightTurn.Snapshot inflight, int width, int maxMessages) {
-        return project(messages, notices, null, inflight, width, maxMessages);
-    }
-
-    /**
-     * 投影出完整视觉行序列，并在最前插入启动提示。
-     *
-     * @param messages    会话消息列表，可为 {@code null}（当作空）
-     * @param notices     外壳提示列表（按插入顺序，时间戳非递减），可为 {@code null}（当作空）
-     * @param startupHint 启动提示正文，可为 {@code null} 或空白（不显示）
-     * @param inflight    进行中回合快照，不可为 {@code null}
-     * @param width       可用列数，小于 1 时按 1 处理
-     * @param maxMessages 参与投影的最近消息条数上限；小于 1 时使用 {@link #DEFAULT_MAX_MESSAGES}
-     * @return 视觉行列表，保证非 {@code null}
-     */
-    public static List<VisualLine> project(List<SessionMessage> messages, List<ShellNotice> notices,
-                                           String startupHint, InflightTurn.Snapshot inflight,
-                                           int width, int maxMessages) {
         List<SessionMessage> source = messages == null ? Collections.<SessionMessage>emptyList() : messages;
         List<ShellNotice> noticeSource = notices == null ? Collections.<ShellNotice>emptyList() : notices;
         int limit = maxMessages < 1 ? DEFAULT_MAX_MESSAGES : maxMessages;
@@ -163,9 +168,8 @@ public final class TranscriptProjector {
         int folded = start;
 
         List<VisualLine> out = new ArrayList<VisualLine>();
-        // 启动提示排在一切之前，并复用助手消息的样子：它是外壳以 agent 身份先说的话，
-        // 而不是命令的返回值——用 ⎿ 块会让它看起来像某条命令的输出
-        boolean insideAssistantBlock = appendStartupHint(out, startupHint, width);
+        // 普通投影没有前缀消息，因此初始不在助手块内；首条 assistant / tool 消息会自己补表头
+        boolean insideAssistantBlock = false;
         long noticeCutoff = Long.MIN_VALUE;
         if (folded > 0) {
             // 用与其它提示行相同的前缀，保持左侧缩进一致；用裸空前缀会让这行顶到最左边
@@ -197,24 +201,6 @@ public final class TranscriptProjector {
         }
         appendInflight(out, inflight, width);
         return out;
-    }
-
-    /**
-     * 把启动提示渲染成助手消息的样子。
-     * <p>
-     * 复用 {@link #appendAssistant} 的视觉语法（{@code ⏺ jellyfish} 表头 + 正文缩进），
-     * 与真实助手消息完全同构：用户在空会话里看到的第一条内容就是「agent 先说的话」。
-     *
-     * @param out          输出列表
-     * @param startupHint  启动提示正文，可为 {@code null} 或空白（不显示）
-     * @param width        可用列数
-     * @return 是否已进入助手块（用于与后续消息共用表头）
-     */
-    private static boolean appendStartupHint(List<VisualLine> out, String startupHint, int width) {
-        if (isBlank(startupHint)) {
-            return false;
-        }
-        return appendAssistant(out, false, startupHint, width);
     }
 
     /**

@@ -252,12 +252,13 @@ class LauncherTest {
     }
 
     /**
-     * 桩上 TUI 真实现需要的门面：比 CLI 多一个模型门面（状态栏展示上下文长度用）与扩展层两个门面
-     * （{@code UiContributions} 的构造输入）。
+     * 桩上 TUI 真实现需要的门面：比 CLI 多一个模型门面（状态栏展示上下文长度用）、一个 agent 门面
+     * （首页无会话时状态栏展示默认 agent 用）与扩展层两个门面（{@code UiContributions} 的构造输入）。
      */
     private void givenTuiCollaborators() {
         givenRunModeCollaborators();
         when(component.modelManager()).thenReturn(models);
+        when(component.agentManager()).thenReturn(agents);
         when(component.extensionRegistry()).thenReturn(extensionRegistry);
         when(component.eventChannel()).thenReturn(eventChannel);
     }

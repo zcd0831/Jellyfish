@@ -65,9 +65,6 @@ public final class ChatState {
     /** 最近一次投影时的提示版本号。 */
     private int lastNoticeVersion = -1;
 
-    /** 最近一次投影使用的启动提示，用于缓存判据。 */
-    private String lastStartupHint;
-
     /** 最近一次投影的结果，作为「什么都没变」时的复用对象。 */
     private List<VisualLine> projected = Collections.emptyList();
 
@@ -76,14 +73,6 @@ public final class ChatState {
 
     /** 提示缓冲版本号，参与投影缓存判据。 */
     private int noticeVersion;
-
-    /**
-     * 启动提示正文，{@code null} 表示不显示。
-     * <p>
-     * 它不进会话历史（否则会污染发给模型的历史），也不属于命令输出，
-     * 因此由外壳单独特有；投影器把它渲染成助手消息的样子（见 {@link TranscriptProjector}）。
-     */
-    private String startupHint;
 
     /** 提示条数上限：它是附属于界面的反馈，不应无界增长。 */
     static final int MAX_NOTICES = 50;
@@ -128,17 +117,6 @@ public final class ChatState {
         }
         notices.clear();
         noticeVersion++;
-    }
-
-    /**
-     * 设置启动提示。
-     * <p>
-     * 与外壳提示缓冲一样只由渲染线程调用。传 {@code null} 或空白即清掉。
-     *
-     * @param text 启动提示正文，可为 {@code null}
-     */
-    public void setStartupHint(String text) {
-        this.startupHint = text == null || text.trim().isEmpty() ? null : text;
     }
 
     /**
@@ -202,7 +180,7 @@ public final class ChatState {
      * 但在「会话未变、暂存区未变、尺寸未变」时直接复用上一次的结果，
      * 因为渲染引擎在无输入时也会以约 26fps 持续调用本方法。
      *
-     * @param sessionId   当前会话标识，可为 {@code null}
+     * @param sessionId   当前会话标识，可为 {@code null}（表示首页，无当前会话）
      * @param messages    当前会话消息列表，可为 {@code null}
      * @param width       消息区可用列数
      * @param viewportRows 消息区可用行数
@@ -325,7 +303,6 @@ public final class ChatState {
                 && lastMaxMessages == maxMessages
                 && lastMessageCount == source.size()
                 && lastNoticeVersion == noticeVersion
-                && Objects.equals(lastStartupHint, startupHint)
                 && Objects.equals(lastMessageId, lastId)
                 && Objects.equals(lastSessionId, sessionId)
                 && !inflight.isDirty();
@@ -337,14 +314,18 @@ public final class ChatState {
         // 而流式结束时通常不再有下一次追加，屏幕上会永久少了最后一截。
         inflight.clearDirty();
         InflightTurn.Snapshot snapshot = inflight.snapshot();
-        projected = TranscriptProjector.project(source, notices, startupHint, snapshot, width, maxMessages);
+        if (sessionId == null) {
+            // 无当前会话 = 首页：投影字标与外壳提示（见 TranscriptProjector.home）
+            projected = TranscriptProjector.home(notices, width);
+        } else {
+            projected = TranscriptProjector.project(source, notices, snapshot, width, maxMessages);
+        }
         lastWidth = width;
         lastMaxMessages = maxMessages;
         lastMessageCount = source.size();
         lastMessageId = lastId;
         lastSessionId = sessionId;
         lastNoticeVersion = noticeVersion;
-        lastStartupHint = startupHint;
         totalRows = projected.size();
     }
 

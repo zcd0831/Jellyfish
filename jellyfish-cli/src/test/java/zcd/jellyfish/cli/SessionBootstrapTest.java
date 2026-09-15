@@ -13,6 +13,7 @@ import zcd.jellyfish.infra.session.Session;
 import zcd.jellyfish.infra.session.SessionManager;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.never;
@@ -158,6 +159,50 @@ class SessionBootstrapTest {
 
         assertSame(session, actual);
         verifyNoMoreInteractions(agents);
+    }
+
+    @Test
+    void ensureCurrentSession_should_defer_when_tui_without_session_or_overrides() {
+        when(sessions.current()).thenReturn(null);
+
+        Session actual = bootstrap.ensureCurrentSession(StartupOptions.builder(StartupOptions.Mode.TUI).build());
+
+        // TUI 首页：不建会话，但依然做完了存在性校验（无覆盖项时无需校验）
+        assertNull(actual);
+        verify(sessions, never()).create(null, null, null, null);
+    }
+
+    @Test
+    void ensureCurrentSession_should_still_create_when_tui_given_overrides() {
+        when(sessions.current()).thenReturn(null);
+        when(sessions.create("coder", null, null, null)).thenReturn(session);
+
+        Session actual = bootstrap.ensureCurrentSession(
+                StartupOptions.builder(StartupOptions.Mode.TUI).agentId("coder").build());
+
+        assertSame(session, actual);
+        verify(sessions).switchTo(sessionId);
+    }
+
+    @Test
+    void ensureCurrentSession_should_still_switch_when_tui_given_session() {
+        when(sessions.switchTo("abc")).thenReturn(session);
+
+        Session actual = bootstrap.ensureCurrentSession(
+                StartupOptions.builder(StartupOptions.Mode.TUI).sessionId("abc").build());
+
+        assertSame(session, actual);
+        verify(sessions, never()).create(null, null, null, null);
+    }
+
+    @Test
+    void ensureCurrentSession_should_keep_existing_current_session_on_tui() {
+        when(sessions.current()).thenReturn(session);
+
+        Session actual = bootstrap.ensureCurrentSession(StartupOptions.builder(StartupOptions.Mode.TUI).build());
+
+        assertSame(session, actual);
+        verify(sessions, never()).create(null, null, null, null);
     }
 
     @Test

@@ -132,8 +132,8 @@ public final class Launcher {
         switch (options.getMode()) {
             case TUI:
                 return new TuiRunMode(component.agentHarness(), component.commandManager(),
-                        component.sessionManager(), component.modelManager(), component.extensionRegistry(),
-                        component.eventChannel(), console);
+                        component.sessionManager(), component.modelManager(), component.agentManager(),
+                        component.extensionRegistry(), component.eventChannel(), console);
             case SERVER:
                 return new ServerRunMode(console);
             case CLI:

@@ -16,9 +16,11 @@ import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.extension.CommandChoice;
 import zcd.jellyfish.api.extension.CommandDescriptor;
 import zcd.jellyfish.api.extension.CommandResult;
+import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.api.ui.UiRegion;
 import zcd.jellyfish.core.AgentHarness;
 import zcd.jellyfish.core.ReActTurn;
+import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.command.CommandInfo;
 import zcd.jellyfish.infra.command.CommandManager;
 import zcd.jellyfish.infra.llm.LlmUsage;
@@ -32,12 +34,15 @@ import zcd.jellyfish.infra.ui.UiContributions;
 import zcd.jellyfish.infra.ui.UiSnapshot;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * TUI 外壳：交互式终端界面的组装与事件循环。
@@ -61,6 +66,13 @@ import java.util.Optional;
  *     <li><b>每轮现读当前会话</b>（{@link SessionManager#current()}），不缓存 sessionId，
  *     这样 {@code /new}、{@code /resume} 之后立刻生效，界面也会跟着切到新会话的内容。</li>
  * </ol>
+ * <p>
+ * <b>首页与会话页是同一个界面的两种投影</b>：裸 {@code -tui} 启动时没有当前会话，消息区显示
+ * {@link HomeSplash} 字标（首页）；用户真正发起对话或执行命令时才建会话（见
+ * {@link #SESSION_DOMAIN_COMMANDS}），界面随之变成会话投影。因为视图本来就是「会话的投影」，
+ * 两种状态共用同一条渲染路径（{@link ChatState} 按 {@code sessionId} 是否为 {@code null} 分支），
+ * 不需要第二套界面。壳内唯一的硬约束是「不要假设当前会话一定存在」——
+ * 补全、候选查询、命令分发都可能在首页发生。
  * <p>
  * <b>回合为什么是异步的</b>：{@code chat} 返回 {@link ReActTurn} 句柄并在专用线程池里推进，
  * 界面在自己的事件循环里继续跑。若在这里调 {@code await()}，界面会在整个回合期间冻住——
@@ -88,6 +100,9 @@ public final class TuiApp extends ToolkitApp {
 
     /** 模型门面，仅用于状态栏展示上下文长度。 */
     private final ModelManager models;
+
+    /** agent 门面，仅用于首页（无会话）时状态栏展示默认 agent。 */
+    private final AgentManager agents;
 
     /** 插件 UI 贡献门面：收集插件贡献的界面内容，并订阅「可能已过期」。 */
     private final UiContributions uiContributions;
@@ -119,6 +134,21 @@ public final class TuiApp extends ToolkitApp {
     /** {@code /ui} 在补全清单里的条目。 */
     private static final CommandInfo UI_INFO = new CommandInfo(UiCommand.NAME,
             new CommandDescriptor("查看与切换插件的界面贡献", null, null));
+
+    /**
+     * 「会话域命令」：在首页上执行时<b>不</b>先建当前会话的那些命令。
+     * <p>
+     * 只有这几类不属于「先建一个新会话再执行」语义：{@code /new} 自己就会建会话，
+     * {@code /resume} 是切到<b>已有</b>会话，{@code /delete} 是删掉某个会话。尤其是 {@code /delete}：
+     * 若它也在首页先建一个空会话，就会变成「删了一个、又造了一个」，净效果为零，
+     * 正好与用户要的清理目标相反；{@code /new} 若先建一个，一次会多出一条空会话。
+     * 其余命令（含 {@code /session}）一律先建会话再执行——这是用户裁决的口径，见 tui方案.md。
+     * <p>
+     * 命令名与别名镜像 {@code core/command/SystemCommands} 的注册。与 {@link ShellCommand}
+     * 硬编码外壳命令名是同一类取舍：外壳需要知道少数几条命令的语义来分流。
+     */
+    private static final Set<String> SESSION_DOMAIN_COMMANDS = Collections.unmodifiableSet(
+            new HashSet<String>(Arrays.asList("new", "resume", "delete", "rm")));
 
     /**
      * 插件 UI 的逃生门系统属性。
@@ -161,14 +191,16 @@ public final class TuiApp extends ToolkitApp {
      * @param commands 命令域服务，不可为 {@code null}
      * @param sessions 会话域服务，不可为 {@code null}
      * @param models   模型门面，不可为 {@code null}
+     * @param agents   agent 门面，不可为 {@code null}
      * @param uiContributions 插件 UI 贡献门面，不可为 {@code null}
      */
     public TuiApp(AgentHarness harness, CommandManager commands, SessionManager sessions, ModelManager models,
-                  UiContributions uiContributions) {
+                  AgentManager agents, UiContributions uiContributions) {
         this.harness = Objects.requireNonNull(harness, "harness must not be null");
         this.commands = Objects.requireNonNull(commands, "commands must not be null");
         this.sessions = Objects.requireNonNull(sessions, "sessions must not be null");
         this.models = Objects.requireNonNull(models, "models must not be null");
+        this.agents = Objects.requireNonNull(agents, "agents must not be null");
         this.uiContributions = Objects.requireNonNull(uiContributions, "uiContributions must not be null");
         this.uiCache = new UiCache(uiContributions);
         this.pluginPanelsEnabled = pluginPanelsEnabled();
@@ -246,7 +278,7 @@ public final class TuiApp extends ToolkitApp {
         String sessionId = session == null ? null : session.getSessionId();
         // 每帧只取一次消息快照：Session.getMessages() 返回防御性副本，重复调用会白白多分配一份
         List<SessionMessage> messages = session == null ? null : session.getMessages();
-        syncSession(sessionId, messages);
+        syncSession(sessionId);
         // 回合从「进行中」变为「已收敛」是插件内容最容易过期的时刻（工具刚改完状态），在这里补一次失效。
         // 终局判定放在渲染线程，因此能覆盖完成 / 报错 / 取消全部收敛路径，不必让三个回调各发一遍。
         boolean turnRunning = chatState.isTurnRunning();
@@ -333,7 +365,7 @@ public final class TuiApp extends ToolkitApp {
      */
     private List<CommandChoice> optionsOf(String commandName) {
         try {
-            return commands.options(commandName, currentSessionId());
+            return commands.options(commandName, currentSessionIdOrNull());
         } catch (RuntimeException e) {
             LOG.warn("查询命令候选失败：{}", e.getMessage());
             return Collections.emptyList();
@@ -341,23 +373,19 @@ public final class TuiApp extends ToolkitApp {
     }
 
     /**
-     * 识别会话切换：清掉属于旧会话的外壳提示，并给「全新空会话」贴上启动提示。
+     * 识别会话切换：清掉属于旧会话的外壳提示，并让插件界面内容重新收集一遍。
      * <p>
      * 提示是「外壳刚刚说过的话」，属于上一次交互的上下文；换了会话还留着，会让用户以为那是新会话的一部分。
      * 消息区本身由投影自动跟随，不需要在这里做任何事——这正是「视图 = 会话投影」的好处。
      * <p>
-     * <b>启动提示只在全新空会话贴出</b>：{@code /resume} 打开的是已有历史，用户想看的是对话本身，
-     * 底部再压一条用法说明反而碍事；只有「什么都不存在」的页面才需要它来告知怎么用。
-     * 它是外壳持有的独立状态（不是外壳提示），投影时渲染成助手消息的样子；
-     * 每次会话切换都显式置一次，反复渲染同一会话只判一次，不会重复追加。
+     * <b>首页 ↔ 会话页也是「切换」</b>：从首页建出第一个会话时 {@code sessionId} 由 {@code null} 变为新标识，
+     * 或者删除当前会话后由标识变回 {@code null}，都会命中这里并清掉旧提示。
      *
-     * @param sessionId 当前会话标识，可为 {@code null}
-     * @param messages  当前会话消息快照，可为 {@code null}
+     * @param sessionId 当前会话标识，可为 {@code null}（首页）
      */
-    private void syncSession(String sessionId, List<SessionMessage> messages) {
+    private void syncSession(String sessionId) {
         if (!Objects.equals(renderedSessionId, sessionId)) {
             chatState.clearNotices();
-            chatState.setStartupHint(isBrandNewSession(messages) ? StartupHint.text() : null);
             renderedSessionId = sessionId;
             // 插件贡献是按会话给的，换了会话必须重新问一遍（UiCache 自己也会比对 sessionId，这里是双保险）
             uiCache.invalidate();
@@ -365,17 +393,11 @@ public final class TuiApp extends ToolkitApp {
     }
 
     /**
-     * 判断当前页面是否为「全新空会话」。
-     *
-     * @param messages 当前会话消息快照，可为 {@code null}
-     * @return 没有历史消息返回 {@code true}
-     */
-    static boolean isBrandNewSession(List<SessionMessage> messages) {
-        return messages != null && messages.isEmpty();
-    }
-
-    /**
      * 处理用户提交。
+     * <p>
+     * <b>首页上的分流规则</b>：普通文本与绝大多数命令都先建一个当前会话再执行
+     * （见 {@link #SESSION_DOMAIN_COMMANDS} 说明例外），{@code /exit} {@code /ui} 是外壳自有命令，
+     * 不建会话。
      */
     private void submit() {
         if (input.isBlank()) {
@@ -395,9 +417,18 @@ public final class TuiApp extends ToolkitApp {
             }
             return;
         }
-        String sessionId = currentSessionId();
+        String sessionId = currentSessionIdOrNull();
+        if (sessionId == null && !isSessionDomainCommand(text)) {
+            // 首页 + 非会话域命令：先建会话再执行，界面随之进入会话页
+            sessionId = createSession();
+        }
         if (commands.isCommand(text)) {
             executeCommand(text, sessionId);
+            return;
+        }
+        if (sessionId == null) {
+            // 理论不可达：非命令文本不会命中会话域例外，上面一定已经建过会话
+            chatState.appendNotice("当前没有会话，可用 /new 新建。", ShellNotice.Kind.ERROR);
             return;
         }
         startTurn(text, sessionId);
@@ -412,12 +443,16 @@ public final class TuiApp extends ToolkitApp {
     private void executeCommand(String text, String sessionId) {
         try {
             CommandResult result = commands.execute(text, sessionId);
+            // 命令可能改了当前会话（/new /resume /delete）：先把会话切换的副作用落实（清掉旧会话的提示、
+            // 重收集插件贡献），再把本次结果贴上去。否则下一帧 syncSession 会把刚贴的命令结果
+            // 当成「旧会话留下的提示」一并清掉，用户看不到任何反馈。
+            syncSession(currentSessionIdOrNull());
             if (result.hasChoices()) {
                 // 命令要求挑一个取值：打开二级选择页，不再把列表文本重复贴到屏幕上
                 picker.open(text.trim(), result.getChoices());
                 return;
             }
-            chatState.appendNotice(text, result.getOutput(), kindOf(result.getKind()));
+            chatState.appendNotice(text, withShellUsage(text, result), kindOf(result.getKind()));
         } catch (JellyfishException e) {
             LOG.warn("TUI 命令执行失败：{}", e.getMessage());
             chatState.appendNotice(text, "命令执行失败：" + e.getMessage(), ShellNotice.Kind.ERROR);
@@ -472,7 +507,7 @@ public final class TuiApp extends ToolkitApp {
         }
         String text = baseCommand + " " + choice.getValue();
         try {
-            executeCommand(text, currentSessionId());
+            executeCommand(text, currentSessionIdOrNull());
         } catch (JellyfishException e) {
             LOG.warn("二级选择页执行失败：{}", e.getMessage());
             chatState.appendNotice(text, "命令执行失败：" + e.getMessage(), ShellNotice.Kind.ERROR);
@@ -501,6 +536,78 @@ public final class TuiApp extends ToolkitApp {
     }
 
     /**
+     * 判断一条输入是不是「会话域命令」（在首页上不建会话）。
+     * <p>
+     * 只取第一个词并去掉前缀，不查注册表——与 {@link ShellCommand} 同口径：外壳只需要知道
+     * {@link #SESSION_DOMAIN_COMMANDS} 这一小撮名字就能分流，「有没有这条命令」由命令域回答。
+     *
+     * @param text 用户输入原文
+     * @return 是会话域命令返回 {@code true}
+     */
+    static boolean isSessionDomainCommand(String text) {
+        String token = firstToken(text);
+        return token != null && SESSION_DOMAIN_COMMANDS.contains(token);
+    }
+
+    /**
+     * 判断一条输入是不是「无参的 /help」。
+     *
+     * @param text 用户输入原文
+     * @return 是无参 /help 返回 {@code true}
+     */
+    static boolean isBareHelp(String text) {
+        String token = firstToken(text);
+        if (token == null || !("help".equals(token) || "h".equals(token) || "?".equals(token))) {
+            return false;
+        }
+        return text.trim().indexOf(' ') < 0;
+    }
+
+    /**
+     * 取输入里去掉前缀后的命令名。
+     * <p>
+     * <b>不是命令就返回 {@code null}</b>：两个调用方（首页分流与 {@code /help} 追加）都只在
+     * 「输入确实是一条命令」时才该命中。若允许无前缀的词通过，用户把 {@code resume this} 当普通对话
+     * 发出来时就会被当成命令、跳过建会话——这是首页上最容易踩的一个坑。
+     *
+     * @param text 用户输入原文，可为 {@code null}
+     * @return 命令名（不含 {@code /}）；不是命令时为 {@code null}
+     */
+    private static String firstToken(String text) {
+        if (text == null) {
+            return null;
+        }
+        String trimmed = text.trim();
+        if (!trimmed.startsWith(CommandManager.COMMAND_PREFIX)) {
+            return null;
+        }
+        int end = 0;
+        while (end < trimmed.length() && !Character.isWhitespace(trimmed.charAt(end))) {
+            end++;
+        }
+        return trimmed.substring(CommandManager.COMMAND_PREFIX.length(), end);
+    }
+
+    /**
+     * 给无参 {@code /help} 的输出追加外壳侧用法说明。
+     * <p>
+     * <b>为什么在外壳侧追加而不写进内核帮助</b>：说明里是 TUI 专属键位（{@code Ctrl+S} / 滚轮），
+     * 写进内核会让 {@code -cli} / {@code -server} 的 {@code /help} 冒出按不了的键位。
+     * 只对无参 {@code /help} 追加：{@code /help /model} 是查单条命令，再附一段全局键位只是噪音。
+     *
+     * @param text   命令原文
+     * @param result 命令结果
+     * @return 要展示的输出文本，保证非 {@code null}
+     */
+    static String withShellUsage(String text, CommandResult result) {
+        String output = result.getOutput() == null ? "" : result.getOutput();
+        if (!isBareHelp(text)) {
+            return output;
+        }
+        return output.isEmpty() ? ShellUsage.text() : output + "\n\n" + ShellUsage.text();
+    }
+
+    /**
      * 发起一次 ReAct 回合。
      *
      * @param text      用户输入
@@ -522,16 +629,30 @@ public final class TuiApp extends ToolkitApp {
     }
 
     /**
-     * 取当前会话标识。
+     * 取当前会话标识，没有当前会话时返回 {@code null}。
+     * <p>
+     * TUI 现在从首页（无会话）进入，因此「没有当前会话」是合法状态而不是接线错误：
+     * 首页上补全候选查询、二级选择页确认、命令分发都可能在没有会话时发生。
+     * 需要会话的路径（发起回合）必须先经 {@link #createSession()} 建会话。
      *
-     * @return 当前会话标识
-     * @throws JellyfishException 没有当前会话时抛出（说明启动期接线被绕过，属程序缺陷）
+     * @return 当前会话标识，没有当前会话时为 {@code null}
      */
-    private String currentSessionId() {
+    private String currentSessionIdOrNull() {
         Session session = sessions.current();
-        if (session == null) {
-            throw new JellyfishException("当前没有会话：启动期未建立会话（外壳接线错误）");
-        }
+        return session == null ? null : session.getSessionId();
+    }
+
+    /**
+     * 在首页建一个新会话并切为当前。
+     * <p>
+     * 这是「首页 → 会话页」的唯一入口：用户真正要发起对话或执行命令时才建会话，
+     * 因此「进来看看」不会留下空会话文件——会话持久化是 {@code create} 的一等职责，建了就一定落盘。
+     *
+     * @return 新会话的标识，保证非 {@code null}
+     */
+    private String createSession() {
+        Session session = sessions.createDefault();
+        sessions.switchTo(session.getSessionId());
         return session.getSessionId();
     }
 
@@ -542,13 +663,13 @@ public final class TuiApp extends ToolkitApp {
      * 时显示的是配置默认值解析出的真实模型，而不是「默认」两个字——用户关心的是实际在跑哪个模型。
      * 解析失败只退回会话原始字段（可能为 {@code null}），不让状态栏因配置问题而整行消失。
      *
-     * @param session       当前会话，可为 {@code null}
+     * @param session       当前会话，可为 {@code null}（首页）
      * @param contextTokens 最近一次调用的输入 token 数
-     * @return 状态栏数据；会话为 {@code null} 时返回 {@code null}
+     * @return 状态栏数据，保证非 {@code null}
      */
     private StatusBarView.Info statusInfoOf(Session session, long contextTokens) {
         if (session == null) {
-            return null;
+            return homeStatusInfo();
         }
         ResolvedModel resolved = resolvedModel(session);
         String provider = resolved == null ? session.getProvider() : resolved.getProviderName();
@@ -556,6 +677,45 @@ public final class TuiApp extends ToolkitApp {
         int contextLength = resolved == null ? 0 : resolved.getModel().getContextLength();
         return new StatusBarView.Info(session.getAgentId(), provider, model, session.getPermissionMode(),
                 System.getProperty("user.dir"), contextTokens, contextLength, session.getUsage());
+    }
+
+    /**
+     * 装配首页（无会话）状态栏数据：展示「将要使用的」默认 agent 与默认模型。
+     * <p>
+     * 首页没有会话，但状态栏也不应该是一片空白：用户正要看的就是「现在如果用，会用哪个 agent 与模型」，
+     * 因此这里解析配置默认值而不是显示 {@code -}。权限模式取 {@link PermissionMode#NORMAL}，
+     * 与 {@code SessionManager.createDefault()} 建的会话一致，保证「首页看到的」和「建出来的」相同。
+     * <p>
+     * 解析失败（没配模型）只退回 {@code null}，让状态栏退回「默认」字样，不因配置问题整行消失。
+     *
+     * @return 状态栏数据，保证非 {@code null}
+     */
+    private StatusBarView.Info homeStatusInfo() {
+        ResolvedModel resolved = null;
+        try {
+            resolved = models.resolveDefault();
+        } catch (JellyfishException e) {
+            LOG.debug("首页解析默认模型失败：{}", e.getMessage());
+        }
+        String provider = resolved == null ? null : resolved.getProviderName();
+        String model = resolved == null ? null : resolved.getModelName();
+        int contextLength = resolved == null ? 0 : resolved.getModel().getContextLength();
+        return new StatusBarView.Info(defaultAgentId(), provider, model, PermissionMode.NORMAL,
+                System.getProperty("user.dir"), 0L, contextLength, null);
+    }
+
+    /**
+     * 取配置里的默认 agent 标识。
+     *
+     * @return 默认 agentId；没有配置时返回 {@code null}
+     */
+    private String defaultAgentId() {
+        try {
+            return agents.getDefaultAgentId();
+        } catch (RuntimeException e) {
+            LOG.debug("首页读取默认 agent 失败：{}", e.getMessage());
+            return null;
+        }
     }
 
     /**
@@ -606,12 +766,12 @@ public final class TuiApp extends ToolkitApp {
     /**
      * 生成消息区标题。
      *
-     * @param session 当前会话，可为 {@code null}
-     * @return 标题文本，保证非 {@code null}
+     * @param session 当前会话，可为 {@code null}（首页）
+     * @return 标题文本；首页（无会话）时为 {@code null}，表示不显示标题栏（字标已在内容里居中）
      */
     private static String title(Session session) {
         if (session == null) {
-            return " jellyfish ";
+            return null;
         }
         String label = session.getTitle();
         if (label == null || label.isEmpty()) {

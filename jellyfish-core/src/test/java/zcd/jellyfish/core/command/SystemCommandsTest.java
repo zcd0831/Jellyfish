@@ -84,8 +84,8 @@ class SystemCommandsTest {
 
         // Then
         assertTrue(names.containsAll(Arrays.asList("help", "new", "session", "resume", "model", "agent", "mode",
-                "status", "usage", "todo")));
-        assertEquals(10, names.size());
+                "status", "usage")));
+        assertEquals(9, names.size());
     }
 
     @Test
@@ -278,48 +278,10 @@ class SystemCommandsTest {
     }
 
     @Test
-    void todo_should_add_complete_list_and_clear() {
-        // Given
-        commandManager.execute("/new");
-
-        // When
-        CommandResult added = commandManager.execute("/todo add 写文档");
-        CommandResult listed = commandManager.execute("/todo");
-        CommandResult done = commandManager.execute("/todo done 1");
-        CommandResult afterDone = commandManager.execute("/todo");
-        CommandResult cleared = commandManager.execute("/todo clear");
-
-        // Then
-        assertEquals(CommandResult.Kind.OK, added.getKind());
-        assertTrue(listed.getOutput().contains("[ ] 1. 写文档"));
-        assertTrue(done.getOutput().contains("1"));
-        assertTrue(afterDone.getOutput().contains("[x] 1. 写文档"));
-        assertTrue(cleared.getOutput().contains("1"));
-        assertEquals(0, sessionManager.todosOf(sessionManager.current().getSessionId()).size());
-    }
-
-    @Test
-    void todo_should_report_usage_errors() {
-        // Given
-        commandManager.execute("/new");
-
-        // When
-        CommandResult badAdd = commandManager.execute("/todo add");
-        CommandResult badDone = commandManager.execute("/todo done 999");
-        CommandResult badSub = commandManager.execute("/todo whatever");
-
-        // Then
-        assertEquals(CommandResult.Kind.ERROR, badAdd.getKind());
-        assertEquals(CommandResult.Kind.ERROR, badDone.getKind());
-        assertEquals(CommandResult.Kind.ERROR, badSub.getKind());
-    }
-
-    @Test
     void commands_should_report_error_when_no_current_session() {
         // When / Then：依赖会话的命令在无当前会话时应明确报错而不是 NPE
         assertEquals(CommandResult.Kind.ERROR, commandManager.execute("/status").getKind());
         assertEquals(CommandResult.Kind.ERROR, commandManager.execute("/usage").getKind());
-        assertEquals(CommandResult.Kind.ERROR, commandManager.execute("/todo").getKind());
         assertEquals(CommandResult.Kind.ERROR, commandManager.execute("/mode").getKind());
         assertNull(sessionManager.current());
     }

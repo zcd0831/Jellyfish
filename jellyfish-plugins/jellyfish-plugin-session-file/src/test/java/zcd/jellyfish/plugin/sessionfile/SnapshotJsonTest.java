@@ -47,11 +47,9 @@ class SnapshotJsonTest {
         assertEquals("gpt-4o", restored.getModel());
         assertEquals(PermissionMode.PLAN, restored.getPermissionMode());
         assertEquals(4, restored.getMessages().size());
-        assertEquals(2, restored.getTodos().size());
         assertEquals("call-1", restored.getMessages().get(1).getToolCalls().get(0).getId());
         assertEquals("{\"path\":\"a.txt\"}", restored.getMessages().get(1).getToolCalls().get(0).getArguments());
         assertEquals(15, restored.getMessages().get(1).getUsage().getTotalTokens());
-        assertTrue(restored.getTodos().get(0).isDone());
         assertEquals(4L, restored.getUsage().getLlmCalls());
     }
 

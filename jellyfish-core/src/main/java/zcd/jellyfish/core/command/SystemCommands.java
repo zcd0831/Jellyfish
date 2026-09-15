@@ -21,7 +21,6 @@ import zcd.jellyfish.infra.config.Model;
 import zcd.jellyfish.infra.config.Provider;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.model.ModelManager;
-import zcd.jellyfish.infra.session.PendingTodo;
 import zcd.jellyfish.infra.session.Session;
 import zcd.jellyfish.infra.session.SessionManager;
 
@@ -34,7 +33,7 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * 内核系统命令：在 {@link ReActLooper} 之外，给外壳提供会话 / 模型 / agent / 权限 / 待办的基本操作。
+ * 内核系统命令：在 {@link ReActLooper} 之外，给外壳提供会话 / 模型 / agent / 权限的基本操作。
  * <p>
  * <b>为什么落在 core 而不是 infra/command</b>：这些命令要读会话、模型与 agent 域服务，
  * 而命令域（{@code CommandManager}）刻意只依赖 {@code ExtensionRegistry}，保持对外壳与其它域中立。
@@ -48,8 +47,8 @@ import java.util.Objects;
  * <p>
  * <b>不做</b>：{@code /exit} 属外壳职责（进程退出），不进注册表；
  * <ul>
- *     <li>LLM 可写的 {@code todo_write} 工具推迟到后续轮，届时一并闭环 {@code ReadOnlyTools}
- *     的「核心工具只读声明」TODO（计划模式下它必须被判为只读）；</li>
+ *     <li>{@code /todo} 与待办状态归 {@code jellyfish-plugin-todo}（插件自持存储，经
+ *     {@code PromptContributionRequest} 注入 system prompt），内核不再持有该领域；</li>
  *     <li>{@code /compact}（摘要式压缩，读法 2）依赖会话持久化与额外模型调用，也留待后续轮。</li>
  * </ul>
  *
@@ -66,15 +65,6 @@ public class SystemCommands {
 
     /** 权限模式取值：常规模式。 */
     private static final String MODE_NORMAL = "normal";
-
-    /** 待办子命令：新增。 */
-    private static final String TODO_ADD = "add";
-
-    /** 待办子命令：完成。 */
-    private static final String TODO_DONE = "done";
-
-    /** 待办子命令：清空。 */
-    private static final String TODO_CLEAR = "clear";
 
     /** 同步扩展点策略。 */
     private final ExtensionRegistry extensions;
@@ -136,8 +126,6 @@ public class SystemCommands {
         subscriptions.add(register("status", new CommandDescriptor("显示当前会话概要", null, null), this::status));
         subscriptions.add(register("usage", new CommandDescriptor("显示当前会话 token 用量", null, aliases("cost")),
                 this::usage));
-        subscriptions.add(register("todo", new CommandDescriptor("查看或管理待办", "[add|done|clear]", null),
-                this::todo));
         // 只读候选查询：与执行处理器平行，外壳「选中命令就弹选择页」时走这条路径，不产生任何副作用
         subscriptions.add(registerOptions("resume", this::resumeOptions));
         subscriptions.add(registerOptions("model", this::modelOptions));
@@ -467,46 +455,6 @@ public class SystemCommands {
     }
 
     /**
-     * {@code /todo [add|done|clear]}：查看或管理会话待办。
-     *
-     * @param request 命令请求
-     * @return 结果
-     */
-    private CommandResult todo(CommandRequest request) {
-        String sessionId = sessionIdOf(request);
-        if (sessionId == null) {
-            return CommandResult.error("当前没有会话，可用 /new 新建。");
-        }
-        List<String> tokens = request.getArguments().getTokens();
-        if (tokens.isEmpty()) {
-            return CommandResult.ok(renderTodos(sessionManager.todosOf(sessionId)));
-        }
-        String subCommand = tokens.get(0);
-        if (TODO_CLEAR.equals(subCommand)) {
-            return CommandResult.ok("已清空 " + sessionManager.clearTodos(sessionId) + " 条待办。");
-        }
-        if (TODO_ADD.equals(subCommand)) {
-            if (tokens.size() < 2) {
-                return CommandResult.error("用法：/todo add <内容>");
-            }
-            String content = StringUtils.join(tokens.subList(1, tokens.size()), ' ');
-            PendingTodo added = sessionManager.addTodo(sessionId, content);
-            return CommandResult.ok("已添加待办 " + added.getId() + "：" + added.getContent());
-        }
-        if (TODO_DONE.equals(subCommand)) {
-            if (tokens.size() != 2) {
-                return CommandResult.error("用法：/todo done <id>");
-            }
-            String todoId = tokens.get(1);
-            if (!sessionManager.completeTodo(sessionId, todoId)) {
-                return CommandResult.error("未找到未完成的待办：" + todoId);
-            }
-            return CommandResult.ok("已完成待办 " + todoId + "。");
-        }
-        return CommandResult.error("用法：/todo [add <内容>|done <id>|clear]");
-    }
-
-    /**
      * 渲染模型清单，当前会话选中项带 {@code *} 标记。
      *
      * @return 文本
@@ -623,24 +571,6 @@ public class SystemCommands {
         choices.add(new CommandChoice(MODE_PLAN, MODE_PLAN, "仅只读工具可用", mode == PermissionMode.PLAN));
         choices.add(new CommandChoice(MODE_NORMAL, MODE_NORMAL, "常规模式（可写）", mode == PermissionMode.NORMAL));
         return choices;
-    }
-
-    /**
-     * 渲染待办清单。
-     *
-     * @param todos 待办列表
-     * @return 文本
-     */
-    private static String renderTodos(List<PendingTodo> todos) {
-        if (todos.isEmpty()) {
-            return "当前没有待办。";
-        }
-        StringBuilder text = new StringBuilder("待办：");
-        for (PendingTodo todo : todos) {
-            text.append('\n').append(todo.isDone() ? "  [x] " : "  [ ] ")
-                    .append(todo.getId()).append(". ").append(todo.getContent());
-        }
-        return text.toString();
     }
 
     /**

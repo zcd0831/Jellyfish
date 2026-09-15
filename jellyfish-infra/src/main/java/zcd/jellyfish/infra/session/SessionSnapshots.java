@@ -2,7 +2,6 @@ package zcd.jellyfish.infra.session;
 
 import zcd.jellyfish.api.extension.SessionMessageSnapshot;
 import zcd.jellyfish.api.extension.SessionSnapshot;
-import zcd.jellyfish.api.extension.SessionTodoSnapshot;
 import zcd.jellyfish.api.extension.SessionToolCallSnapshot;
 import zcd.jellyfish.api.extension.SessionUsageSnapshot;
 import zcd.jellyfish.api.extension.TokenUsageSnapshot;
@@ -47,13 +46,9 @@ public final class SessionSnapshots {
         for (SessionMessage message : session.getMessages()) {
             messages.add(captureMessage(message));
         }
-        List<SessionTodoSnapshot> todos = new ArrayList<SessionTodoSnapshot>();
-        for (PendingTodo todo : session.getTodos()) {
-            todos.add(captureTodo(todo));
-        }
         return new SessionSnapshot(session.getSessionId(), session.getCreatedAt(), session.getUpdatedAt(),
                 session.getTitle(), session.getAgentId(), session.getProvider(), session.getModel(),
-                session.getPermissionMode(), messages, todos, captureUsage(session.getUsage()));
+                session.getPermissionMode(), messages, captureUsage(session.getUsage()));
     }
 
     /**
@@ -75,17 +70,6 @@ public final class SessionSnapshots {
     }
 
     /**
-     * 还原单条待办。
-     *
-     * @param snapshot 待办快照，不可为 {@code null}
-     * @return 待办项
-     */
-    static PendingTodo toTodo(SessionTodoSnapshot snapshot) {
-        PendingTodo.Status status = snapshot.isDone() ? PendingTodo.Status.DONE : PendingTodo.Status.PENDING;
-        return new PendingTodo(snapshot.getId(), snapshot.getContent(), status, snapshot.getCreatedAt());
-    }
-
-    /**
      * 还原会话累计用量。
      *
      * @param snapshot 累计用量快照，可为 {@code null}（按零用量处理）
@@ -97,29 +81,6 @@ public final class SessionSnapshots {
         }
         return new SessionUsage(snapshot.getPromptTokens(), snapshot.getCompletionTokens(),
                 snapshot.getTotalTokens(), snapshot.getLlmCalls());
-    }
-
-    /**
-     * 从待办快照恢复出内核对等的编号序列位置。
-     * <p>
-     * 待办编号由会话内的自增序列分配。恢复后若不把序列推到已有编号之后，下一次 {@code addTodo}
-     * 会分配出一个已被占用的编号，{@code /todo done 1} 就会同时命中两条。
-     * 编号解析不出数字时退化为「条数」，保证推进方向至少是向前的。
-     *
-     * @param todos 待办快照列表
-     * @return 自增序列的恢复值
-     */
-    static long restoreTodoSequence(List<SessionTodoSnapshot> todos) {
-        long max = 0L;
-        for (SessionTodoSnapshot todo : todos) {
-            try {
-                max = Math.max(max, Long.parseLong(todo.getId().trim()));
-            } catch (NumberFormatException e) {
-                // 非数字编号由其它来源写入，对序列没有推进意义
-                continue;
-            }
-        }
-        return Math.max(max, todos.size());
     }
 
     /**
@@ -138,16 +99,6 @@ public final class SessionSnapshots {
         return new SessionMessageSnapshot(message.getMessageId(), message.getTimestamp(), body.getRole(),
                 body.getContent(), body.getToolCallId(), body.getName(), toolCalls,
                 captureTokenUsage(message.getUsage()));
-    }
-
-    /**
-     * 投影单条待办。
-     *
-     * @param todo 待办项，不可为 {@code null}
-     * @return 待办快照
-     */
-    private static SessionTodoSnapshot captureTodo(PendingTodo todo) {
-        return new SessionTodoSnapshot(todo.getId(), todo.getContent(), todo.isDone(), todo.getCreatedAt());
     }
 
     /**

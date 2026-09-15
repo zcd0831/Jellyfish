@@ -23,7 +23,7 @@ class SessionSnapshotTest {
     @Test
     void constructor_should_keepAllFields() {
         SessionSnapshot snapshot = new SessionSnapshot("s-1", 1L, 2L, "标题", "coder", "openai", "gpt-4o",
-                PermissionMode.PLAN, null, null, null);
+                PermissionMode.PLAN, null, null);
 
         assertEquals("s-1", snapshot.getSessionId());
         assertEquals(1L, snapshot.getCreatedAt());
@@ -40,20 +40,19 @@ class SessionSnapshotTest {
         SessionSnapshot snapshot = minimal("s-1");
 
         assertTrue(snapshot.getMessages().isEmpty());
-        assertTrue(snapshot.getTodos().isEmpty());
         assertNull(snapshot.getUsage());
     }
 
     @Test
     void constructor_should_fail_when_sessionIdBlank() {
         assertThrows(JellyfishException.class, () -> new SessionSnapshot("  ", 0L, 0L, null, null, null, null,
-                PermissionMode.NORMAL, null, null, null));
+                PermissionMode.NORMAL, null, null));
     }
 
     @Test
     void constructor_should_fail_when_permissionModeNull() {
         assertThrows(JellyfishException.class, () -> new SessionSnapshot("s-1", 0L, 0L, null, null, null, null,
-                null, null, null, null));
+                null, null, null));
     }
 
     @Test
@@ -61,7 +60,7 @@ class SessionSnapshotTest {
         List<SessionMessageSnapshot> messages = new ArrayList<SessionMessageSnapshot>();
         messages.add(message("m-1"));
         SessionSnapshot snapshot = new SessionSnapshot("s-1", 0L, 0L, null, null, null, null,
-                PermissionMode.NORMAL, messages, null, null);
+                PermissionMode.NORMAL, messages, null);
 
         messages.clear();
 
@@ -72,22 +71,15 @@ class SessionSnapshotTest {
     @Test
     void constructor_should_rejectNullMessageElement() {
         assertThrows(JellyfishException.class, () -> new SessionSnapshot("s-1", 0L, 0L, null, null, null, null,
-                PermissionMode.NORMAL, Arrays.asList(message("m-1"), null), null, null));
-    }
-
-    @Test
-    void constructor_should_rejectNullTodoElement() {
-        assertThrows(JellyfishException.class, () -> new SessionSnapshot("s-1", 0L, 0L, null, null, null, null,
-                PermissionMode.NORMAL, null, Arrays.asList(new SessionTodoSnapshot("1", "a", false, 0L), null),
-                null));
+                PermissionMode.NORMAL, Arrays.asList(message("m-1"), null), null));
     }
 
     @Test
     void toString_should_notDumpMessageBodies() {
         SessionSnapshot snapshot = new SessionSnapshot("s-1", 0L, 0L, null, null, null, null,
-                PermissionMode.NORMAL, Collections.singletonList(message("m-1")), null, null);
+                PermissionMode.NORMAL, Collections.singletonList(message("m-1")), null);
 
-        assertEquals("SessionSnapshot{sessionId=s-1, messages=1, todos=0}", snapshot.toString());
+        assertEquals("SessionSnapshot{sessionId=s-1, messages=1}", snapshot.toString());
     }
 
     /**
@@ -98,7 +90,7 @@ class SessionSnapshotTest {
      */
     private static SessionSnapshot minimal(String sessionId) {
         return new SessionSnapshot(sessionId, 0L, 0L, null, null, null, null, PermissionMode.NORMAL,
-                null, null, null);
+                null, null);
     }
 
     /**

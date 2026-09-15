@@ -5,7 +5,6 @@ import org.junit.jupiter.api.Test;
 import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.api.extension.SessionMessageSnapshot;
 import zcd.jellyfish.api.extension.SessionSnapshot;
-import zcd.jellyfish.api.extension.SessionTodoSnapshot;
 import zcd.jellyfish.api.extension.SessionToolCallSnapshot;
 import zcd.jellyfish.infra.llm.LlmMessage;
 import zcd.jellyfish.infra.llm.LlmToolCall;
@@ -47,7 +46,6 @@ class SessionSnapshotsTest {
         assertEquals("gpt-4o", snapshot.getModel());
         assertEquals(PermissionMode.PLAN, snapshot.getPermissionMode());
         assertEquals(4, snapshot.getMessages().size());
-        assertEquals(1, snapshot.getTodos().size());
         assertNotNull(snapshot.getUsage());
         // 每条消息都算一次调用计数，未返回用量的消息也计入
         assertEquals(4L, snapshot.getUsage().getLlmCalls());
@@ -102,32 +100,6 @@ class SessionSnapshotsTest {
     }
 
     @Test
-    @DisplayName("待办状态与编号都应保留")
-    void restore_should_keepTodoState() {
-        Session original = fullSession();
-
-        Session restored = Session.restore(SessionSnapshots.capture(original));
-
-        assertEquals(1, restored.getTodos().size());
-        PendingTodo todo = restored.getTodos().get(0);
-        assertEquals("1", todo.getId());
-        assertEquals("写测试", todo.getContent());
-        assertEquals(PendingTodo.Status.DONE, todo.getStatus());
-        assertEquals(original.getTodos().get(0).getCreatedAt(), todo.getCreatedAt());
-    }
-
-    @Test
-    @DisplayName("回放后新增待办不得复用已占用的编号")
-    void restore_should_advanceTodoSequence() {
-        SessionSnapshot snapshot = SessionSnapshots.capture(fullSession());
-        Session restored = Session.restore(snapshot);
-
-        PendingTodo next = restored.addTodo("再来一条");
-
-        assertEquals("2", next.getId());
-    }
-
-    @Test
     @DisplayName("为空的标题与 agent 必须保持为空，不能被填成默认值")
     void restore_should_keepNullFields_when_absent() {
         Session session = new Session("session-2", null, null, null, null, CREATED_AT);
@@ -140,7 +112,6 @@ class SessionSnapshotsTest {
         assertNull(restored.getModel());
         assertEquals(PermissionMode.NORMAL, restored.getPermissionMode());
         assertEquals(0, restored.size());
-        assertEquals(0, restored.getTodos().size());
     }
 
     @Test
@@ -170,9 +141,7 @@ class SessionSnapshotsTest {
                 new LlmUsage(7, 8, 15)));
         session.append(SessionMessage.of(LlmMessage.tool("call-1", "read_file", "文件内容")));
         session.append(SessionMessage.of(LlmMessage.assistant("读完了")));
-        session.addTodo("写测试");
-        session.completeTodo("1");
-        // addTodo 会刷新 updatedAt，这里再改一次标题以确保 updatedAt 与 createdAt 不同
+        // 再改一次标题以确保 updatedAt 与 createdAt 不同
         session.setTitle("标题");
         return session;
     }
@@ -199,10 +168,6 @@ class SessionSnapshotsTest {
         assertEquals(expected.getMessages().size(), actual.getMessages().size());
         for (int i = 0; i < expected.getMessages().size(); i++) {
             assertMessageEquals(expected.getMessages().get(i), actual.getMessages().get(i));
-        }
-        assertEquals(expected.getTodos().size(), actual.getTodos().size());
-        for (int i = 0; i < expected.getTodos().size(); i++) {
-            assertTodoEquals(expected.getTodos().get(i), actual.getTodos().get(i));
         }
     }
 
@@ -234,18 +199,5 @@ class SessionSnapshotsTest {
             assertEquals(expectedCall.getName(), actualCall.getName());
             assertEquals(expectedCall.getArguments(), actualCall.getArguments());
         }
-    }
-
-    /**
-     * 逐字段比对两条待办快照。
-     *
-     * @param expected 期望快照
-     * @param actual   实际快照
-     */
-    private static void assertTodoEquals(SessionTodoSnapshot expected, SessionTodoSnapshot actual) {
-        assertEquals(expected.getId(), actual.getId());
-        assertEquals(expected.getContent(), actual.getContent());
-        assertEquals(expected.isDone(), actual.isDone());
-        assertEquals(expected.getCreatedAt(), actual.getCreatedAt());
     }
 }

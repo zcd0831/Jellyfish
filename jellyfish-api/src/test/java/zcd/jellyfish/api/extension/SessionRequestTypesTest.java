@@ -18,7 +18,7 @@ class SessionRequestTypesTest {
     @Test
     void persistRequest_should_carrySnapshotAndSessionId() {
         SessionSnapshot snapshot = new SessionSnapshot("s-1", 0L, 0L, null, null, null, null,
-                PermissionMode.NORMAL, null, null, null);
+                PermissionMode.NORMAL, null, null);
 
         SessionPersistRequest request = new SessionPersistRequest(snapshot);
 
@@ -30,7 +30,7 @@ class SessionRequestTypesTest {
     @Test
     void persistRequest_should_haveNullRouteKey() {
         SessionSnapshot snapshot = new SessionSnapshot("s-1", 0L, 0L, null, null, null, null,
-                PermissionMode.NORMAL, null, null, null);
+                PermissionMode.NORMAL, null, null);
 
         assertNull(new SessionPersistRequest(snapshot).getRouteKey());
     }
@@ -52,7 +52,7 @@ class SessionRequestTypesTest {
     @Test
     void restoreResult_should_carrySnapshots() {
         SessionSnapshot snapshot = new SessionSnapshot("s-1", 0L, 0L, null, null, null, null,
-                PermissionMode.NORMAL, null, null, null);
+                PermissionMode.NORMAL, null, null);
 
         SessionRestoreResult result = SessionRestoreResult.of(java.util.Collections.singletonList(snapshot));
 
@@ -95,22 +95,6 @@ class SessionRequestTypesTest {
         assertNull(token.getPromptTokens());
         assertNull(token.getCompletionTokens());
         assertNull(token.getTotalTokens());
-    }
-
-    @Test
-    void todoSnapshot_should_keepValues() {
-        SessionTodoSnapshot todo = new SessionTodoSnapshot("1", "写测试", true, 7L);
-
-        assertEquals("1", todo.getId());
-        assertEquals("写测试", todo.getContent());
-        assertTrue(todo.isDone());
-        assertEquals(7L, todo.getCreatedAt());
-    }
-
-    @Test
-    void todoSnapshot_should_fail_when_idOrContentBlank() {
-        assertThrows(JellyfishException.class, () -> new SessionTodoSnapshot(" ", "内容", false, 0L));
-        assertThrows(JellyfishException.class, () -> new SessionTodoSnapshot("1", " ", false, 0L));
     }
 
     @Test

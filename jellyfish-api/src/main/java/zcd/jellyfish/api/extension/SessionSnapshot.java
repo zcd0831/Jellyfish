@@ -51,9 +51,6 @@ public final class SessionSnapshot {
     /** 会话消息列表，可为 {@code null}（等价空列表）。 */
     private final List<SessionMessageSnapshot> messages;
 
-    /** 会话待办列表，可为 {@code null}（等价空列表）。 */
-    private final List<SessionTodoSnapshot> todos;
-
     /** 会话累计 token 用量，可为 {@code null}（按零用量处理）。 */
     private final SessionUsageSnapshot usage;
 
@@ -69,14 +66,12 @@ public final class SessionSnapshot {
      * @param model          model 名，可为 {@code null}
      * @param permissionMode 权限模式，不可为 {@code null}
      * @param messages       消息列表，可为 {@code null}
-     * @param todos          待办列表，可为 {@code null}
      * @param usage          累计用量，可为 {@code null}
      * @throws JellyfishException 会话标识为空白或权限模式为 {@code null} 时抛出
      */
     public SessionSnapshot(String sessionId, long createdAt, long updatedAt, String title, String agentId,
                            String provider, String model, PermissionMode permissionMode,
-                           List<SessionMessageSnapshot> messages, List<SessionTodoSnapshot> todos,
-                           SessionUsageSnapshot usage) {
+                           List<SessionMessageSnapshot> messages, SessionUsageSnapshot usage) {
         if (sessionId == null || sessionId.trim().isEmpty()) {
             throw new JellyfishException("session id must not be blank");
         }
@@ -92,7 +87,6 @@ public final class SessionSnapshot {
         this.model = model;
         this.permissionMode = permissionMode;
         this.messages = copyMessages(messages);
-        this.todos = copyTodos(todos);
         this.usage = usage;
     }
 
@@ -178,15 +172,6 @@ public final class SessionSnapshot {
     }
 
     /**
-     * 获取会话待办列表。
-     *
-     * @return 不可变列表，保证非 {@code null}
-     */
-    public List<SessionTodoSnapshot> getTodos() {
-        return todos;
-    }
-
-    /**
      * 获取会话累计 token 用量。
      *
      * @return 累计用量，可为 {@code null}
@@ -197,8 +182,7 @@ public final class SessionSnapshot {
 
     @Override
     public String toString() {
-        return "SessionSnapshot{sessionId=" + sessionId + ", messages=" + messages.size()
-                + ", todos=" + todos.size() + '}';
+        return "SessionSnapshot{sessionId=" + sessionId + ", messages=" + messages.size() + '}';
     }
 
     /**
@@ -217,26 +201,6 @@ public final class SessionSnapshot {
                 throw new JellyfishException("session message snapshot must not be null");
             }
             copy.add(message);
-        }
-        return Collections.unmodifiableList(copy);
-    }
-
-    /**
-     * 复制待办列表并拒绝 {@code null} 元素。
-     *
-     * @param todos 原始列表，可为 {@code null}
-     * @return 不可变列表，保证非 {@code null}
-     */
-    private static List<SessionTodoSnapshot> copyTodos(List<SessionTodoSnapshot> todos) {
-        if (todos == null || todos.isEmpty()) {
-            return Collections.emptyList();
-        }
-        List<SessionTodoSnapshot> copy = new ArrayList<SessionTodoSnapshot>(todos.size());
-        for (SessionTodoSnapshot todo : todos) {
-            if (todo == null) {
-                throw new JellyfishException("session todo snapshot must not be null");
-            }
-            copy.add(todo);
         }
         return Collections.unmodifiableList(copy);
     }

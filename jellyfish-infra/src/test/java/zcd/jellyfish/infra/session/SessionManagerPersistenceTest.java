@@ -14,7 +14,6 @@ import zcd.jellyfish.api.extension.SessionPersistRequest;
 import zcd.jellyfish.api.extension.SessionRestoreRequest;
 import zcd.jellyfish.api.extension.SessionRestoreResult;
 import zcd.jellyfish.api.extension.SessionSnapshot;
-import zcd.jellyfish.api.extension.SessionTodoSnapshot;
 import zcd.jellyfish.api.extension.SessionUsageSnapshot;
 import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.infra.agent.AgentManager;
@@ -117,24 +116,6 @@ class SessionManagerPersistenceTest {
     }
 
     @Test
-    @DisplayName("待办变更要落盘，但没有实际变化时不该产生多余落盘")
-    void todoMutations_should_persistOnlyWhenChanged() {
-        List<SessionSnapshot> persisted = capturePersistedSnapshots();
-        String sessionId = manager.create(null, null, null, null).getSessionId();
-
-        manager.addTodo(sessionId, "写测试");
-        manager.completeTodo(sessionId, "1");
-        manager.completeTodo(sessionId, "1");
-        manager.completeTodo(sessionId, "404");
-        manager.clearTodos(sessionId);
-        manager.clearTodos(sessionId);
-
-        // 1 次创建 + addTodo + completeTodo(成功) + clearTodos(有内容)
-        assertEquals(4, persisted.size());
-        assertTrue(persisted.get(persisted.size() - 1).getTodos().isEmpty());
-    }
-
-    @Test
     @DisplayName("关闭会话前先落盘，且关闭后的快照仍带着最后一轮内容")
     void close_should_persistLastSnapshot() {
         List<SessionSnapshot> persisted = capturePersistedSnapshots();
@@ -215,17 +196,6 @@ class SessionManagerPersistenceTest {
     }
 
     @Test
-    @DisplayName("恢复出的会话编号序列要接着走，避免新待办撞号")
-    void restore_should_keepTodoSequenceUsable() {
-        // 快照里已有编号为 1 的待办，恢复后新待办必须是 2
-        contributeRestore(SessionRestoreResult.of(Collections.singletonList(snapshot("s-1"))));
-
-        manager.restore();
-
-        assertEquals("2", manager.addTodo("s-1", "新待办").getId());
-    }
-
-    @Test
     @DisplayName("没有插件提供恢复数据时返回 0，不报错")
     void restore_should_returnZero_whenNoPluginRegistered() {
         assertEquals(0, manager.restore());
@@ -285,9 +255,8 @@ class SessionManagerPersistenceTest {
     private static SessionSnapshot snapshot(String sessionId) {
         SessionMessageSnapshot message = new SessionMessageSnapshot("m-1", 1L, LlmMessage.ROLE_USER, "你好",
                 null, null, null, null);
-        SessionTodoSnapshot todo = new SessionTodoSnapshot("1", "已有待办", true, 3L);
         return new SessionSnapshot(sessionId, 1L, 2L, "标题", "coder", "openai", "gpt-4o",
-                PermissionMode.NORMAL, Collections.singletonList(message), Collections.singletonList(todo),
+                PermissionMode.NORMAL, Collections.singletonList(message),
                 new SessionUsageSnapshot(0L, 0L, 0L, 0L));
     }
 }

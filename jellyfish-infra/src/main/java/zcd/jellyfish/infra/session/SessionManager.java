@@ -40,7 +40,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * 本类是<b>可变运行态</b>——不读配置、不建索引、不广播装载事件，只维护「sessionId → Session」表与一个
  * 进程内的当前会话指针。
  * <p>
- * <b>唯一变更入口</b>：所有会话运行态变更（追加消息 / 改标题 / 绑 agent / 切模型 / 切权限模式 / 待办）
+ * <b>唯一变更入口</b>：所有会话运行态变更（追加消息 / 改标题 / 绑 agent / 切模型 / 切权限模式）
  * 都必须经本类。因为这些变更要连带做两件横切的事——广播通知、同步落盘扩展点
  * （架构图 {@code SessionMgr ==> ExtReg}）——集中在一处才不会每个调用点各写一遍。
  * <p>
@@ -52,10 +52,8 @@ import java.util.concurrent.atomic.AtomicReference;
  * <b>不持有全局模型状态</b>：当前模型是会话字段，本类只做读写转发；解析与路由仍归 {@code ModelManager}，
  * 因此同一进程内的不同会话可以各用各的模型。
  * <p>
- * <b>本轮不做</b>：上下文裁剪与 token 预算——归 {@code core/prompt}，本类只做计量。
- * <p>
- * <b>已落地</b>：会话级待办运行态（{@code /todo} 命令与 {@code core/prompt} 的注入都读这里），
- * 注入发生在构建上下文时且不写回消息历史（见 session 方案 §4.5）。
+ * <b>本轮不做</b>：上下文裁剪与 token 预算——归 {@code core/prompt}，本类只做计量。待办这类
+ * 领域状态不再由会话持有，改由插件自持（经提示词贡献扩展点注入），因此本类也不提供对应入口。
  *
  * @author zcd
  */
@@ -353,68 +351,6 @@ public class SessionManager {
             llmMessages.add(message.getMessage());
         }
         return Collections.unmodifiableList(llmMessages);
-    }
-
-    /**
-     * 追加一条会话级待办。
-     *
-     * @param sessionId 会话标识，不可为空白
-     * @param content   待办内容，不可为空白
-     * @return 新增的待办项
-     * @throws JellyfishException 会话不存在或内容为空白时抛出
-     */
-    public PendingTodo addTodo(String sessionId, String content) {
-        Session session = require(sessionId);
-        PendingTodo todo = session.addTodo(content);
-        persist(session);
-        return todo;
-    }
-
-    /**
-     * 按编号标记待办为已完成。
-     * <p>
-     * 幂等：编号不存在或本就已完成时返回 {@code false}，不抛错——用户重复敲同一条命令不应中断。
-     *
-     * @param sessionId 会话标识，不可为空白
-     * @param todoId    待办编号
-     * @return 确实发生状态流转返回 {@code true}
-     * @throws JellyfishException 会话不存在时抛出
-     */
-    public boolean completeTodo(String sessionId, String todoId) {
-        Session session = require(sessionId);
-        boolean changed = session.completeTodo(todoId);
-        if (changed) {
-            // 幂等调用（编号不存在或已完成）没有改变任何状态，不需要落盘
-            persist(session);
-        }
-        return changed;
-    }
-
-    /**
-     * 清空会话全部待办。
-     *
-     * @param sessionId 会话标识，不可为空白
-     * @return 被清空的待办条数
-     * @throws JellyfishException 会话不存在时抛出
-     */
-    public int clearTodos(String sessionId) {
-        Session session = require(sessionId);
-        int cleared = session.clearTodos();
-        if (cleared > 0) {
-            persist(session);
-        }
-        return cleared;
-    }
-
-    /**
-     * 取会话待办列表的不可修改快照。
-     *
-     * @param sessionId 会话标识，不可为空白
-     * @return 不可修改列表，可能为空但不会为 {@code null}
-     * @throws JellyfishException 会话不存在时抛出
-     */
-    public List<PendingTodo> todosOf(String sessionId) {
-        return require(sessionId).getTodos();
     }
 
     /**

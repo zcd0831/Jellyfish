@@ -3,7 +3,6 @@ package zcd.jellyfish.plugin.sessionfile;
 import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.api.extension.SessionMessageSnapshot;
 import zcd.jellyfish.api.extension.SessionSnapshot;
-import zcd.jellyfish.api.extension.SessionTodoSnapshot;
 import zcd.jellyfish.api.extension.SessionToolCallSnapshot;
 import zcd.jellyfish.api.extension.SessionUsageSnapshot;
 import zcd.jellyfish.api.extension.TokenUsageSnapshot;
@@ -39,11 +38,8 @@ final class TestSnapshots {
                         new TokenUsageSnapshot(7, 8, 15)),
                 new SessionMessageSnapshot("m-3", 3L, "tool", "文件内容", "call-1", "read_file", null, null),
                 new SessionMessageSnapshot("m-4", 4L, "assistant", "读完了", null, null, null, null));
-        List<SessionTodoSnapshot> todos = Arrays.asList(
-                new SessionTodoSnapshot("1", "写测试", true, 5L),
-                new SessionTodoSnapshot("2", "写文档", false, 6L));
         return new SessionSnapshot(sessionId, 100L, 200L, "标题", "coder", "openai", "gpt-4o",
-                PermissionMode.PLAN, messages, todos, new SessionUsageSnapshot(7L, 8L, 15L, 4L));
+                PermissionMode.PLAN, messages, new SessionUsageSnapshot(7L, 8L, 15L, 4L));
     }
 
     /**
@@ -54,6 +50,6 @@ final class TestSnapshots {
      */
     static SessionSnapshot minimal(String sessionId) {
         return new SessionSnapshot(sessionId, 1L, 1L, null, null, null, null, PermissionMode.NORMAL,
-                null, null, null);
+                null, null);
     }
 }

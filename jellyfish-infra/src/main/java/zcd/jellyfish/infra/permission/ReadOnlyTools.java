@@ -127,10 +127,9 @@ public final class ReadOnlyTools {
                 }
             }
         }
-        // TODO 内核将来自己注册的工具没有插件配置段，在 PLAN 模式下无法声明只读，会被一律拒绝。
-        //      触发点是「LLM 可写的 todo_write 核心工具」那一轮（计划模式下它必须被判为只读），
-        //      届时需要预留一个保留配置段（例如 plugins.configurations.core.readOnlyTools），
-        //      或把只读性迁到 ToolDescriptor。
+        // TODO 只读白名单只认插件配置段：若将来内核自己注册工具（没有 plugins.configurations 段），
+        //      它在 PLAN 模式下无法声明只读，会被一律拒绝。届时需要预留一个保留配置段
+        //      （例如 plugins.configurations.core.readOnlyTools），或把只读性迁到 ToolDescriptor。
         return Collections.unmodifiableSet(collected);
     }
 

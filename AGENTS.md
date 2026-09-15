@@ -222,8 +222,9 @@ flowchart LR
 ```
 jellyfish-api/src/main/java/zcd/jellyfish/api/
 ├── JellyfishException.java        # 统一运行时异常，插件抛错也能被 core 统一捕获
-├── extension/                     # 扩展点对外模型（同步派发侧）：类型即地址的请求类型（ExtensionRequest / ExtensionHandler / XxxRequest）与结果类型；结果类型按能力开洞，例如权限判定用三态 PermissionDecision、插件拦截用两态 PermissionVeto、命令用三态 CommandResult（配 CommandDescriptor 名片与 CommandArguments 参数）；会话持久化额外带一套快照值类型（SessionSnapshot / SessionMessageSnapshot / SessionToolCallSnapshot / SessionUsageSnapshot / TokenUsageSnapshot）作为请求载荷；提示词注入用 PromptContributionRequest → PromptContribution，状态栏片段用 StatusLineContributionRequest → StatusLineContribution；只有数据与接口，没有任何调用语义参数
+├── extension/                     # 扩展点对外模型（同步派发侧）：类型即地址的请求类型（ExtensionRequest / ExtensionHandler / XxxRequest）与结果类型；结果类型按能力开洞，例如权限判定用三态 PermissionDecision、插件拦截用两态 PermissionVeto、命令用三态 CommandResult（配 CommandDescriptor 名片与 CommandArguments 参数）；会话持久化额外带一套快照值类型（SessionSnapshot / SessionMessageSnapshot / SessionToolCallSnapshot / SessionUsageSnapshot / TokenUsageSnapshot）作为请求载荷；提示词注入用 PromptContributionRequest → PromptContribution，状态栏片段用 StatusLineContributionRequest → StatusLineContribution，面板用 PanelContributionRequest → PanelContribution（带标题、内容行与**软建议**落位区域，真正的落位归外壳）；只有数据与接口，没有任何调用语义参数
 ├── event/                         # 事件通道对外模型（异步派发侧）：事件基类、发布订阅入口与注册选项，以及 notification/ 下的具体通知（含 UiInvalidatedEvent：插件主动告诉外壳「我贡献的界面内容已过期」的唯一通道）；只有数据与接口，没有任何调用语义参数
+├── ui/                            # 插件界面内容的渲染无关模型：UiLine / UiSegment / UiEmphasis（语义强调档位而非颜色）/ UiRegion（软建议区域）；api 是零依赖的，因此这里不能出现渲染引擎类型（Style / Element），否则插件自带的同名类会在「子优先」类加载器下与内核那份不是同一个 Class
 └── plugin/                        # 插件 SPI：插件总入口（JellyfishPlugin）、插件上下文（PluginContext）与插件声明（PluginDeclaration），面向仓库外插件作者的唯一稳定契约
 
 jellyfish-infra/src/main/java/zcd/jellyfish/infra/
@@ -237,7 +238,7 @@ jellyfish-infra/src/main/java/zcd/jellyfish/infra/
 ├── llm/            # LLM 调用抽象：统一的同步/流式调用接口与各厂商实现
 ├── plugin/         # 插件运行时：Java 插件加载、热部署、描述符体检与上下文供给，按统一 SPI 看待桥接插件，不感知底层脚本进程；装配输入 PluginRuntimeConfig 由「config.json 的 plugins.roots（扫描目录）+ jellyfish.json 的 plugins 段（名单/配置段）」两处组装，且是「引用稳定、快照可换」的发布点
 ├── permission/     # 权限控制：核心策略（agent 授权）→ PLAN 只读白名单（来自 plugins.configurations.<pluginId>.readOnlyTools）→ 插件两态拦截，判定后发审计事件；权限检查不经扩展层下发，由调用点同步询问；策略来源由 AgentManager 实现 PermissionPolicyProvider。待落地：人工审批通道（ASK 暂时降级为拒绝）
-├── ui/             # UI 贡献门面 UiContributions：外壳向插件收集界面内容、并订阅「内容可能已过期」的唯一入口（外壳不直接认识 ExtensionRegistry / EventChannel）；调用模型是「失效时收集」而不是「每帧收集」，因此空闲时零插件调用，代价是失效触发源必须记全；单处理器抛错只跳过它自己
+├── ui/             # UI 贡献门面 UiContributions：外壳向插件收集界面内容、并订阅「内容可能已过期」的唯一入口（外壳不直接认识 ExtensionRegistry / EventChannel）；两类贡献的区别只在「能否共存」——状态栏片段是拼接型（多插件共存，按 owner 去重），面板是独占型（带上 owner 交给外壳与用户仲裁）；调用模型是「失效时收集」而不是「每帧收集」，因此空闲时零插件调用，代价是失效触发源必须记全；单处理器抛错只跳过它自己
 ├── metrics/        # 可观测性：指标采集、健康检查与日志上报
 ├── config/         # 配置加载：全局级 + 项目级双源读取与合并，只读；四类配置类与文件一一对应：AppConfig(config.json) / ModelSettings(models.json) / AgentSettings(agents.json) / JellyfishSettings(jellyfish.json，含 plugins 与 react 段)；AppConfig 额外承载 PluginPaths(config.json 的 plugins.roots，插件扫描目录，不是双源段)
 └── support/        # 通用支撑：序列化封装、类型常量等底层工具
@@ -265,10 +266,15 @@ jellyfish-cli/src/main/java/zcd/jellyfish/cli/
     └── module/                    # 各依赖域的 Dagger2 Module
 
 jellyfish-tui/src/main/java/zcd/jellyfish/tui/
-├── TuiApp.java                     # 唯一入口：装配 ToolkitRunner、按键路由、回合与命令分流
-├── ChatShell.java                  # 版式：DockElement 三段式 + 视觉行转 TamboUI Line 的唯一转换点
+├── TuiApp.java                     # 唯一入口：装配 ToolkitRunner、按键路由、回合与命令分流、/ui 分派、插件 UI 失效触发源
+├── ChatShell.java                  # 版式：DockElement 五边停靠（全 length 约束）+ 视觉行转 TamboUI Line 的唯一转换点；模态浮层打开时面板让位
+├── ChatLayout.java                 # 二维版式账本（纯函数）：先底/顶、后左右、最后消息区；侧栏 [20, W/4]、合计 ≤ W/3、W<80 隐藏、预算不足时先砍右栏再砍左栏
+├── UiRender.java                   # 插件内容渲染：UiEmphasis → Style、UiLine → 视觉行（CJK 折行 + 行数截断）；api 与渲染引擎的唯一转换点
+├── DockPanel.java                  # 常驻面板：{标题, 视觉行}；与 Overlay 同形但独立类型（模态浮层与常驻面板是两套账本）
+├── UiPlacement.java                # 面板落位仲裁：候选分组、默认（建议区域 / DOCK）、用户指定优先、关闭只影响显示
+├── UiCommand.java                  # 外壳自有命令 /ui 的解析与清单渲染（纯逻辑）：清单 / 轮换 / 指定 pluginId / off / on
 ├── ChatState.java                  # 视图状态：滚动窗口切片、智能跟随、外壳提示缓冲（带时间戳，参与投影排序）
-├── UiCache.java                    # 插件 UI 贡献的帧间缓存：只在失效时收集，空闲时零插件调用；dirty 跨线程置位
+├── UiCache.java                    # 插件 UI 贡献的帧间缓存：只在失效时收集，空闲时零插件调用；版本号跨线程自增，收集期间发生的失效不会丢
 ├── InflightTurn.java               # 进行中回合的暂存区（有界）：唯一一处「尚未成为会话消息」的数据
 ├── TranscriptProjector.java        # 纯函数投影：会话消息 + 外壳提示 + 暂存区 → 视觉行序列（按时间戳归并）
 ├── ShellNotice.java                # 外壳提示（命令回显 + 输出 + 三态）：带时间戳，不进会话，按时间戳插进消息流
@@ -277,7 +283,7 @@ jellyfish-tui/src/main/java/zcd/jellyfish/tui/
 ├── MouseScrollMapper.java          # 滚轮判定：鼠标事件 → 滚动动作（只认上下滚轮，其余吞掉以保住焦点）
 ├── InputAction.java                # 按键动作枚举：判定与执行分离，判定是纯函数
 ├── StatusBarView.java              # 状态栏：agent · provider/model · 权限模式 · token 用量；appendFragments 把插件片段接在尾部并按显示宽度整块丢弃超限片段
-├── ShellCommand.java               # 外壳自有命令 /exit：不进内核命令注册表
+├── ShellCommand.java               # 外壳自有命令 /exit 与 /ui 的判定：不进内核命令注册表
 ├── CommandCompletion.java          # 命令补全状态：激活判定 / 前缀过滤 / 选中 / 接受 / 收起（纯逻辑）
 ├── CommandCompletionView.java      # 补全面板渲染：候选 → 视觉行（纯函数，CJK 宽度安全）
 ├── CommandChoicePicker.java        # 二级选择页状态：命令候选 / 选中 / 上下移动 / 确认 / 收起（纯逻辑）
@@ -343,11 +349,12 @@ jellyfish-plugins/                        # 官方插件聚合（packaging=pom�
     └── src/main/
         ├── resources/plugin.properties
         └── java/zcd/jellyfish/plugin/todo/
-            ├── TodoPlugin.java           # 一个插件占四个扩展点：命令 / 工具 / 提示词贡献 / 状态栏贡献
+            ├── TodoPlugin.java           # 一个插件占五个扩展点：命令 / 工具 / 提示词贡献 / 状态栏贡献 / 面板贡献
             ├── TodoCommand.java          # 只读 /todo：列出本会话待办（写入只走 todo_write）
             ├── TodoWriteTool.java        # todo_write：整表覆盖，参数非法当场抛错
             ├── TodoPromptContribution.java # 待办注入 system prompt，无待办时空贡献
             ├── TodoStatusLine.java       # 状态栏贡献「待办 2/5」：无待办时不贡献
+            ├── TodoPanel.java            # 面板贡献：完整清单常驻侧栏，已完成项整行变暗；无待办时不占区域
             ├── TodoStore.java            # 一个会话一个文件、懒加载、空表删文件、原子替换、文件名安全
             ├── TodoItem.java             # 待办项（content / done），同时是落盘 DTO
             ├── TodoJson.java             # 待办 JSON 读写（自带 Jackson，显式注解不靠 -parameters）
@@ -376,8 +383,12 @@ jellyfish-cli/src/main/resources/log4j2.xml    # 日志：root 默认 WARN、只
 - **TUI 的视图 = 会话投影 + 进行中回合暂存区**：屏幕上的消息区**不持有第二份会话消息列表**，它每次由 `SessionManager` 的消息**投影**得出（`TranscriptProjector` 是纯函数），因此插件写入历史、命令改写会话都会自动反映到屏幕。唯一的例外是 `InflightTurn`：会话是按**轮**落库的（`ReActLooper` 只在每轮模型响应聚合完成后才 `appendMessage`），流式进行中当前轮的增量在会话里**不存在**，必须暂存；它随回合终结即清空，且**有界**（超限保留尾部并标记截断）。工具轨迹**不**进暂存区——`onToolCallStarted` 发生在 assistant 消息落库之后，轨迹直接由会话投影得出。
 - **TUI 的线程契约**：`ReActListener` 的 7 个回调全部发生在 `react` 池线程，而界面状态只允许在渲染线程变更。契约是「**react 线程只往线程安全的暂存区追加字节并置 volatile 脏标记；所有界面状态变更都发生在渲染线程**」。中断（`Esc`）由渲染线程直接调 `ReActTurn.cancel()`，不依赖 react 线程投递——否则用户按下后界面没有立刻可见的反应，与卡死无法区分。
 - **TUI 的渲染载体是「单个 RichText」而不是「每条消息一个元素」**（实测结论）：布局容器的子元素在约 120～180 个处出现性能断崖（38ms/帧 → >3000ms/帧），而单个 `richText` 承载 3000 行仅约 1.96ms/帧。因此消息区把整份可见内容压成一个元素，滚动偏移是 `ChatState` 自己的字段（框架的 `ScrollableElement` 做不到「每帧内容都变 + 滚动位置保留」）。
-- **插件的界面内容由外壳收集，插件碰不到布局**：插件只能贡献**渲染无关的数据**（目前是状态栏片段），`infra/ui/UiContributions` 是外壳向插件收集的唯一入口（外壳不认识 `ExtensionRegistry` / `EventChannel`，与 `CommandManager` 同口径）。**插件不可能自己造 TamboUI 组件**：`jellyfish-api` 零依赖，声明不出 `Element`；就算插件自带 TamboUI，PF4J 的**子优先**类加载器也会让它拿到的 `Element` 与内核那份不是一个 `Class`，回传必然 `ClassCastException`——这是类型系统层面的死路，不是规范问题。渲染那一侧的约束也硬：消息区必须压成**单个 `richText`**（子元素过百就断崖）。
-- **UI 贡献的调用模型是「失效时收集」，不是「每帧收集」**：TamboUI 每 40ms 渲染一帧（`tickRate` 默认值，流式文本能实时上屏就是靠它），若每帧都去问插件，空闲时也在反复调用插件处理器；因此只在失效时收集，**代价是失效触发源必须记全——漏一个就是插件内容永久陈旧**。六处：首帧（缓存初值）、会话切换、回合开始、**回合收敛**（在渲染线程比对上一帧的「进行中」状态，因此完成 / 报错 / 取消全部收敛路径都覆盖）、命令执行后、以及 `UiInvalidatedEvent`（插件主动说的唯一通道）与 `PluginStateChangedEvent`（它让「插件装上后立刻出现、卸下后立刻消失」成为白拿的行为，插件自己不用做任何事）。缓存是 `ChatState` 之外的 `UiCache`：`dirty` 由事件线程置位（`volatile`），快照只在渲染线程读。
+- **插件的界面内容由外壳收集，插件碰不到布局**：插件只能贡献**渲染无关的数据**，目前两类：**状态栏片段**（拼接型，多插件共存）与**面板**（独占型，一块区域同时只显示一个）。`infra/ui/UiContributions` 是外壳向插件收集的唯一入口（外壳不认识 `ExtensionRegistry` / `EventChannel`，与 `CommandManager` 同口径）。**插件不可能自己造 TamboUI 组件**：`jellyfish-api` 零依赖，声明不出 `Element`；就算插件自带 TamboUI，PF4J 的**子优先**类加载器也会让它拿到的 `Element` 与内核那份不是一个 `Class`，回传必然 `ClassCastException`——这是类型系统层面的死路，不是规范问题。渲染那一侧的约束也硬：消息区必须压成**单个 `richText`**（子元素过百就断崖）。
+- **区域（region）归外壳，插件只能给软建议**：`PanelContribution.preferredRegion` 是「我更想放左边」的意思，外壳**可以完全忽略**（终端太窄时侧栏整体隐藏、建议的区域已有别人、用户 `/ui` 指定过）——插件看不到终端宽度也不知道别人的存在，位置这个决定在它那边没有依据。由此外壳加一个区域**不需要改 api**（插件给 `null` 就走默认），而位置作为竞争资源必须有仲裁者，仲裁者只能是外壳与用户。落位在 `tui/UiPlacement`（纯逻辑）：用户指定优先于 `order`，默认显示 `order` 最小者，`/ui <region> off` 只影响显示而不清候选（所以关掉再打开不需要重新收集）。
+- **`/ui` 是外壳自有命令**（与 `/exit` 同口径，不进内核命令注册表）：CLI 与 server 没有区域概念，注册进去只会让 `/help` 多一条对 `-cli` 无意义的条目。清单要列出**被挤下去的候选名字**而不只是个数量——只给数量，用户依旧无法用 `/ui <region> <pluginId>` 指定自己想要的。
+- **五边版式只用固定约束，账本必须自己算**：`DockElement` 原生支持 top/bottom/left/right/center，五个区域一次 `dock()` 就能表达；但**所有约束一律用 `length(n)`，不用 `percent` / `fill`**——固定值下框架分配的 `center` 尺寸与 `ChatLayout` 算的完全一致，用百分比就要复刻框架的取整规则，迟早对不上（症状是「消息区被顶掉一行、滚动位置与内容错位」）。`ChatLayout` 是二维账本（纯函数）：先底/顶、后左右、最后消息区，侧栏宽度单侧 `[20, W/4]`、左右合计 ≤ `W/3`、`W < 80` 整体隐藏，消息区宽度不足时先砍右栏再砍左栏。**每一条收缩规则都是为了消息区**：面板是插件想要的，消息区是用户要看的。
+- **模态浮层打开时面板让位**（补全面板 / 二级选择页）：浮层是「正在输入、正在挑参数」的强交互，与常驻面板同屏只会把焦点搞散——虽然两者在版式上并不重叠。让位只影响那一帧的显示（`ChatShell.visiblePanels` 是纯函数，不动落位也不动缓存），关掉浮层立刻恢复。**代价是打开补全面板时侧栏会消失、消息区重排**（这是已知的版面跳动，见 `tui插件方案.md` §11.5）。
+- **UI 贡献的调用模型是「失效时收集」，不是「每帧收集」**：TamboUI 每 40ms 渲染一帧（`tickRate` 默认值，流式文本能实时上屏就是靠它），若每帧都去问插件，空闲时也在反复调用插件处理器；因此只在失效时收集，**代价是失效触发源必须记全——漏一个就是插件内容永久陈旧**。六处：首帧（缓存初值）、会话切换、回合开始、**回合收敛**（在渲染线程比对上一帧的「进行中」状态，因此完成 / 报错 / 取消全部收敛路径都覆盖）、命令执行后、以及 `UiInvalidatedEvent`（插件主动说的唯一通道）与 `PluginStateChangedEvent`（它让「插件装上后立刻出现、卸下后立刻消失」成为白拿的行为，插件自己不用做任何事）。缓存是 `ChatState` 之外的 `UiCache`：失效用**版本号**而不是布尔 `dirty`——布尔标记在「渲染线程刚读到 false 并开始收集、事件线程此时置 true、收集结束又清回 false」这个竞态下会**静默丢掉那次失效**；改成「收集开始前读版本、收集后回写该版本」后，收集期间发生的失效会让版本对不上，下一帧自然再收集。
 - **UI 贡献处理器的三条硬约束**（写进扩展点注释）：**纯只读**（只读插件自己的内存状态，不做 I/O——它会被任一失效触发反复调用，把 I/O 写进来等于把帧率绑在磁盘上）、**不得发布 `UiInvalidatedEvent`**（否则形成「失效 → 收集 → 失效」的自激循环）、**必须快**（渲染线程内联执行）。单个处理器抛错只记 WARN 并跳过它自己——收集是全量的，不隔离就会把「一个插件坏了」放大成「整个界面没内容」。
 - **TUI 的日志必须与终端隔离**：TUI 独占备用屏，任何写向 stderr 的字节都会糊在画面上。因此 `-tui` 在**参数解析之后、DI 装配之前**把 `log4j.configurationFile` 切到 `log4j2-tui.xml`（root 写文件）——必须在第一个 `Logger` 被创建之前设置，否则不生效。
 - **TUI 的输入元素是自己实现的**（实测结论）：`EventRouter.addGlobalHandler` 排在聚焦元素**之后**、按键是**冒泡**的（父级无法抢先）、且 `StyledElement.onKeyEvent` 对 `TextAreaElement` 是死钩子（它重写 `handleKeyEvent` 时不调 `super`）。因此 `ChatInputView` 直接渲染 `TextArea` 部件、自己决定键位归属，编辑原语仍复用 `TextAreaState`。
@@ -414,7 +425,7 @@ jellyfish-cli/src/main/resources/log4j2.xml    # 日志：root 默认 WARN、只
 - **权限判定的三层与 fail-open 的适用域**：`PermissionManager` 依次走「核心策略（普通 Java 代码）→ PLAN 只读白名单 → 插件拦截（两态、只收紧）」，再统一处理 ASK 与审计。fail-open 只覆盖「取不到策略」（未绑定 agent、无策略）；策略一旦生效，它的否定结论就是硬结论，否则 PLAN 模式形同虚设。插件侧结果类型独立为两态 `PermissionVeto`，因此「插件只能 Deny、不能要求人工审批」是编译期约束，不靠运行期判定。
 - **插件模型**：Java 插件与跨语言桥接插件在 `PF4JPluginManager` 眼里完全同构，都只经 `PluginContext`（`handle` / `contribute` / `observe` / `emit`）与内核交互：前两者写同一份类型注册表，后两者读写事件通道；脚本进程只是桥接插件背后的一台「无状态计算器」。
 - **插件碰不到会话、也拿不到工作目录**：`PluginContext` 只有身份与四个注册订阅方法，`ToolCallRequest` / `CommandRequest` 只带 `sessionId` 这类标识。两个直接后果：插件读写不了会话内部结构（消息列表、权限模式）；工具的相对路径只能按**进程工作目录**解析（`ToolPaths` 把这个基准集中在一处，将来补会话级 cwd 只改那里）。这不是缺陷而是边界——**只要一份状态能按 `sessionId` 归属，插件就完全能自己持有它**：`jellyfish-plugin-todo` 就是这样把待办从内核搬走的（自持文件 + 提示词贡献），内核不用新增会话字段，也不必为它保留任何调用点。
-- **官方插件**：`jellyfish-plugin-tools` 提供文件读写/编辑、目录列举与文本搜索五个工具（只读工具靠 `plugins.configurations.jellyfish-tools.readOnlyTools` 声明，供 PLAN 白名单）；`jellyfish-plugin-session-file` 把会话写成「一个会话一个 JSON 文件」并用 git 管理历史。**该插件的失败语义是分层的**：文件落盘失败上抛（文件是真相，对应内核的「不可丢」），git 与单个坏文件只记告警（git 只是附加的版本化层，机器没装 git 不该升级成「不能说话」；一个坏文件不该拖累同目录其它会话）。目录默认 `~/jellyfish/sessions`，首次落盘时 `git init`，提交身份用 `git -c user.name/user.email` 临时指定（新机器没有全局 git 配置也能提交，且不会把用户身份写进本仓库）；只认会话目录自己的 `.git`，绝不向上寻找父仓库。`jellyfish-plugin-todo` 承载会话待办：`todo_write` 工具整表覆盖（参数非法当场抛错，由 ReAct 转成 tool 结果回灌给模型）、只读 `/todo`、经 `PromptContributionRequest` 注入 system prompt、经 `StatusLineContributionRequest` 在状态栏显示 `待办 2/5`，并在写成功后广播 `UiInvalidatedEvent` 让状态栏不必等回合结束就刷新；状态落在 `<todoDir>/<sessionId>.json`（默认 `~/jellyfish/todos`，空表删文件）；待办只按 `sessionId` 归属，因此它不需要任何会话内部结构。
+- **官方插件**：`jellyfish-plugin-tools` 提供文件读写/编辑、目录列举与文本搜索五个工具（只读工具靠 `plugins.configurations.jellyfish-tools.readOnlyTools` 声明，供 PLAN 白名单）；`jellyfish-plugin-session-file` 把会话写成「一个会话一个 JSON 文件」并用 git 管理历史。**该插件的失败语义是分层的**：文件落盘失败上抛（文件是真相，对应内核的「不可丢」），git 与单个坏文件只记告警（git 只是附加的版本化层，机器没装 git 不该升级成「不能说话」；一个坏文件不该拖累同目录其它会话）。目录默认 `~/jellyfish/sessions`，首次落盘时 `git init`，提交身份用 `git -c user.name/user.email` 临时指定（新机器没有全局 git 配置也能提交，且不会把用户身份写进本仓库）；只认会话目录自己的 `.git`，绝不向上寻找父仓库。`jellyfish-plugin-todo` 承载会话待办：`todo_write` 工具整表覆盖（参数非法当场抛错，由 ReAct 转成 tool 结果回灌给模型）、只读 `/todo`、经 `PromptContributionRequest` 注入 system prompt、经 `StatusLineContributionRequest` 在状态栏显示 `待办 2/5`、经 `PanelContributionRequest` 在侧栏常驻显示完整清单（已完成项整行变暗；建议右栏但可被忽略），并在写成功后广播 `UiInvalidatedEvent` 让状态栏与面板不必等回合结束就刷新；状态落在 `<todoDir>/<sessionId>.json`（默认 `~/jellyfish/todos`，空表删文件）；待办只按 `sessionId` 归属，因此它不需要任何会话内部结构。
 - **跨语言通信**：JSON-RPC 2.0 over Stdio，每行一个 JSON；每种语言最多一个常驻进程（单进程多路复用），请求统一经 `ScriptGateway` 路由，脚本不直接管理进程。
 - **跨语言事件桥接**：内核通知经 `EventBridge` 推给脚本，脚本 `emit_event` 反向回 `EventChannel`；脚本来源事件带来源标记避免回推，事件类型走白名单、负载限 1MB、队列有界。
 

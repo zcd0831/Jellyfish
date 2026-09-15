@@ -330,11 +330,12 @@ public final class OwnedPanel {        // infra/ui
 | api | `extension/PanelContribution*.java`（新 ×2） | 请求 + 结果 |
 | api | `ui/UiLine.java` `ui/UiSegment.java` `ui/UiEmphasis.java` `ui/UiRegion.java`（新 ×4） | 行模型 + 建议区域 |
 | api | `event/notification/UiInvalidatedEvent.java`（新） | 空事件 |
-| infra | `ui/UiContributions.java`（新） | 门面：收集 + 异常隔离 + 去重 + 失效订阅 |
-| infra | `ui/Snapshot.java` `ui/OwnedPanel.java`（新） | 公开值类型 |
+| infra | `ui/UiContributions.java`（新） | 门面：收集 + 异常隔离 + 去重 + 失效订阅（快照类型实现为 `UiSnapshot`，见 §11.2） |
+| infra | `ui/UiSnapshot.java` `ui/OwnedPanel.java`（新） | 公开值类型 |
 | tui | `ChatLayout.java`（新） | 二维账本（纯函数） |
 | tui | `UiRender.java`（新） | `UiEmphasis → Style`、`UiLine → VisualLine` |
 | tui | `DockPanel.java`（新） | `{title, List<VisualLine>}`，与 `Overlay` **同形但独立类型**（共用会让两套账本口径混淆） |
+| tui | `UiPlacement.java`（新） | 面板落位仲裁（方案原文把它写成 `TuiApp`/`ChatState` 上的两个字段，见 §11.5） |
 | tui | `ChatShell.java`（改） | `render(...)` 增 `UiSnapshot` 与区域面板；`bottomParts` 顺序固定为 `[dock面板, overlay?, input, statusLine]`；`messageAreaRows` 拆给 `ChatLayout` |
 | tui | `UiCommand.java`（新） | `/ui` 的解析与文本渲染（纯函数，可单测） |
 | tui | `ShellCommand.java`（改） | 认 `/ui` |
@@ -498,5 +499,58 @@ public final class OwnedPanel {        // infra/ui
 
 ### 11.4 尚未开始
 
-P2a（面板骨架 + `DOCK` + `/ui`）与 P2b（`TOP` / `LEFT` / `RIGHT`）按 §6 分期推进；本轮的 `UiSnapshot` / `UiContributions`
-已经是它们的长大点（加面板时只需加一个收集方法与非空结束条件）。
+无：P2a 与 P2b 已在同一轮落地（见 §11.5），本方案的全部阶段均已完成。
+
+### 11.5 P2a（面板骨架 + `DOCK`）与 P2b（`TOP` / `LEFT` / `RIGHT`）—— 已完成
+
+| 层 | 交付物 |
+| --- | --- |
+| api | `PanelContributionRequest` / `PanelContribution`（`extension/`）、`ui/` 包：`UiLine` / `UiSegment` / `UiEmphasis` / `UiRegion` |
+| infra | `ui/OwnedPanel`；`UiSnapshot` 加 `panels`；`UiContributions` 收集面板（按 `order` 升序、按 owner 去重、异常隔离） |
+| tui | `ChatLayout`（二维账本，含 P2b 的侧栏宽度策略）、`UiRender`、`DockPanel`、`UiPlacement`、`UiCommand`；`ChatShell` 改五边停靠、`TuiApp` 接入 `/ui` 与落位、`ShellCommand` 认 `/ui` |
+| 插件 | `jellyfish-plugin-todo` 注册侧栏面板（完整清单，已完成项变暗，建议 `RIGHT`） |
+
+**P2a/P2b 合并交付**：方案 §6 建议拆开是为了「骨架出问题不连累侧栏」。实际做下来，侧栏的宽度策略只落在
+`ChatLayout.sidebarsOf` 一个方法里，而五边停靠的版本式代码路径完全相同（都是 `DockElement` 的一个边）；
+拆成两个提交只会让 `ChatLayout` 改两次、测试建两次。因此一次做完，但区域预算仍按 §3.2 逐条单测。
+
+### 11.6 与初稿的偏差（P2）
+
+1. **落位逻辑独立成 `UiPlacement`**（初稿写成「`TuiApp`/`ChatState` 持有的两个字段：`placement` 与 `hidden`」）：
+   一旦把字段交出来，紧接着出现的是四条规则——用户指定优先于 `order`、`off` 只影响显示不清候选、
+   轮换要从**当前实际显示者**出发、`show` 要清掉旧指定。这四条必须有单测，
+   而塞在 `TuiApp`（需要 `ToolkitRunner` 才能构造）里就只能间接测。独立成纯逻辑类之后，`UiPlacementTest` 直接断言仲裁结果。
+2. **一个插件全局至多一块面板**（初稿 D2 写的是「每个区域至多一块」）：更严也更简单。
+   面板是独占型资源，{@code /ui} 的抽象是「区域 ← 插件」；同一个 pluginId 跨区域重复出现会让清单读起来像两份配置，
+   而用户还得逐个区域去关。代价是「一个插件想在两处同时显示」做不到——真需要时再放开。
+3. **`assign` 会先清掉同区域的其他用户指定**：实现过程中被测试抓到的真 bug——初版 `assigned` 是累加的，
+   `chooseFrom` 取第一个匹配者，于是「最近一次指定」不再生效，`/ui` 轮换三次后会停在中同一个面板上。
+   一个区域同时只能有一个「用户选中的那个」才是正确语义。
+4. **`ChatLayout` 另开了一个 `messageWidth(终端宽, 面板)` 入口**：浮层面板的折行宽度依赖消息区宽度，
+   而消息区宽度**不**依赖浮层高度。初稿没有提这个先后依赖，但实际上少这个入口就只能先假定一个宽度、
+   拿到高度后宽度又变了。有了它，调用方可以先算宽度 → 折行浮层 → 算完整账本，全程只有一份口径。
+5. **`/ui` 清单要列出候选的名字而不只是个数**（初稿只说「列出所有贡献」）：
+   用户根本看不到被挤下去的面板，只告诉他「还有 2 个候选」，他依旧无法用
+   `/ui <region> <pluginId>` 指定自己想要的。因此清单里把名字全部列出。
+6. **浮层让位做成了纯函数 `ChatShell.visiblePanels`**：初稿只在 §3.5 的表格里写了「模态浮层打开时面板区隐藏，缓存不清」，
+   没说是谁在哪儿做。做成纯函数之后「只影响本帧、不改落位、不改缓存」这件事可以直接断言（`ChatShellTest`），
+   而不是靠读 `TuiApp.render` 确认。
+7. **`UiRegion` 保持五个值全部落地**，包括 `STATUS` 这个「不是面板区域」的值：
+   它不属于面板，但 `/ui status off` 需要它来统一寻址；把所有取值放在同一个枚举里，
+   「哪些是面板区域」由 `UiPlacement.isPanelRegion` 一处判定（插件误填 `STATUS` 时落回 `DOCK`，而不是不显示）。
+
+### 11.7 P2 验收结果
+
+- 全量 `mvn test`：**1502 用例，0 失败 0 错误**（P2 新增 101 个）。
+- 新增测试：`ChatLayoutTest`（13）、`UiRenderTest`（12）、`UiPlacementTest`（14）、`UiCommandTest`（13）、
+  `ChatShellTest`（8），以及 todo 插件的 `TodoPanelTest` 与加载链路的五个面断言。
+- 既有 TUI 用例一条未改：`ChatStateTest` / `TranscriptProjectorTest` / `CommandCompletionTest` /
+  `CommandChoicePickerTest` / `InputKeyMapperTest` 全部原样通过（对应 §7.3）。
+
+### 11.8 已知缺口（需真机确认或后续裁决）
+
+| # | 缺口 | 说明 |
+| --- | --- |
+| G1 | **打开补全面板时侧栏会消失、消息区重排** | 这是 §3.5「浮层出现时面板让位」的直接后果。两者在版式上其实并不重叠（面板在 DOCK、浮层在输入框上方），但让位是方案定的口径。若跳动不可接受，改法就一行：`ChatShell.visiblePanels` 直接返回 `declared` |
+| G2 | **`length` 约束与框架实际分配是否一致，未在真机验证** | 单测定的是账本的数字（§7.2），而「框架真的按 `length(n)` 给了这么多行」需要真机 PTY 看一次。若不一致，症状是消息区多一行/少一行或底部被截 |
+| G3 | 侧栏无内部滚动、`/ui` 状态不持久化 | 对应初稿的 L2 / L3，本轮有意不做 |

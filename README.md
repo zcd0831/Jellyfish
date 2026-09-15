@@ -101,6 +101,7 @@ java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -tui
 | `PageUp` / `PageDown` | 消息区翻页 |
 | `End` | 跳到底部并恢复跟随 |
 | `/exit` | 退出（由外壳处理，不在 `/help` 列表里） |
+| `/ui` | 查看与切换插件的界面贡献（同样由外壳处理，不在 `/help` 列表里） |
 
 **为什么是 `Ctrl+S` 发送而不是 `Enter` 发送**：终端在 raw 模式下，`Shift+Enter`、`Alt+Enter`、
 CSI-u 等所有「带修饰的 Enter」编码都无法被底层框架区分（一律解码成无修饰的 `Enter`），
@@ -118,10 +119,25 @@ CSI-u 等所有「带修饰的 Enter」编码都无法被底层框架区分（�
 消息区只投影最近 500 条消息，更早的以 `⎿ N 条更早的消息已折叠` 占位。
 编辑器的「光标到行尾」不可用（`End` 归消息区）；`\r\n` 输入会变成两个换行。
 
-**插件片段**：状态栏尾部可以显示插件贡献的一小段内容（例如待办插件的 `待办 2/5`）。
-插件**不能自己布局界面**——它只能贡献纯文本片段，由外壳按显示宽度拼接、并从最后一个片段起**整块丢弃**超宽的部分。
+**插件 UI**：插件可以往界面上放两类东西——状态栏尾部的一小段文本（例如待办插件的 `待办 2/5`），
+以及一块常驻面板（例如完整的待办清单）。插件**不能自己布局界面**——它只能贡献渲染无关的数据（文本 + 语义强调档位），
+位置、宽度、行数全部由外壳决定：状态栏片段按显示宽度拼接、并从最后一个起**整块丢弃**超宽的部分；
+面板的折行与行数上限由版式账本给出，插件无权把消息区挤没。
+
+面板占区域，而一块区域同一时刻只显示一个，因此两个插件抢同一位置时默认只显示 `order` 最小的那个，
+其余进入候选。用 `/ui` 查看与切换（这命令归外壳，不进内核命令注册表）：
+
+```
+/ui                        列出所有贡献：区域 | 插件 | 标题 | 是否可见 | 还有哪些候选
+/ui right                  在该区域轮换到下一个候选
+/ui right jellyfish-todo   指定由某个插件占用该区域
+/ui right off              关掉该区域（/ui right on 恢复）
+```
+
+界面窄于 80 列时左右侧栏自动隐藏；窄到放不下时面板会让位给消息区，而不是反过来。
+
 外壳**不**每帧询问插件（那样空闲时也在反复调用处理器），只在失效时收集一次：会话切换、回合开始或结束、
-命令执行后、插件加载卸载、以及插件自己发布 UI 失效事件。
+命令执行后、插件加载卸载、以及插件自己发布 UI 失效事件。整体不要插件 UI 时用 `-Djellyfish.tui.pluginPanels=false`。
 
 ## 配置
 
@@ -232,7 +248,7 @@ CSI-u 等所有「带修饰的 Enter」编码都无法被底层框架区分（�
 | --- | --- | --- |
 | `jellyfish-plugin-tools` | `jellyfish-tools` | 五个文件工具：`read_file`、`write_file`、`edit_file`、`list_dir`、`grep_files` |
 | `jellyfish-plugin-session-file` | `jellyfish-session-file` | 会话持久化：一个会话一个 JSON 文件，并用 git 管理历史 |
-| `jellyfish-plugin-todo` | `jellyfish-todo` | 会话待办：模型可写的 `todo_write` 工具 + 只读 `/todo` + 注入 system prompt |
+| `jellyfish-plugin-todo` | `jellyfish-todo` | 会话待办：模型可写的 `todo_write` 工具 + 只读 `/todo` + 注入 system prompt + 状态栏进度 + 侧栏清单面板 |
 
 `jellyfish-tools` 的五个工具：
 
@@ -291,8 +307,11 @@ cp jellyfish-plugins/jellyfish-plugin-todo/target/jellyfish-plugin-todo-*.jar pl
 | `/todo` 命令 | `CommandRequest` | 只读地列出当前会话待办（写入只走 `todo_write`，不给同一份状态第二套写入语义） |
 | 上下文注入 | `PromptContributionRequest` | 每轮把待办块注入 system prompt，模型始终看得见自己的计划；没有待办时不注入 |
 | 状态栏进度 | `StatusLineContributionRequest` | 状态栏尾部显示 `待办 2/5`，不敲命令也能看到还剩几件事；没有待办时不占位 |
+| 侧栏清单 | `PanelContributionRequest` | 在侧栏常驻显示完整清单（已完成项整行变暗），建议放右栏；没有待办时不占区域 |
 
-参数非法（`todos` 不是数组、项不是对象、`content` 为空、`status` 不在取值内）会**当场报错**，并作为工具结果回灌给模型让它自己改，而不是静默落盘一份坏数据。待办写完会广播一次 UI 失效事件，因此状态栏进度不必等回合结束就更新。
+参数非法（`todos` 不是数组、项不是对象、`content` 为空、`status` 不在取值内）会**当场报错**，并作为工具结果回灌给模型让它自己改，而不是静默落盘一份坏数据。待办写完会广播一次 UI 失效事件，因此状态栏进度与侧栏清单不必等回合结束就更新。
+
+面板是「独占型」贡献：它建议落在右栏，但外壳可以忽略这个建议（终端太窄时侧栏整体隐藏，也可能被用户用 `/ui` 改到别处）。
 
 `todo_write` 是写操作，PLAN 模式下默认被权限拒绝；上面配置里的 `readOnlyTools: ["todo_write"]` 就是「计划模式下也允许维护计划」的声明，不需要可以去掉。
 

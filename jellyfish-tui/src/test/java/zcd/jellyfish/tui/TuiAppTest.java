@@ -23,8 +23,33 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class TuiAppTest {
 
     @AfterEach
-    void clearMouseCaptureProperty() {
+    void clearSystemProperties() {
         System.clearProperty(TuiApp.MOUSE_CAPTURE_PROPERTY);
+        System.clearProperty(TuiApp.PLUGIN_PANELS_PROPERTY);
+    }
+
+    @Test
+    @DisplayName("未设置逃生门时默认启用插件 UI：插件能往界面上放东西是默认能力")
+    void pluginPanelsEnabled_should_defaultToTrue() {
+        assertTrue(TuiApp.pluginPanelsEnabled());
+    }
+
+    @Test
+    @DisplayName("显式置为 false 时整体关闭插件 UI（片段与面板都不显示，也不再向插件收集）")
+    void pluginPanelsEnabled_should_beFalse_when_propertyFalse() {
+        System.setProperty(TuiApp.PLUGIN_PANELS_PROPERTY, "false");
+
+        assertFalse(TuiApp.pluginPanelsEnabled());
+    }
+
+    @Test
+    @DisplayName("插件 UI 逃生门取值也是大小写不敏感，且取值不是 false 时保持开启")
+    void pluginPanelsEnabled_should_ignoreCaseAndStayTrueOtherwise() {
+        System.setProperty(TuiApp.PLUGIN_PANELS_PROPERTY, "FALSE");
+        assertFalse(TuiApp.pluginPanelsEnabled());
+
+        System.setProperty(TuiApp.PLUGIN_PANELS_PROPERTY, "true");
+        assertTrue(TuiApp.pluginPanelsEnabled());
     }
 
     @Test

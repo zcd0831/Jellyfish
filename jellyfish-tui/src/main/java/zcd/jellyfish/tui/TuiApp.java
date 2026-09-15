@@ -16,6 +16,7 @@ import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.extension.CommandChoice;
 import zcd.jellyfish.api.extension.CommandDescriptor;
 import zcd.jellyfish.api.extension.CommandResult;
+import zcd.jellyfish.api.ui.UiRegion;
 import zcd.jellyfish.core.AgentHarness;
 import zcd.jellyfish.core.ReActTurn;
 import zcd.jellyfish.infra.command.CommandInfo;
@@ -25,21 +26,32 @@ import zcd.jellyfish.infra.model.ResolvedModel;
 import zcd.jellyfish.infra.session.Session;
 import zcd.jellyfish.infra.session.SessionManager;
 import zcd.jellyfish.infra.session.SessionMessage;
+import zcd.jellyfish.infra.ui.OwnedPanel;
 import zcd.jellyfish.infra.ui.UiContributions;
+import zcd.jellyfish.infra.ui.UiSnapshot;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 
 /**
  * TUI 外壳：交互式终端界面的组装与事件循环。
  * <p>
- * <b>它只做四件事</b>：把按键翻译成动作、把动作交给内核、把内核的产出投影到屏幕、把会话运行态贴到状态栏。
+ * <b>它只做四件事</b>：把按键翻译成动作、把动作交给内核、把内核的产出投影到屏幕、
+ * 把会话运行态与插件贡献贴到状态栏与各面板区域。
  * 任何「思考」都不在这里——智能入口只有 {@link AgentHarness#chat}，命令入口只有 {@link CommandManager}，
  * 与 {@code CliRunMode} 走的是同一对门面，这条口径从 CLI 轮延续下来，不另起一套。
+ * <p>
+ * <b>插件界面内容靠「失效时收集」而不是「每帧收集」</b>：{@link UiContributions} 只在缓存失效时
+ * 被问一次（空闲时零调用，见 {@link UiCache}）。代价是<b>失效触发源必须记全</b>——漏一个就是
+ * 插件内容永久陈旧，因此五处都在本类里显式置位：会话切换（{@link #syncSession}）、
+ * 回合开始（{@link #startTurn}）、回合收敛（{@link #render} 里比对上一帧的「进行中」状态）、
+ * 命令执行后（{@link #executeCommand}），以及插件主动发布的失效事件与插件加载卸载
+ * （{@link #onStart} 里订阅）。首帧由缓存初值保证。
  * <p>
  * <b>两条必须原样复用的规则</b>：
  * <ol>
@@ -82,6 +94,14 @@ public final class TuiApp extends ToolkitApp {
     /** 视图状态。 */
     private final ChatState chatState = new ChatState();
 
+    /**
+     * 面板落位状态：哪个插件的面板显示在哪个区域。
+     * <p>
+     * 归外壳而不是插件：区域是布局能力，也是多插件之间的竞争资源（一块区域同时只能显示一个），
+     * 因此必须由外壳与用户（{@code /ui}）仲裁。刻意不持久化，重启回默认。
+     */
+    private final UiPlacement uiPlacement = new UiPlacement();
+
     /** 插件 UI 贡献的帧间缓存：只在失效时收集，空闲时零调用。 */
     private final UiCache uiCache;
 
@@ -94,6 +114,21 @@ public final class TuiApp extends ToolkitApp {
     /** 外壳自有命令在补全清单里的条目：命令名不含前缀，与命令域清单同构。 */
     private static final CommandInfo EXIT_INFO = new CommandInfo(ShellCommand.EXIT_NAME,
             new CommandDescriptor("退出 jellyfish", null, null));
+
+    /** {@code /ui} 在补全清单里的条目。 */
+    private static final CommandInfo UI_INFO = new CommandInfo(UiCommand.NAME,
+            new CommandDescriptor("查看与切换插件的界面贡献", null, null));
+
+    /**
+     * 插件 UI 的逃生门系统属性。
+     * <p>
+     * 置为 {@code false} 时整体关闭插件界面内容（状态栏片段与面板都不显示，也不再向插件收集）：
+     * 面板会占掉消息区的地盘，不能接受时应当有一个开关退回「纯内核界面」。
+     */
+    static final String PLUGIN_PANELS_PROPERTY = "jellyfish.tui.pluginPanels";
+
+    /** 是否启用插件 UI 贡献，构造期读一次（与鼠标捕获同口径：运行期改属性不影响已建的界面）。 */
+    private final boolean pluginPanelsEnabled;
 
     /**
      * 鼠标捕获的逃生门系统属性。
@@ -135,8 +170,21 @@ public final class TuiApp extends ToolkitApp {
         this.models = Objects.requireNonNull(models, "models must not be null");
         this.uiContributions = Objects.requireNonNull(uiContributions, "uiContributions must not be null");
         this.uiCache = new UiCache(uiContributions);
+        this.pluginPanelsEnabled = pluginPanelsEnabled();
         this.input = new ChatInputView(inputKeys);
         this.shell = new ChatShell(input);
+    }
+
+    /**
+     * 判断本进程是否启用插件 UI 贡献。
+     * <p>
+     * 只有显式置为 {@code false} 才关闭：读取失败（未设置）时保持开启，
+     * 因为「插件能往界面上放东西」是默认能力，逃生门是例外而非常态。
+     *
+     * @return 启用返回 {@code true}
+     */
+    static boolean pluginPanelsEnabled() {
+        return !"false".equalsIgnoreCase(System.getProperty(PLUGIN_PANELS_PROPERTY));
     }
 
     /**
@@ -194,13 +242,6 @@ public final class TuiApp extends ToolkitApp {
     protected Element render() {
         Session session = sessions.current();
         Size size = runner().tuiRunner().terminal().size();
-        int width = ChatShell.messageAreaWidth(size.width());
-
-        // 补全每帧现算：命令清单不缓存（插件热部署后立刻可见），输入文本随按键而变
-        completion.refresh(input.text(), availableCommands());
-        Overlay overlay = buildOverlay(width);
-        int rows = ChatShell.messageAreaRows(size.height(), input.panelRows(), ChatShell.overlayRows(overlay));
-
         String sessionId = session == null ? null : session.getSessionId();
         // 每帧只取一次消息快照：Session.getMessages() 返回防御性副本，重复调用会白白多分配一份
         List<SessionMessage> messages = session == null ? null : session.getMessages();
@@ -213,20 +254,36 @@ public final class TuiApp extends ToolkitApp {
         }
         renderedTurnRunning = turnRunning;
 
-        ChatState.View view = chatState.view(sessionId, messages, width, rows,
-                TranscriptProjector.DEFAULT_MAX_MESSAGES);
+        // 一帧只收集一次，片段与面板共用同一份快照（缓存命中，不会重复问插件）
+        UiSnapshot snapshot = pluginPanelsEnabled ? uiCache.snapshot(sessionId) : UiSnapshot.empty();
+        List<String> fragments = uiPlacement.isHidden(UiRegion.STATUS)
+                ? Collections.<String>emptyList()
+                : snapshot.getStatusFragments();
+
+        // 消息区宽度只取决于侧栏，与底部高度无关：先算它，才能把浮层面板按正确宽度折行
+        Map<UiRegion, OwnedPanel> declared = uiPlacement.selected(snapshot.getPanels());
+        int width = ChatLayout.messageWidth(size.width(), declared);
+        // 补全每帧现算：命令清单不缓存（插件热部署后立刻可见），输入文本随按键而变
+        completion.refresh(input.text(), availableCommands());
+        Overlay overlay = buildOverlay(width);
+        // 模态浮层打开时面板让位（只影响本帧显示，落位与缓存都不动）
+        Map<UiRegion, OwnedPanel> panels = ChatShell.visiblePanels(declared, overlay);
+        ChatLayout layout = ChatLayout.compute(size.width(), size.height(), input.panelRows(),
+                ChatShell.overlayRows(overlay), panels);
+
+        ChatState.View view = chatState.view(sessionId, messages, layout.getMessageWidth(),
+                layout.getMessageRows(), TranscriptProjector.DEFAULT_MAX_MESSAGES);
 
         String status = StatusBarView.render(session, null, contextLengthOf(session));
         // 插件片段紧跟内核字段：宽度预算按终端总列数算，最后一个装不下的片段整块丢弃
-        status = StatusBarView.appendFragments(status,
-                uiCache.snapshot(sessionId).getStatusFragments(), size.width());
+        status = StatusBarView.appendFragments(status, fragments, size.width());
         String hint = view.hiddenBelowHint();
         if (hint != null) {
             // 提示放在状态栏而不是消息区：消息区的行数已被投影切片占满，
             // 额外加一行会把最新的一行挤出可视区——而「跟随底部」时用户最想看的正是那一行
             status = status + "   " + hint;
         }
-        return shell.render(view, title(session), status, overlay);
+        return shell.render(view, title(session), status, overlay, panels, layout);
     }
 
     /**
@@ -258,6 +315,7 @@ public final class TuiApp extends ToolkitApp {
         try {
             List<CommandInfo> infos = new ArrayList<CommandInfo>(commands.commands());
             infos.add(EXIT_INFO);
+            infos.add(UI_INFO);
             infos.sort(Comparator.comparing(CommandInfo::getName));
             return infos;
         } catch (RuntimeException e) {
@@ -329,7 +387,11 @@ public final class TuiApp extends ToolkitApp {
         String text = input.takeText();
         // 外壳自有命令必须先截胡：交给命令域只会得到 UNKNOWN，而外壳其实完全听得懂
         if (ShellCommand.isShellCommand(text)) {
-            quit();
+            if (UiCommand.isUi(text)) {
+                executeUi(text);
+            } else {
+                quit();
+            }
             return;
         }
         String sessionId = currentSessionId();
@@ -362,6 +424,36 @@ public final class TuiApp extends ToolkitApp {
             // 命令的副作用写在各自的域服务里，插件可能因此改了自家状态：这是外壳能看到的兜底失效点之一
             uiCache.invalidate();
         }
+    }
+
+    /**
+     * 执行一条 {@code /ui} 命令。
+     * <p>
+     * 与其它命令一样贴成外壳提示，但<b>不走 {@link CommandManager}</b>：区域是外壳概念，
+     * 内核命令域里没有它。
+     * <p>
+     * 面板候选取自当前缓存快照（可能为空——插件没贡献、或本进程已用逃生门关闭插件 UI）。
+     * 用户敲错区域名会得到一条错误提示，而不是「未知命令」。
+     *
+     * @param text 命令原文
+     */
+    private void executeUi(String text) {
+        UiCommand.Result result = UiCommand.execute(text, uiPlacement, currentPanels());
+        chatState.appendNotice(text, result.getText(),
+                result.isError() ? ShellNotice.Kind.ERROR : ShellNotice.Kind.INFO);
+    }
+
+    /**
+     * 取当前会话的面板候选。
+     * <p>
+     * 只读缓存（不额外触发收集）：{@code /ui} 是用户主动敲的命令，界面刚渲染过，快照必然是最新的。
+     *
+     * @return 面板候选，保证非 {@code null}
+     */
+    private List<OwnedPanel> currentPanels() {
+        Session session = sessions.current();
+        String sessionId = session == null ? null : session.getSessionId();
+        return uiCache.snapshot(sessionId).getPanels();
     }
 
     /**

@@ -1,5 +1,6 @@
 package zcd.jellyfish.infra.config;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.io.TempDir;
@@ -28,6 +29,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -51,6 +53,19 @@ class RuntimeConfigTest {
     /** 只 mock 提供双源路径的应用级配置。 */
     @Mock
     AppConfig appConfig;
+
+    /** 内置默认 agent 加载器：本测试只验证用户 agent 的双源合并，内置 agent 统一按不存在处理。 */
+    @Mock
+    BuiltinAgentLoader builtinAgentLoader;
+
+    /**
+     * 统一让内置 agent 返回 {@code null}：这样断言里的 agent 集合全部来自用户配置，
+     * 与内置 agent 是否随构件发布解耦。用 {@code lenient} 是因为并非每个用例都会走到该加载。
+     */
+    @BeforeEach
+    void ignoreBuiltinAgent() {
+        lenient().when(builtinAgentLoader.load()).thenReturn(null);
+    }
 
     @Test
     void refresh_should_merge_global_and_project_when_both_exist() throws IOException {
@@ -227,7 +242,7 @@ class RuntimeConfigTest {
                 .thenReturn(new ModelSettings(null, null, null));
 
         // When
-        RuntimeConfig runtimeConfig = new RuntimeConfig(appConfig, configLoader, new RecordingPublisher());
+        RuntimeConfig runtimeConfig = runtimeConfigOf(configLoader, new RecordingPublisher());
         runtimeConfig.refresh();
 
         // Then：同一路径只读取一次
@@ -243,8 +258,7 @@ class RuntimeConfigTest {
         RecordingPublisher publisher = new RecordingPublisher();
 
         // When
-        RuntimeConfig runtimeConfig = new RuntimeConfig(appConfig,
-                new ConfigLoader(new SettingsReader(), new SettingsBinder()), publisher);
+        RuntimeConfig runtimeConfig = runtimeConfigOf(new ConfigLoader(new SettingsReader(), new SettingsBinder()), publisher);
         runtimeConfig.refresh();
 
         // Then
@@ -285,46 +299,53 @@ class RuntimeConfigTest {
     }
 
     @Test
-    void refresh_should_merge_agents_with_project_override_and_backfill_agent_id() throws IOException {
-        // Given
-        Path globalAgents = writeFile("agents-global.json",
-                "{\"defaultAgent\":\"global-agent\",\"agents\":{"
-                        + "\"coder\":{\"systemPrompt\":\"global\"},"
-                        + "\"writer\":{\"systemPrompt\":\"keep\"}}}");
-        Path projectAgents = writeFile("agents-project.json",
-                "{\"agents\":{\"coder\":{\"systemPrompt\":\"project\"},\"reviewer\":{}}}");
+    void refresh_should_merge_agents_with_md_prompt_per_source() throws IOException {
+        // Given：两个源各在自己的目录里，提示词随源加载
+        Path globalDir = Files.createDirectories(tempDir.resolve("global"));
+        Path projectDir = Files.createDirectories(tempDir.resolve("project"));
+        Path globalAgents = writeFile(globalDir.resolve("agents.json"),
+                "{\"agents\":{\"coder\":{},\"writer\":{}}}");
+        Path projectAgents = writeFile(projectDir.resolve("agents.json"),
+                "{\"agents\":{\"coder\":{},\"reviewer\":{}}}");
+        writeFile(globalDir.resolve("coder.md"), "global-coder");
+        writeFile(globalDir.resolve("writer.md"), "keep");
+        writeFile(projectDir.resolve("coder.md"), "project-coder");
 
         // When
         RuntimeConfig runtimeConfig = newRuntimeConfig(pathsTo(null, null),
                 pathsTo(globalAgents, projectAgents), pathsTo(null, null));
 
-        // Then：默认值项目级未配置 → 回退全局级
-        assertEquals("global-agent", runtimeConfig.getAgentSettings().getDefaultAgent());
         // Then：同名 agent 整对象替换，顺序保留全局级位置，新 agent 追加在后
         assertEquals(Arrays.asList("coder", "writer", "reviewer"),
                 new ArrayList<>(runtimeConfig.getAgentSettings().getAgents().keySet()));
-        assertEquals("project",
+        // Then：提示词与定义一起被项目级覆盖
+        assertEquals("project-coder",
                 runtimeConfig.getAgentSettings().getAgents().get("coder").getSystemPrompt());
         assertEquals("keep", runtimeConfig.getAgentSettings().getAgents().get("writer").getSystemPrompt());
+        // Then：项目级没有 reviewer.md，该 agent 仍存在但无提示词
+        assertNull(runtimeConfig.getAgentSettings().getAgents().get("reviewer").getSystemPrompt());
         // Then：agentId 由配置 key 回填
         assertEquals("writer", runtimeConfig.getAgentSettings().getAgents().get("writer").getAgentId());
     }
 
     @Test
-    void refresh_should_warn_when_default_agent_not_declared() throws IOException {
-        // Given
-        Path agents = writeFile("agents.json", "{\"defaultAgent\":\"ghost\",\"agents\":{\"coder\":{}}}");
+    void refresh_should_drop_agent_with_unsafe_id_and_warn() throws IOException {
+        // Given：agentId 同时是提示词文件名，含路径分隔符的 key 不该被拼进文件路径
+        Path agents = writeFile("agents.json", "{\"agents\":{\"../evil\":{},\"coder\":{}}}");
         RecordingPublisher publisher = new RecordingPublisher();
         when(appConfig.getModel()).thenReturn(pathsTo(null, null));
         when(appConfig.getAgent()).thenReturn(pathsTo(agents, null));
         when(appConfig.getJellyfish()).thenReturn(pathsTo(null, null));
 
         // When
-        new RuntimeConfig(appConfig, new ConfigLoader(new SettingsReader(), new SettingsBinder()), publisher)
-                .refresh();
+        RuntimeConfig runtimeConfig = runtimeConfigOf(
+                new ConfigLoader(new SettingsReader(), new SettingsBinder()), publisher);
+        runtimeConfig.refresh();
 
-        // Then
-        assertTrue(publisher.warnings().stream().anyMatch(warning -> "agent".equals(warning.getSource())));
+        // Then：非法条目整条丢弃，合法条目保留，并给出告警
+        assertTrue(runtimeConfig.getAgentSettings().getAgents().containsKey("coder"));
+        assertTrue(!runtimeConfig.getAgentSettings().getAgents().containsKey("../evil"));
+        assertTrue(publisher.warnings().stream().anyMatch(warning -> "../evil".equals(warning.getSource())));
     }
 
     @Test
@@ -336,7 +357,7 @@ class RuntimeConfigTest {
         when(appConfig.getJellyfish()).thenReturn(pathsTo(null, null));
 
         // When
-        new RuntimeConfig(appConfig, new ConfigLoader(new SettingsReader(), new SettingsBinder()), publisher)
+        runtimeConfigOf(new ConfigLoader(new SettingsReader(), new SettingsBinder()), publisher)
                 .refresh();
 
         // Then：无 agent 是合法状态（全员 fail-open），不应发 agent 段告警
@@ -450,7 +471,7 @@ class RuntimeConfigTest {
         when(appConfig.getJellyfish()).thenReturn(pathsTo(jellyfish, null));
 
         // When
-        new RuntimeConfig(appConfig, new ConfigLoader(new SettingsReader(), new SettingsBinder()), publisher)
+        runtimeConfigOf(new ConfigLoader(new SettingsReader(), new SettingsBinder()), publisher)
                 .refresh();
 
         // Then
@@ -476,8 +497,7 @@ class RuntimeConfigTest {
      */
     private RuntimeConfig newRuntimeConfig(ConfigPaths paths) {
         when(appConfig.getModel()).thenReturn(paths);
-        RuntimeConfig runtimeConfig = new RuntimeConfig(appConfig,
-                new ConfigLoader(new SettingsReader(), new SettingsBinder()),
+        RuntimeConfig runtimeConfig = runtimeConfigOf(new ConfigLoader(new SettingsReader(), new SettingsBinder()),
                 new RecordingPublisher());
         runtimeConfig.refresh();
         return runtimeConfig;
@@ -495,8 +515,7 @@ class RuntimeConfigTest {
         when(appConfig.getModel()).thenReturn(model);
         when(appConfig.getAgent()).thenReturn(agent);
         when(appConfig.getJellyfish()).thenReturn(jellyfish);
-        RuntimeConfig runtimeConfig = new RuntimeConfig(appConfig,
-                new ConfigLoader(new SettingsReader(), new SettingsBinder()),
+        RuntimeConfig runtimeConfig = runtimeConfigOf(new ConfigLoader(new SettingsReader(), new SettingsBinder()),
                 new RecordingPublisher());
         runtimeConfig.refresh();
         return runtimeConfig;
@@ -517,8 +536,7 @@ class RuntimeConfigTest {
         when(appConfig.getAgent()).thenReturn(agent);
         when(appConfig.getJellyfish()).thenReturn(jellyfish);
         when(appConfig.getPlugins()).thenReturn(plugins);
-        RuntimeConfig runtimeConfig = new RuntimeConfig(appConfig,
-                new ConfigLoader(new SettingsReader(), new SettingsBinder()),
+        RuntimeConfig runtimeConfig = runtimeConfigOf(new ConfigLoader(new SettingsReader(), new SettingsBinder()),
                 new RecordingPublisher());
         runtimeConfig.refresh();
         return runtimeConfig;
@@ -578,9 +596,32 @@ class RuntimeConfigTest {
      * @throws IOException 写文件失败
      */
     private Path writeFile(String name, String json) throws IOException {
-        Path file = tempDir.resolve(name);
-        Files.write(file, json.getBytes(StandardCharsets.UTF_8));
+        return writeFile(tempDir.resolve(name), json);
+    }
+
+    /**
+     * 向指定路径写入内容，用于目录分层的用例（每层各自有 {@code agents.json} 与 {@code *.md}）。
+     *
+     * @param file    目标文件路径
+     * @param content 文件内容
+     * @return 写入后的文件路径
+     * @throws IOException 写文件失败
+     */
+    private Path writeFile(Path file, String content) throws IOException {
+        Files.write(file, content.getBytes(StandardCharsets.UTF_8));
         return file;
+    }
+
+    /**
+     * 用真实读取链构造被测对象，并注入内置 agent 的桩。
+     *
+     * @param configLoader 配置文件读取门面
+     * @param publisher    通知发布入口
+     * @return 尚未 {@code refresh} 的 {@link RuntimeConfig}
+     */
+    private RuntimeConfig runtimeConfigOf(ConfigLoader configLoader, EventPublisher publisher) {
+        return new RuntimeConfig(appConfig, configLoader, publisher, builtinAgentLoader,
+                new AgentPromptLoader(new SettingsReader()));
     }
 
     /**

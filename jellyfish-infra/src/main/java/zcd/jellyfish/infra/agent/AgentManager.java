@@ -25,9 +25,13 @@ import java.util.Set;
  * {@code AgentHarness.bootstrap()} 中 {@code runtimeConfig.refresh()} 之后——{@code RuntimeConfig}
  * 构造时不读文件，构造期拿到的必然是本进程刚启动时的空快照。
  * <p>
- * <b>fail-open 的边界</b>：{@code agentId} 为空或未被配置声明，就引用不到任何 agent，
- * {@link #policyOf(String)} 返回 {@link PermissionPolicy#unrestricted()}（放行），与 permission 方案的
- * fail-open 口径一致；需要「硬失败」的调用点（将来的 /agent 切换命令）改用 {@link #require(String)}。
+ * <b>默认 agent 是内置的，不来自用户配置</b>：一切会话创建都绑随构件发布的系统 agent，
+ * 想用自定义 agent 只能显式 {@code /agent} 切换。因此 {@link #resolveDefault()} 在内置定义缺失时
+ * 不再返回 {@code null}——那是启动期就该拖住的错误，已由 {@code RuntimeConfig} 直接抛错。
+ * <p>
+ * <b>fail-open 的边界</b>：引用到未被声明的 {@code agentId} 时，{@link #policyOf(String)} 返回
+ * {@link PermissionPolicy#unrestricted()}（放行），与 permission 方案的 fail-open 口径一致；
+ * 需要「硬失败」的调用点（{@code /agent} 切换命令）改用 {@link #require(String)}。
  * <p>
  * <b>本类不接触扩展层</b>：不知道工具是否存在、不感知插件与提示词拼装。提示词只提供原文，
  * 拼接与模板处理归 {@code core/prompt}。
@@ -112,32 +116,16 @@ public class AgentManager implements PermissionPolicyProvider {
     /**
      * 解析「会话创建时应绑定的默认 agent」。
      * <p>
-     * 三档：① 配置了 {@code defaultAgent} 且该 agent 存在 → 它；② 否则取第一个 agent（配置顺序）；
-     * ③ 一个 agent 都没有 → 返回 {@code null}。
+     * 恒为内置默认 agent：它随构件发布、不受用户 {@code agents.json} 影响，因此不存在
+     * 「未配置就没 agent 可用」这种退化状态，也不需要「第一个 agent」这类候选顺序规则。
      * <p>
-     * <b>与 {@code ModelManager.resolveDefault()} 的唯一差别</b>：没有 agent 时返回 {@code null}
-     * 而不是抛异常。「一个 agent 都没配」是合法状态（全员 fail-open），不需要让会话创建失败。
-     * <p>
-     * 调用点是 {@code SessionManager.create(...)}：会话创建时用它绑定默认 agentId（结果可能仍为
-     * {@code null}）。这里只提供入口，不缓存结果——每次创建会话都按当前索引解析，agent 定义热更新后
-     * 新建的会话拿到的是新定义。
+     * 调用点是 {@code SessionManager.create(...)}：会话创建时用它绑定 agentId。
+     * 不缓存结果——快照每次 {@code refresh()} 整体替换，新建的会话按当次快照绑定。
      *
-     * @return 默认 agent 定义，无任何 agent 时返回 {@code null}
+     * @return 内置默认 agent 定义；尚未加载配置快照时为 {@code null}
      */
     public AgentDefinition resolveDefault() {
-        String defaultAgentId = registry.getDefaultAgentId();
-        if (StringUtils.isNotBlank(defaultAgentId)) {
-            AgentDefinition configured = registry.find(defaultAgentId);
-            if (configured != null) {
-                return configured;
-            }
-        }
-        for (AgentDefinition definition : registry.all()) {
-            if (definition != null) {
-                return definition;
-            }
-        }
-        return null;
+        return runtimeConfig.getSystemAgent();
     }
 
     /**
@@ -152,12 +140,13 @@ public class AgentManager implements PermissionPolicyProvider {
     }
 
     /**
-     * 获取配置声明的默认 agentId。
+     * 获取内置默认 agent 的标识。
      *
-     * @return 默认 agentId，未配置时为 {@code null}
+     * @return 内置默认 agent 的 agentId；尚未加载配置快照时为 {@code null}
      */
     public String getDefaultAgentId() {
-        return registry.getDefaultAgentId();
+        AgentDefinition systemAgent = runtimeConfig.getSystemAgent();
+        return systemAgent == null ? null : systemAgent.getAgentId();
     }
 
     /**
@@ -192,7 +181,7 @@ public class AgentManager implements PermissionPolicyProvider {
         if (reloadConfig) {
             runtimeConfig.refresh();
         }
-        registry.refresh(runtimeConfig.getAgentSettings());
+        registry.refresh(runtimeConfig.getAgentSettings(), runtimeConfig.getSystemAgent());
     }
 
     /**
@@ -206,7 +195,7 @@ public class AgentManager implements PermissionPolicyProvider {
                     agentIds.add(definition.getAgentId());
                 }
             }
-            events.publish(new AgentsLoadedEvent(registry.getDefaultAgentId(), agentIds));
+            events.publish(new AgentsLoadedEvent(getDefaultAgentId(), agentIds));
         } catch (RuntimeException e) {
             LOG.warn("agent 装载事件发布失败", e);
         }

@@ -4,7 +4,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.agent.AgentRegistry;
+import zcd.jellyfish.infra.config.AgentPromptLoader;
 import zcd.jellyfish.infra.config.AppConfig;
+import zcd.jellyfish.infra.config.BuiltinAgentLoader;
 import zcd.jellyfish.infra.config.ConfigLoader;
 import zcd.jellyfish.infra.config.ConfigPaths;
 import zcd.jellyfish.infra.config.RuntimeConfig;
@@ -17,6 +19,9 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -54,7 +59,7 @@ class AgentModuleTest {
     void providePermissionPolicyProvider_should_expose_policy_of_declared_agent() throws IOException {
         // Given：agents.json 里声明一个拒绝 bash 的 agent
         Path agents = tempDir.resolve("agents.json");
-        Files.write(agents, ("{\"defaultAgent\":\"coder\",\"agents\":{\"coder\":"
+        Files.write(agents, ("{\"agents\":{\"coder\":"
                 + "{\"permissions\":{\"deniedTools\":[\"bash\"]}}}}").getBytes(StandardCharsets.UTF_8));
         AgentManager agentManager = newAgentManager(pathsTo(agents));
 
@@ -66,6 +71,18 @@ class AgentModuleTest {
         assertTrue(provider.policyOf("ghost").isEmpty());
     }
 
+    @Test
+    void default_agent_should_be_builtin_even_when_nothing_configured() {
+        // Given：项目里一份 agents.json 都没有
+        AgentManager agentManager = newAgentManager(new ConfigPaths());
+
+        // When / Then：默认 agent 与提示词都来自随构件发布的内置资源
+        assertEquals("jellyfish", agentManager.getDefaultAgentId());
+        assertNotNull(agentManager.resolveDefault());
+        assertNotNull(agentManager.find("jellyfish"));
+        assertFalse(agentManager.systemPromptOf("jellyfish").isEmpty());
+    }
+
     /**
      * 构造真实协作者串起来的 AgentManager（配置由临时文件提供）。
      *
@@ -74,9 +91,10 @@ class AgentModuleTest {
      */
     private AgentManager newAgentManager(ConfigPaths agentPaths) {
         AppConfig appConfig = new AppConfig(null, new ConfigPaths(), agentPaths, new ConfigPaths(), null);
-        RuntimeConfig runtimeConfig = new RuntimeConfig(appConfig,
-                new ConfigLoader(new SettingsReader(), new SettingsBinder()), event -> {
-                });
+        ConfigLoader configLoader = new ConfigLoader(new SettingsReader(), new SettingsBinder());
+        AgentPromptLoader promptLoader = new AgentPromptLoader(new SettingsReader());
+        RuntimeConfig runtimeConfig = new RuntimeConfig(appConfig, configLoader, event -> {
+        }, new BuiltinAgentLoader(configLoader, promptLoader), promptLoader);
         runtimeConfig.refresh();
         return new AgentManager(runtimeConfig, new AgentRegistry(event -> {
         }), event -> {

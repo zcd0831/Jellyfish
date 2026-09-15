@@ -60,6 +60,12 @@ public class RuntimeConfig {
 
     private final EventPublisher eventPublisher;
 
+    /** 内置默认 agent 加载器。 */
+    private final BuiltinAgentLoader builtinAgentLoader;
+
+    /** 提示词加载器：把用户 agent 的 {@code {agentId}.md} 补进定义。 */
+    private final AgentPromptLoader agentPromptLoader;
+
     /** 当前配置快照，整体替换保证读取一致性。 */
     private volatile RuntimeSnapshot snapshot = RuntimeSnapshot.empty();
 
@@ -71,12 +77,19 @@ public class RuntimeConfig {
      * @param appConfig      应用级配置，提供各配置段的双源路径
      * @param configLoader   配置文件读取门面
      * @param eventPublisher 通知发布入口，用于广播配置告警
+     * @param builtinAgentLoader 内置默认 agent 加载器
+     * @param agentPromptLoader  用户 agent 的提示词加载器
      */
     @Inject
-    public RuntimeConfig(AppConfig appConfig, ConfigLoader configLoader, EventPublisher eventPublisher) {
+    public RuntimeConfig(AppConfig appConfig, ConfigLoader configLoader, EventPublisher eventPublisher,
+                         BuiltinAgentLoader builtinAgentLoader, AgentPromptLoader agentPromptLoader) {
         this.appConfig = appConfig;
         this.configLoader = configLoader;
         this.eventPublisher = eventPublisher;
+        this.builtinAgentLoader = Objects.requireNonNull(builtinAgentLoader,
+                "builtinAgentLoader must not be null");
+        this.agentPromptLoader = Objects.requireNonNull(agentPromptLoader,
+                "agentPromptLoader must not be null");
     }
 
     /**
@@ -86,15 +99,74 @@ public class RuntimeConfig {
      * 配置热更新时由上层再次调用。
      */
     public synchronized void refresh() {
+        AgentDefinition systemAgent = builtinAgentLoader.load();
         ModelSettings mergedModel = load(appConfig.getModel(), ModelSettings.class, RuntimeConfig::mergeModelSettings);
-        AgentSettings mergedAgents = load(appConfig.getAgent(), AgentSettings.class, RuntimeConfig::mergeAgentSettings);
+        AgentSettings mergedAgents = loadAgentSettings();
         JellyfishSettings mergedJellyfish = load(appConfig.getJellyfish(), JellyfishSettings.class,
                 RuntimeConfig::mergeJellyfishSettings);
         notifyIfInvalid(mergedModel);
-        notifyIfInvalid(mergedAgents);
         notifyIfInvalid(mergedJellyfish);
         this.snapshot = RuntimeSnapshot.of(mergedModel, mergedAgents, mergedJellyfish,
-                pluginRootsOf(appConfig.getPlugins()));
+                pluginRootsOf(appConfig.getPlugins()), systemAgent);
+    }
+
+    /**
+     * 加载并合并 agent 段：在通用双源合并的基础上，额外为每个自定义 agent 补上同名 md 提示词。
+     * <p>
+     * 不走通用 {@link #load} 是因为它只做「读取 + 合并」，而 agent 还需要一步「按条目 key 读提示词文件」；
+     * 这一步<b>必须在合并前按各自源目录完成</b>——提示词的基准目录由「这份配置写在哪个文件」决定，
+     * 合并之后就丢掉了来源信息。
+     *
+     * @return 合并后的 agent 配置，保证非 {@code null}
+     */
+    private AgentSettings loadAgentSettings() {
+        ConfigPaths paths = appConfig.getAgent();
+        String globalPath = paths == null ? null : paths.getGlobalPath();
+        String projectPath = paths == null ? null : paths.getProjectPath();
+        AgentSettings global = readAgents(globalPath);
+        AgentSettings project = isSamePath(globalPath, projectPath) ? null : readAgents(projectPath);
+        return mergeAgentSettings(global, project);
+    }
+
+    /**
+     * 读取单个来源的 agent 配置并补上提示词。
+     *
+     * @param path 该来源的配置文件路径，可为空
+     * @return 带提示词的配置；文件缺失时返回 {@code null}
+     */
+    private AgentSettings readAgents(String path) {
+        AgentSettings settings = read(path, AgentSettings.class);
+        return settings == null ? null : withPrompts(settings, agentPromptLoader.promptBaseOf(path));
+    }
+
+    /**
+     * 为一份 agent 配置里的每个条目补上同名 md 提示词。
+     * <p>
+     * <b>非法 agentId 直接丢弃整条</b>：它同时是提示词文件名，含路径分隔符或 {@code ..} 的 key
+     * 不该被拼进文件路径。这里不做「当成没有提示词继续用」的降级——那会留下一个名为 agent、
+     * 实际没有身份提示词的条目，用户切过去会觉得「换了个 agent 却毫无变化」。
+     *
+     * @param settings 单源 agent 配置
+     * @param base     该源的提示词基准目录，可为 {@code null}（无法定位，等同于无提示词）
+     * @return 补上提示词后的配置
+     */
+    private AgentSettings withPrompts(AgentSettings settings, String base) {
+        Map<String, AgentDefinition> agents = new LinkedHashMap<>();
+        for (Map.Entry<String, AgentDefinition> entry : settings.getAgents().entrySet()) {
+            String agentId = entry.getKey();
+            AgentDefinition definition = entry.getValue();
+            if (definition == null) {
+                continue;
+            }
+            if (!agentPromptLoader.isSafeAgentId(agentId)) {
+                eventPublisher.publish(new ConfigWarningEvent(agentId,
+                        "agentId 含路径分隔符等非法文件名字符，已忽略该条目"));
+                continue;
+            }
+            agents.put(agentId, definition.withAgentId(agentId)
+                    .withSystemPrompt(agentPromptLoader.load(base, agentId)));
+        }
+        return new AgentSettings(agents);
     }
 
     /**
@@ -173,6 +245,18 @@ public class RuntimeConfig {
      */
     public AgentSettings getAgentSettings() {
         return snapshot.getAgentSettings();
+    }
+
+    /**
+     * 获取内置默认 agent。
+     * <p>
+     * 与 {@link #getAgentSettings()} 分开：内置 agent 不来自任何双源配置文件，
+     * 是随构件发布的一份常量定义，会话创建时恒绑它。
+     *
+     * @return 内置默认 agent；尚未加载配置快照时为 {@code null}
+     */
+    public AgentDefinition getSystemAgent() {
+        return snapshot.getSystemAgent();
     }
 
     /**
@@ -293,7 +377,7 @@ public class RuntimeConfig {
         putAgents(agents, global);
         // 同名 agent 整对象替换，理由同 provider：逐字段合并会让「一半授权来自全局、一半来自项目」无法审计
         putAgents(agents, project);
-        return new AgentSettings(override(project, global, AgentSettings::getDefaultAgent), agents);
+        return new AgentSettings(agents);
     }
 
     /**
@@ -485,23 +569,6 @@ public class RuntimeConfig {
         if (StringUtils.isNotBlank(defaultModel) && !hasModel(providers, defaultProvider, defaultModel)) {
             eventPublisher.publish(new ConfigWarningEvent("model",
                     "默认 model [" + defaultModel + "] 未在任何 provider 中定义"));
-        }
-    }
-
-    /**
-     * 对合并后的 agent 配置做一致性告警：默认 agent 指向不存在的条目时只发出
-     * {@link ConfigWarningEvent}，由 {@code AgentManager} 在真正用到时决定如何处理。
-     * <p>
-     * 刻意不告警「一个 agent 都没配」：这是合法状态（全部人员按 fail-open 放行），
-     * 报成告警会让干净启动也刷屏。
-     *
-     * @param merged 合并后的 agent 配置
-     */
-    private void notifyIfInvalid(AgentSettings merged) {
-        String defaultAgent = merged.getDefaultAgent();
-        if (StringUtils.isNotBlank(defaultAgent) && !merged.getAgents().containsKey(defaultAgent)) {
-            eventPublisher.publish(new ConfigWarningEvent("agent",
-                    "默认 agent [" + defaultAgent + "] 不存在于 agents 中"));
         }
     }
 

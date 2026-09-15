@@ -72,7 +72,8 @@ class SystemCommandsTest {
         ExtensionRegistry extensions = new ExtensionRegistry(new TypeRegistry());
         commandManager = new CommandManager(extensions);
         sessionManager = new SessionManager(agentManager, events, extensions);
-        systemCommands = new SystemCommands(extensions, commandManager, sessionManager, modelManager, agentManager);
+        systemCommands = new SystemCommands(extensions, commandManager, sessionManager, modelManager, agentManager,
+                events);
         systemCommands.register();
     }
 
@@ -231,6 +232,7 @@ class SystemCommandsTest {
         commandManager.execute("/new");
         when(agentManager.require("coder")).thenReturn(definition("coder"));
         when(agentManager.require("ghost")).thenThrow(new JellyfishException("not found"));
+        when(agentManager.systemPromptOf("coder")).thenReturn("prompt");
 
         // When
         CommandResult ok = commandManager.execute("/agent coder");
@@ -240,6 +242,22 @@ class SystemCommandsTest {
         assertEquals(CommandResult.Kind.OK, ok.getKind());
         assertEquals("coder", sessionManager.current().getAgentId());
         assertEquals(CommandResult.Kind.ERROR, missing.getKind());
+    }
+
+    @Test
+    void agent_with_argument_should_warn_when_prompt_file_missing() {
+        // Given：agent 声明了权限配置，但同目录下没有同名 md 提示词
+        commandManager.execute("/new");
+        when(agentManager.require("coder")).thenReturn(definition("coder"));
+        when(agentManager.systemPromptOf("coder")).thenReturn(null);
+
+        // When
+        CommandResult result = commandManager.execute("/agent coder");
+
+        // Then：切换仍成功（权限配置照常生效），但结果里必须说清楚没有提示词
+        assertEquals(CommandResult.Kind.OK, result.getKind());
+        assertEquals("coder", sessionManager.current().getAgentId());
+        assertTrue(result.getOutput().contains("没有系统提示词"));
     }
 
     @Test
@@ -379,6 +397,6 @@ class SystemCommandsTest {
      * @return 定义
      */
     private static AgentDefinition definition(String agentId) {
-        return new AgentDefinition(agentId, "描述", null, null);
+        return new AgentDefinition(agentId, "描述", null);
     }
 }

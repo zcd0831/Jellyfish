@@ -19,7 +19,7 @@ import java.util.Set;
  */
 public final class AgentsLoadedEvent extends AbstractJellyfishEvent {
 
-    /** 配置声明的默认 agentId，未配置时为 {@code null}。 */
+    /** 内置默认 agent 的标识，尚未加载配置时为 {@code null}。 */
     private final String defaultAgentId;
 
     /** 本次装载到的 agentId 集合。 */
@@ -28,7 +28,7 @@ public final class AgentsLoadedEvent extends AbstractJellyfishEvent {
     /**
      * 构造进程级事件。
      *
-     * @param defaultAgentId 配置声明的默认 agentId，可为 {@code null}
+     * @param defaultAgentId 内置默认 agent 的标识，可为 {@code null}（未加载配置时）
      * @param agentIds       本次装载到的 agentId 集合，可为 {@code null}
      */
     public AgentsLoadedEvent(String defaultAgentId, Set<String> agentIds) {
@@ -42,7 +42,7 @@ public final class AgentsLoadedEvent extends AbstractJellyfishEvent {
     /**
      * 获取默认 agentId。
      *
-     * @return 默认 agentId，未配置时为 {@code null}
+     * @return 内置默认 agent 的标识，尚未加载配置时为 {@code null}
      */
     public String getDefaultAgentId() {
         return defaultAgentId;

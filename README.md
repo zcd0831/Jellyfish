@@ -141,14 +141,15 @@ CSI-u 等所有「带修饰的 Enter」编码都无法被底层框架区分（�
 
 ## 配置
 
-配置分四份文件，每份对应一个配置类。**文件位置与插件扫描目录只在 `config.json` 里声明**，其余文件都走「全局级 + 项目级」双源，项目级优先。
+配置分四份用户可改的文件，每份对应一个配置类。**文件位置与插件扫描目录只在 `config.json` 里声明**，其余文件都走「全局级 + 项目级」双源，项目级优先。另有一份随构件发布的 `default-agent.json`（内置系统默认 agent），它不走双源、用户改不了。
 
 | 文件 | 配置类 | 内容 |
 | --- | --- | --- |
 | `config.json` | `AppConfig` | 进程名 + 各配置文件路径 + 插件扫描目录 |
 | `models.json` | `ModelSettings` | `defaultProvider` / `defaultModel` / `providers` |
-| `agents.json` | `AgentSettings` | `defaultAgent` / `agents` |
+| `agents.json` | `AgentSettings` | `agents`（用户自定义 agent） |
 | `jellyfish.json` | `JellyfishSettings` | `plugins`（名单与插件配置段）等运行期设置 |
+| `default-agent.json` | `AgentDefinition` | 内置系统默认 agent（classpath 根，不走双源） |
 
 `config.json` 放在 classpath 根（本仓库为 `jellyfish-cli/src/main/resources/config.json`）：
 
@@ -182,15 +183,13 @@ CSI-u 等所有「带修饰的 Enter」编码都无法被底层框架区分（�
 }
 ```
 
-`agents.json`：
+`agents.json`（系统提示词**不写在这里**，而是同目录下的 `{agentId}.md`）：
 
 ```json
 {
-  "defaultAgent": "coder",
   "agents": {
     "coder": {
       "description": "通用编码助手",
-      "systemPrompt": "You are Jellyfish, a coding agent.",
       "permissions": {
         "deniedTools": ["write_file", "edit_file"],
         "askTools": [],
@@ -200,6 +199,20 @@ CSI-u 等所有「带修饰的 Enter」编码都无法被底层框架区分（�
   }
 }
 ```
+
+上例的 `coder` 还需要一份 `coder.md`（与 `agents.json` 同目录），内容就是它的系统提示词，可以是多段长文。
+
+`default-agent.json`（内置，位于 `jellyfish-cli/src/main/resources/`，与 `config.json` 同目录）：
+
+```json
+{
+  "agentId": "jellyfish",
+  "description": "系统默认 agent",
+  "permissions": {}
+}
+```
+
+它配合同目录的 `jellyfish.md` 使用。**每次启动、每个新建会话都绑这个内置 agent**；想用自定义 agent 必须手动 `/agent <agentId>` 切换。用户 `agents.json` 里写同名 `jellyfish` 会被忽略并告警（内置定义不可被覆盖）。
 
 `jellyfish.json`：
 
@@ -224,9 +237,10 @@ CSI-u 等所有「带修饰的 Enter」编码都无法被底层框架区分（�
 
 约定：
 
-- **插值**：只有字符串值里的 `${VAR}` 会被替换为环境变量（`${VAR:-default}` 可取默认值，`\${VAR}` 转义为字面量），JSON 的 key 不替换。`systemPrompt` 是**原文**，不做模板插值。
+- **插值**：只有字符串值里的 `${VAR}` 会被替换为环境变量（`${VAR:-default}` 可取默认值，`\${VAR}` 转义为字面量），JSON 的 key 不替换。`{agentId}.md` 提示词是**原文**，不做模板插值。
 - **路径**：`~` 与 `~/` 展开为用户主目录（`~other/...` 这种指定其他用户的形式不展开）；两条路径都支持。项目级路径相对**进程工作目录**解析，不是相对 jar 位置。文件不存在视为「该源未配置」，静默跳过（这是 `globalPath` 与 `projectPath` 可以同时配上、缺哪份就少哪份的原因）。`config.json` 的 `plugins.roots` 同样支持 `~` 与相对路径，语义一致。
-- **合并**：同名 `provider` / `agent` / 插件配置段以项目级**整对象**覆盖全局级；`defaultProvider` / `defaultModel` / `defaultAgent` 取项目级非空值，否则回退全局级；`react` 段项目级整对象覆盖全局级；启用 / 禁用名单项目级非空则**整体替换**（不做并集）。`plugins.roots` 只在 `config.json` 一处，不参与双源合并。
+- **合并**：同名 `provider` / `agent` / 插件配置段以项目级**整对象**覆盖全局级，agent 的提示词 md 也随来源一起覆盖；`defaultProvider` / `defaultModel` 取项目级非空值，否则回退全局级；`react` 段项目级整对象覆盖全局级；启用 / 禁用名单项目级非空则**整体替换**（不做并集）。`plugins.roots` 只在 `config.json` 一处，不参与双源合并。
+- **agent 提示词**：每个 agent（包括内置的系统 agent）的系统提示词来自与配置文件同目录的 `{agentId}.md`；`agentId` 同时是文件名，因此不能含路径分隔符或 `..`（含这类字符的条目会被整条丢弃并告警）。文件不存在不阻断启动，只有用户 `/agent` 切过去时才提示「该 agent 没有系统提示词」。
 - **容错**：配置缺失或可疑只发配置告警事件，不中断启动；真正用到时才报错。
 - **不要提交密钥**：`apiKey` 等敏感值通过环境变量注入，不要落到配置文件里。
 

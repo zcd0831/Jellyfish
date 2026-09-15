@@ -35,7 +35,7 @@ flowchart TB
             subgraph "内核模块<br>编译期单向依赖+构造器注入，模块互调不经扩展层"
                 direction LR
                 SessionMgr["SessionManager<br>会话隔离 / 消息列表 / token 统计<br>当前 agentId / 当前模型 / 权限模式<br>会话级切换"]
-                AgentMgr["AgentManager + AgentRegistry<br>Agent 定义注册表<br>按 agentId 提供系统提示词原文 / 权限策略<br>（提示词拼装归 core/prompt）"]
+                AgentMgr["AgentManager + AgentRegistry<br>Agent 定义注册表<br>内置系统默认 agent + 用户自定义 agent<br>按 agentId 提供提示词（来自同名 md）/ 权限策略<br>（提示词拼装归 core/prompt）"]
                 CommandMgr["CommandManager<br>命令域服务：解析 / 别名 / 分发 / 结构化清单 / 帮助 / 只读候选查询<br>不注册处理器 · 不持有会话 · 无缓存<br>系统命令与插件命令同源（系统命令由 core/command 注册）"]
                 ModelMgr["ModelManager<br>Provider/Model 注册/解析/路由<br>不持有全局当前态"]
                 LLMClient["LLMClient<br>统一 LLM 调用抽象"]
@@ -68,7 +68,7 @@ flowchart TB
         direction LR
         Models["models.json<br>全局级 + 项目级<br>Provider/Model"]
         Jelly["jellyfish.json<br>全局级 + 项目级<br>插件名单/配置段等运行期设置"]
-        Agents["agents.json<br>全局级 + 项目级<br>Agent 定义"]
+        Agents["agents.json（用户，双源）<br>default-agent.json（内置）<br>+ 同目录 {agentId}.md 提示词"]
     end
 
     subgraph "外部依赖·模型提供商"
@@ -232,7 +232,7 @@ jellyfish-infra/src/main/java/zcd/jellyfish/infra/
 ├── extension/      # 同步派发策略 ExtensionRegistry：调用点线程内联执行、按 order 升序、取返回值、不可丢弃；查找分 handlers（只要处理器）、bindings（连 owner 一起给，供审计归因）与 descriptorBindings（连 routeKey 与 owner 一起给的描述符清单，供命令清单 / 菜单）；需要结果或必须完成的扩展点走这里
 ├── event/          # 异步派发策略 EventChannel：线程池 + 有界队列、无返回值、可丢弃；纯通知，带白名单与限流
 ├── session/        # 会话运行态：会话隔离、消息列表、token 统计，以及会话内当前 agentId / 当前模型 / 权限模式（仅内存态；无配置段）；SessionManager 是唯一变更入口，每次变更同步派发 SessionPersistRequest（失败上抛），启动期用 SessionRestoreRequest 向插件要回会话；SessionSnapshots 负责会话模型 ↔ api 快照的双向映射，Session.restore 由快照还原
-├── agent/          # Agent 定义注册表：AgentManager（门面，implements PermissionPolicyProvider，按 agentId 提供提示词原文与权限策略）+ AgentRegistry（定义与策略的只读索引）；提示词拼装归 core/prompt，新增事件 AgentsLoadedEvent
+├── agent/          # Agent 定义注册表：AgentManager（门面，implements PermissionPolicyProvider，按 agentId 提供提示词原文与权限策略，默认 agent 恒为内置）+ AgentRegistry（定义与策略的只读索引；内置 agent 优先，同名用户条目跳过并告警）；提示词拼装归 core/prompt，新增事件 AgentsLoadedEvent
 ├── command/        # 命令域服务 CommandManager：输入解析 / 别名解析 / 分发 / 结构化清单（CommandInfo）/ 帮助渲染 / 只读候选查询（options → CommandOptionRequest → CommandOptions，供「选中命令即弹选择页」且不执行命令），按类型查询注册表；只注入 ExtensionRegistry，对外壳（cli / tui / server）中立；系统命令与插件命令同源，系统命令由 core/command/SystemCommands 以 owner=core 注册（/compact 等仍待落地）
 ├── model/          # 模型注册与路由：维护 provider/model 索引，按名字解析模型并给出 LLM 客户端（不持有全局当前态）
 ├── llm/            # LLM 调用抽象：统一的同步/流式调用接口与各厂商实现
@@ -240,7 +240,7 @@ jellyfish-infra/src/main/java/zcd/jellyfish/infra/
 ├── permission/     # 权限控制：核心策略（agent 授权）→ PLAN 只读白名单（来自 plugins.configurations.<pluginId>.readOnlyTools）→ 插件两态拦截，判定后发审计事件；权限检查不经扩展层下发，由调用点同步询问；策略来源由 AgentManager 实现 PermissionPolicyProvider。待落地：人工审批通道（ASK 暂时降级为拒绝）
 ├── ui/             # UI 贡献门面 UiContributions：外壳向插件收集界面内容、并订阅「内容可能已过期」的唯一入口（外壳不直接认识 ExtensionRegistry / EventChannel）；两类贡献的区别只在「能否共存」——状态栏片段是拼接型（多插件共存，按 owner 去重），面板是独占型（带上 owner 交给外壳与用户仲裁）；调用模型是「失效时收集」而不是「每帧收集」，因此空闲时零插件调用，代价是失效触发源必须记全；单处理器抛错只跳过它自己
 ├── metrics/        # 可观测性：指标采集、健康检查与日志上报
-├── config/         # 配置加载：全局级 + 项目级双源读取与合并，只读；四类配置类与文件一一对应：AppConfig(config.json) / ModelSettings(models.json) / AgentSettings(agents.json) / JellyfishSettings(jellyfish.json，含 plugins 与 react 段)；AppConfig 额外承载 PluginPaths(config.json 的 plugins.roots，插件扫描目录，不是双源段)
+├── config/         # 配置加载：全局级 + 项目级双源读取与合并，只读；四类配置类与文件一一对应：AppConfig(config.json) / ModelSettings(models.json) / AgentSettings(agents.json) / JellyfishSettings(jellyfish.json，含 plugins 与 react 段)；AppConfig 额外承载 PluginPaths(config.json 的 plugins.roots，插件扫描目录，不是双源段)；另有不走双源的内置 agent 定义：BuiltinAgentLoader(classpath:default-agent.json) + AgentPromptLoader({agentId}.md 的路径安全校验与加载)
 └── support/        # 通用支撑：序列化封装、类型常量等底层工具
 
 jellyfish-core/src/main/java/zcd/jellyfish/core/
@@ -361,8 +361,10 @@ jellyfish-plugins/                        # 官方插件聚合（packaging=pom�
             ├── TodoText.java             # 四种渲染（提示词块 / 只读清单 / 工具确认 / 状态栏进度）集中一处
             └── PluginConfig.java         # todoDir，含 ~ 展开（插件自己展开）
 
-jellyfish-cli/src/main/resources/config.json  # 应用配置（进程名 + 各配置段的双源文件路径）
-jellyfish-cli/src/main/resources/log4j2.xml    # 日志：root 默认 WARN、只写 stderr（回答走 stdout，不能被日志污染）
+jellyfish-cli/src/main/resources/config.json       # 应用配置（进程名 + 各配置段的双源文件路径）
+jellyfish-cli/src/main/resources/default-agent.json  # 内置系统默认 agent（不走双源）
+jellyfish-cli/src/main/resources/jellyfish.md        # 内置系统 agent 的提示词（文件名 = agentId）
+jellyfish-cli/src/main/resources/log4j2.xml           # 日志：root 默认 WARN、只写 stderr（回答走 stdout，不能被日志污染）
 ```
 
 - **分层靠模块强制**：`core` 与 `infra` 拆开，Maven 才能在编译期守住「应用层 → 基础设施层」这条依赖方向；`api` 独立，是因为它的消费者是仓库外的插件。
@@ -400,7 +402,8 @@ jellyfish-cli/src/main/resources/log4j2.xml    # 日志：root 默认 WARN、只
 - **依赖注入（Dagger2）**：通过 Dagger2 进行依赖注入，对各个模块进行解耦。
 - **配置加载**：`AppConfig` 直接绑定 `classpath:config.json`，应用级配置，**只有它声明各配置文件的位置与插件扫描目录**；默认约定全局级目录 `~/jellyfish/`、项目级目录 `./jellyfish/`（`~` 与 `~/` 由 `SettingsReader` 展开为用户主目录，`~other` 不展开）。`SettingsBinder` 会把 `${ENV_VAR}` 替换为环境变量（`\${VAR}` 转义），apiKey 通常这样注入。
 - **插件扫描目录写在 `config.json` 的 `plugins.roots`，不在 `jellyfish.json`**：它与「去哪个文件读配置」同属部署事实，所以和 `model` / `agent` / `jellyfish` 三段路径放在同一处；`jellyfish.json` 的 `plugins` 段只留 `enabled` / `disabled` / `configurations`。`roots` 只写一处、不参与双源合并；`RuntimeConfig.getPluginRoots()` 负责展开条目行首的 `~`（与文件路径同一套规则，共用 `HomePaths`）并丢弃空白条目，空列表由 `PluginRuntimeConfig` 回退默认目录 `plugins`。
-- **四份配置与四类配置类一一对应**：`config.json`→`AppConfig`、`models.json`→`ModelSettings`、`agents.json`→`AgentSettings`、`jellyfish.json`→`JellyfishSettings`；类名与文件名一致，一个文件一个根类、一个双源段（`config.json` 里的 `plugins` 段只承载 `PluginPaths` 一份目录清单，不是双源段）。
+- **四份配置与四类配置类一一对应**：`config.json`→`AppConfig`、`models.json`→`ModelSettings`、`agents.json`→`AgentSettings`、`jellyfish.json`→`JellyfishSettings`；类名与文件名一致，一个文件一个根类、一个双源段（`config.json` 里的 `plugins` 段只承载 `PluginPaths` 一份目录清单，不是双源段）。此外 `classpath:default-agent.json` 是随构件发布的**内置只读**定义，不走双源、不进 `AppConfig`。
+- **agent 的提示词改为同名 md，默认 agent 内置**：`AgentSettings` 删掉了 `defaultAgent`，用户配置改不了「进来用谁」——启动与新建会话恒绑 `classpath:default-agent.json` 里的内置 agent，想换必须 `/agent` 显式切换。每个 agent 的提示词来自与配置文件（或内置 json）同目录的 `{agentId}.md`，JSON 里写 `systemPrompt` 会被忽略（`@JsonIgnore`，因为 Jackson 默认允许对 final 字段反射赋值）。md **随源加载**（合并前按各自目录补上），所以项目级覆盖同名 agent 时提示词一起换。非法 `agentId`（含路径分隔符或 `..`）整条丢弃并告警；用户条目与内置 agent 同名时保留内置、跳过用户条目并告警；内置定义或其 md 缺失属打包错误，直接抛 `JellyfishException`。
 - **global/project 合并**：`RuntimeConfig` 合并两者，同名 provider / agent / 插件配置段以 project **整对象**覆盖 global，默认 provider/model/agent 同理，`react` 段同样整对象覆盖；列表段（启用 / 禁用名单）项目级非空则**整体替换**。
 - **配置驱动的索引在启动期建立**：`ModelManager` / `AgentManager` 构造期只建空索引（那时配置还没读），真正的装载发生在 `AgentHarness.bootstrap()` 的 `runtimeConfig.refresh()` 之后；`PluginRuntimeConfig` 是「引用稳定、快照可换」的发布点，必须在 `pluginManager.bootstrap()` 之前刷新。
 - **流式调用**：`AbstractHttpLlmClient` 用 OkHttp 手写 SSE（`text/event-stream`）解析，流式请求在线程池（守护线程，名为 `llm-stream`）中执行，句柄可 `cancel()`。OpenAI 兼容协议的公共逻辑在 `AbstractOpenAiCompatibleLlmClient`。

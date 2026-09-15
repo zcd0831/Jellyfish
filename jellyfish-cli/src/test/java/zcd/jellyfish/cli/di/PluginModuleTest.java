@@ -6,7 +6,9 @@ import zcd.jellyfish.api.event.Subscription;
 import zcd.jellyfish.api.event.notification.ConfigWarningEvent;
 import zcd.jellyfish.api.plugin.PluginContext;
 import zcd.jellyfish.api.plugin.PluginDeclaration;
+import zcd.jellyfish.infra.config.AgentPromptLoader;
 import zcd.jellyfish.infra.config.AppConfig;
+import zcd.jellyfish.infra.config.BuiltinAgentLoader;
 import zcd.jellyfish.infra.config.ConfigLoader;
 import zcd.jellyfish.infra.config.ConfigPaths;
 import zcd.jellyfish.infra.config.PluginPaths;
@@ -151,9 +153,10 @@ class PluginModuleTest {
      */
     private static RuntimeConfig runtimeConfigOf(ConfigPaths jellyfishPaths, PluginPaths plugins) {
         AppConfig appConfig = new AppConfig(null, new ConfigPaths(), new ConfigPaths(), jellyfishPaths, plugins);
-        RuntimeConfig runtimeConfig = new RuntimeConfig(appConfig,
-                new ConfigLoader(new SettingsReader(), new SettingsBinder()), event -> {
-                });
+        ConfigLoader configLoader = new ConfigLoader(new SettingsReader(), new SettingsBinder());
+        AgentPromptLoader promptLoader = new AgentPromptLoader(new SettingsReader());
+        RuntimeConfig runtimeConfig = new RuntimeConfig(appConfig, configLoader, event -> {
+        }, new BuiltinAgentLoader(configLoader, promptLoader), promptLoader);
         runtimeConfig.refresh();
         return runtimeConfig;
     }

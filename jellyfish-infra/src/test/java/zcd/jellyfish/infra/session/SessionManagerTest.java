@@ -455,7 +455,7 @@ class SessionManagerTest {
      * @return agent 定义
      */
     private AgentDefinition definition(String agentId) {
-        return new AgentDefinition(agentId, null, null, null);
+        return new AgentDefinition(agentId, null, null);
     }
 
     /**

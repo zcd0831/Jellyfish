@@ -23,6 +23,7 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -31,7 +32,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
 /**
- * {@link AgentRegistry} 的单元测试：验证索引重建、策略转换、未命中语义与非法条目容错。
+ * {@link AgentRegistry} 的单元测试：验证索引重建、策略转换、未命中语义、非法条目容错，
+ * 以及「内置默认 agent 不可被同名用户条目覆盖」这条规则。
  *
  * @author zcd
  */
@@ -49,7 +51,7 @@ class AgentRegistryTest {
     void find_should_return_null_when_agent_id_null_or_not_declared() {
         // Given
         AgentRegistry registry = new AgentRegistry(events);
-        registry.refresh(settings(null, definition(CODER, null)));
+        registry.refresh(settings(definition(CODER, null)), null);
 
         // When / Then
         assertNull(registry.find(null));
@@ -66,7 +68,7 @@ class AgentRegistryTest {
         AgentRegistry registry = new AgentRegistry(events);
 
         // When
-        registry.refresh(settings(null, definition(CODER, permissions)));
+        registry.refresh(settings(definition(CODER, permissions)), null);
 
         // Then
         PermissionPolicy policy = registry.policyOf(CODER);
@@ -80,7 +82,7 @@ class AgentRegistryTest {
     void policyOf_should_return_unrestricted_when_agent_not_declared() {
         // Given
         AgentRegistry registry = new AgentRegistry(events);
-        registry.refresh(settings(null, definition(CODER, null)));
+        registry.refresh(settings(definition(CODER, null)), null);
 
         // When / Then
         PermissionPolicy unknown = registry.policyOf("ghost");
@@ -95,7 +97,7 @@ class AgentRegistryTest {
         AgentRegistry registry = new AgentRegistry(events);
 
         // When
-        registry.refresh(settings(null, definition(CODER, new AgentPermissions(null, null, null))));
+        registry.refresh(settings(definition(CODER, new AgentPermissions(null, null, null))), null);
 
         // Then
         assertTrue(registry.policyOf(CODER).isEmpty());
@@ -107,10 +109,10 @@ class AgentRegistryTest {
     void refresh_should_replace_previous_entries_wholesale() {
         // Given
         AgentRegistry registry = new AgentRegistry(events);
-        registry.refresh(settings(null, definition(CODER, null), definition("writer", null)));
+        registry.refresh(settings(definition(CODER, null), definition("writer", null)), null);
 
         // When
-        registry.refresh(settings(null, definition("reviewer", null)));
+        registry.refresh(settings(definition("reviewer", null)), null);
 
         // Then
         assertNull(registry.find(CODER));
@@ -125,22 +127,53 @@ class AgentRegistryTest {
         AgentRegistry registry = new AgentRegistry(events);
 
         // When
-        registry.refresh(settings(null, definition("first", null), definition("second", null)));
+        registry.refresh(settings(definition("first", null), definition("second", null)), null);
 
         // Then
         assertEquals(Arrays.asList("first", "second"), idsOf(registry.all()));
     }
 
     @Test
+    void refresh_should_index_system_agent_first() {
+        // Given
+        AgentRegistry registry = new AgentRegistry(events);
+
+        // When：内置 agent 始终排在索引最前，用户 agent 追加在后
+        registry.refresh(settings(definition(CODER, null)), systemAgent("jellyfish"));
+
+        // Then
+        assertEquals(Arrays.asList("jellyfish", CODER), idsOf(registry.all()));
+        assertEquals("jellyfish", registry.find("jellyfish").getAgentId());
+        verify(events, never()).publish(any());
+    }
+
+    @Test
+    void refresh_should_keep_system_agent_and_warn_when_user_declares_same_id() {
+        // Given
+        AgentDefinition systemDefinition = systemAgent("jellyfish");
+        AgentRegistry registry = new AgentRegistry(events);
+
+        // When
+        registry.refresh(settings(definition("jellyfish", null), definition(CODER, null)), systemDefinition);
+
+        // Then：同名用户条目被跳过，留下的是内置定义本体
+        assertEquals(Arrays.asList("jellyfish", CODER), idsOf(registry.all()));
+        assertSame(systemDefinition, registry.find("jellyfish"));
+        ArgumentCaptor<ConfigWarningEvent> captor = ArgumentCaptor.forClass(ConfigWarningEvent.class);
+        verify(events).publish(captor.capture());
+        assertTrue(captor.getValue().getMessage().contains("同名"));
+    }
+
+    @Test
     void refresh_should_skip_blank_key_and_warn() {
         // Given
         Map<String, AgentDefinition> agents = new LinkedHashMap<>();
-        agents.put("  ", new AgentDefinition(null, null, null, null));
+        agents.put("  ", new AgentDefinition(null, null, null));
         agents.put(CODER, definition(CODER, null));
 
         // When
         AgentRegistry registry = new AgentRegistry(events);
-        registry.refresh(new AgentSettings(null, agents));
+        registry.refresh(new AgentSettings(agents), null);
 
         // Then：非法条目被跳过，合法条目照常入索引
         assertEquals(Collections.singletonList(CODER), idsOf(registry.all()));
@@ -157,7 +190,7 @@ class AgentRegistryTest {
 
         // When
         AgentRegistry registry = new AgentRegistry(events);
-        registry.refresh(new AgentSettings(null, agents));
+        registry.refresh(new AgentSettings(agents), null);
 
         // Then
         assertTrue(registry.all().isEmpty());
@@ -168,49 +201,24 @@ class AgentRegistryTest {
     }
 
     @Test
-    void refresh_should_tolerate_null_settings() {
+    void refresh_should_tolerate_null_settings_and_null_system_agent() {
         // Given
         AgentRegistry registry = new AgentRegistry(events);
-        registry.refresh(settings(null, definition(CODER, null)));
+        registry.refresh(settings(definition(CODER, null)), null);
 
         // When
-        registry.refresh(null);
+        registry.refresh(null, null);
 
         // Then
         assertTrue(registry.all().isEmpty());
-        assertNull(registry.getDefaultAgentId());
         verify(events, never()).publish(any());
-    }
-
-    @Test
-    void getDefaultAgentId_should_return_null_when_blank() {
-        // Given
-        AgentRegistry registry = new AgentRegistry(events);
-
-        // When
-        registry.refresh(settings("   ", definition(CODER, null)));
-
-        // Then
-        assertNull(registry.getDefaultAgentId());
-    }
-
-    @Test
-    void getDefaultAgentId_should_return_configured_value() {
-        // Given
-        AgentRegistry registry = new AgentRegistry(events);
-
-        // When
-        registry.refresh(settings(CODER, definition(CODER, null)));
-
-        // Then
-        assertEquals(CODER, registry.getDefaultAgentId());
     }
 
     @Test
     void all_should_return_unmodifiable_collection() {
         // Given
         AgentRegistry registry = new AgentRegistry(events);
-        registry.refresh(settings(null, definition(CODER, null)));
+        registry.refresh(settings(definition(CODER, null)), null);
 
         // When / Then
         assertThrows(UnsupportedOperationException.class, () -> registry.all().add(definition("other", null)));
@@ -222,7 +230,7 @@ class AgentRegistryTest {
         AgentRegistry registry = new AgentRegistry(events);
 
         // When
-        registry.refresh(settings(CODER, definition(CODER, null), definition("writer", null)));
+        registry.refresh(settings(definition(CODER, null), definition("writer", null)), null);
 
         // Then
         verify(events, never()).publish(any());
@@ -237,16 +245,15 @@ class AgentRegistryTest {
     /**
      * 构造 agent 配置。
      *
-     * @param defaultAgent 默认 agentId，可为 {@code null}
-     * @param definitions  agent 定义，顺序即配置顺序
+     * @param definitions agent 定义，顺序即配置顺序
      * @return agent 配置
      */
-    private static AgentSettings settings(String defaultAgent, AgentDefinition... definitions) {
+    private static AgentSettings settings(AgentDefinition... definitions) {
         Map<String, AgentDefinition> agents = new LinkedHashMap<>();
         for (AgentDefinition definition : definitions) {
             agents.put(definition.getAgentId(), definition);
         }
-        return new AgentSettings(defaultAgent, agents);
+        return new AgentSettings(agents);
     }
 
     /**
@@ -257,7 +264,17 @@ class AgentRegistryTest {
      * @return agent 定义
      */
     private static AgentDefinition definition(String agentId, AgentPermissions permissions) {
-        return new AgentDefinition(agentId, "desc", "prompt", permissions);
+        return new AgentDefinition(agentId, "desc", permissions);
+    }
+
+    /**
+     * 构造内置默认 agent。
+     *
+     * @param agentId 内置 agent 标识
+     * @return 内置 agent 定义
+     */
+    private static AgentDefinition systemAgent(String agentId) {
+        return new AgentDefinition(agentId, "系统默认 agent", null).withSystemPrompt("system");
     }
 
     /**

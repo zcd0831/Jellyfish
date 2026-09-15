@@ -2,8 +2,10 @@ package zcd.jellyfish.core.command;
 
 import org.apache.commons.lang3.StringUtils;
 import zcd.jellyfish.api.JellyfishException;
+import zcd.jellyfish.api.event.EventPublisher;
 import zcd.jellyfish.api.event.RegisterOptions;
 import zcd.jellyfish.api.event.Subscription;
+import zcd.jellyfish.api.event.notification.ConfigWarningEvent;
 import zcd.jellyfish.api.extension.CommandArguments;
 import zcd.jellyfish.api.extension.CommandChoice;
 import zcd.jellyfish.api.extension.CommandDescriptor;
@@ -81,6 +83,9 @@ public class SystemCommands {
     /** agent 门面。 */
     private final AgentManager agentManager;
 
+    /** 通知发布入口，用于在切换到无提示词的 agent 时广播配置告警。 */
+    private final EventPublisher events;
+
     /** 已注册的命令句柄，{@link #close()} 时回收。 */
     private final List<Subscription> subscriptions = new ArrayList<Subscription>();
 
@@ -92,15 +97,18 @@ public class SystemCommands {
      * @param sessionManager 会话域服务
      * @param modelManager   模型门面
      * @param agentManager   agent 门面
+     * @param events         通知发布入口
      */
     @Inject
     public SystemCommands(ExtensionRegistry extensions, CommandManager commandManager,
-                          SessionManager sessionManager, ModelManager modelManager, AgentManager agentManager) {
+                          SessionManager sessionManager, ModelManager modelManager, AgentManager agentManager,
+                          EventPublisher events) {
         this.extensions = Objects.requireNonNull(extensions, "extensions must not be null");
         this.commandManager = Objects.requireNonNull(commandManager, "commandManager must not be null");
         this.sessionManager = Objects.requireNonNull(sessionManager, "sessionManager must not be null");
         this.modelManager = Objects.requireNonNull(modelManager, "modelManager must not be null");
         this.agentManager = Objects.requireNonNull(agentManager, "agentManager must not be null");
+        this.events = Objects.requireNonNull(events, "events must not be null");
     }
 
     /**
@@ -383,7 +391,27 @@ public class SystemCommands {
             return CommandResult.error("agent 不存在：" + agentId);
         }
         sessionManager.bindAgent(sessionId, agentId);
-        return CommandResult.ok("已绑定 agent：" + agentId);
+        return CommandResult.ok(boundAgentMessage(agentId));
+    }
+
+    /**
+     * 拼出绑定成功的提示文本，并在该 agent 没有提示词时追加告警。
+     * <p>
+     * 提示词来自与 {@code agents.json} 同目录的 {@code {agentId}.md}：配置文件是全局级与项目级两处，
+     * 用户很容只写了 JSON 而忘了那个 Markdown 文件。这里不阻止切换（agent 的权限配置仍然生效），
+     * 只把「这个 agent 没有系统提示词」这件事当场说清楚——否则用户会以为切换没生效。
+     *
+     * @param agentId 已绑定的 agent 标识
+     * @return 结果文本
+     */
+    private String boundAgentMessage(String agentId) {
+        StringBuilder message = new StringBuilder("已绑定 agent：").append(agentId);
+        if (StringUtils.isBlank(agentManager.systemPromptOf(agentId))) {
+            String warning = "agent [" + agentId + "] 未找到同名 .md 提示词文件，该 agent 没有系统提示词";
+            events.publish(new ConfigWarningEvent(agentId, warning));
+            message.append('\n').append("提示：").append(warning);
+        }
+        return message.toString();
     }
 
     /**

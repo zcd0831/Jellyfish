@@ -4,10 +4,14 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import zcd.jellyfish.infra.llm.LlmMessage;
+import zcd.jellyfish.infra.llm.LlmUsage;
 import zcd.jellyfish.infra.session.SessionMessage;
 
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -99,5 +103,25 @@ class TuiAppTest {
     @DisplayName("没有当前会话时不算全新会话，避免把提示贴到空页面上")
     void isBrandNewSession_should_beFalse_when_messagesIsNull() {
         assertFalse(TuiApp.isBrandNewSession(null));
+    }
+
+    @Test
+    @DisplayName("当前上下文取最近一次调用返回的输入 token，而不是会话累计总量")
+    void contextTokensOf_should_returnLatestCallPromptTokens() {
+        List<SessionMessage> messages = Arrays.asList(
+                SessionMessage.of(LlmMessage.user("hi"), new LlmUsage(100, 10, 110)),
+                SessionMessage.of(LlmMessage.tool("id", "read_file", "ok"), null),
+                SessionMessage.of(LlmMessage.assistant("done"), new LlmUsage(2_000, 50, 2_050)));
+
+        assertEquals(2_000L, TuiApp.contextTokensOf(messages));
+    }
+
+    @Test
+    @DisplayName("还没有任何带用量的调用时上下文长度为 0")
+    void contextTokensOf_should_returnZero_when_noUsageYet() {
+        assertEquals(0L, TuiApp.contextTokensOf(Collections.<SessionMessage>emptyList()));
+        assertEquals(0L, TuiApp.contextTokensOf(null));
+        assertEquals(0L, TuiApp.contextTokensOf(
+                Collections.singletonList(SessionMessage.of(LlmMessage.user("hi")))));
     }
 }

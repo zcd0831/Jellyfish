@@ -282,7 +282,7 @@ jellyfish-tui/src/main/java/zcd/jellyfish/tui/
 ├── InputKeyMapper.java             # 按键判定（Ctrl+S 发送 / Ctrl+C 退出 / Esc 中断 / 滚动键）
 ├── MouseScrollMapper.java          # 滚轮判定：鼠标事件 → 滚动动作（只认上下滚轮，其余吞掉以保住焦点）
 ├── InputAction.java                # 按键动作枚举：判定与执行分离，判定是纯函数
-├── StatusBarView.java              # 状态栏：agent · provider/model · 权限模式 · token 用量；appendFragments 把插件片段接在尾部并按显示宽度整块丢弃超限片段
+├── StatusBarView.java              # 状态栏：agent · provider/model · 权限模式 · 工作目录 · 上下文 · token 上传/下载；Info 为外壳每帧装配的数据对象，appendFragments 把插件片段接在尾部并按显示宽度整块丢弃超限片段
 ├── ShellCommand.java               # 外壳自有命令 /exit 与 /ui 的判定：不进内核命令注册表
 ├── CommandCompletion.java          # 命令补全状态：激活判定 / 前缀过滤 / 选中 / 接受 / 收起（纯逻辑）
 ├── CommandCompletionView.java      # 补全面板渲染：候选 → 视觉行（纯函数，CJK 宽度安全）

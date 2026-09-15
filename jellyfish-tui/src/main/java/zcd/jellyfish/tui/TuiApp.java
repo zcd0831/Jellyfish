@@ -21,6 +21,7 @@ import zcd.jellyfish.core.AgentHarness;
 import zcd.jellyfish.core.ReActTurn;
 import zcd.jellyfish.infra.command.CommandInfo;
 import zcd.jellyfish.infra.command.CommandManager;
+import zcd.jellyfish.infra.llm.LlmUsage;
 import zcd.jellyfish.infra.model.ModelManager;
 import zcd.jellyfish.infra.model.ResolvedModel;
 import zcd.jellyfish.infra.session.Session;
@@ -274,7 +275,7 @@ public final class TuiApp extends ToolkitApp {
         ChatState.View view = chatState.view(sessionId, messages, layout.getMessageWidth(),
                 layout.getMessageRows(), TranscriptProjector.DEFAULT_MAX_MESSAGES);
 
-        String status = StatusBarView.render(session, null, contextLengthOf(session));
+        String status = StatusBarView.render(statusInfoOf(session, contextTokensOf(messages)));
         // 插件片段紧跟内核字段：宽度预算按终端总列数算，最后一个装不下的片段整块丢弃
         status = StatusBarView.appendFragments(status, fragments, size.width());
         String hint = view.hiddenBelowHint();
@@ -535,22 +536,71 @@ public final class TuiApp extends ToolkitApp {
     }
 
     /**
-     * 取当前模型的上下文长度。
+     * 装配状态栏数据。
+     * <p>
+     * 每帧现读会话，并把「生效模型」解析交给 {@link ModelManager}：会话未显式指定 provider / model
+     * 时显示的是配置默认值解析出的真实模型，而不是「默认」两个字——用户关心的是实际在跑哪个模型。
+     * 解析失败只退回会话原始字段（可能为 {@code null}），不让状态栏因配置问题而整行消失。
      *
-     * @param session 当前会话，可为 {@code null}
-     * @return 上下文长度；取不到时返回 0
+     * @param session       当前会话，可为 {@code null}
+     * @param contextTokens 最近一次调用的输入 token 数
+     * @return 状态栏数据；会话为 {@code null} 时返回 {@code null}
      */
-    private int contextLengthOf(Session session) {
-        if (session == null || session.getProvider() == null || session.getModel() == null) {
-            return 0;
+    private StatusBarView.Info statusInfoOf(Session session, long contextTokens) {
+        if (session == null) {
+            return null;
         }
+        ResolvedModel resolved = resolvedModel(session);
+        String provider = resolved == null ? session.getProvider() : resolved.getProviderName();
+        String model = resolved == null ? session.getModel() : resolved.getModelName();
+        int contextLength = resolved == null ? 0 : resolved.getModel().getContextLength();
+        return new StatusBarView.Info(session.getAgentId(), provider, model, session.getPermissionMode(),
+                System.getProperty("user.dir"), contextTokens, contextLength, session.getUsage());
+    }
+
+    /**
+     * 解析会话当前生效的模型：显式配置了 provider 与 model 就精确解析，否则跟随配置默认值。
+     *
+     * @param session 会话运行态，不可为 {@code null}
+     * @return 解析结果；解析不到时返回 {@code null}
+     */
+    private ResolvedModel resolvedModel(Session session) {
         try {
-            ResolvedModel resolved = models.resolve(session.getProvider(), session.getModel());
-            return resolved == null || resolved.getModel() == null ? 0 : resolved.getModel().getContextLength();
+            String provider = session.getProvider();
+            String model = session.getModel();
+            if (provider == null || provider.isEmpty() || model == null || model.isEmpty()) {
+                return models.resolveDefault();
+            }
+            return models.resolve(provider, model);
         } catch (JellyfishException e) {
-            LOG.debug("状态栏取上下文长度失败：{}", e.getMessage());
-            return 0;
+            LOG.debug("状态栏解析当前模型失败：{}", e.getMessage());
+            return null;
         }
+    }
+
+    /**
+     * 取最近一次调用返回的输入 token 数，作为「当前上下文长度」。
+     * <p>
+     * <b>为什么不用累计总量</b>：累计值可以远超上下文窗口，用它当分子会让人误判「快爆了」。
+     * 厂商在每次响应里返回的 prompt tokens 才是这一次真正送进模型的上下文规模（含系统提示词），
+     * 而最后一条带用量的 assistant 消息正对应最近一次调用。
+     * <p>
+     * 从后往前找：越新的调用越接近「当前」，找到即返回，不必遍历整份历史。
+     *
+     * @param messages 消息快照，可为 {@code null}
+     * @return 输入 token 数；尚无调用时返回 0
+     */
+    static long contextTokensOf(List<SessionMessage> messages) {
+        if (messages == null || messages.isEmpty()) {
+            return 0L;
+        }
+        for (int i = messages.size() - 1; i >= 0; i--) {
+            LlmUsage usage = messages.get(i).getUsage();
+            if (usage != null) {
+                return usage.getPromptTokens();
+            }
+        }
+        return 0L;
     }
 
     /**

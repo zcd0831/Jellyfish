@@ -2,12 +2,15 @@ package zcd.jellyfish.tui;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import zcd.jellyfish.api.extension.PermissionMode;
+import zcd.jellyfish.infra.session.SessionUsage;
 
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * {@link StatusBarView} 中「插件片段拼接」的单元测试。
@@ -85,5 +88,49 @@ class StatusBarViewTest {
     @DisplayName("基座为 null 时也能拼接，不抛空指针")
     void appendFragments_should_tolerateNullBase() {
         assertEquals(GAP + "a", StatusBarView.appendFragments(null, Collections.singletonList("a"), 80));
+    }
+
+    @Test
+    @DisplayName("按 agent · provider/model · 模式 · 目录 · 上下文 · 用量的顺序渲染")
+    void render_should_joinAllFieldsInOrder() {
+        StatusBarView.Info info = new StatusBarView.Info("coder", "openai", "gpt-4o", PermissionMode.NORMAL,
+                "/tmp", 12_400L, 128_000, new SessionUsage(3_200L, 1_100L, 4_300L, 5L));
+
+        assertEquals(" coder \u00b7 openai/gpt-4o \u00b7 normal \u00b7 /tmp \u00b7 ctx 12.4k/128k \u00b7 \u21913.2k \u21931.1k",
+                StatusBarView.render(info));
+    }
+
+    @Test
+    @DisplayName("上下文分母未知时只显示分子，不显示斜杠")
+    void render_should_omitContextDenominator_when_contextLengthUnknown() {
+        StatusBarView.Info info = new StatusBarView.Info(null, null, null, null, null, 500L, 0, null);
+
+        assertTrue(StatusBarView.render(info).contains("ctx 500"));
+        assertTrue(!StatusBarView.render(info).contains("ctx 500/"));
+    }
+
+    @Test
+    @DisplayName("字段缺失时用占位符兜底，不出现 null 字样")
+    void render_should_usePlaceholders_when_fieldsMissing() {
+        StatusBarView.Info info = new StatusBarView.Info(null, null, null, null, null, 0L, -1, null);
+
+        String text = StatusBarView.render(info);
+
+        assertEquals(" - \u00b7 默认 \u00b7 - \u00b7 - \u00b7 ctx 0 \u00b7 \u21910 \u21930", text);
+    }
+
+    @Test
+    @DisplayName("工作目录在主目录下时缩写为 ~")
+    void render_should_abbreviateHomeDir() {
+        String home = System.getProperty("user.home");
+        StatusBarView.Info info = new StatusBarView.Info(null, null, null, null, home + "/proj", 0L, 0, null);
+
+        assertTrue(StatusBarView.render(info).contains("~/proj"));
+    }
+
+    @Test
+    @DisplayName("info 为 null 时渲染单占位符，不抛空指针")
+    void render_should_returnPlaceholder_when_infoNull() {
+        assertEquals("-", StatusBarView.render(null));
     }
 }

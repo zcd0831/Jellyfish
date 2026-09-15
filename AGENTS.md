@@ -67,7 +67,7 @@ flowchart TB
     subgraph "外部依赖·配置"
         direction LR
         Models["models.json<br>全局级 + 项目级<br>Provider/Model"]
-        Jelly["jellyfish.json<br>全局级 + 项目级<br>插件清单等运行期设置"]
+        Jelly["jellyfish.json<br>全局级 + 项目级<br>插件名单/配置段等运行期设置"]
         Agents["agents.json<br>全局级 + 项目级<br>Agent 定义"]
     end
 
@@ -78,7 +78,7 @@ flowchart TB
 
     subgraph "外部依赖·插件与脚本"
         direction LR
-        Plugins["PF4J 插件<br>Java: 工具/记忆/横切<br>桥接: Python / TS 语言适配"]
+        Plugins["PF4J 插件<br>官方: tools / session-file<br>Java: 工具/记忆/横切<br>桥接: Python / TS 语言适配"]
         Scripts["脚本插件进程<br>Python 常驻网关 / TS·JS 常驻网关<br>单进程多路复用"]
     end
 
@@ -107,7 +107,7 @@ flowchart TB
     %% ===================== 扩展层·同步派发：需要结果或必须完成（粗线） =====================
     ReAct ==>|"list：可用工具清单（LlmTool 描述符）"| ExtReg
     ReAct ==>|"ToolCallRequest（工具名 + 参数）"| ExtReg
-    SessionMgr ==>|"会话持久化（pending todo 注入已归 core/prompt）（无返回值但不可丢）"| ExtReg
+    SessionMgr ==>|"会话持久化 / 启动期恢复（无返回值但不可丢）"| ExtReg
     AgentMgr ==>|"提示词修改（链式，取返回值）"| ExtReg
     PermMgr ==>|"权限拦截（返回两态拦截裁定：不拦截 / 拦截，插件无法返回 ASK）"| ExtReg
     ExtReg ==>|"ExtensionResult / 贡献结果"| ReAct
@@ -175,6 +175,7 @@ Maven 多模块。模块边界与「整体架构图」的两层 + 对外契约�
 ```mermaid
 flowchart LR
     API["jellyfish-api<br>插件 SPI + 扩展点/事件模型 + 统一异常"]
+    PLUGINS["jellyfish-plugins<br>官方插件聚合：tools / session-file"]
     SCRIPT["jellyfish-script<br>跨语言插件运行时（语言无关）"]
     PY["jellyfish-plugin-python<br>PF4J 桥接插件"]
     NODE["jellyfish-plugin-node<br>PF4J 桥接插件（TS/JS）"]
@@ -186,6 +187,7 @@ flowchart LR
     PY --> SCRIPT
     NODE --> SCRIPT
     SCRIPT --> API
+    PLUGINS --> API
     CORE --> API
     CORE --> INFRA
     INFRA --> API
@@ -198,7 +200,7 @@ flowchart LR
     CLI --> TUI
 ```
 
-跨语言桥接插件与内核之间没有编译期依赖：它们由 `PF4JPluginManager` 在运行时从 `plugins/` 目录加载，因此不出现在上面的依赖链里。
+跨语言桥接插件与内核之间没有编译期依赖：它们由 `PF4JPluginManager` 在运行时从 `config.json` 的 `plugins.roots` 指定的目录（默认 `plugins/`）加载，因此不出现在上面的依赖链里。
 
 | 模块 | 坐标 | 职责 | 依赖 |
 | --- | --- | --- | --- |
@@ -207,16 +209,19 @@ flowchart LR
 | `jellyfish-core` | `zcd:jellyfish-core` | 架构图【应用层】：ReAct 循环与 `AgentHarness` 门面 | `jellyfish-api`、`jellyfish-infra` |
 | `jellyfish-tui` | `zcd:jellyfish-tui` | TUI 外壳：TamboUI 声明式界面、视图投影与滚动、TUI 版 `ReActListener` 与跨线程契约 | `jellyfish-api`、`jellyfish-infra`、`jellyfish-core` |
 | `jellyfish-cli` | `zcd:jellyfish-cli` | `main`、启动参数解析、启动模式分发（CLI / TUI 已实现）、Dagger 装配、shade 打成可执行 jar | `jellyfish-api`、`jellyfish-infra`、`jellyfish-core`、`jellyfish-tui` |
-| `jellyfish-script` | `zcd:jellyfish-script` | 跨语言插件运行时（语言无关）：JSON-RPC over Stdio、常驻进程池、双向事件桥接、生命周期与安全护栏 | `jellyfish-api` |
+| `jellyfish-script` | `zcd:jellyfish-script` | 跨语言插件运行时（语言无关）：JSON-RPC over Stdio、常驻进程池、双向事件桥接、生命周期与安全护栏（待开工） | `jellyfish-api` |
 | `jellyfish-plugin-python` | `zcd:jellyfish-plugin-python` | Python 桥接插件：声明宿主语言与脚本目录，拉起 Python 常驻网关，代脚本操作 `PluginContext` | `jellyfish-script`、`jellyfish-api` |
-| `jellyfish-plugin-node` | `zcd:jellyfish-plugin-node` | TS/JS 桥接插件：同 Python 桥接插件，宿主 Node 常驻网关 | `jellyfish-script`、`jellyfish-api` |
+| `jellyfish-plugin-node` | `zcd:jellyfish-plugin-node` | TS/JS 桥接插件：同 Python 桥接插件，宿主 Node 常驻网关（待开工） | `jellyfish-script`、`jellyfish-api` |
+| `jellyfish-plugins` | `zcd:jellyfish-plugins` | 官方插件聚合（packaging=pom）：每个子模块产出一个独立插件 jar，不在内核依赖链上 | 各插件子模块 |
+| `jellyfish-plugin-tools` | `zcd:jellyfish-plugin-tools` | 官方工具插件：`read_file` / `write_file` / `edit_file` / `list_dir` / `grep_files` | `jellyfish-api`（provided） |
+| `jellyfish-plugin-session-file` | `zcd:jellyfish-plugin-session-file` | 官方会话持久化插件：一个会话一个 JSON 文件 + git 管理历史 | `jellyfish-api`（provided） |
 
 包名一律全小写。
 
 ```
 jellyfish-api/src/main/java/zcd/jellyfish/api/
 ├── JellyfishException.java        # 统一运行时异常，插件抛错也能被 core 统一捕获
-├── extension/                     # 扩展点对外模型（同步派发侧）：类型即地址的请求类型（ExtensionRequest / ExtensionHandler / XxxRequest）与结果类型；结果类型按能力开洞，例如权限判定用三态 PermissionDecision、插件拦截用两态 PermissionVeto、命令用三态 CommandResult（配 CommandDescriptor 名片与 CommandArguments 参数）；只有数据与接口，没有任何调用语义参数
+├── extension/                     # 扩展点对外模型（同步派发侧）：类型即地址的请求类型（ExtensionRequest / ExtensionHandler / XxxRequest）与结果类型；结果类型按能力开洞，例如权限判定用三态 PermissionDecision、插件拦截用两态 PermissionVeto、命令用三态 CommandResult（配 CommandDescriptor 名片与 CommandArguments 参数）；会话持久化额外带一套快照值类型（SessionSnapshot / SessionMessageSnapshot / SessionToolCallSnapshot / SessionTodoSnapshot / SessionUsageSnapshot / TokenUsageSnapshot）作为请求载荷；只有数据与接口，没有任何调用语义参数
 ├── event/                         # 事件通道对外模型（异步派发侧）：事件基类、发布订阅入口与注册选项；只有数据与接口，没有任何调用语义参数
 └── plugin/                        # 插件 SPI：插件总入口（JellyfishPlugin）、插件上下文（PluginContext）与插件声明（PluginDeclaration），面向仓库外插件作者的唯一稳定契约
 
@@ -224,15 +229,15 @@ jellyfish-infra/src/main/java/zcd/jellyfish/infra/
 ├── registry/       # 注册表底座 TypeRegistry：按「类型 + 路由键 → 有序 handler 集合」存储，同键唯一、描述符随 handler 一起存；同步与异步两侧共用，不依赖任何第三方事件总线
 ├── extension/      # 同步派发策略 ExtensionRegistry：调用点线程内联执行、按 order 升序、取返回值、不可丢弃；查找分 handlers（只要处理器）、bindings（连 owner 一起给，供审计归因）与 descriptorBindings（连 routeKey 与 owner 一起给的描述符清单，供命令清单 / 菜单）；需要结果或必须完成的扩展点走这里
 ├── event/          # 异步派发策略 EventChannel：线程池 + 有界队列、无返回值、可丢弃；纯通知，带白名单与限流
-├── session/        # 会话运行态：会话隔离、消息列表、token 统计、pending todo，以及会话内当前 agentId / 当前模型 / 权限模式（仅内存态；无配置段，持久化由插件经同步扩展点完成）
+├── session/        # 会话运行态：会话隔离、消息列表、token 统计、pending todo，以及会话内当前 agentId / 当前模型 / 权限模式（仅内存态；无配置段）；SessionManager 是唯一变更入口，每次变更同步派发 SessionPersistRequest（失败上抛），启动期用 SessionRestoreRequest 向插件要回会话；SessionSnapshots 负责会话模型 ↔ api 快照的双向映射，Session.restore 由快照还原
 ├── agent/          # Agent 定义注册表：AgentManager（门面，implements PermissionPolicyProvider，按 agentId 提供提示词原文与权限策略）+ AgentRegistry（定义与策略的只读索引）；提示词拼装归 core/prompt，新增事件 AgentsLoadedEvent
 ├── command/        # 命令域服务 CommandManager：输入解析 / 别名解析 / 分发 / 结构化清单（CommandInfo）/ 帮助渲染 / 只读候选查询（options → CommandOptionRequest → CommandOptions，供「选中命令即弹选择页」且不执行命令），按类型查询注册表；只注入 ExtensionRegistry，对外壳（cli / tui / server）中立；系统命令与插件命令同源，系统命令由 core/command/SystemCommands 以 owner=core 注册（/compact 等仍待落地）
 ├── model/          # 模型注册与路由：维护 provider/model 索引，按名字解析模型并给出 LLM 客户端（不持有全局当前态）
 ├── llm/            # LLM 调用抽象：统一的同步/流式调用接口与各厂商实现
-├── plugin/         # 插件运行时：Java 插件加载、热部署、描述符体检与上下文供给，按统一 SPI 看待桥接插件，不感知底层脚本进程；装配输入 PluginRuntimeConfig 由 jellyfish.json 的 plugins 段驱动，且是「引用稳定、快照可换」的发布点
+├── plugin/         # 插件运行时：Java 插件加载、热部署、描述符体检与上下文供给，按统一 SPI 看待桥接插件，不感知底层脚本进程；装配输入 PluginRuntimeConfig 由「config.json 的 plugins.roots（扫描目录）+ jellyfish.json 的 plugins 段（名单/配置段）」两处组装，且是「引用稳定、快照可换」的发布点
 ├── permission/     # 权限控制：核心策略（agent 授权）→ PLAN 只读白名单（来自 plugins.configurations.<pluginId>.readOnlyTools）→ 插件两态拦截，判定后发审计事件；权限检查不经扩展层下发，由调用点同步询问；策略来源由 AgentManager 实现 PermissionPolicyProvider。待落地：人工审批通道（ASK 暂时降级为拒绝）、核心工具只读声明（todo_write 轮）
 ├── metrics/        # 可观测性：指标采集、健康检查与日志上报
-├── config/         # 配置加载：全局级 + 项目级双源读取与合并，只读；四类配置类与文件一一对应：AppConfig(config.json) / ModelSettings(models.json) / AgentSettings(agents.json) / JellyfishSettings(jellyfish.json，含 plugins 与 react 段)
+├── config/         # 配置加载：全局级 + 项目级双源读取与合并，只读；四类配置类与文件一一对应：AppConfig(config.json) / ModelSettings(models.json) / AgentSettings(agents.json) / JellyfishSettings(jellyfish.json，含 plugins 与 react 段)；AppConfig 额外承载 PluginPaths(config.json 的 plugins.roots，插件扫描目录，不是双源段)
 └── support/        # 通用支撑：序列化封装、类型常量等底层工具
 
 jellyfish-core/src/main/java/zcd/jellyfish/core/
@@ -304,6 +309,33 @@ jellyfish-plugin-node/src/main/
     ├── plugin.properties        # PF4J 描述符：Plugin-Id、依赖、声明的权限
     └── scripts/                 # gateway.js 常驻网关 + 业务脚本目录
 
+jellyfish-plugins/                        # 官方插件聚合（packaging=pom），不在内核依赖链上
+├── jellyfish-plugin-tools/
+│   ├── pom.xml                           # 只依赖 jellyfish-api（provided）+ 测试期 infra
+│   └── src/main/
+│       ├── resources/plugin.properties   # PF4J 描述符：plugin.id / plugin.class / plugin.requires
+│       └── java/zcd/jellyfish/plugin/tools/
+│           ├── ToolsPlugin.java          # JellyfishPlugin 实现：把工具清单交给上下文
+│           ├── PluginTool.java           # 工具契约：ToolDescriptor + handler + register
+│           ├── ToolArguments.java        # 参数读取与校验（参数是不可信输入）
+│           ├── ToolSchema.java           # 参数 JSON Schema 的小构造器（无 JSON 库依赖）
+│           ├── ToolPaths.java            # 路径约定：相对路径基准 + 展示口径
+│           ├── ReadFileTool.java         # read_file：按行范围读取
+│           ├── WriteFileTool.java        # write_file：整文件覆盖写
+│           ├── EditFileTool.java         # edit_file：字面量精确替换（带匹配数量校验）
+│           ├── ListDirTool.java          # list_dir：只列一层
+│           └── GrepFilesTool.java        # grep_files：逐行正则搜索
+└── jellyfish-plugin-session-file/
+    ├── pom.xml                           # api provided + Jackson（shade 进插件包）
+    └── src/main/
+        ├── resources/plugin.properties
+        └── java/zcd/jellyfish/plugin/sessionfile/
+            ├── SessionFilePlugin.java    # 订阅会话持久化 / 恢复两个扩展点
+            ├── PluginConfig.java         # sessionDir / gitEnabled，含 ~ 展开（插件自己展开）
+            ├── SnapshotJson.java         # 快照 JSON 读写（自带 Jackson + ParameterNamesModule）
+            ├── SessionStore.java         # 一个会话一个文件、内容未变不写、原子替换、文件名安全
+            └── GitRepository.java        # git init / add / commit；环境问题只告警不上抛
+
 jellyfish-cli/src/main/resources/config.json  # 应用配置（进程名 + 各配置段的双源文件路径）
 jellyfish-cli/src/main/resources/log4j2.xml    # 日志：root 默认 WARN、只写 stderr（回答走 stdout，不能被日志污染）
 ```
@@ -313,6 +345,7 @@ jellyfish-cli/src/main/resources/log4j2.xml    # 日志：root 默认 WARN、只
 - **`AgentHarness` 是唯一的组装门面**：`cli`/`tui`/`server` 都通过同一个 `JellyfishApplication` 入口走它，三种外壳只靠启动参数区分。
 - **DI 装配在最外层**：Dagger 组件与 Module 只放在 `jellyfish-cli`，core/infra 只暴露构造器与 `@Module`，新增启动模式不必改动 core/infra。
 - **`tui`/`server` 先不建模块**：暂时只在 `cli/mode` 留占位，等真正开工再抽 `jellyfish-tui`/`jellyfish-server`。
+- **官方插件是独立模块，不在内核依赖链上**：`jellyfish-plugins` 只聚合、不产出构件；每个插件一个子模块（PF4J 是「一个 jar 一个 `plugin.properties`」）。插件对 `jellyfish-api` **必须 provided**：`PluginClasspathGuard` 会在加载期拒绝自带 `zcd/jellyfish/api/**` 或 `org/pf4j/**` 的插件包（PF4J 插件类加载器是子优先，自带会遮蔽父加载器的同名类）。插件自带的第三方库用 shade 打进插件包（`session-file` 这样带 Jackson），内核 classpath 上不出现插件私有依赖。
 - **跨语言靠桥接插件落地**：`jellyfish-script` 只做语言无关的跨语言运行时，由桥接插件自行 shade 进插件 jar；内核 classpath 上不出现任何跨语言代码，`infra`/`core` 也不知道脚本进程存在。
 - **脚本插件与 Java 插件同构**：脚本只能注册 handler、订阅事件、发布事件，**不能发起同步派发**，权限边界与 Java 插件完全一致。
 
@@ -333,9 +366,10 @@ jellyfish-cli/src/main/resources/log4j2.xml    # 日志：root 默认 WARN、只
 - **TUI 的命令输出按时间戳插进消息流，不贴在投影末尾**：命令输出不是会话消息（进会话会污染发给模型的历史），但它是「在某个时刻发生的事」，因此 `ShellNotice` 自带时间戳，投影时与会话消息按时间戳归并（同毫秒时消息在前）；比投影窗口更旧的提示直接丢弃。若把它整体拼在投影之后，它会永远贴在屏幕底部、且排在比它更晚的对话之前——即「命令输出在尾部堆积」。**外观上它是一个块**：命令原文回显成一行 `❯ /help`，输出块首行带 `⎿ `/`! `/`✗ `（`INFO`/`WARN`/`ERROR` 三态），续行用 6 列悬挂缩进并保留原始缩进；**不要**给它套 `dim` 或工具轨迹前缀——那是「模型做的事」的视觉，而命令输出是「用户主动要的结果」。
 - **TUI 的启动提示不经过 LLM，也不进会话**：**只在「全新空会话」**（`Session.getMessages()` 为空）由外壳贴出一条固定文案（`StartupHint`：自我介绍 + `Ctrl+S` 发送 / `Enter` 换行 / `Esc` 中断 / `Ctrl+C` 退出 / `/help` / 滚动键），让空页面不再是一片空白；`/resume` 打开的已有历史不贴，底部压一条用法说明只会碍事。它**不是** `ShellNotice`：外壳提示带 `⎿ ` 块前缀与命令回显，那是「用户主动要的命令结果」的视觉，而启动提示是外壳以 agent 身份先说的话，因此由 `ChatState` 单独持有，投影时复用助手消息的样子（`⏺ jellyfish` 表头 + 正文缩进，`TranscriptProjector.appendStartupHint`），排在投影最前。它必须走外壳渲染态而不是会话消息——落进会话会被后续每一轮请求当作历史发给模型，既污染 prompt 又让模型以为自己说过这段话；写入点只有 `TuiApp.syncSession` 一处，且判据固定，反复渲染同一会话不会重复追加。
 - **依赖注入（Dagger2）**：通过 Dagger2 进行依赖注入，对各个模块进行解耦。
-- **配置加载**：`AppConfig` 直接绑定 `classpath:config.json`，应用级配置，**只有它声明各配置文件的位置**；默认约定全局级目录 `~/jellyfish/`、项目级目录 `./jellyfish/`（`~` 与 `~/` 由 `SettingsReader` 展开为用户主目录，`~other` 不展开）。`SettingsBinder` 会把 `${ENV_VAR}` 替换为环境变量（`\${VAR}` 转义），apiKey 通常这样注入。
-- **四份配置与四类配置类一一对应**：`config.json`→`AppConfig`、`models.json`→`ModelSettings`、`agents.json`→`AgentSettings`、`jellyfish.json`→`JellyfishSettings`；类名与文件名一致，一个文件一个根类、一个双源段。
-- **global/project 合并**：`RuntimeConfig` 合并两者，同名 provider / agent / 插件配置段以 project **整对象**覆盖 global，默认 provider/model/agent 同理，`react` 段同样整对象覆盖；列表段（插件根目录、启用 / 禁用名单）项目级非空则**整体替换**。
+- **配置加载**：`AppConfig` 直接绑定 `classpath:config.json`，应用级配置，**只有它声明各配置文件的位置与插件扫描目录**；默认约定全局级目录 `~/jellyfish/`、项目级目录 `./jellyfish/`（`~` 与 `~/` 由 `SettingsReader` 展开为用户主目录，`~other` 不展开）。`SettingsBinder` 会把 `${ENV_VAR}` 替换为环境变量（`\${VAR}` 转义），apiKey 通常这样注入。
+- **插件扫描目录写在 `config.json` 的 `plugins.roots`，不在 `jellyfish.json`**：它与「去哪个文件读配置」同属部署事实，所以和 `model` / `agent` / `jellyfish` 三段路径放在同一处；`jellyfish.json` 的 `plugins` 段只留 `enabled` / `disabled` / `configurations`。`roots` 只写一处、不参与双源合并；`RuntimeConfig.getPluginRoots()` 负责展开条目行首的 `~`（与文件路径同一套规则，共用 `HomePaths`）并丢弃空白条目，空列表由 `PluginRuntimeConfig` 回退默认目录 `plugins`。
+- **四份配置与四类配置类一一对应**：`config.json`→`AppConfig`、`models.json`→`ModelSettings`、`agents.json`→`AgentSettings`、`jellyfish.json`→`JellyfishSettings`；类名与文件名一致，一个文件一个根类、一个双源段（`config.json` 里的 `plugins` 段只承载 `PluginPaths` 一份目录清单，不是双源段）。
+- **global/project 合并**：`RuntimeConfig` 合并两者，同名 provider / agent / 插件配置段以 project **整对象**覆盖 global，默认 provider/model/agent 同理，`react` 段同样整对象覆盖；列表段（启用 / 禁用名单）项目级非空则**整体替换**。
 - **配置驱动的索引在启动期建立**：`ModelManager` / `AgentManager` 构造期只建空索引（那时配置还没读），真正的装载发生在 `AgentHarness.bootstrap()` 的 `runtimeConfig.refresh()` 之后；`PluginRuntimeConfig` 是「引用稳定、快照可换」的发布点，必须在 `pluginManager.bootstrap()` 之前刷新。
 - **流式调用**：`AbstractHttpLlmClient` 用 OkHttp 手写 SSE（`text/event-stream`）解析，流式请求在线程池（守护线程，名为 `llm-stream`）中执行，句柄可 `cancel()`。OpenAI 兼容协议的公共逻辑在 `AbstractOpenAiCompatibleLlmClient`。
 - **ReAct 循环**：`AgentHarness.chat(sessionId, input, listener)` 是外壳唯一的智能入口，委托 `ReActLooper` 在专用 `react` 守护线程池里异步推进；文本 / 思考增量实时回调，工具调用只取流结束后的聚合结果。工具失败（权限拒绝 / 未知工具 / 工具异常）一律转成 tool 结果消息回灌给模型，只有模型调用本身失败才上抛。
@@ -345,7 +379,10 @@ jellyfish-cli/src/main/resources/log4j2.xml    # 日志：root 默认 WARN、只
 - **序列化与反序列化**: 读写统一走 `ObjectMapperWrapper`，不要直接 new `ObjectMapper`。
 - **请求/消息模型**：`LlmRequest`、`LlmMessage`、`LlmTool` 是与厂商无关的统一模型，`LlmRequest` 用 builder 构建。
 - **配置类型**：应用内部配置类（即项目代码里的配置，不会暴露给用户）用`Config`结尾，提供用用户的配置类用`Settings`结尾。
-- **会话状态一律归 `Session`，进程内没有全局当前态**：当前 agentId / 当前 provider / 当前 model / 权限模式都是**会话字段**，由 `SessionManager` 统一读写（唯一变更入口），因此同一进程内的不同会话可以各用各的；`ModelManager` 只做解析与路由。会话是**纯内存运行态**：不当配置、不建索引，持久化由插件经同步扩展点完成，其配置随插件走 `jellyfish.json` 的 `plugins.configurations.<pluginId>`，因此**不设 `session` 配置段**。
+- **会话状态一律归 `Session`，进程内没有全局当前态**：当前 agentId / 当前 provider / 当前 model / 权限模式都是**会话字段**，由 `SessionManager` 统一读写（唯一变更入口），因此同一进程内的不同会话可以各用各的；`ModelManager` 只做解析与路由。会话是**内存运行态**：不当配置、不建索引，其配置随插件走 `jellyfish.json` 的 `plugins.configurations.<pluginId>`，因此**不设 `session` 配置段**。
+- **会话持久化是一等职责，不是旁路**：`SessionManager` 的每个变更入口（创建 / 追加消息 / 改标题 / 绑 agent / 切模型 / 切权限模式 / 待办三入口 / 关闭）都会同步派发 `SessionPersistRequest`，处理器异常**原样上抛**——那一刻起「状态已变」与「状态已落盘」必须同生共死，静默吞掉只会让下次启动悄悄少一段历史。落盘的是**整个会话快照**，因此上一次失败的变更会在下一次任何变更时被一并补上。创建与关闭因此调整了次序：先落盘再入表 / 先落盘再移除，避免「能看见但没存下」与「已关闭但没存下」。恢复（`SessionRestoreRequest`）的失败语义**相反**：单个插件读不出备份只记告警并跳过，因为落盘失败会丢新数据，而恢复失败只是回到「从零开始」。恢复必须排在 `pluginManager.bootstrap()` **之后**（插件此刻才注册好处理器），导入的会话同样广播 `SessionCreatedEvent`。
+- **会话快照是 api 侧的投影，不是第二份真相**：`Session` / `LlmMessage` 住在 `jellyfish-infra`，插件只看得到 `jellyfish-api`，因此跨边界的载荷必须是一套 api 值类型（`SessionSnapshot` 及其嵌套）。映射归 `infra/session/SessionSnapshots`（与模型同域，模型加字段时改动落在同一个包），并用**往返测试**（`capture → restore → capture` 逐字段相等）守住「快照漏了一个字段」这种不会让任何编译失败的错。不走「不透明 JSON 字符串」是因为那会让持久化插件除「存/取」外什么都做不了（加密、迁移、搜索、同步数据库），而「类型即地址、契约显式」是本项目的底线。
+- **`-parameters` 是全局编译约定，不许去掉**：api 的扩展点载荷是「全字段构造器 + 无 setter」的不可变类型，插件侧用 Jackson 反序列化时只能靠构造器参数名把 JSON 字段对上（`ParameterNamesModule` + `-parameters`）。丢了这个编译标志，「文件写得出、重启后读不回」，而编译与大部分单测依然全绿——只有 JSON 往返测试会报错。
 - **一份注册表 + 两种派发策略**：内核与插件之间只有两个能力面——`ExtensionRegistry`（同步派发）与 `EventChannel`（异步派发），两者共用**同一份内核自有类型注册表**（`infra/registry` 内实现，不依赖任何第三方事件总线）。差异只在派发策略：同步策略在调用点线程内联调用、按 `order` 升序、取返回值、异常原样上抛；异步策略先入有界队列再由订阅者线程派发、无返回值、可丢弃。
 - **选择哪个能力面的判据是「能否丢弃」，不是「有没有返回值」**：需要同步参与结果或必须完成的（工具调用、提示词修改、权限拦截、会话持久化）走 `ExtensionRegistry`——即使没有返回值也不能丢；只是通知的（轮次开始、工具结果、指标、审计）走 `EventChannel`，允许异步、允许丢弃。因此 `Metrics` 是 best-effort 订阅者，不承担审计级可靠性。
 - **类型即地址**：扩展点请求没有 ID、没有需要事前声明的清单——**请求类型本身就是那层身份**。内核在指定调用点构造请求子类（如 `ToolCallRequest` 带工具名与参数）交给注册表，注册表按「类型 + 路由键」找出处理器。插件拿不到的类型就注册不了，注册边界由类型可见性天然承载。
@@ -355,6 +392,8 @@ jellyfish-cli/src/main/resources/log4j2.xml    # 日志：root 默认 WARN、只
 - **命令域只解析与分发，不拥有命令**：`CommandManager` 不注册处理器、不持有会话、不发事件、不缓存索引（每次现算，插件热部署后立刻可见）；命令名即路由键，别名与用法来自随 handler 落表的 `CommandDescriptor`（名片不含名字，避免「名片上的名字 ≠ 路由键」）。原文入口（输入框）与结构化入口（Web/TUI 直接给命令名 + 参数）共用同一条分发路径，且**对外壳中立**——cli / tui / server 谁调都一样；结果只有三态 + 文本，命令的副作用写回对应域服务，外壳执行后读域服务拿状态。内核系统命令（`/help` `/new` `/session` `/resume` `/model` `/agent` `/mode` `/status` `/usage` `/todo`）由 `core/command/SystemCommands` 以 owner=`core` 注册进同一份注册表，`/exit` 归外壳。**候选查询是与执行平行的一条只读路径**：需要用户挑参数的命令（`/agent` `/model` `/mode` `/resume`）额外注册 `CommandOptionRequest` → `CommandOptions` 处理器，外壳选中命令时先查候选、有候选就弹二级选择页——不执行命令，因此不会误触 `/new` 这类副作用；`CommandResult` 的 choices 仅用于「直接发送无参命令」这条路径。
 - **权限判定的三层与 fail-open 的适用域**：`PermissionManager` 依次走「核心策略（普通 Java 代码）→ PLAN 只读白名单 → 插件拦截（两态、只收紧）」，再统一处理 ASK 与审计。fail-open 只覆盖「取不到策略」（未绑定 agent、无策略）；策略一旦生效，它的否定结论就是硬结论，否则 PLAN 模式形同虚设。插件侧结果类型独立为两态 `PermissionVeto`，因此「插件只能 Deny、不能要求人工审批」是编译期约束，不靠运行期判定。
 - **插件模型**：Java 插件与跨语言桥接插件在 `PF4JPluginManager` 眼里完全同构，都只经 `PluginContext`（`handle` / `contribute` / `observe` / `emit`）与内核交互：前两者写同一份类型注册表，后两者读写事件通道；脚本进程只是桥接插件背后的一台「无状态计算器」。
+- **插件碰不到会话、也拿不到工作目录**：`PluginContext` 只有身份与四个注册订阅方法，`ToolCallRequest` 只带工具名 / 参数 / sessionId。两个直接后果：`todo_write` 这类要写会话待办的工具**做不成插件**（只能内核自带或再补扩展点）；工具的相对路径只能按**进程工作目录**解析（`ToolPaths` 把这个基准集中在一处，将来补会话级 cwd 只改那里）。这不是缺陷而是边界：插件的能力面就是「注册回调 + 订阅事件」。
+- **官方插件**：`jellyfish-plugin-tools` 提供文件读写/编辑、目录列举与文本搜索五个工具（只读工具靠 `plugins.configurations.jellyfish-tools.readOnlyTools` 声明，供 PLAN 白名单）；`jellyfish-plugin-session-file` 把会话写成「一个会话一个 JSON 文件」并用 git 管理历史。**该插件的失败语义是分层的**：文件落盘失败上抛（文件是真相，对应内核的「不可丢」），git 与单个坏文件只记告警（git 只是附加的版本化层，机器没装 git 不该升级成「不能说话」；一个坏文件不该拖累同目录其它会话）。目录默认 `~/jellyfish/sessions`，首次落盘时 `git init`，提交身份用 `git -c user.name/user.email` 临时指定（新机器没有全局 git 配置也能提交，且不会把用户身份写进本仓库）；只认会话目录自己的 `.git`，绝不向上寻找父仓库。
 - **跨语言通信**：JSON-RPC 2.0 over Stdio，每行一个 JSON；每种语言最多一个常驻进程（单进程多路复用），请求统一经 `ScriptGateway` 路由，脚本不直接管理进程。
 - **跨语言事件桥接**：内核通知经 `EventBridge` 推给脚本，脚本 `emit_event` 反向回 `EventChannel`；脚本来源事件带来源标记避免回推，事件类型走白名单、负载限 1MB、队列有界。
 

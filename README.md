@@ -120,14 +120,14 @@ CSI-u 等所有「带修饰的 Enter」编码都无法被底层框架区分（�
 
 ## 配置
 
-配置分四份文件，每份对应一个配置类。**文件位置只在 `config.json` 里声明**，其余文件都走「全局级 + 项目级」双源，项目级优先。
+配置分四份文件，每份对应一个配置类。**文件位置与插件扫描目录只在 `config.json` 里声明**，其余文件都走「全局级 + 项目级」双源，项目级优先。
 
 | 文件 | 配置类 | 内容 |
 | --- | --- | --- |
-| `config.json` | `AppConfig` | 进程名 + 各配置文件路径 |
+| `config.json` | `AppConfig` | 进程名 + 各配置文件路径 + 插件扫描目录 |
 | `models.json` | `ModelSettings` | `defaultProvider` / `defaultModel` / `providers` |
 | `agents.json` | `AgentSettings` | `defaultAgent` / `agents` |
-| `jellyfish.json` | `JellyfishSettings` | `plugins` 等运行期设置 |
+| `jellyfish.json` | `JellyfishSettings` | `plugins`（名单与插件配置段）等运行期设置 |
 
 `config.json` 放在 classpath 根（本仓库为 `jellyfish-cli/src/main/resources/config.json`）：
 
@@ -136,11 +136,14 @@ CSI-u 等所有「带修饰的 Enter」编码都无法被底层框架区分（�
   "processName": "Jellyfish",
   "model":     { "globalPath": "~/jellyfish/models.json",    "projectPath": "./jellyfish/models.json" },
   "agent":     { "globalPath": "~/jellyfish/agents.json",    "projectPath": "./jellyfish/agents.json" },
-  "jellyfish": { "globalPath": "~/jellyfish/jellyfish.json", "projectPath": "./jellyfish/jellyfish.json" }
+  "jellyfish": { "globalPath": "~/jellyfish/jellyfish.json", "projectPath": "./jellyfish/jellyfish.json" },
+  "plugins":   { "roots": ["plugins", "~/jellyfish/plugins"] }
 }
 ```
 
 仓库里的 `config.json` 就是这份：**全局级约定目录 `~/jellyfish/`、项目级约定目录 `<工作目录>/jellyfish/`**，四类配置的文件名固定。要换位置只改 `config.json`。
+
+`plugins.roots` 是插件 jar 的扫描根目录（PF4J 在目录下一层找 `plugin.properties`）：顺序即扫描顺序，相对路径相对**进程工作目录**解析，条目行首的 `~` 展开为用户主目录；留空则回退默认值 `plugins`。为什么它在这里而不是 `jellyfish.json`：它与「去哪个文件读配置」同属部署事实；`jellyfish.json` 的 `plugins` 段只保留加载后的运行期设置。
 
 `models.json`：
 
@@ -168,8 +171,8 @@ CSI-u 等所有「带修饰的 Enter」编码都无法被底层框架区分（�
       "description": "通用编码助手",
       "systemPrompt": "You are Jellyfish, a coding agent.",
       "permissions": {
-        "deniedTools": ["bash"],
-        "askTools": ["write_file"],
+        "deniedTools": ["write_file", "edit_file"],
+        "askTools": [],
         "allowedTools": []
       }
     }
@@ -182,11 +185,10 @@ CSI-u 等所有「带修饰的 Enter」编码都无法被底层框架区分（�
 ```json
 {
   "plugins": {
-    "roots": ["plugins"],
     "enabled": [],
     "disabled": [],
     "configurations": {
-      "jellyfish-plugin-python": { "readOnlyTools": ["read_file", "list_dir"] }
+      "jellyfish-tools": { "readOnlyTools": ["read_file", "list_dir"] }
     }
   },
   "react": {
@@ -202,8 +204,8 @@ CSI-u 等所有「带修饰的 Enter」编码都无法被底层框架区分（�
 约定：
 
 - **插值**：只有字符串值里的 `${VAR}` 会被替换为环境变量（`${VAR:-default}` 可取默认值，`\${VAR}` 转义为字面量），JSON 的 key 不替换。`systemPrompt` 是**原文**，不做模板插值。
-- **路径**：`~` 与 `~/` 展开为用户主目录（`~other/...` 这种指定其他用户的形式不展开）；两条路径都支持。项目级路径相对**进程工作目录**解析，不是相对 jar 位置。文件不存在视为「该源未配置」，静默跳过（这是 `globalPath` 与 `projectPath` 可以同时配上、缺哪份就少哪份的原因）。
-- **合并**：同名 `provider` / `agent` / 插件配置段以项目级**整对象**覆盖全局级；`defaultProvider` / `defaultModel` / `defaultAgent` 取项目级非空值，否则回退全局级；`react` 段项目级整对象覆盖全局级；插件根目录与启用 / 禁用名单项目级非空则**整体替换**（不做并集）。
+- **路径**：`~` 与 `~/` 展开为用户主目录（`~other/...` 这种指定其他用户的形式不展开）；两条路径都支持。项目级路径相对**进程工作目录**解析，不是相对 jar 位置。文件不存在视为「该源未配置」，静默跳过（这是 `globalPath` 与 `projectPath` 可以同时配上、缺哪份就少哪份的原因）。`config.json` 的 `plugins.roots` 同样支持 `~` 与相对路径，语义一致。
+- **合并**：同名 `provider` / `agent` / 插件配置段以项目级**整对象**覆盖全局级；`defaultProvider` / `defaultModel` / `defaultAgent` 取项目级非空值，否则回退全局级；`react` 段项目级整对象覆盖全局级；启用 / 禁用名单项目级非空则**整体替换**（不做并集）。`plugins.roots` 只在 `config.json` 一处，不参与双源合并。
 - **容错**：配置缺失或可疑只发配置告警事件，不中断启动；真正用到时才报错。
 - **不要提交密钥**：`apiKey` 等敏感值通过环境变量注入，不要落到配置文件里。
 
@@ -216,3 +218,55 @@ CSI-u 等所有「带修饰的 Enter」编码都无法被底层框架区分（�
 3. 想让配置对**这台机器上的所有项目**生效，把同样的文件放到 `~/jellyfish/` 即可（项目级同名条目会整对象覆盖全局级）。
 
 两个目录里的文件名与上方四类配置一一对应，不要改成别的名字。
+
+## 插件
+
+官方插件在 `jellyfish-plugins/` 下，**一个插件一个子模块**（PF4J 是「一个 jar 一个 `plugin.properties`」）：
+
+| 模块 | plugin.id | 提供什么 |
+| --- | --- | --- |
+| `jellyfish-plugin-tools` | `jellyfish-tools` | 五个文件工具：`read_file`、`write_file`、`edit_file`、`list_dir`、`grep_files` |
+| `jellyfish-plugin-session-file` | `jellyfish-session-file` | 会话持久化：一个会话一个 JSON 文件，并用 git 管理历史 |
+
+`jellyfish-tools` 的五个工具：
+
+| 工具 | 参数 | 说明 |
+| --- | --- | --- |
+| `read_file` | `path`、`offset`、`limit` | 按行分片读取，命中 `limit` 会提示续读；相对路径按**进程工作目录**解析 |
+| `write_file` | `path`、`content` | 整文件覆盖写（UTF-8），输出区分「新建」与「覆盖」，父目录自动创建 |
+| `edit_file` | `path`、`old_text`、`new_text`、`replace_all` | 字面量精确替换；匹配到多处且未声明 `replace_all` 时**报错而不改文件** |
+| `list_dir` | `path` | 只列一层，目录优先 + `/` 后缀，不过滤 `target` 之类 |
+| `grep_files` | `pattern`、`path`、`max_results` | 逐行正则，返回 `文件:行号:内容`；跳过 `.git`/`target`/`node_modules` 与二进制文件 |
+
+打包与安装（扫描目录由 `config.json` 的 `plugins.roots` 决定，默认是**工作目录**下的 `plugins/`，该目录不入版本库）：
+
+```bash
+mvn -q package -DskipTests
+mkdir -p plugins
+cp jellyfish-plugins/jellyfish-plugin-tools/target/jellyfish-plugin-tools-*.jar plugins/
+cp jellyfish-plugins/jellyfish-plugin-session-file/target/jellyfish-plugin-session-file-*.jar plugins/
+```
+
+插件配置写在 `jellyfish.json` 的 `plugins.configurations.<pluginId>` 段：
+
+```json
+{
+  "plugins": {
+    "configurations": {
+      "jellyfish-tools": {
+        "readOnlyTools": ["read_file", "list_dir", "grep_files"]
+      },
+      "jellyfish-session-file": {
+        "sessionDir": "~/jellyfish/sessions",
+        "gitEnabled": true
+      }
+    }
+  }
+}
+```
+
+- `readOnlyTools` 是**跨插件的约定键**（`jellyfish.json` 里位于插件配置段下）：PLAN 模式下只有列在这里的工具能执行。没列的工具在 PLAN 模式一律拒绝。
+- `sessionDir`（默认 `~/jellyfish/sessions`）：会话文件目录。会话是跨项目的运行态数据，因此默认放全局级目录。
+- `gitEnabled`（默认 `true`）：首次落盘时在 `sessionDir` 里 `git init`，此后**每次内容变化的落盘留一次提交**（内容没变则不写文件、也不提交）。机器上没有 git 时只告警，文件照常落盘。
+
+会话恢复：启动时内核向所有注册了恢复处理器的插件要回会话，因此上次退出前的会话在下次启动时立即可见（`/session` 会列出来）。

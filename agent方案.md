@@ -73,7 +73,7 @@ jellyfish-infra/src/main/java/zcd/jellyfish/infra/config/
 ├── AgentSettings.java      # 【新增】agents.json 的根：defaultAgent + agents 映射
 ├── AgentDefinition.java    # 【新增】单个 agent 定义：agentId / description / systemPrompt / permissions
 ├── AgentPermissions.java   # 【新增】permissions 段原始值：三个工具名列表
-├── PluginsSettings.java    # 【新增】plugins 段原始值：roots / enabled / disabled / configurations
+├── PluginsSettings.java    # 【新增】plugins 段原始值：enabled / disabled / configurations（扫描目录后续迁去 config.json 的 PluginPaths）
 ├── ModelSettings.java      # 【改】只改类注释：对应文件由 jellyfish.json 改为 models.json（不再承载 plugins 段）
 ├── RuntimeSnapshot.java    # 【改】加 agentSettings / jellyfishSettings
 ├── RuntimeConfig.java      # 【改】加 agent / jellyfish 两段的双源读取与合并 + 三个 getter
@@ -233,32 +233,34 @@ public final class AgentSettings {
 ```
 
 ```java
-/** plugins 段原始值：插件根目录、启用 / 禁用名单、各插件配置段。 */
+/** plugins 段原始值：启用 / 禁用名单、各插件配置段。 */
 public final class PluginsSettings {
 
     /**
      * 反序列化与合并共用的构造器。
      *
-     * @param roots          插件根目录，可为 {@code null}
      * @param enabled        启用名单，可为 {@code null}
      * @param disabled       禁用名单，可为 {@code null}
      * @param configurations pluginId → 该插件配置段，可为 {@code null}
      */
     @JsonCreator
-    public PluginsSettings(@JsonProperty("roots") List<String> roots,
-                           @JsonProperty("enabled") List<String> enabled,
+    public PluginsSettings(@JsonProperty("enabled") List<String> enabled,
                            @JsonProperty("disabled") List<String> disabled,
                            @JsonProperty("configurations") Map<String, Map<String, Object>> configurations) { ... }
 
-    public List<String> getRoots();        // 空列表而非 null
     public List<String> getEnabled();
     public List<String> getDisabled();
     public Map<String, Map<String, Object>> getConfigurations();
 
-    /** 四段全空表示「未配置 plugins 段」。 */
+    /** 三段全空表示「未配置 plugins 段」。 */
     public boolean isEmpty();
 }
 ```
+
+> **后续调整**：`roots` 一度写在本段里，后因「去哪找插件 jar」与「去哪个文件读配置」同属部署事实而迁到
+> `config.json`（`PluginPaths`）。落地后本段只剩三个字段，扫描目录由 `RuntimeConfig#getPluginRoots()` 提供、
+> `PluginRuntimeConfig#refresh(List, PluginsSettings)` 一并装入快照。下面各处保留迁移前的形态，
+> 仅作为当初决策记录。
 
 本轮把「模型段」与「插件段」**拆成两份文件**，因此 `JellyfishSettings` 是**新增类**，`ModelSettings` 保持原名、只换挂靠的文件：
 
@@ -578,6 +580,9 @@ public final class PluginRuntimeConfig {
      */
     public void refresh(PluginsSettings settings);
 
+    // 后续调整：签名变为 refresh(List<Path> pluginsRoots, PluginsSettings settings)，
+    // 扫描目录来自 config.json；本对象不再自己解析 roots 字符串、不再展开 ~（由 RuntimeConfig 负责）。
+
     public List<Path> getPluginsRoots();
     public Set<String> getEnabledPluginIds();
     public Set<String> getDisabledPluginIds();
@@ -674,18 +679,19 @@ public final class AgentModule {
 
 ### 4.1 配置形状
 
-`config.json`（**只有它声明路径**）：
+`config.json`（**只有它声明配置文件路径与插件扫描目录**）：
 
 ```json
 {
   "processName": "Jellyfish",
   "model":     { "globalPath": "/etc/jellyfish/models.json",   "projectPath": "./models.json" },
   "agent":     { "globalPath": "/etc/jellyfish/agents.json",   "projectPath": "./agents.json" },
-  "jellyfish": { "globalPath": "/etc/jellyfish/jellyfish.json", "projectPath": "./jellyfish.json" }
+  "jellyfish": { "globalPath": "/etc/jellyfish/jellyfish.json", "projectPath": "./jellyfish.json" },
+  "plugins":   { "roots": ["plugins"] }
 }
 ```
 
-> 段名即 `AppConfig` 的字段名：`model`（既有段，指向的文件由 jellyfish.json 改为 models.json）、`agent`（新增）、`jellyfish`（新增）。如果不想让段名叫 `jellyfish`，只需改 `AppConfig` 的字段名，不影响其它改动。
+> 段名即 `AppConfig` 的字段名：`model`（既有段，指向的文件由 jellyfish.json 改为 models.json）、`agent`（新增）、`jellyfish`（新增）、`plugins`（**后续调整**：扫描目录原先写在 `jellyfish.json` 的 `plugins.roots`，因与「去哪个文件读配置」同属部署事实而迁到此处的 `PluginPaths`；`jellyfish.json` 的 `plugins` 段自此只留 `enabled` / `disabled` / `configurations`）。如果不想让段名叫 `jellyfish`，只需改 `AppConfig` 的字段名，不影响其它改动。
 
 `models.json`（provider / model）：
 
@@ -697,12 +703,11 @@ public final class AgentModule {
 }
 ```
 
-`jellyfish.json`（运行期设置，当前只有插件段）：
+`jellyfish.json`（运行期设置，当前只有插件段；扫描目录不在这里，见上方 `config.json` 的 `plugins.roots`）：
 
 ```json
 {
   "plugins": {
-    "roots": ["plugins"],
     "enabled": [],
     "disabled": ["jellyfish-plugin-node"],
     "configurations": {
@@ -738,7 +743,8 @@ public final class AgentModule {
 | `agents.<id>` | 同名 agent **整对象替换**（项目级覆盖全局级），不同 key 视为新增 | 逐字段合并会让「一半权限来自全局、一半来自项目」无法审计 |
 | `defaultAgent` | 项目级非空值优先，否则回退全局级 | 与 `defaultProvider` 完全一致，复用 `override(...)` |
 | `plugins.configurations.<pluginId>` | 同名插件配置段**整对象替换** | 同上；这是 `readOnlyTools` 与将来插件配置的共同语义 |
-| `plugins.roots` / `enabled` / `disabled` | 项目级**非空则整体替换**全局级（列表不做并集） | 并集会让「项目级想收窄」做不到；顺序与「谁是生效值」必须唯一 |
+| `plugins.enabled` / `disabled` | 项目级**非空则整体替换**全局级（列表不做并集） | 并集会让「项目级想收窄」做不到；顺序与「谁是生效值」必须唯一 |
+| `config.json` 的 `plugins.roots` | 不参与双源合并（只写在 `config.json` 一处） | 它与文件路径同属部署事实，天然只有一份真相 |
 | `plugins.disabled` 与 `enabled` | `disabled` 优先（既有 `ConfigPluginStatusProvider` 语义，不变） | —— |
 
 ### 4.2 容错（一律「告警不中断」）
@@ -751,7 +757,7 @@ public final class AgentModule {
 | `defaultAgent` 指向不存在的 agent | 发 `ConfigWarningEvent`，索引照常建立；`resolveDefault()` 按 §3.2 的三档处理 |
 | 工具名空白 / 重复 | 由 `PermissionPolicy.of` 既有逻辑忽略，不额外告警 |
 | `plugins` 段缺失 | `PluginsSettings.isEmpty()` 为真 → `PluginRuntimeConfig` 落到默认（扫 `plugins/`、不限启用禁用、无配置段） |
-| `plugins.roots` 为空 | `PluginRuntimeConfig` 既有逻辑回退 `DEFAULT_PLUGINS_ROOT` |
+| `plugins.roots` 为空 | `PluginRuntimeConfig` 既有逻辑回退 `DEFAULT_PLUGINS_ROOT`（后续调整：`roots` 迁到 `config.json`，空白条目由 `RuntimeConfig` 先丢弃） |
 
 ### 4.3 未命中语义（fail-open 的适用域不变）
 
@@ -891,7 +897,7 @@ public final class AgentModule {
 | Q7 | `AgentSettings` 归属 | 进 `RuntimeSnapshot` | §3.1 |
 | Q8 | 字段边界 | 只做 `agentId` / `description` / `systemPrompt` / `permissions` | §3.1 |
 | Q9 | 范围 | 只交付模块 + 装配，不接调用点 | §0 表 #9、L1 |
-| Q10 | `plugins` 段的 JSON 形状 | **A**：保留键与插件段分离——`plugins.roots` / `plugins.enabled` / `plugins.disabled` / `plugins.configurations.<pluginId>`。**否决 B**（`plugins.<pluginId>` 与保留键同级）：pluginId 由插件作者自由取名，与 `roots`/`enabled`/`disabled` 撞名时既无报错也无优先级约定 | §4.1；§11.1 第 2 条同步 permission 方案的示例键路径 |
+| Q10 | `plugins` 段的 JSON 形状 | **A**：保留键与插件段分离——`plugins.roots` / `plugins.enabled` / `plugins.disabled` / `plugins.configurations.<pluginId>`。**否决 B**（`plugins.<pluginId>` 与保留键同级）：pluginId 由插件作者自由取名，与 `roots`/`enabled`/`disabled` 撞名时既无报错也无优先级约定。**后续调整**：`roots` 移出到 `config.json` 的 `plugins.roots`（保留键与插件配置段分离这条结论不变，`jellyfish.json` 仍只有 `enabled` / `disabled` / `configurations`） | §4.1；§11.1 第 2 条同步 permission 方案的示例键路径 |
 | Q11 | 配置文件 ↔ 配置类的对应关系 | **统一为**：`config.json` → `AppConfig`、`models.json` → `ModelSettings`、`agents.json` → `AgentSettings`、`jellyfish.json` → `JellyfishSettings`。事实澄清：仓库里 `jellyfish.json` **原本**由 `ModelSettings` 承载（见其类注释），**不存在** `AppSettings`（`App*` 前缀归 `classpath:config.json` 的 `AppConfig`），也**没有** `models.json`。落地含义：① 新增 `JellyfishSettings`，承载 `plugins` 段；② `ModelSettings` **不改名**，只把类注释指向 `models.json`、不再承载插件段；③ `config.json` 的 `model` 段改指 models.json，新增 `agent` / `jellyfish` 两段 | §2.2（约定表）、§3.1、§4.1；L8 消除 |
 | Q12 | 本轮是否做 `SessionManager` | **不做**；依赖它的实现（会话级自动绑定默认 agent）**只写 `TODO` 注释**，不写占位实现 | §3.2、L1、阶段 5/6 |
 | Q13 | `config.json` 里 jellyfish.json 的段名 | **`jellyfish`**（段名即 `AppConfig` 字段名）。换名只需改一个字段名 | §4.1 |

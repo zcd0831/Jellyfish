@@ -134,11 +134,14 @@ public class SystemCommands {
         subscriptions.add(register("status", new CommandDescriptor("显示当前会话概要", null, null), this::status));
         subscriptions.add(register("usage", new CommandDescriptor("显示当前会话 token 用量", null, aliases("cost")),
                 this::usage));
+        subscriptions.add(register("delete", new CommandDescriptor("删除会话（含持久化文件）", "<sessionId>",
+                aliases("rm")), this::deleteSession));
         // 只读候选查询：与执行处理器平行，外壳「选中命令就弹选择页」时走这条路径，不产生任何副作用
         subscriptions.add(registerOptions("resume", this::resumeOptions));
         subscriptions.add(registerOptions("model", this::modelOptions));
         subscriptions.add(registerOptions("agent", this::agentOptions));
         subscriptions.add(registerOptions("mode", this::modeOptions));
+        subscriptions.add(registerOptions("delete", this::deleteOptions));
     }
 
     /**
@@ -184,6 +187,16 @@ public class SystemCommands {
      * @return 候选结果
      */
     private CommandOptions resumeOptions(CommandOptionRequest request) {
+        return CommandOptions.of(sessionChoices(sortedSessions()));
+    }
+
+    /**
+     * {@code /delete} 的只读候选：可删除的会话。
+     *
+     * @param request 候选查询请求
+     * @return 候选结果
+     */
+    private CommandOptions deleteOptions(CommandOptionRequest request) {
         return CommandOptions.of(sessionChoices(sortedSessions()));
     }
 
@@ -305,6 +318,37 @@ public class SystemCommands {
             choices.add(new CommandChoice(sessionId, sessionId, description, sessionId.equals(currentId)));
         }
         return choices;
+    }
+
+    /**
+     * {@code /delete <sessionId>}：删除会话（含插件存储）。
+     * <p>
+     * 无参时回退为候选清单：删除是破坏性操作，让外壳弹选择页比让人手敲一长串 UUID 更不容易出错。
+     * 删除当前会话是允许的——{@link SessionManager#delete(String)} 会清掉当前指针，
+     * 外壳据此回到无会话状态（TUI 首页）。
+     *
+     * @param request 命令请求
+     * @return 结果
+     */
+    private CommandResult deleteSession(CommandRequest request) {
+        if (request.getArguments().isEmpty()) {
+            List<Session> sessions = sortedSessions();
+            return CommandResult.choices(renderSessions(sessions), sessionChoices(sessions));
+        }
+        if (request.getArguments().size() != 1) {
+            return CommandResult.error("用法：/delete <sessionId>");
+        }
+        String sessionId = request.getArguments().getTokens().get(0);
+        try {
+            Session deleted = sessionManager.delete(sessionId);
+            if (deleted == null) {
+                return CommandResult.error("会话不存在：" + sessionId);
+            }
+            return CommandResult.ok("已删除会话：" + sessionId);
+        } catch (JellyfishException e) {
+            // 插件删不掉时会话仍在内存里，如实告知失败比默默假装删掉更安全
+            return CommandResult.error("删除会话失败：" + e.getMessage());
+        }
     }
 
     /**

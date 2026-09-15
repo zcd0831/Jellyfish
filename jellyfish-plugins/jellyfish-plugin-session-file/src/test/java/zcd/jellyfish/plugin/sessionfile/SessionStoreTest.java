@@ -129,4 +129,15 @@ class SessionStoreTest {
 
         assertEquals(SnapshotJson.write(snapshot), store.read(store.fileOf("session-1")));
     }
+
+    @Test
+    @DisplayName("删除应移除文件；文件不存在时返回 false 而不是抛错")
+    void delete_should_removeFile_and_beIdempotent() {
+        SessionStore store = new SessionStore(tempDir);
+        store.writeIfChanged("session-1", SnapshotJson.write(TestSnapshots.minimal("session-1")));
+
+        assertTrue(store.delete("session-1"));
+        assertFalse(Files.exists(store.fileOf("session-1")));
+        assertFalse(store.delete("session-1"));
+    }
 }

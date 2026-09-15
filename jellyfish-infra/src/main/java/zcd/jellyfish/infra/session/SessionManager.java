@@ -10,6 +10,7 @@ import zcd.jellyfish.api.event.notification.SessionClosedEvent;
 import zcd.jellyfish.api.event.notification.SessionCreatedEvent;
 import zcd.jellyfish.api.event.notification.SessionMessageAppendedEvent;
 import zcd.jellyfish.api.extension.PermissionMode;
+import zcd.jellyfish.api.extension.SessionDeleteRequest;
 import zcd.jellyfish.api.extension.SessionPersistRequest;
 import zcd.jellyfish.api.extension.SessionRestoreRequest;
 import zcd.jellyfish.api.extension.SessionRestoreResult;
@@ -201,6 +202,41 @@ public class SessionManager {
     }
 
     /**
+     * 删除会话：先把插件那一份存储删掉，再从会话表移除并广播关闭事件。
+     * <p>
+     * <b>与 {@link #close(String)} 的分工</b>：{@code close} 只是结束运行态、把最后的快照落盘保留；
+     * 本方法是「这个会话不要了」，磁盘上的那一份也要一起清掉，因此它不会先落快照。
+     * <p>
+     * <b>为什么先派发删除再移出会话表</b>：删除是破坏性操作，失败时不能留下不一致状态。
+     * 处理器抛出的异常原样上抛（同步侧无护栏），此时会话仍留在内存里、用户看到的是「删除失败」；
+     * 反过来先移除再派发，插件失败就会变成「界面说删了、文件还在、下次启动复活」这种三处对不上的状态。
+     * <p>
+     * <b>幂等</b>：会话不存在（含 {@code sessionId} 为 {@code null}）时返回 {@code null} 且不抛错，
+     * 也不派发删除请求——删除一个不存在的会话不需要任何清理动作。
+     * <p>
+     * 清当前指针用 {@code compareAndSet}：只有当前指针仍指向被删除的会话时才清空，
+     * 避免把并发切换后的「新当前会话」误清。外壳据此回到无会话状态（TUI 首页）。
+     *
+     * @param sessionId 会话标识，可为 {@code null}
+     * @return 被删除的会话运行态，会话不存在时返回 {@code null}
+     * @throws JellyfishException 插件删除失败时抛出（此时会话保留在内存中）
+     */
+    public Session delete(String sessionId) {
+        if (sessionId == null) {
+            return null;
+        }
+        Session session = sessions.get(sessionId);
+        if (session == null) {
+            return null;
+        }
+        deletePersisted(sessionId);
+        sessions.remove(sessionId);
+        currentSessionId.compareAndSet(sessionId, null);
+        publish(new SessionClosedEvent(sessionId, session.getAgentId(), session.size()));
+        return session;
+    }
+
+    /**
      * 启动期恢复会话：向所有注册了恢复处理器的插件要回会话快照并导入。
      * <p>
      * 必须在插件启动<b>之后</b>调用——插件要先注册处理器，才可能被问到。
@@ -361,6 +397,28 @@ public class SessionManager {
     private String resolveDefaultAgentId() {
         AgentDefinition definition = agentManager.resolveDefault();
         return definition == null ? null : definition.getAgentId();
+    }
+
+    /**
+     * 同步派发会话删除：无返回值，但不可丢。
+     * <p>
+     * 与持久化同样的取舍：同一份存储可能同时落在文件、数据库与远端，这些是「都做」而不是「二选一」。
+     * 没有插件注册时删除只发生在内存里——没有持久化插件是合法状态。
+     * <p>
+     * 处理器抛出的异常原样上抛，由 {@link #delete(String)} 的调用点决定处置。
+     *
+     * @param sessionId 会话标识
+     */
+    private void deletePersisted(String sessionId) {
+        List<HandlerBinding<SessionDeleteRequest, Void>> bindings =
+                extensions.bindings(SessionDeleteRequest.class, null);
+        if (bindings.isEmpty()) {
+            return;
+        }
+        SessionDeleteRequest request = new SessionDeleteRequest(sessionId);
+        for (HandlerBinding<SessionDeleteRequest, Void> binding : bindings) {
+            extensions.invoke(binding.getHandler(), request);
+        }
     }
 
     /**

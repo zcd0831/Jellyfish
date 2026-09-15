@@ -100,6 +100,17 @@ class TodoStoreTest {
     }
 
     @Test
+    @DisplayName("删除会话待办应清掉缓存与文件；文件不存在时返回 false")
+    void delete_should_clearCacheAndFile() {
+        store.replace("s-1", Arrays.asList(new TodoItem("a", false)));
+
+        assertTrue(store.delete("s-1"));
+        assertFalse(Files.exists(store.fileOf("s-1")));
+        assertTrue(store.itemsOf("s-1").isEmpty());
+        assertFalse(store.delete("s-1"));
+    }
+
+    @Test
     @DisplayName("坏文件必须抛错而不是当作空：否则下一次写入就把原数据覆盖掉了")
     void itemsOf_should_fail_when_fileCorrupt() throws IOException {
         Files.write(store.fileOf("s-1"), "{不是数组".getBytes(StandardCharsets.UTF_8));

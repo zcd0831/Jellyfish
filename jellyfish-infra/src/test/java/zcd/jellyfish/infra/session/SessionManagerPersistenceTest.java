@@ -9,6 +9,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.event.EventPublisher;
 import zcd.jellyfish.api.event.RegisterOptions;
+import zcd.jellyfish.api.extension.SessionDeleteRequest;
 import zcd.jellyfish.api.extension.SessionMessageSnapshot;
 import zcd.jellyfish.api.extension.SessionPersistRequest;
 import zcd.jellyfish.api.extension.SessionRestoreRequest;
@@ -28,6 +29,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -156,6 +158,73 @@ class SessionManagerPersistenceTest {
         assertThrows(JellyfishException.class, () -> manager.close(sessionId));
 
         assertSame(sessionId, manager.require(sessionId).getSessionId());
+    }
+
+    @Test
+    @DisplayName("删除会话应先派发删除请求，再从会话表移除")
+    void delete_should_dispatchDeleteRequestAndRemoveSession() {
+        List<String> deleted = new ArrayList<String>();
+        extensions.contribute("eraser", SessionDeleteRequest.class, null, request -> {
+            deleted.add(request.getSessionId());
+            return null;
+        }, RegisterOptions.DEFAULT);
+        String sessionId = manager.create(null, null, null, null).getSessionId();
+
+        Session removed = manager.delete(sessionId);
+
+        assertEquals(Collections.singletonList(sessionId), deleted);
+        assertEquals(sessionId, removed.getSessionId());
+        assertTrue(manager.all().isEmpty());
+        assertThrows(JellyfishException.class, () -> manager.require(sessionId));
+    }
+
+    @Test
+    @DisplayName("删除不落盘最后快照：close 才落盘，delete 是「不要了」")
+    void delete_should_notPersistSnapshot() {
+        List<SessionSnapshot> persisted = capturePersistedSnapshots();
+        String sessionId = manager.create(null, null, null, null).getSessionId();
+
+        manager.delete(sessionId);
+
+        assertEquals(1, persisted.size(), "只有创建时那一次落盘");
+    }
+
+    @Test
+    @DisplayName("删除失败应保留会话：不能让「界面说删了、文件还在」")
+    void delete_should_keepSession_whenDeleteFails() {
+        extensions.contribute("broken", SessionDeleteRequest.class, null, request -> {
+            throw new JellyfishException("文件删不掉");
+        }, RegisterOptions.DEFAULT);
+        String sessionId = manager.create(null, null, null, null).getSessionId();
+
+        assertThrows(JellyfishException.class, () -> manager.delete(sessionId));
+
+        assertSame(sessionId, manager.require(sessionId).getSessionId());
+    }
+
+    @Test
+    @DisplayName("删除当前会话后当前指针置空，外壳据此回首页")
+    void delete_should_clearCurrent_whenCurrentDeleted() {
+        Session session = manager.create(null, null, null, null);
+        manager.switchTo(session.getSessionId());
+
+        manager.delete(session.getSessionId());
+
+        assertNull(manager.current());
+    }
+
+    @Test
+    @DisplayName("删除不存在的会话是幂等的，也不派发删除请求")
+    void delete_should_beIdempotent_whenSessionMissing() {
+        List<String> deleted = new ArrayList<String>();
+        extensions.contribute("eraser", SessionDeleteRequest.class, null, request -> {
+            deleted.add(request.getSessionId());
+            return null;
+        }, RegisterOptions.DEFAULT);
+
+        assertNull(manager.delete("missing"));
+        assertNull(manager.delete(null));
+        assertTrue(deleted.isEmpty());
     }
 
     @Test

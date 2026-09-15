@@ -2,6 +2,7 @@ package zcd.jellyfish.plugin.sessionfile;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import zcd.jellyfish.api.extension.SessionDeleteRequest;
 import zcd.jellyfish.api.extension.SessionPersistRequest;
 import zcd.jellyfish.api.extension.SessionRestoreRequest;
 import zcd.jellyfish.api.extension.SessionRestoreResult;
@@ -50,6 +51,7 @@ public final class SessionFilePlugin implements JellyfishPlugin {
         this.store = new SessionStore(directory);
         this.git = new GitRepository(directory, config.gitEnabled());
         context.contribute(SessionPersistRequest.class, this::persist);
+        context.contribute(SessionDeleteRequest.class, this::delete);
         context.contribute(SessionRestoreRequest.class, this::restore);
         LOG.info("会话文件插件已启动: dir={} git={}", directory, config.gitEnabled());
     }
@@ -68,6 +70,29 @@ public final class SessionFilePlugin implements JellyfishPlugin {
             return null;
         }
         git.commit(store.fileOf(snapshot.getSessionId()), commitMessage(snapshot));
+        return null;
+    }
+
+    /**
+     * 删除会话文件，并留一次 git 提交。
+     * <p>
+     * <b>为什么复用 {@link GitRepository#commit(Path, String)} 而不加专门的删除方法</b>：
+     * 文件已经从工作区删掉，{@code git add -- <file>} 本来就会把这次删除记进索引（Git 2.0 起
+     * 不带 {@code -A} 的 pathspec 形式也包含删除），因此提交路径与普通落盘完全一样。
+     * <p>
+     * 文件不存在时不是错误：删除一个已经没了的会话应当是幂等的。
+     * 文件删除失败由 {@link SessionStore#delete(String)} 上抛——那一刻「删掉了」就是假的，
+     * 内核会据此保留内存里的会话并告诉用户删除失败。
+     *
+     * @param request 删除请求
+     * @return 恒为 {@code null}（结果类型是 {@code Void}）
+     */
+    private Void delete(SessionDeleteRequest request) {
+        String sessionId = request.getSessionId();
+        if (!store.delete(sessionId)) {
+            return null;
+        }
+        git.commit(store.fileOf(sessionId), deleteMessage(sessionId));
         return null;
     }
 
@@ -97,8 +122,26 @@ public final class SessionFilePlugin implements JellyfishPlugin {
      * @return 提交信息
      */
     private static String commitMessage(SessionSnapshot snapshot) {
-        String sessionId = snapshot.getSessionId();
-        String shortId = sessionId.length() > SHORT_ID_LENGTH ? sessionId.substring(0, SHORT_ID_LENGTH) : sessionId;
-        return "session(" + shortId + "): " + snapshot.getMessages().size() + " 条消息";
+        return "session(" + shortId(snapshot.getSessionId()) + "): " + snapshot.getMessages().size() + " 条消息";
+    }
+
+    /**
+     * 生成删除会话的提交信息。
+     *
+     * @param sessionId 会话标识
+     * @return 提交信息
+     */
+    private static String deleteMessage(String sessionId) {
+        return "session(" + shortId(sessionId) + "): 删除";
+    }
+
+    /**
+     * 取会话短标识。
+     *
+     * @param sessionId 会话标识
+     * @return 前 {@value #SHORT_ID_LENGTH} 个字符（不足则原样）
+     */
+    private static String shortId(String sessionId) {
+        return sessionId.length() > SHORT_ID_LENGTH ? sessionId.substring(0, SHORT_ID_LENGTH) : sessionId;
     }
 }

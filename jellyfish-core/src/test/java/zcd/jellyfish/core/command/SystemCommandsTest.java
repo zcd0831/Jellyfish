@@ -36,7 +36,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.when;
 
 /**
- * {@link SystemCommands} 的单元测试：验证十条系统命令的副作用写回、错误分支与注册回收。
+ * {@link SystemCommands} 的单元测试：验证系统命令的副作用写回、错误分支与注册回收。
  * <p>
  * 用真实 {@code ExtensionRegistry} + 真实 {@code CommandManager} + 真实 {@code SessionManager}，
  * 只 mock 模型与 agent 门面这类外部协作者。
@@ -85,8 +85,8 @@ class SystemCommandsTest {
 
         // Then
         assertTrue(names.containsAll(Arrays.asList("help", "new", "session", "resume", "model", "agent", "mode",
-                "status", "usage")));
-        assertEquals(9, names.size());
+                "status", "usage", "delete")));
+        assertEquals(10, names.size());
     }
 
     @Test
@@ -345,6 +345,45 @@ class SystemCommandsTest {
         assertEquals(2, options.size());
         assertEquals("plan", options.get(0).getValue());
         assertTrue(options.get(1).isCurrent());
+    }
+
+    @Test
+    void delete_should_remove_session_and_report_missing() {
+        // Given
+        commandManager.execute("/new");
+        String sessionId = sessionManager.current().getSessionId();
+
+        // When
+        CommandResult result = commandManager.execute("/delete " + sessionId);
+
+        // Then
+        assertEquals(CommandResult.Kind.OK, result.getKind());
+        assertTrue(result.getOutput().contains(sessionId));
+        assertNull(sessionManager.current());
+        assertTrue(sessionManager.all().isEmpty());
+    }
+
+    @Test
+    void delete_without_argument_should_offer_session_choices() {
+        // Given
+        commandManager.execute("/new");
+
+        // When
+        CommandResult result = commandManager.execute("/delete");
+
+        // Then：无参时回退为候选清单（删除是破坏性操作，弹选择页比手敲 UUID 更稳）
+        assertEquals(CommandResult.Kind.OK, result.getKind());
+        assertTrue(result.hasChoices());
+        assertEquals(1, result.getChoices().size());
+    }
+
+    @Test
+    void delete_should_report_error_when_session_missing() {
+        // When
+        CommandResult result = commandManager.execute("/delete missing");
+
+        // Then
+        assertEquals(CommandResult.Kind.ERROR, result.getKind());
     }
 
     @Test

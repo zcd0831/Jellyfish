@@ -10,6 +10,7 @@ import zcd.jellyfish.api.extension.CommandRequest;
 import zcd.jellyfish.api.extension.ExtensionHandler;
 import zcd.jellyfish.api.extension.PanelContributionRequest;
 import zcd.jellyfish.api.extension.PromptContributionRequest;
+import zcd.jellyfish.api.extension.SessionDeleteRequest;
 import zcd.jellyfish.api.extension.StatusLineContributionRequest;
 import zcd.jellyfish.api.extension.ToolCallRequest;
 import zcd.jellyfish.api.extension.ToolCallResult;
@@ -21,6 +22,7 @@ import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.plugin.PluginContextImpl;
 import zcd.jellyfish.infra.registry.TypeRegistry;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -29,6 +31,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -75,13 +78,27 @@ class TodoPluginTest {
     }
 
     @Test
-    @DisplayName("五个面各注册一次：命令 / 工具 / 提示词注入 / 状态栏 / 面板")
+    @DisplayName("五个面各注册一次，另注册一次会话删除清理")
     void start_should_registerAllCapabilities() {
         assertEquals(1, extensions.bindings(CommandRequest.class, "todo").size());
         assertEquals(1, extensions.bindings(ToolCallRequest.class, TodoWriteTool.NAME).size());
         assertEquals(1, extensions.bindings(PromptContributionRequest.class, null).size());
         assertEquals(1, extensions.bindings(StatusLineContributionRequest.class, null).size());
         assertEquals(1, extensions.bindings(PanelContributionRequest.class, null).size());
+        assertEquals(1, extensions.bindings(SessionDeleteRequest.class, null).size());
+    }
+
+    @Test
+    @DisplayName("删除会话请求应清掉本会话的待办文件，不留孤儿")
+    void deleteRequest_should_removeTodoFile() throws Exception {
+        writeTool().handle(request());
+        Path file = directory.resolve("s-1.json");
+        assertTrue(Files.exists(file));
+
+        extensions.invoke(extensions.bindings(SessionDeleteRequest.class, null).get(0).getHandler(),
+                new SessionDeleteRequest("s-1"));
+
+        assertFalse(Files.exists(file));
     }
 
     @Test

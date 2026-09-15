@@ -100,6 +100,24 @@ final class TodoStore {
     }
 
     /**
+     * 删除某会话的待办文件并清掉缓存。
+     * <p>
+     * 内核删除会话时经 {@code SessionDeleteRequest} 调到这里：待办按 {@code sessionId} 归属，
+     * 会话没了它的待办文件也就没有意义，留着只会变成孤儿文件。
+     * <p>
+     * 幂等：文件不存在（该会话从没写过待办）时返回 {@code false}，不算失败。
+     *
+     * @param sessionId 会话标识，不可为空白且需可安全作为文件名
+     * @return 确实删掉了返回 {@code true}
+     * @throws JellyfishException 会话标识非法或删除失败时抛出
+     */
+    synchronized boolean delete(String sessionId) {
+        String key = requireSafeFileName(sessionId);
+        cache.remove(key);
+        return deleteIfExists(fileOf(key));
+    }
+
+    /**
      * 取某会话待办文件路径。
      *
      * @param sessionId 会话标识
@@ -135,11 +153,12 @@ final class TodoStore {
      * 删除文件，不存在时静默跳过。
      *
      * @param file 目标文件
+     * @return 确实删掉了返回 {@code true}；文件不存在返回 {@code false}
      * @throws JellyfishException 删除失败时抛出
      */
-    private static void deleteIfExists(Path file) {
+    private static boolean deleteIfExists(Path file) {
         try {
-            Files.deleteIfExists(file);
+            return Files.deleteIfExists(file);
         } catch (IOException e) {
             throw new JellyfishException("删除待办文件失败: " + file + " (" + e.getMessage() + ')', e);
         }

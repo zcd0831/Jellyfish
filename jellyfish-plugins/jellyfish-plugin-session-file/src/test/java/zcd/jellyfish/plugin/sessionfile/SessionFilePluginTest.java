@@ -5,6 +5,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import zcd.jellyfish.api.extension.SessionDeleteRequest;
 import zcd.jellyfish.api.extension.SessionPersistRequest;
 import zcd.jellyfish.api.extension.SessionRestoreRequest;
 import zcd.jellyfish.api.extension.SessionRestoreResult;
@@ -152,6 +153,29 @@ class SessionFilePluginTest {
         assertTrue(Files.exists(tempDir.resolve("session-1.json")));
     }
 
+    @Test
+    @DisplayName("删除请求应清掉会话文件，重启恢复不会再复活")
+    void delete_should_removeFile() {
+        startPlugin(false);
+        persist(TestSnapshots.full("session-1"));
+
+        delete("session-1");
+
+        assertFalse(Files.exists(tempDir.resolve("session-1.json")));
+        assertEquals(0, restore().getSessions().size());
+    }
+
+    @Test
+    @DisplayName("删除不存在的会话文件是幂等的，不抛错")
+    void delete_should_beIdempotentWhenMissing() {
+        startPlugin(false);
+
+        delete("session-1");
+        delete("session-1");
+
+        assertFalse(Files.exists(tempDir.resolve("session-1.json")));
+    }
+
     /**
      * 启动插件，把配置指向临时目录。
      *
@@ -174,6 +198,16 @@ class SessionFilePluginTest {
     private void persist(SessionSnapshot snapshot) {
         extensions.invoke(extensions.handler(SessionPersistRequest.class, null),
                 new SessionPersistRequest(snapshot));
+    }
+
+    /**
+     * 通过注册表派发一次删除请求。
+     *
+     * @param sessionId 会话标识
+     */
+    private void delete(String sessionId) {
+        extensions.invoke(extensions.handler(SessionDeleteRequest.class, null),
+                new SessionDeleteRequest(sessionId));
     }
 
     /**

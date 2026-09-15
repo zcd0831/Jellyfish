@@ -85,6 +85,25 @@ final class SessionStore {
     }
 
     /**
+     * 删除会话文件，文件不存在时静默跳过。
+     * <p>
+     * <b>幂等</b>：删除一个已经没了的会话应当是成功的，{@code deleteIfExists} 正好表达这个语义；
+     * 调用方（插件）据此决定要不要留 git 提交。
+     *
+     * @param sessionId 会话标识
+     * @return 确实删掉了返回 {@code true}；文件本来就不存在返回 {@code false}
+     * @throws JellyfishException 删除失败时抛出（与落盘同为「不可丢」语义）
+     */
+    boolean delete(String sessionId) {
+        Path file = fileOf(sessionId);
+        try {
+            return Files.deleteIfExists(file);
+        } catch (IOException e) {
+            throw new JellyfishException("删除会话文件失败: " + file + " (" + e.getMessage() + ')' , e);
+        }
+    }
+
+    /**
      * 列出目录下全部会话文件。
      *
      * @return 已排序的会话文件路径列表；目录不存在时为空列表

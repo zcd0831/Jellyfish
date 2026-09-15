@@ -705,6 +705,25 @@ T2.1 端到端冒烟时发现原 T5 键位**不可实现**，停下来求证后�
 
 **顺带纠正一处我写错的注释**：`ensureLogDirectory()` 曾以「Log4j2 不建父目录」为由预先建目录，实测**它会自建多级父目录**（`-Djellyfish.log.file=/tmp/a/b/c.log` 能把 `a/b` 一并建出来），因此该方法已删除，不留无用代码与不成立的注释。
 
+### 10.7 终端前置条件 —— **✅ 已裁决（用户批准）**
+
+**问题**：没有可交互终端时 TUI **不报错，而是永久挂住**。实测 `java -jar ... -tui < /dev/null`：JLine 检测不到终端，只往 stderr 打一行 `Unable to create a system terminal`（容易被忽略），随后退化成 dumb 终端；TamboUI 照常进事件循环，`jstack` 停在 `TuiRunner.pollEvent` 等一个永远不会来的事件。用户看到的是「黑屏 + 不退出」，无从判断是环境不对还是自己代码卡死。
+
+**判据**：`System.console() == null`。两种情况下的取值实测对得上：
+
+| 环境 | `System.console()` |
+| --- | --- |
+| 真实终端 / PTY | `java.io.Console@...`（非 null） |
+| 管道 / 无终端（即现在挂住的那种） | `null` |
+
+**已知边界（已确认接受）**：JDK 8 的 `System.console()` 语义是「`stdin` **或** `stdout` 任一被重定向就返回 `null`」（JDK 22 之后才改成只看是否 tty），因此 `-tui > log.txt` 也会被拦下。TUI 本来两个流都要用，拦住是对的。
+
+**裁决**：在 `RunMode` 上加 `checkEnvironment(options)`（默认 `Optional.empty()`，Java 8 default 方法），由 `TuiRunMode` 覆写，`Launcher` 在**启动内核之前**调用；不满足则报错并返回 `STARTUP_ERROR(3)`。退出码取 3 而非 4：它发生在内核启动之前，性质是「启动条件不具备」，与「配置写错」同类，脚本都应当直接放弃。
+
+**保留一个显式逃生门**：`-Djellyfish.tui.skipTerminalCheck=true` 跳过检查。理由是判据可能误伤异常终端或 IDE 的伪终端实现，而误伤的代价是「完全用不了」；显式开关让用户自己担责，与「默默挂住」有本质区别。
+
+**为什么放在 `Launcher` 而不是模式的 `run()` 里**：放进 `run()` 时插件扫描、事件线程、HTTP 客户端池都已经白起过一遍。
+
 ## 11. 落地记录（T2.1 骨架完成）
 
 ### 11.1 交付内容
@@ -779,6 +798,16 @@ T2.1 端到端冒烟时发现原 T5 键位**不可实现**，停下来求证后�
 日志改为绝对路径后复核：写入 `~/jellyfish/jellyfish-tui.log`，`/tmp/jellyfish-tui.log` 不再被更新（CWD 不再被污染）；且 `-Djellyfish.log.file=...` 指向不存在的多级目录时 **Log4j2 自建成功**。
 
 新增 `InputKeyMapperTest`（14 个用例）锁住键位判定：`Ctrl+S`→发送、`Ctrl+C`→退出、`Esc`→中断、**`Enter`/`Shift+Enter`/`Alt+Enter` 一律为编辑**（防回归成「误把 Enter 当发送」）、`Ctrl+非字符键`与`无 Ctrl 的同名字母`不得命中。
+
+### 11.8 终端前置条件检查的验证
+
+| 场景 | 结果 |
+| --- | --- |
+| 无 TTY（`< /dev/null`） | ✅ **1 秒**内报出可执行文案并退 `3`（修复前：永久挂住，`jstack` 停在 `pollEvent`） |
+| 逃生门 `-Djellyfish.tui.skipTerminalCheck=true` | ✅ 跳过检查，恢复到原来的挂住行为（证明开关真的生效，不是摆设） |
+| 真实 PTY | ✅ 进备用屏、`/help` 正常执行、**未被误拦** |
+
+`LauncherTest` 补两条用例：无终端时返回 `STARTUP_ERROR` 且 `bootstrap` **从未被调用**（锁住「自检先于启动内核」）；占位模式仍先返回 `5`（锁住判定顺序，防止将来把自检提到 `isImplemented` 之前）。`TuiTerminalTest` 5 条用例：逃生门开／关语义、文案必须同时包含 `-cli` 与开关名（文案是用户唯一的线索，必须能照着做）。依赖运行环境的断言用 `assumeTrue` 保护，在可交互终端里跑测试时跳过而不是误报。
 
 ### 11.7 仍然存在的已知限制
 

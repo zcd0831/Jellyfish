@@ -49,6 +49,7 @@ echo "/help" | java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -
 | `3` | 启动失败：配置、插件或装配出错 |
 | `4` | 运行失败：回合抛异常，或命令执行失败 |
 | `5` | 模式尚未实现（当前的 `-server`） |
+| `3`（TUI） | TUI 需要可交互终端而当前没有（stdin 或 stdout 被重定向也算） |
 | `6` | 回合未收敛：达到最大轮次仍未给出最终回复 |
 
 单次模式里输入以 `/` 开头就走命令域（`/help` `/model` `/agent` `/new` …），否则走一次 LLM 对话；
@@ -56,11 +57,26 @@ echo "/help" | java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -
 
 ### TUI 模式
 
+> **在 IDEA 里调试**：IDEA 的运行控制台默认不是真终端，直接跑 `-tui` 会命中「需要可交互终端」的检查。
+> 推荐做法是**在真实终端里启动、用 IDEA 远程调试挂接**：
+>
+> ```bash
+> mvn -o package -DskipTests
+> java -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=5005 \
+>      -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -tui
+> ```
+>
+> 然后 `Run → Edit Configurations → + → Remote JVM Debug`（默认就是 5005）→ 点 Debug。
+> 想在启动阶段（DI 装配、`bootstrap`）下断点就把 `suspend=n` 改成 `suspend=y`。
+> IDEA 内置的 Terminal 标签页是真 PTY，也可以直接在那里运行。
+> 若确认终端可用却被拦下，用 `-Djellyfish.tui.skipTerminalCheck=true` 跳过检查。
+
 ```bash
 java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -tui
 ```
 
-需要**真实终端**（备用屏 + raw 模式）；在 IDE 的运行窗口或管道里跑起来后会看到排版异常或直接报错，那时请用 `-cli`。
+需要**可交互终端**（备用屏 + raw 模式）。在管道、CI 或没有终端的环境里启动会**立刻报错并退出 3**，
+不会挂住——修复前它会退化到 dumb 终端后永久等待事件。**在 IDE 里调试请见下方「在 IDEA 里调试」。**
 界面结构：
 
 ```

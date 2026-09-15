@@ -1,5 +1,6 @@
 package zcd.jellyfish.cli;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -16,7 +17,11 @@ import zcd.jellyfish.cli.mode.TuiRunMode;
 import zcd.jellyfish.core.AgentHarness;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.command.CommandManager;
+import zcd.jellyfish.infra.event.EventChannel;
+import zcd.jellyfish.infra.event.EventChannelOptions;
+import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.model.ModelManager;
+import zcd.jellyfish.infra.registry.TypeRegistry;
 import zcd.jellyfish.infra.session.Session;
 import zcd.jellyfish.infra.session.SessionManager;
 
@@ -45,6 +50,20 @@ class LauncherTest {
 
     @Mock
     private JellyfishComponent component;
+
+    /**
+     * 扩展层：TUI 模式装配 {@code UiContributions} 时需要。
+     * <p>
+     * 两者都是 {@code final} 类，本模块没开 inline mock maker，因此只能用真实实例；
+     * 事件通道自建线程池，所以要在 {@link #tearDown()} 里收敛。
+     */
+    private final TypeRegistry typeRegistry = new TypeRegistry();
+
+    /** 真实同步扩展点策略，仅为满足 TUI 装配。 */
+    private final ExtensionRegistry extensionRegistry = new ExtensionRegistry(typeRegistry);
+
+    /** 真实事件通道，仅为满足 TUI 装配。 */
+    private final EventChannel eventChannel = new EventChannel(EventChannelOptions.defaults(), typeRegistry);
 
     @Mock
     private AgentHarness harness;
@@ -225,11 +244,22 @@ class LauncherTest {
     }
 
     /**
-     * 桩上 TUI 真实现需要的门面：比 CLI 多一个模型门面（状态栏展示上下文长度用）。
+     * 收敛真实事件通道的线程池。
+     */
+    @AfterEach
+    void tearDown() {
+        eventChannel.close();
+    }
+
+    /**
+     * 桩上 TUI 真实现需要的门面：比 CLI 多一个模型门面（状态栏展示上下文长度用）与扩展层两个门面
+     * （{@code UiContributions} 的构造输入）。
      */
     private void givenTuiCollaborators() {
         givenRunModeCollaborators();
         when(component.modelManager()).thenReturn(models);
+        when(component.extensionRegistry()).thenReturn(extensionRegistry);
+        when(component.eventChannel()).thenReturn(eventChannel);
     }
 
     /**

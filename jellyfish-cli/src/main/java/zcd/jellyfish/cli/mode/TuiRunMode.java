@@ -8,8 +8,11 @@ import zcd.jellyfish.cli.StartupOptions;
 import zcd.jellyfish.cli.console.ConsoleIO;
 import zcd.jellyfish.core.AgentHarness;
 import zcd.jellyfish.infra.command.CommandManager;
+import zcd.jellyfish.infra.event.EventChannel;
+import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.model.ModelManager;
 import zcd.jellyfish.infra.session.SessionManager;
+import zcd.jellyfish.infra.ui.UiContributions;
 import zcd.jellyfish.tui.TuiApp;
 import zcd.jellyfish.tui.TuiTerminal;
 
@@ -47,6 +50,9 @@ public final class TuiRunMode implements RunMode {
     /** 日志。 */
     private static final Logger LOG = LoggerFactory.getLogger(TuiRunMode.class);
 
+    /** 外壳在事件通道上的订阅来源标识。 */
+    private static final String UI_OWNER = "tui";
+
     /** 智能入口：ReAct 回合的唯一门面。 */
     private final AgentHarness harness;
 
@@ -59,24 +65,34 @@ public final class TuiRunMode implements RunMode {
     /** 模型门面：状态栏展示上下文长度用。 */
     private final ModelManager models;
 
+    /** 同步扩展点策略：构造 UI 贡献门面用。 */
+    private final ExtensionRegistry extensions;
+
+    /** 事件通道：UI 贡献失效订阅用。 */
+    private final EventChannel events;
+
     /** 输出面板：只在进入备用屏之前用于报告启动期错误。 */
     private final ConsoleIO console;
 
     /**
      * 构造 TUI 模式。
      *
-     * @param harness  智能入口，不可为 {@code null}
-     * @param commands 命令域服务，不可为 {@code null}
-     * @param sessions 会话域服务，不可为 {@code null}
-     * @param models   模型门面，不可为 {@code null}
-     * @param console  输出面板，不可为 {@code null}
+     * @param harness    智能入口，不可为 {@code null}
+     * @param commands   命令域服务，不可为 {@code null}
+     * @param sessions   会话域服务，不可为 {@code null}
+     * @param models     模型门面，不可为 {@code null}
+     * @param extensions 同步扩展点策略，不可为 {@code null}
+     * @param events     事件通道，不可为 {@code null}
+     * @param console    输出面板，不可为 {@code null}
      */
     public TuiRunMode(AgentHarness harness, CommandManager commands, SessionManager sessions,
-                      ModelManager models, ConsoleIO console) {
+                      ModelManager models, ExtensionRegistry extensions, EventChannel events, ConsoleIO console) {
         this.harness = Objects.requireNonNull(harness, "harness must not be null");
         this.commands = Objects.requireNonNull(commands, "commands must not be null");
         this.sessions = Objects.requireNonNull(sessions, "sessions must not be null");
         this.models = Objects.requireNonNull(models, "models must not be null");
+        this.extensions = Objects.requireNonNull(extensions, "extensions must not be null");
+        this.events = Objects.requireNonNull(events, "events must not be null");
         this.console = Objects.requireNonNull(console, "console must not be null");
     }
 
@@ -102,8 +118,11 @@ public final class TuiRunMode implements RunMode {
 
     @Override
     public int run(StartupOptions options) {
+        // UI 贡献门面的生命周期归外壳：谁创建谁释放，因此放在这里而不是交给 Dagger 单例
+        // （单例不会被组件自动关闭，订阅就会一直挂着）。
+        UiContributions uiContributions = new UiContributions(extensions, events, UI_OWNER);
         try {
-            new TuiApp(harness, commands, sessions, models).run();
+            new TuiApp(harness, commands, sessions, models, uiContributions).run();
             return ExitCodes.OK;
         } catch (JellyfishException e) {
             // 回合未收敛仍然只算正常结束：它是「答完了但没收敛」，不是执行失败。
@@ -118,6 +137,9 @@ public final class TuiRunMode implements RunMode {
             console.writeErrLine("TUI 启动失败：" + e.getMessage()
                     + "（需要真实终端；请用 -cli 做单次调用）");
             return ExitCodes.RUNTIME_ERROR;
+        } finally {
+            // close 幂等：它只解除本门面建立的订阅，不清空共用注册表（那是插件回收的职责）
+            uiContributions.close();
         }
     }
 }

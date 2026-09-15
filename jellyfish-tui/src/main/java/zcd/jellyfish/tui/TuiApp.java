@@ -25,6 +25,7 @@ import zcd.jellyfish.infra.model.ResolvedModel;
 import zcd.jellyfish.infra.session.Session;
 import zcd.jellyfish.infra.session.SessionManager;
 import zcd.jellyfish.infra.session.SessionMessage;
+import zcd.jellyfish.infra.ui.UiContributions;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -75,8 +76,14 @@ public final class TuiApp extends ToolkitApp {
     /** 模型门面，仅用于状态栏展示上下文长度。 */
     private final ModelManager models;
 
+    /** 插件 UI 贡献门面：收集插件贡献的界面内容，并订阅「可能已过期」。 */
+    private final UiContributions uiContributions;
+
     /** 视图状态。 */
     private final ChatState chatState = new ChatState();
+
+    /** 插件 UI 贡献的帧间缓存：只在失效时收集，空闲时零调用。 */
+    private final UiCache uiCache;
 
     /** 命令补全状态：只由渲染线程读写。 */
     private final CommandCompletion completion = new CommandCompletion();
@@ -108,6 +115,9 @@ public final class TuiApp extends ToolkitApp {
     /** 上一帧显示的会话标识，用于识别会话切换：清掉旧会话的提示并按需重新贴出启动提示。 */
     private String renderedSessionId;
 
+    /** 上一帧是否处于「回合进行中」，用于识别回合收敛并补一次插件内容失效。 */
+    private boolean renderedTurnRunning;
+
     /**
      * 构造 TUI 外壳。
      *
@@ -115,12 +125,16 @@ public final class TuiApp extends ToolkitApp {
      * @param commands 命令域服务，不可为 {@code null}
      * @param sessions 会话域服务，不可为 {@code null}
      * @param models   模型门面，不可为 {@code null}
+     * @param uiContributions 插件 UI 贡献门面，不可为 {@code null}
      */
-    public TuiApp(AgentHarness harness, CommandManager commands, SessionManager sessions, ModelManager models) {
+    public TuiApp(AgentHarness harness, CommandManager commands, SessionManager sessions, ModelManager models,
+                  UiContributions uiContributions) {
         this.harness = Objects.requireNonNull(harness, "harness must not be null");
         this.commands = Objects.requireNonNull(commands, "commands must not be null");
         this.sessions = Objects.requireNonNull(sessions, "sessions must not be null");
         this.models = Objects.requireNonNull(models, "models must not be null");
+        this.uiContributions = Objects.requireNonNull(uiContributions, "uiContributions must not be null");
+        this.uiCache = new UiCache(uiContributions);
         this.input = new ChatInputView(inputKeys);
         this.shell = new ChatShell(input);
     }
@@ -172,6 +186,8 @@ public final class TuiApp extends ToolkitApp {
         // 兼容兼底的全局处理器：只在滚动键没被输入框吃掉时才会收到（焦点丢失等边界情况）。
         // 发送与中断不依赖它——实测全局处理器排在聚焦元素之后，靠它接不到 Enter。
         runner().eventRouter().addGlobalHandler(new ScrollFallback());
+        // 插件改了内容它会主动说一声；回调在事件通道的订阅者线程，因此只置标记不做别的
+        uiContributions.onInvalidated(uiCache::invalidate);
     }
 
     @Override
@@ -189,11 +205,21 @@ public final class TuiApp extends ToolkitApp {
         // 每帧只取一次消息快照：Session.getMessages() 返回防御性副本，重复调用会白白多分配一份
         List<SessionMessage> messages = session == null ? null : session.getMessages();
         syncSession(sessionId, messages);
+        // 回合从「进行中」变为「已收敛」是插件内容最容易过期的时刻（工具刚改完状态），在这里补一次失效。
+        // 终局判定放在渲染线程，因此能覆盖完成 / 报错 / 取消全部收敛路径，不必让三个回调各发一遍。
+        boolean turnRunning = chatState.isTurnRunning();
+        if (renderedTurnRunning && !turnRunning) {
+            uiCache.invalidate();
+        }
+        renderedTurnRunning = turnRunning;
 
         ChatState.View view = chatState.view(sessionId, messages, width, rows,
                 TranscriptProjector.DEFAULT_MAX_MESSAGES);
 
         String status = StatusBarView.render(session, null, contextLengthOf(session));
+        // 插件片段紧跟内核字段：宽度预算按终端总列数算，最后一个装不下的片段整块丢弃
+        status = StatusBarView.appendFragments(status,
+                uiCache.snapshot(sessionId).getStatusFragments(), size.width());
         String hint = view.hiddenBelowHint();
         if (hint != null) {
             // 提示放在状态栏而不是消息区：消息区的行数已被投影切片占满，
@@ -274,6 +300,8 @@ public final class TuiApp extends ToolkitApp {
             chatState.clearNotices();
             chatState.setStartupHint(isBrandNewSession(messages) ? StartupHint.text() : null);
             renderedSessionId = sessionId;
+            // 插件贡献是按会话给的，换了会话必须重新问一遍（UiCache 自己也会比对 sessionId，这里是双保险）
+            uiCache.invalidate();
         }
     }
 
@@ -330,6 +358,9 @@ public final class TuiApp extends ToolkitApp {
         } catch (JellyfishException e) {
             LOG.warn("TUI 命令执行失败：{}", e.getMessage());
             chatState.appendNotice(text, "命令执行失败：" + e.getMessage(), ShellNotice.Kind.ERROR);
+        } finally {
+            // 命令的副作用写在各自的域服务里，插件可能因此改了自家状态：这是外壳能看到的兜底失效点之一
+            uiCache.invalidate();
         }
     }
 
@@ -385,6 +416,8 @@ public final class TuiApp extends ToolkitApp {
     private void startTurn(String text, String sessionId) {
         // 必须先重置暂存区：上一回合的终局若不清掉，投影器会把新回合的流式正文当成「已结束回合」而不显示
         chatState.beginTurn(null);
+        // 回合开始是插件内容可能变化的起点（例如模型马上要改待办），先让下一帧重问一遍
+        uiCache.invalidate();
         TuiReActListener listener = new TuiReActListener(chatState.getInflight());
         try {
             ReActTurn turn = harness.chat(sessionId, text, listener);

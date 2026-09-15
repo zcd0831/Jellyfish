@@ -5,6 +5,8 @@ import zcd.jellyfish.core.AgentHarness;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.command.CommandManager;
 import zcd.jellyfish.infra.config.RuntimeConfig;
+import zcd.jellyfish.infra.event.EventChannel;
+import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.llm.LlmClientFactory;
 import zcd.jellyfish.infra.model.ModelManager;
 import zcd.jellyfish.infra.permission.PermissionManager;
@@ -88,4 +90,24 @@ public interface JellyfishComponent {
      * @return SessionManager
      */
     SessionManager sessionManager();
+
+    /**
+     * 获取同步扩展点策略。
+     * <p>
+     * 调用点是外壳装配：{@code TuiRunMode} 用它构造 {@code UiContributions}——
+     * 「向插件收集界面内容」是外壳对扩展层的唯一需求，外壳本身不直接读注册表。
+     *
+     * @return ExtensionRegistry
+     */
+    ExtensionRegistry extensionRegistry();
+
+    /**
+     * 获取事件通道。
+     * <p>
+     * 调用点是外壳装配：{@code TuiRunMode} 用它构造 {@code UiContributions}，订阅插件发布的
+     * {@code UiInvalidatedEvent} 与内核的 {@code PluginStateChangedEvent}。
+     *
+     * @return EventChannel
+     */
+    EventChannel eventChannel();
 }

@@ -2,6 +2,9 @@ package zcd.jellyfish.tui;
 
 import zcd.jellyfish.infra.session.Session;
 import zcd.jellyfish.infra.session.SessionUsage;
+import zcd.jellyfish.tui.text.DisplayWidth;
+
+import java.util.List;
 
 /**
  * 状态栏：把会话运行态压成一行文本。
@@ -21,7 +24,44 @@ public final class StatusBarView {
     /** 字段分隔符。 */
     private static final String SEPARATOR = " \u00b7 ";
 
+    /** 插件片段与内核字段、片段与片段之间的分隔符（比字段分隔符宽松一点，避免与内核字段混淆）。 */
+    private static final String FRAGMENT_SEPARATOR = "   ";
+
     private StatusBarView() {
+    }
+
+    /**
+     * 把插件贡献的状态栏片段追加到已渲染的状态栏文本之后。
+     * <p>
+     * <b>为什么是「整块丢弃」而不是「截断」</b>：状态栏是一行扫读区域，被切掉一半的片段既读不懂，
+     * 又会让人以为插件坏了；丢掉整块至少语义完整。丢弃从<b>最后一个</b>片段开始——它与
+     * {@code order} 升序呼应：插件声明 order 越小越靠前，也越不容易被丢掉。
+     * <p>
+     * 宽度按终端列数算而不是字符数：片段常含中文（{@code 待办 2/5}），按 {@code length()} 算会低估。
+     *
+     * @param base        已渲染的状态栏文本，可为 {@code null}
+     * @param fragments   插件片段，按 {@code order} 升序；可为 {@code null} 或空
+     * @param terminalWidth 终端总列数；不大于 0 时不做宽度限制
+     * @return 追加后的状态栏文本，保证非 {@code null}
+     */
+    public static String appendFragments(String base, List<String> fragments, int terminalWidth) {
+        String text = base == null ? "" : base;
+        if (fragments == null || fragments.isEmpty()) {
+            return text;
+        }
+        StringBuilder buffer = new StringBuilder(text);
+        for (String fragment : fragments) {
+            if (fragment == null || fragment.isEmpty()) {
+                continue;
+            }
+            String candidate = buffer + FRAGMENT_SEPARATOR + fragment;
+            if (terminalWidth > 0 && DisplayWidth.of(candidate) > terminalWidth) {
+                break;
+            }
+            buffer.setLength(0);
+            buffer.append(candidate);
+        }
+        return buffer.toString();
     }
 
     /**

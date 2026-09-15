@@ -78,7 +78,7 @@ public final class SessionFilePlugin implements JellyfishPlugin {
      * @return 恢复结果，保证非 {@code null}
      */
     private SessionRestoreResult restore(SessionRestoreRequest request) {
-        List<SessionSnapshot> sessions = new ArrayList<SessionSnapshot>();
+        List<SessionSnapshot> sessions = new ArrayList<>();
         for (Path file : store.files()) {
             try {
                 sessions.add(SnapshotJson.read(store.read(file), file.toString()));

@@ -144,7 +144,7 @@ final class GitRepository {
      * @return 退出码与合并输出
      */
     private CommandResult run(String... args) {
-        List<String> command = new ArrayList<String>();
+        List<String> command = new ArrayList<>();
         command.add("git");
         command.add("-c");
         command.add("user.name=" + COMMITTER_NAME);
@@ -209,7 +209,6 @@ final class GitRepository {
                 }
             } catch (IOException e) {
                 // 进程被杀掉时读侧报错是预期内的，没有可恢复动作
-                return;
             }
         }
 

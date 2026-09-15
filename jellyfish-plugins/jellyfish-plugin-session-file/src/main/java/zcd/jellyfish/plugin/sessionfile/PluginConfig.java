@@ -59,7 +59,7 @@ final class PluginConfig {
      * @throws JellyfishException 配置值类型不对或目录非法时抛出
      */
     static PluginConfig from(Map<String, Object> configuration) {
-        Map<String, Object> values = configuration == null ? java.util.Collections.<String, Object>emptyMap()
+        Map<String, Object> values = configuration == null ? java.util.Collections.emptyMap()
                 : configuration;
         return new PluginConfig(resolveDirectory(values.get(KEY_SESSION_DIR)),
                 resolveBoolean(values.get(KEY_GIT_ENABLED), true));

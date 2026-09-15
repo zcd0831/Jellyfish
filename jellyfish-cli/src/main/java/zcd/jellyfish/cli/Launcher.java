@@ -12,6 +12,7 @@ import zcd.jellyfish.cli.mode.TuiRunMode;
 import zcd.jellyfish.core.AgentHarness;
 
 import java.util.Objects;
+import java.util.Optional;
 
 /**
  * 启动模式分发与生命周期宿主：把「选哪个模式」与「内核什么时候起停」这两件事收在一处。
@@ -64,6 +65,8 @@ public final class Launcher {
      * 失败按<b>类别</b>返回不同退出码：内核没起成 {@link ExitCodes#STARTUP_ERROR}、
      * 参数不可满足（{@code --session} / {@code --agent} / {@code --model} 不存在）
      * {@link ExitCodes#USAGE_ERROR}、模式运行中抛出 {@link ExitCodes#RUNTIME_ERROR}。
+     * 模式自报环境不满足（如 TUI 无可交互终端）也归 {@link ExitCodes#STARTUP_ERROR}——它发生在内核启动之前，
+     * 性质是「启动条件不具备」，与「配置写错」属于同一类，脚本都应当直接放弃。
      * 无论哪一类，{@code finally} 都会收敛内核。
      *
      * @param options 启动参数，不可为 {@code null}
@@ -74,6 +77,14 @@ public final class Launcher {
         RunMode mode = modeFor(options);
         if (!mode.isImplemented()) {
             return mode.run(options);
+        }
+        // 环境自检必须排在启动内核之前：不满足时白起插件扫描、事件线程与 HTTP 客户端池毫无意义。
+        // 这一步只做判定，不产生任何需要回收的资源。
+        Optional<String> problem = mode.checkEnvironment(options);
+        if (problem.isPresent()) {
+            LOG.error("环境不满足：{}", problem.get());
+            console.writeErrLine("错误：" + problem.get());
+            return ExitCodes.STARTUP_ERROR;
         }
         AgentHarness harness = component.agentHarness();
         Thread hook = new Thread(harness::shutdown, SHUTDOWN_HOOK_NAME);

@@ -25,6 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
@@ -103,6 +104,29 @@ class LauncherTest {
         assertFalse(mode.isImplemented());
     }
 
+
+    @Test
+    void launch_should_return_startup_error_and_skip_kernel_when_tui_has_no_terminal() {
+        // 无终端时 TUI 会永久挂住（退化到 dumb 终端后等一个永远不来的事件），
+        // 因此必须在启动内核之前就拦下：既给用户一句可执行的报错，也不白起插件扫描与事件线程。
+        assumeTrue(System.console() == null, "当前测试 JVM 有可交互终端，无法验证无终端场景");
+        givenTuiCollaborators();
+
+        int code = launcher.launch(StartupOptions.builder(StartupOptions.Mode.TUI).build());
+
+        assertEquals(ExitCodes.STARTUP_ERROR, code);
+        assertTrue(console.err().contains("-cli"));
+        verify(harness, never()).bootstrap();
+    }
+
+    @Test
+    void launch_should_skip_environment_check_when_server_placeholder_given() {
+        // 占位模式的自检发生在 isImplemented 之后，占位分支应先返回 5；
+        // 这条用例锁住判定顺序，防止将来把自检提到 isImplemented 之前。
+        int code = launcher.launch(StartupOptions.builder(StartupOptions.Mode.SERVER).port(9096).build());
+
+        assertEquals(ExitCodes.NOT_IMPLEMENTED, code);
+    }
 
     @Test
     void launch_should_return_not_implemented_and_skip_kernel_when_server_given() {

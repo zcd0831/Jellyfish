@@ -2,6 +2,8 @@ package zcd.jellyfish.cli.mode;
 
 import zcd.jellyfish.cli.StartupOptions;
 
+import java.util.Optional;
+
 /**
  * 启动模式：一种「谁来驱动 ReAct 回合」的具体做法。
  * <p>
@@ -23,6 +25,24 @@ public interface RunMode {
      * @return 已实现返回 {@code true}；占位实现返回 {@code false}
      */
     boolean isImplemented();
+
+    /**
+     * 运行前环境自检：由模式自己回答「当前环境跑不跑得起来」。
+     * <p>
+     * <b>为什么要单独一步</b>：某些模式对运行环境有硬要求（TUI 需要可交互终端），
+     * 而环境不满足时启动内核是纯浪费——插件扫描、事件线程、HTTP 客户端池都会白起一遍，
+     * 最后才在模式里发现跑不了。因此检查必须发生在 {@code Launcher} 启动内核<b>之前</b>。
+     * <p>
+     * <b>为什么不放在模式自己的 {@code run()} 里</b>：那时内核已经起来了，上面那些代价都已经付过。
+     * <p>
+     * 默认实现认为环境总是满足——多数模式只要求能读写标准流。
+     *
+     * @param options 启动参数，不可为 {@code null}
+     * @return 环境不满足时返回可直接展示给用户的原因；满足时返回 {@link Optional#empty()}
+     */
+    default Optional<String> checkEnvironment(StartupOptions options) {
+        return Optional.empty();
+    }
 
     /**
      * 以本模式运行。

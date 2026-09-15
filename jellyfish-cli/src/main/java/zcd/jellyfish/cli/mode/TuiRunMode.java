@@ -11,8 +11,10 @@ import zcd.jellyfish.infra.command.CommandManager;
 import zcd.jellyfish.infra.model.ModelManager;
 import zcd.jellyfish.infra.session.SessionManager;
 import zcd.jellyfish.tui.TuiApp;
+import zcd.jellyfish.tui.TuiTerminal;
 
 import java.util.Objects;
+import java.util.Optional;
 
 /**
  * TUI 模式：交互式终端界面，用 TamboUI 构建。
@@ -81,6 +83,21 @@ public final class TuiRunMode implements RunMode {
     @Override
     public boolean isImplemented() {
         return true;
+    }
+
+    /**
+     * 检查是否具备可交互终端。
+     * <p>
+     * <b>为什么必须提前拦</b>：终端不满足时 TamboUI <b>不会报错，而是永久挂住</b>——
+     * 退化到 dumb 终端后照常进事件循环，等一个永远不会来的事件，用户只看到「黑屏 + 不退出」。
+     * 详细实测见 {@link TuiTerminal} 类注释。
+     *
+     * @param options 启动参数（本模式不使用）
+     * @return 没有可交互终端时返回原因；否则返回 {@link Optional#empty()}
+     */
+    @Override
+    public Optional<String> checkEnvironment(StartupOptions options) {
+        return TuiTerminal.unsupportedReason();
     }
 
     @Override

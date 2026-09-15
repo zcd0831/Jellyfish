@@ -280,11 +280,12 @@ public final class PermissionPolicy {
     /**
      * @param deniedTools  显式拒绝的工具名，可为 {@code null}
      * @param askTools     需人工审批的工具名，可为 {@code null}
-     * @param allowedTools 允许的工具名（空表示不限制），可为 {@code null}
+     * @param allowedTools 允许的工具名；{@code null} 表示未声明（不限制），非 {@code null} 表示已声明
+     *                     （可为空集合，即全拦）
      */
     public static PermissionPolicy of(Set<String> deniedTools, Set<String> askTools, Set<String> allowedTools);
 
-    /** 是否无策略（三个集合都空）。 */
+    /** 是否无策略（另外两组为空，且允许名单未声明）。 */
     public boolean isEmpty();
 
     /** 显式拒绝？ */
@@ -293,7 +294,7 @@ public final class PermissionPolicy {
     /** 需审批？ */
     public boolean requiresApproval(String toolName);
 
-    /** 允许？allowedTools 为空表示不限制。 */
+    /** 允许？allowedTools 未声明（{@code null}）表示不限制；已声明时只放行命中项（空集合即全拦）。 */
     public boolean allows(String toolName);
 }
 ```
@@ -584,7 +585,7 @@ private static PermissionDecision resolveApproval(PermissionDecision decision) {
 | `PermissionVetoTest` | `none()` / `deny()` 两态工厂、`isDenied`、`reason` 可空；**不存在 ask 工厂**（编译期约束由签名保证） |
 | `PermissionCheckRequestTest` | `getRouteKey()` 为 `null`；`arguments` 只读且非空；`mode` 缺省为 NORMAL；`toolName` 空白抛 `JellyfishException`；`agentId`/`sessionId` 透传 |
 | `PermissionDecidedEventTest` | 字段（含 `source`）透传、`belongsToSession` |
-| `PermissionPolicyTest` | `@ParameterizedTest` 覆盖三集合语义矩阵：显式拒绝优先、ask 次之、allowed 收窄、全空 = 不限制 |
+| `PermissionPolicyTest` | `@ParameterizedTest` 覆盖三集合语义矩阵：显式拒绝优先、ask 次之、allowed 收窄、未声明 = 不限制、声明为空 = 全拦 |
 | `ReadOnlyToolsTest` | 多插件合并；非 `List` 值 / 非 `String` 项 / 空白项容错并各发一条 `ConfigWarningEvent`；无配置时为空集合 |
 | `PermissionManagerTest` | ① 无策略 → ALLOW；② 显式拒绝 → DENY 且**不查询**插件；③ ask → **DENY**（降级）+ reason 含降级说明；④ allowed 收窄 → DENY；⑤ PLAN + 只读 → ALLOW；⑥ PLAN + 非只读 → DENY；⑦ PLAN + 白名单为空 → **DENY**；⑧ 核心 ALLOW + 插件 deny → DENY 且短路（后续 handler 不被调用）；⑨ 核心 ASK + 插件 deny → DENY（source 为 pluginId）；⑩ 插件 `none()` / `null` → 无异议；⑪ 插件抛 `RuntimeException` → 放行（无异议）+ WARN；⑫ **每次判定都发一条审计事件（含 ALLOW）**；⑬ 审计发布抛异常不影响判定返回值；⑭ `source` 归因：核心判定为 `"core"`、插件拦截为 pluginId |
 | `HandlerBindingTest` | getter 透传、owner 空白 / handler 为 `null` 的入参校验 |

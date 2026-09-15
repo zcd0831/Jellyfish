@@ -67,6 +67,23 @@ class PluginsSettingsTest {
     }
 
     @Test
+    void isEnabledDeclared_should_distinguish_absent_from_declared_empty() {
+        // When / Then：未声明表示不额外限定，声明为空表示一个都不启用
+        assertFalse(new PluginsSettings(null, null, null).isEnabledDeclared());
+
+        PluginsSettings declaredEmpty = new PluginsSettings(Collections.<String>emptyList(), null, null);
+        assertTrue(declaredEmpty.isEnabledDeclared());
+        assertTrue(declaredEmpty.getEnabled().isEmpty());
+    }
+
+    @Test
+    void isEmpty_should_be_false_when_any_list_declared_empty() {
+        // Given / When / Then：显式写了空数组也算配过
+        assertFalse(new PluginsSettings(Collections.<String>emptyList(), null, null).isEmpty());
+        assertFalse(new PluginsSettings(null, Collections.<String>emptyList(), null).isEmpty());
+    }
+
+    @Test
     void deserialization_should_bind_three_sections() {
         // Given
         String json = "{\"enabled\":[\"plugin-a\"],\"disabled\":[\"plugin-b\"],"
@@ -106,5 +123,21 @@ class PluginsSettingsTest {
         // Then
         assertTrue(settings.isEmpty());
         assertEquals(Arrays.asList(), settings.getEnabled());
+        assertFalse(settings.isEnabledDeclared());
+    }
+
+    @Test
+    void deserialization_should_keep_declared_empty_lists() {
+        // Given：空数组必须与「字段缺失」区别开，否则会被读成未配置而把所有插件放进
+        String json = "{\"enabled\":[],\"disabled\":[]}";
+
+        // When
+        PluginsSettings settings = ObjectMapperWrapper.readValue(json, PluginsSettings.class);
+
+        // Then
+        assertTrue(settings.isEnabledDeclared());
+        assertTrue(settings.isDisabledDeclared());
+        assertTrue(settings.getEnabled().isEmpty());
+        assertFalse(settings.isEmpty());
     }
 }

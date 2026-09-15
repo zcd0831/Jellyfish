@@ -191,14 +191,14 @@ CSI-u 等所有「带修饰的 Enter」编码都无法被底层框架区分（�
     "coder": {
       "description": "通用编码助手",
       "permissions": {
-        "deniedTools": ["write_file", "edit_file"],
-        "askTools": [],
-        "allowedTools": []
+        "deniedTools": ["write_file", "edit_file"]
       }
     }
   }
 }
 ```
+
+三段工具名的语义是：**字段缺失 = 不限制**，显式写 `[]` = 该方向上一个都不放行（`allowedTools: []` 就是全拦，`enabled` / `deniedTools` 同理）。因此想表达「只显式拒绝两个工具、其余不限制」就**不要**写 `"allowedTools": []`，直接省略该字段。
 
 上例的 `coder` 还需要一份 `coder.md`（与 `agents.json` 同目录），内容就是它的系统提示词，可以是多段长文。
 
@@ -219,8 +219,6 @@ CSI-u 等所有「带修饰的 Enter」编码都无法被底层框架区分（�
 ```json
 {
   "plugins": {
-    "enabled": [],
-    "disabled": [],
     "configurations": {
       "jellyfish-tools": { "readOnlyTools": ["read_file", "list_dir"] }
     }
@@ -239,7 +237,7 @@ CSI-u 等所有「带修饰的 Enter」编码都无法被底层框架区分（�
 
 - **插值**：只有字符串值里的 `${VAR}` 会被替换为环境变量（`${VAR:-default}` 可取默认值，`\${VAR}` 转义为字面量），JSON 的 key 不替换。`{agentId}.md` 提示词是**原文**，不做模板插值。
 - **路径**：`~` 与 `~/` 展开为用户主目录（`~other/...` 这种指定其他用户的形式不展开）；两条路径都支持。项目级路径相对**进程工作目录**解析，不是相对 jar 位置。文件不存在视为「该源未配置」，静默跳过（这是 `globalPath` 与 `projectPath` 可以同时配上、缺哪份就少哪份的原因）。`config.json` 的 `plugins.roots` 同样支持 `~` 与相对路径，语义一致。
-- **合并**：同名 `provider` / `agent` / 插件配置段以项目级**整对象**覆盖全局级，agent 的提示词 md 也随来源一起覆盖；`defaultProvider` / `defaultModel` 取项目级非空值，否则回退全局级；`react` 段项目级整对象覆盖全局级；启用 / 禁用名单项目级非空则**整体替换**（不做并集）。`plugins.roots` 只在 `config.json` 一处，不参与双源合并。
+- **合并**：同名 `provider` / `agent` / 插件配置段以项目级**整对象**覆盖全局级，agent 的提示词 md 也随来源一起覆盖；`defaultProvider` / `defaultModel` 取项目级非空值，否则回退全局级；`react` 段项目级整对象覆盖全局级；启用 / 禁用名单项目级**已声明则整体替换**（写 `[]` 即清空该名单，不做并集）。`plugins.roots` 只在 `config.json` 一处，不参与双源合并。
 - **agent 提示词**：每个 agent（包括内置的系统 agent）的系统提示词来自与配置文件同目录的 `{agentId}.md`；`agentId` 同时是文件名，因此不能含路径分隔符或 `..`（含这类字符的条目会被整条丢弃并告警）。文件不存在不阻断启动，只有用户 `/agent` 切过去时才提示「该 agent 没有系统提示词」。
 - **容错**：配置缺失或可疑只发配置告警事件，不中断启动；真正用到时才报错。
 - **不要提交密钥**：`apiKey` 等敏感值通过环境变量注入，不要落到配置文件里。

@@ -14,6 +14,7 @@ import java.util.Map;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -42,6 +43,7 @@ class PluginRuntimeConfigTest {
         assertTrue(config.getEnabledPluginIds().isEmpty());
         assertTrue(config.getDisabledPluginIds().isEmpty());
         assertTrue(config.getPluginConfigurations().isEmpty());
+        assertFalse(config.isEnabledPluginIdsDeclared());
     }
 
     @Test
@@ -123,6 +125,31 @@ class PluginRuntimeConfigTest {
 
         // Then
         assertEquals(Collections.singletonList(Paths.get("root-a")), config.getPluginsRoots());
+    }
+
+    @Test
+    void refresh_should_keep_declared_empty_enabled_list() {
+        // Given："enabled": [] 表示一个都不启用，不能被归一成「未声明」
+        PluginRuntimeConfig config = PluginRuntimeConfig.defaults();
+
+        // When
+        config.refresh(null, new PluginsSettings(Collections.<String>emptyList(), null, null));
+
+        // Then
+        assertTrue(config.getEnabledPluginIds().isEmpty());
+        assertTrue(config.isEnabledPluginIdsDeclared());
+    }
+
+    @Test
+    void refresh_should_treat_null_enabled_list_as_undeclared() {
+        // Given
+        PluginRuntimeConfig config = PluginRuntimeConfig.defaults();
+
+        // When
+        config.refresh(null, new PluginsSettings(null, null, null));
+
+        // Then
+        assertFalse(config.isEnabledPluginIdsDeclared());
     }
 
     @Test

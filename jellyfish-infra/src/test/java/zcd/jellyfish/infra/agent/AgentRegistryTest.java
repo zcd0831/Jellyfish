@@ -106,6 +106,22 @@ class AgentRegistryTest {
     }
 
     @Test
+    void policyOf_should_deny_everything_when_allow_list_declared_empty() {
+        // Given："allowedTools": [] 是「一个都不允许」，不能被当成「未配置」而全放行
+        AgentRegistry registry = new AgentRegistry(events);
+
+        // When
+        registry.refresh(settings(definition(CODER,
+                new AgentPermissions(null, null, Collections.<String>emptyList()))), null);
+
+        // Then
+        PermissionPolicy policy = registry.policyOf(CODER);
+        assertFalse(policy.isEmpty());
+        assertFalse(policy.allows("bash"));
+        assertFalse(policy.allows(null));
+    }
+
+    @Test
     void refresh_should_replace_previous_entries_wholesale() {
         // Given
         AgentRegistry registry = new AgentRegistry(events);

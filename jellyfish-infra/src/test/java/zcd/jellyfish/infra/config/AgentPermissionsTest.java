@@ -40,6 +40,23 @@ class AgentPermissionsTest {
     }
 
     @Test
+    void isEmpty_should_be_false_when_allow_list_declared_empty() {
+        // Given：显式声明允许名单为空表示「一个都不允许」，不是「未配置」
+        AgentPermissions permissions = new AgentPermissions(null, null, Collections.<String>emptyList());
+
+        // Then
+        assertFalse(permissions.isEmpty());
+    }
+
+    @Test
+    void isAllowListDeclared_should_distinguish_absent_from_declared_empty() {
+        // When / Then
+        assertFalse(new AgentPermissions(null, null, null).isAllowListDeclared());
+        assertTrue(new AgentPermissions(null, null, Collections.<String>emptyList()).isAllowListDeclared());
+        assertTrue(new AgentPermissions(null, null, Collections.singletonList("read_file")).isAllowListDeclared());
+    }
+
+    @Test
     void getDeniedTools_should_return_unmodifiable_list() {
         // Given
         AgentPermissions permissions = new AgentPermissions(Collections.singletonList("bash"), null, null);
@@ -102,5 +119,20 @@ class AgentPermissionsTest {
 
         // Then
         assertTrue(permissions.isEmpty());
+        assertFalse(permissions.isAllowListDeclared());
+    }
+
+    @Test
+    void deserialization_should_keep_declared_empty_allow_list() {
+        // Given：空数组必须与「字段缺失」区别开，否则会被读成未配置而全放行
+        String json = "{\"allowedTools\":[]}";
+
+        // When
+        AgentPermissions permissions = ObjectMapperWrapper.readValue(json, AgentPermissions.class);
+
+        // Then
+        assertTrue(permissions.isAllowListDeclared());
+        assertFalse(permissions.isEmpty());
+        assertTrue(permissions.getAllowedTools().isEmpty());
     }
 }

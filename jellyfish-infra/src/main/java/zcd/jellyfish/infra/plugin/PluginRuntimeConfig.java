@@ -40,10 +40,14 @@ public final class PluginRuntimeConfig {
 
     /**
      * 构造装配输入。
+     * <p>
+     * 两个名单入参的 {@code null} 与空集合语义不同：{@code null} 表示未声明（不额外限定），
+     * 空集合表示已声明为空。启用名单声明为空即「一个都不启用」，与 {@code jellyfish.json} 里写
+     * {@code "enabled": []} 一致。
      *
      * @param pluginsRoots         插件根目录，为 {@code null} 或空时回退到 {@link #DEFAULT_PLUGINS_ROOT}
-     * @param enabledPluginIds     启用名单，可为 {@code null}
-     * @param disabledPluginIds    禁用名单，可为 {@code null}
+     * @param enabledPluginIds     启用名单，为 {@code null} 表示未声明
+     * @param disabledPluginIds    禁用名单，为 {@code null} 表示未声明
      * @param pluginConfigurations 插件配置段，可为 {@code null}
      */
     public PluginRuntimeConfig(List<Path> pluginsRoots, Set<String> enabledPluginIds,
@@ -92,8 +96,12 @@ public final class PluginRuntimeConfig {
             this.snapshot = Snapshot.of(pluginsRoots, null, null, null);
             return;
         }
-        this.snapshot = Snapshot.of(pluginsRoots, new LinkedHashSet<>(settings.getEnabled()),
-                new LinkedHashSet<>(settings.getDisabled()), settings.getConfigurations());
+        // 未声明的名单传 null（不额外限定），声明的名单（哪怕是空列表）传集合：
+        // 「enabled 声明为空」就是「一个都不启用」，不能被归一成「未声明」
+        this.snapshot = Snapshot.of(pluginsRoots,
+                settings.isEnabledDeclared() ? new LinkedHashSet<>(settings.getEnabled()) : null,
+                settings.isDisabledDeclared() ? new LinkedHashSet<>(settings.getDisabled()) : null,
+                settings.getConfigurations());
     }
 
     /**
@@ -107,11 +115,26 @@ public final class PluginRuntimeConfig {
 
     /**
      * 获取启用名单。
+     * <p>
+     * 空集合的含义由 {@link #isEnabledPluginIdsDeclared()} 区分：未声明表示不额外限定，
+     * 已声明为空表示一个都不启用。
      *
-     * @return 不可变集合，为空表示不额外限定
+     * @return 不可变集合，未声明时为空集合
      */
     public Set<String> getEnabledPluginIds() {
         return snapshot.enabledPluginIds;
+    }
+
+    /**
+     * 判断启用名单是否被显式声明。
+     * <p>
+     * 未声明（{@code null}）表示不额外限定；声明为空集合表示一个都不启用。两者必须能区分，
+     * 否则 {@code "enabled": []} 会被当成「未配置」而把全部插件加载进来。
+     *
+     * @return 配置里声明了启用名单（哪怕是空列表）返回 {@code true}
+     */
+    public boolean isEnabledPluginIdsDeclared() {
+        return snapshot.enabledPluginIdsDeclared;
     }
 
     /**
@@ -159,8 +182,11 @@ public final class PluginRuntimeConfig {
         /** 插件根目录，至少一个元素。 */
         private final List<Path> pluginsRoots;
 
-        /** 启用名单，空表示不额外限定。 */
+        /** 启用名单，未声明时为空集合（语义由 {@link #enabledPluginIdsDeclared} 区分）。 */
         private final Set<String> enabledPluginIds;
+
+        /** 启用名单是否被显式声明；声明为空表示一个都不启用。 */
+        private final boolean enabledPluginIdsDeclared;
 
         /** 禁用名单。 */
         private final Set<String> disabledPluginIds;
@@ -171,15 +197,18 @@ public final class PluginRuntimeConfig {
         /**
          * 构造快照。
          *
-         * @param pluginsRoots         插件根目录
-         * @param enabledPluginIds     启用名单
-         * @param disabledPluginIds    禁用名单
-         * @param pluginConfigurations 插件配置段
+         * @param pluginsRoots             插件根目录
+         * @param enabledPluginIds         启用名单
+         * @param enabledPluginIdsDeclared 启用名单是否被显式声明
+         * @param disabledPluginIds        禁用名单
+         * @param pluginConfigurations     插件配置段
          */
-        private Snapshot(List<Path> pluginsRoots, Set<String> enabledPluginIds, Set<String> disabledPluginIds,
+        private Snapshot(List<Path> pluginsRoots, Set<String> enabledPluginIds,
+                         boolean enabledPluginIdsDeclared, Set<String> disabledPluginIds,
                          Map<String, Map<String, Object>> pluginConfigurations) {
             this.pluginsRoots = pluginsRoots;
             this.enabledPluginIds = enabledPluginIds;
+            this.enabledPluginIdsDeclared = enabledPluginIdsDeclared;
             this.disabledPluginIds = disabledPluginIds;
             this.pluginConfigurations = pluginConfigurations;
         }
@@ -188,7 +217,7 @@ public final class PluginRuntimeConfig {
          * 构造不可变快照，并统一各段缺省语义。
          *
          * @param roots          插件根目录，为 {@code null} 或空时回退默认目录
-         * @param enabled        启用名单，可为 {@code null}
+         * @param enabled        启用名单，为 {@code null} 表示未声明（不额外限定）
          * @param disabled       禁用名单，可为 {@code null}
          * @param configurations 插件配置段，可为 {@code null}
          * @return 不可变快照
@@ -202,6 +231,7 @@ public final class PluginRuntimeConfig {
                     enabled == null
                             ? Collections.<String>emptySet()
                             : Collections.unmodifiableSet(new LinkedHashSet<>(enabled)),
+                    enabled != null,
                     disabled == null
                             ? Collections.<String>emptySet()
                             : Collections.unmodifiableSet(new LinkedHashSet<>(disabled)),

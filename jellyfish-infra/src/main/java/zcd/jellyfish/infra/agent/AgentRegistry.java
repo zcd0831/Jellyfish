@@ -16,6 +16,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * agent 定义与权限策略的只读索引。
@@ -162,6 +163,7 @@ public final class AgentRegistry {
      * 把权限段转换成内核判定用的策略。
      * <p>
      * 空白项与重复项由 {@link PermissionPolicy#of} 统一处理，这里不重复过滤——配置写错不该被悄悄修好。
+     * 允许名单的「未声明」与「声明为空」必须分开传递：前者不限制，后者一个都不放行。
      *
      * @param definition agent 定义
      * @return 权限策略；未声明任何授权时返回 {@link PermissionPolicy#unrestricted()}
@@ -171,9 +173,12 @@ public final class AgentRegistry {
         if (permissions == null || permissions.isEmpty()) {
             return PermissionPolicy.unrestricted();
         }
+        // 未声明允许名单时传 null（不限制）；声明了（哪怕是空数组）就传集合，空集合即全拦
+        Set<String> allowedTools = permissions.isAllowListDeclared()
+                ? new LinkedHashSet<>(permissions.getAllowedTools())
+                : null;
         return PermissionPolicy.of(new LinkedHashSet<>(permissions.getDeniedTools()),
-                new LinkedHashSet<>(permissions.getAskTools()),
-                new LinkedHashSet<>(permissions.getAllowedTools()));
+                new LinkedHashSet<>(permissions.getAskTools()), allowedTools);
     }
 
     /**

@@ -48,6 +48,29 @@ class ConfigPluginStatusProviderTest {
     }
 
     @Test
+    void isPluginDisabled_should_return_true_when_enabled_list_declared_empty() {
+        // Given：显式写 "enabled": [] 表示一个都不启用，而不是「不额外限定」
+        ConfigPluginStatusProvider provider = new ConfigPluginStatusProvider(
+                config(Collections.<String>emptySet(), null));
+
+        // Then
+        assertTrue(provider.isPluginDisabled("anything"));
+    }
+
+    @Test
+    void isPluginDisabled_should_return_false_when_runtime_enable_overrides_declared_empty_list() {
+        // Given
+        ConfigPluginStatusProvider provider = new ConfigPluginStatusProvider(
+                config(Collections.<String>emptySet(), null));
+
+        // When
+        provider.enablePlugin("a");
+
+        // Then
+        assertFalse(provider.isPluginDisabled("a"));
+    }
+
+    @Test
     void isPluginDisabled_should_return_true_when_runtime_disabled() {
         // Given
         ConfigPluginStatusProvider provider = new ConfigPluginStatusProvider(

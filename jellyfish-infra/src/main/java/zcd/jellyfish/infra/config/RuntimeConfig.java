@@ -20,6 +20,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.function.BinaryOperator;
 import java.util.function.Function;
+import java.util.function.Predicate;
 
 /**
  * 运行时配置门面：统一负责所有配置文件的「全局级 + 项目级」双源读取与合并。
@@ -460,8 +461,8 @@ public class RuntimeConfig {
         // 同名插件配置段整对象替换：`readOnlyTools` 这类声明必须整段生效或整段不生效，不能半新半旧
         putPluginConfigurations(configurations, project);
         return new PluginsSettings(
-                listOverride(project, global, PluginsSettings::getEnabled),
-                listOverride(project, global, PluginsSettings::getDisabled),
+                listOverride(project, global, PluginsSettings::isEnabledDeclared, PluginsSettings::getEnabled),
+                listOverride(project, global, PluginsSettings::isDisabledDeclared, PluginsSettings::getDisabled),
                 configurations);
     }
 
@@ -523,20 +524,23 @@ public class RuntimeConfig {
     }
 
     /**
-     * 取项目级非空列表，缺省时回退全局级。
+     * 取「已声明」的项目级列表，未声明时回退全局级。
      * <p>
-     * 列表语义为「非空则整体替换」而不是并集：并集会让「项目级想收窄」做不到，
-     * 而启用 / 禁用名单恰恰是最需要收窄的两段。
+     * 判据是「有没有声明」而不是「非空」：项目级显式写 {@code []} 的语义是「本层一个都不要」，
+     * 按非空判断会把它当成未配置而回退全局级，用户就没法在项目里收窄掉全局名单。
+     * 与「非空则整体替换」一致的地方是：仍然不做并集，因为合并会让「收窄」做不到。
      *
      * @param project  项目级插件段，可为 {@code null}
      * @param global   全局级插件段，可为 {@code null}
+     * @param declared 声明判定函数
      * @param accessor 取值函数
-     * @return 项目级非空列表，否则全局级列表
-     */    private static List<String> listOverride(PluginsSettings project, PluginsSettings global,
+     * @return 项目级已声明的列表，否则全局级列表（可能为 {@code null}）
+     */
+    private static List<String> listOverride(PluginsSettings project, PluginsSettings global,
+                                             Predicate<PluginsSettings> declared,
                                              Function<PluginsSettings, List<String>> accessor) {
-        List<String> projectValue = project == null ? null : accessor.apply(project);
-        if (projectValue != null && !projectValue.isEmpty()) {
-            return projectValue;
+        if (project != null && declared.test(project)) {
+            return accessor.apply(project);
         }
         return global == null ? null : accessor.apply(global);
     }

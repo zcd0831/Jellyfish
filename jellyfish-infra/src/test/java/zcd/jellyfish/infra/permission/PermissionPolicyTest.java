@@ -36,7 +36,18 @@ class PermissionPolicyTest {
         // When / Then
         assertTrue(PermissionPolicy.of(null, null, null).isEmpty());
         assertTrue(PermissionPolicy.of(Collections.<String>emptySet(), Collections.<String>emptySet(),
-                Collections.<String>emptySet()).isEmpty());
+                null).isEmpty());
+    }
+
+    @Test
+    void of_should_report_not_empty_and_deny_everything_when_allow_list_declared_empty() {
+        // When：允许名单已声明但为空，语义是「一个都不允许」而不是「不限制」
+        PermissionPolicy policy = PermissionPolicy.of(null, null, Collections.<String>emptySet());
+
+        // Then
+        assertFalse(policy.isEmpty());
+        assertFalse(policy.allows("read_file"));
+        assertFalse(policy.allows(null));
     }
 
     @Test
@@ -79,8 +90,8 @@ class PermissionPolicyTest {
     }
 
     @Test
-    void allows_should_allow_any_tool_when_allow_list_empty() {
-        // Given：允许集合为空表示「不限制」，即使其它集合非空也不影响
+    void allows_should_allow_any_tool_when_allow_list_not_declared() {
+        // Given：允许名单未声明（null）表示「不限制」，即使其它集合非空也不影响
         PermissionPolicy policy = PermissionPolicy.of(setOf("bash"), null, null);
 
         // Then

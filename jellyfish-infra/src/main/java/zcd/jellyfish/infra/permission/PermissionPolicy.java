@@ -10,7 +10,11 @@ import java.util.Set;
  * 只表达「授权态度」，不感知会话模式、插件拦截与审计：PLAN 模式与只读白名单由
  * {@code PermissionManager} 在调用点组合，插件拦截走扩展层，三者互不侵入。
  * <p>
- * 三个集合都为空表示「无策略」，内核按 fail-open 放行。判定优先级固定为
+ * <b>「未声明」与「声明为空」是两回事</b>：三个集合中只有允许名单需要区分。未声明（{@code null}）
+ * 表示「不限制」；已声明（非 {@code null}，哪怕空集合）表示「只放行命中项」，因此声明为空数组就是
+ * 「一个都不允许」。另外两组为空时本来就是无操作，无需区分。
+ * <p>
+ * 三个集合都未声明表示「无策略」，内核按 fail-open 放行。判定优先级固定为
  * 「显式拒绝 &gt; 需审批 &gt; 允许范围收窄」，因此同一个工具既出现在 {@code deniedTools}
  * 又出现在 {@code allowedTools} 时结论是拒绝——收窄永远优先于放宽。
  * <p>
@@ -29,7 +33,7 @@ public final class PermissionPolicy {
     /** 需要人工审批的工具名。 */
     private final Set<String> askTools;
 
-    /** 允许的工具名，为空表示不限制。 */
+    /** 允许的工具名；{@code null} 表示未声明（不限制），非 {@code null} 时只放行命中项（空集合即全拦）。 */
     private final Set<String> allowedTools;
 
     /**
@@ -37,12 +41,14 @@ public final class PermissionPolicy {
      *
      * @param deniedTools  显式拒绝的工具名，可为 {@code null}
      * @param askTools     需要人工审批的工具名，可为 {@code null}
-     * @param allowedTools 允许的工具名，可为 {@code null}
+     * @param allowedTools 允许的工具名，可为 {@code null}（未声明，表示不限制）
      */
     private PermissionPolicy(Set<String> deniedTools, Set<String> askTools, Set<String> allowedTools) {
         this.deniedTools = copyOf(deniedTools);
         this.askTools = copyOf(askTools);
-        this.allowedTools = copyOf(allowedTools);
+        // 允许集合保留 null：null = 未声明（不限制），非 null（含空集合）= 已声明（空集合即全拦）。
+        // 这里不能像另外两组那样把 null 归一成空集合，否则「声明为空」会退化成「未声明」而全放行。
+        this.allowedTools = allowedTools == null ? null : copyOf(allowedTools);
     }
 
     /**
@@ -59,7 +65,8 @@ public final class PermissionPolicy {
      *
      * @param deniedTools  显式拒绝的工具名，可为 {@code null}
      * @param askTools     需要人工审批的工具名，可为 {@code null}
-     * @param allowedTools 允许的工具名，为空表示不限制，可为 {@code null}
+     * @param allowedTools 允许的工具名；{@code null} 表示未声明（不限制），非 {@code null} 表示已声明
+     *                     （可为空集合，即全拦）
      * @return 策略
      */
     public static PermissionPolicy of(Set<String> deniedTools, Set<String> askTools, Set<String> allowedTools) {
@@ -67,12 +74,12 @@ public final class PermissionPolicy {
     }
 
     /**
-     * 判断是否无策略（三个集合都为空）。
+     * 判断是否无策略（另外两组为空，且允许名单未声明）。
      *
      * @return 无策略返回 {@code true}
      */
     public boolean isEmpty() {
-        return deniedTools.isEmpty() && askTools.isEmpty() && allowedTools.isEmpty();
+        return deniedTools.isEmpty() && askTools.isEmpty() && allowedTools == null;
     }
 
     /**
@@ -98,13 +105,14 @@ public final class PermissionPolicy {
     /**
      * 判断工具是否在允许范围内。
      * <p>
-     * 允许集合为空表示「不限制」，此时一律返回 {@code true}；非空时只放行命中项。
+     * 允许名单未声明（{@code null}）表示「不限制」，此时一律返回 {@code true}；已声明时只放行命中项，
+     * 因此声明为空集合就是「一个都不允许」。
      *
      * @param toolName 工具名，可为 {@code null}
      * @return 在允许范围内返回 {@code true}
      */
     public boolean allows(String toolName) {
-        return allowedTools.isEmpty() || (toolName != null && allowedTools.contains(toolName));
+        return allowedTools == null || (toolName != null && allowedTools.contains(toolName));
     }
 
     /**

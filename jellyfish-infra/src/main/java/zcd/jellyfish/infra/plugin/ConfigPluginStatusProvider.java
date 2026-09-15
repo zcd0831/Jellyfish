@@ -18,14 +18,20 @@ import java.util.concurrent.ConcurrentHashMap;
  *     <li><b>运行期开关优先于配置</b>：显式启用能覆盖「不在启用名单内」这一判定，
  *     否则用户在运行期执行「启用」将永远不会生效。</li>
  * </ol>
+ * <b>启用名单「未声明」与「声明为空」不是一回事</b>：未声明表示不额外限定（全部启用），
+ * 声明为空表示一个都不启用。两者若归一成同一个空集合，{@code "enabled": []} 会把全部插件放进来。
+ * <p>
  * 判定与运行期开关分别用并发集合与构造后不再修改的普通集合承载，读路径无需加锁。
  *
  * @author zcd
  */
 public final class ConfigPluginStatusProvider implements PluginStatusProvider {
 
-    /** 配置中的启用名单（空表示不额外限定），构造后不再修改。 */
+    /** 配置中的启用名单（未声明时不构成限制），构造后不再修改。 */
     private final Set<String> configuredEnabled = new LinkedHashSet<>();
+
+    /** 配置里是否声明了启用名单；声明为空表示一个插件都不启用。 */
+    private boolean enabledConfigured;
 
     /** 配置中的禁用名单，构造后不再修改。 */
     private final Set<String> configuredDisabled = new LinkedHashSet<>();
@@ -62,6 +68,7 @@ public final class ConfigPluginStatusProvider implements PluginStatusProvider {
     void attach(PluginRuntimeConfig config) {
         configuredEnabled.clear();
         configuredEnabled.addAll(config.getEnabledPluginIds());
+        enabledConfigured = config.isEnabledPluginIdsDeclared();
         configuredDisabled.clear();
         configuredDisabled.addAll(config.getDisabledPluginIds());
     }
@@ -77,7 +84,8 @@ public final class ConfigPluginStatusProvider implements PluginStatusProvider {
         if (configuredDisabled.contains(pluginId)) {
             return true;
         }
-        return !configuredEnabled.isEmpty() && !configuredEnabled.contains(pluginId);
+        // 声明了启用名单就是一个白名单（空名单 → 全部禁用）；未声明才是不额外限定
+        return enabledConfigured && !configuredEnabled.contains(pluginId);
     }
 
     @Override

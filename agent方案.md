@@ -150,21 +150,24 @@ public final class AgentPermissions {
      *
      * @param deniedTools  显式拒绝的工具名，可为 {@code null} 或空
      * @param askTools     需人工审批的工具名，可为 {@code null} 或空
-     * @param allowedTools 允许的工具名（空表示不限制），可为 {@code null}
+     * @param allowedTools 允许的工具名；{@code null} 表示未声明（不限制），空数组表示一个都不允许
      */
     @JsonCreator
     public AgentPermissions(@JsonProperty("deniedTools") List<String> deniedTools,
                             @JsonProperty("askTools") List<String> askTools,
                             @JsonProperty("allowedTools") List<String> allowedTools) {
-        // 内部一律转成不可变 List，缺省为空列表
+        // 内部一律转成不可变 List，缺省为空列表；「是否声明」另记一位
     }
 
     public List<String> getDeniedTools();
     public List<String> getAskTools();
     public List<String> getAllowedTools();
 
-    /** 三组都为空表示「无声明」。 */
+    /** 三组都没写表示「无声明」；{@code "allowedTools": []} 算已声明，因此不算无声明。 */
     public boolean isEmpty();
+
+    /** 允许名单是否被显式声明：未声明不限制，声明为空则一个都不允许。 */
+    public boolean isAllowListDeclared();
 
     @Override
     public String toString();
@@ -239,7 +242,7 @@ public final class PluginsSettings {
     /**
      * 反序列化与合并共用的构造器。
      *
-     * @param enabled        启用名单，可为 {@code null}
+     * @param enabled        启用名单；{@code null} 表示未声明（不额外限定），空数组表示一个都不启用
      * @param disabled       禁用名单，可为 {@code null}
      * @param configurations pluginId → 该插件配置段，可为 {@code null}
      */
@@ -252,7 +255,13 @@ public final class PluginsSettings {
     public List<String> getDisabled();
     public Map<String, Map<String, Object>> getConfigurations();
 
-    /** 三段全空表示「未配置 plugins 段」。 */
+    /** 启用名单是否被显式声明（声明为空 = 一个都不启用）。 */
+    public boolean isEnabledDeclared();
+
+    /** 禁用名单是否被显式声明（只影响双源合并：项目级 {@code []} 要能清空全局名单）。 */
+    public boolean isDisabledDeclared();
+
+    /** 三段都没写表示「未配置 plugins 段」。 */
     public boolean isEmpty();
 }
 ```
@@ -728,8 +737,7 @@ public final class AgentModule {
       "systemPrompt": "You are Jellyfish, a coding agent.",
       "permissions": {
         "deniedTools": ["bash"],
-        "askTools": ["write_file"],
-        "allowedTools": []
+        "askTools": ["write_file"]
       }
     }
   }
@@ -743,7 +751,7 @@ public final class AgentModule {
 | `agents.<id>` | 同名 agent **整对象替换**（项目级覆盖全局级），不同 key 视为新增 | 逐字段合并会让「一半权限来自全局、一半来自项目」无法审计 |
 | `defaultAgent` | 项目级非空值优先，否则回退全局级 | 与 `defaultProvider` 完全一致，复用 `override(...)` |
 | `plugins.configurations.<pluginId>` | 同名插件配置段**整对象替换** | 同上；这是 `readOnlyTools` 与将来插件配置的共同语义 |
-| `plugins.enabled` / `disabled` | 项目级**非空则整体替换**全局级（列表不做并集） | 并集会让「项目级想收窄」做不到；顺序与「谁是生效值」必须唯一 |
+| `plugins.enabled` / `disabled` | 项目级**已声明则整体替换**全局级（列表不做并集） | 并集会让「项目级想收窄」做不到；顺序与「谁是生效值」必须唯一。判据是「是否声明」而不是「非空」，否则项目级写 `[]` 会被当成未配置而回退全局，收窄不掉 |
 | `config.json` 的 `plugins.roots` | 不参与双源合并（只写在 `config.json` 一处） | 它与文件路径同属部署事实，天然只有一份真相 |
 | `plugins.disabled` 与 `enabled` | `disabled` 优先（既有 `ConfigPluginStatusProvider` 语义，不变） | —— |
 
@@ -918,7 +926,7 @@ Q1～Q13 已全部裁决，已按 §7 全部落地，记录见 §12。
 | --- | --- | --- |
 | 1 | `AgentsLoadedEvent` / `ModelsLoadedEvent` + `ModelManager` 拆 `rebuild`/`refresh` | **已完成**；构造期不发事件、`refresh` 发一条（内容可为空），发布失败只记日志 |
 | 2 | `AgentPermissions` / `AgentDefinition` / `AgentSettings` / `JellyfishSettings` / `PluginsSettings` | **已完成**，均不可变、缺省即空集合 |
-| 3 | `AppConfig` 加 `agent` / `jellyfish` 两段；`ModelSettings` 改挂 `models.json`；`RuntimeSnapshot` / `RuntimeConfig` 接 agent 与插件段 | **已完成**；`override` 泛型化，新增 `listOverride`（列表段项目级非空整体替换） |
+| 3 | `AppConfig` 加 `agent` / `jellyfish` 两段；`ModelSettings` 改挂 `models.json`；`RuntimeSnapshot` / `RuntimeConfig` 接 agent 与插件段 | **已完成**；`override` 泛型化，新增 `listOverride`（列表段项目级已声明整体替换） |
 | 4 | `PluginRuntimeConfig` 改「引用稳定、快照可换」+ `ReadOnlyTools` 按快照引用缓存 | **已完成**；顺带修掉「白名单恒为空 / 永不刷新」的隐患 |
 | 5 | `AgentRegistry` + `AgentManager` | **已完成**；`resolveDefault()` 按 Q12 留 `TODO`，未写占位实现；该 `TODO` 已于 session 轮闭环（见 §9 L1） |
 | 6 | DI：`AgentModule`、删 `PermissionModule` 占位、`PluginModule` 配置驱动、组件 getter | **已完成**；`PermissionModuleTest` 随之删除（模块已无 `@Provides` 可测） |

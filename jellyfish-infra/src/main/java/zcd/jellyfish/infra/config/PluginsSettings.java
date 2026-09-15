@@ -27,16 +27,28 @@ import java.util.Map;
  * <p>
  * 不可变：列表在构造时复制并包装，{@code configurations} 以不可变映射发布（内层映射沿用原引用，
  * 与 {@code PluginRuntimeConfig} 的处理保持一致）。
+ * <p>
+ * <b>「未声明」与「声明为空」是两回事</b>：反序列化时字段缺失得到 {@code null}，显式写 {@code []}
+ * 得到空列表。启用名单未声明表示「不额外限定」，声明为空则表示「一个都不启用」；若把两者一起归一
+ * 成空列表，{@code "enabled": []} 会被读成「未配置」而把全部插件加载进来。因此两份名单各记一个
+ * 「是否声明」的标记（见 {@link #isEnabledDeclared()} / {@link #isDisabledDeclared()}），
+ * 双源合并也按该标记决定「项目级是否覆盖全局级」。
  *
  * @author zcd
  */
 public class PluginsSettings {
 
-    /** 启用名单，空表示不额外限定。 */
+    /** 启用名单，未声明表示不额外限定，声明为空表示一个都不启用。 */
     private final List<String> enabled;
 
-    /** 禁用名单，优先于启用名单。 */
+    /** 禁用名单，未声明与声明为空等价：都不禁用任何插件。 */
     private final List<String> disabled;
+
+    /** 启用名单是否被显式声明。 */
+    private final boolean enabledDeclared;
+
+    /** 禁用名单是否被显式声明。 */
+    private final boolean disabledDeclared;
 
     /** pluginId → 该插件配置段。 */
     private final Map<String, Map<String, Object>> configurations;
@@ -54,6 +66,8 @@ public class PluginsSettings {
                            @JsonProperty("configurations") Map<String, Map<String, Object>> configurations) {
         this.enabled = copyOf(enabled);
         this.disabled = copyOf(disabled);
+        this.enabledDeclared = enabled != null;
+        this.disabledDeclared = disabled != null;
         this.configurations = configurations == null
                 ? Collections.<String, Map<String, Object>>emptyMap()
                 : Collections.unmodifiableMap(new LinkedHashMap<>(configurations));
@@ -62,7 +76,7 @@ public class PluginsSettings {
     /**
      * 获取启用名单。
      *
-     * @return 不可修改列表，为空表示不额外限定
+     * @return 不可修改列表；未声明时为空列表，语义由 {@link #isEnabledDeclared()} 区分
      */
     public List<String> getEnabled() {
         return enabled;
@@ -70,11 +84,36 @@ public class PluginsSettings {
 
     /**
      * 获取禁用名单。
+     * <p>
+     * 禁用名单为空与未声明等价（都不禁用任何插件），因此不需要额外区分。
      *
      * @return 不可修改列表
      */
     public List<String> getDisabled() {
         return disabled;
+    }
+
+    /**
+     * 判断启用名单是否被显式声明。
+     * <p>
+     * 未声明表示不额外限定；声明为空表示一个都不启用——两者必须能区分，否则
+     * {@code "enabled": []} 会被当成「未配置」而把全部插件加载进来。
+     *
+     * @return 配置里写了 {@code enabled} 字段（哪怕是空数组）返回 {@code true}
+     */
+    public boolean isEnabledDeclared() {
+        return enabledDeclared;
+    }
+
+    /**
+     * 判断禁用名单是否被显式声明。
+     * <p>
+     * 只影响双源合并：「项目级写了 {@code disabled: []}」应当清空全局级的禁用名单，而不是回退它。
+     *
+     * @return 配置里写了 {@code disabled} 字段（哪怕是空数组）返回 {@code true}
+     */
+    public boolean isDisabledDeclared() {
+        return disabledDeclared;
     }
 
     /**
@@ -89,10 +128,10 @@ public class PluginsSettings {
     /**
      * 判断是否未配置任何插件设置。
      *
-     * @return 三段都为空返回 {@code true}
+     * @return 三段都没写返回 {@code true}
      */
     public boolean isEmpty() {
-        return enabled.isEmpty() && disabled.isEmpty() && configurations.isEmpty();
+        return !enabledDeclared && !disabledDeclared && configurations.isEmpty();
     }
 
     /**

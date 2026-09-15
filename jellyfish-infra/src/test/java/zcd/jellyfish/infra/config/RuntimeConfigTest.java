@@ -377,7 +377,7 @@ class RuntimeConfigTest {
         RuntimeConfig runtimeConfig = newRuntimeConfig(pathsTo(null, null), pathsTo(null, null),
                 pathsTo(global, project));
 
-        // Then：列表段项目级非空则整体替换，为空则回退全局级
+        // Then：列表段项目级已声明则整体替换，未声明则回退全局级
         PluginsSettings plugins = runtimeConfig.getPluginsSettings();
         assertEquals(Arrays.asList("a", "b"), plugins.getEnabled());
         // Then：配置段同名整对象替换、不同 key 追加
@@ -385,6 +385,26 @@ class RuntimeConfigTest {
         assertEquals("project", plugins.getConfigurations().get("p2").get("k"));
         // Then：转发入口与快照一致
         assertSame(plugins, runtimeConfig.getJellyfishSettings().getPlugins());
+    }
+
+    @Test
+    void refresh_should_let_project_declared_empty_lists_override_global() throws IOException {
+        // Given：项目级显式写空数组的语义是「本层一个都不要」，不能回退全局名单
+        Path global = writeFile("jellyfish-global-lists.json",
+                "{\"plugins\":{\"enabled\":[\"a\",\"b\"],\"disabled\":[\"c\"]}}");
+        Path project = writeFile("jellyfish-project-lists.json",
+                "{\"plugins\":{\"enabled\":[],\"disabled\":[]}}");
+
+        // When
+        RuntimeConfig runtimeConfig = newRuntimeConfig(pathsTo(null, null), pathsTo(null, null),
+                pathsTo(global, project));
+
+        // Then
+        PluginsSettings plugins = runtimeConfig.getPluginsSettings();
+        assertTrue(plugins.isEnabledDeclared());
+        assertTrue(plugins.getEnabled().isEmpty());
+        assertTrue(plugins.isDisabledDeclared());
+        assertTrue(plugins.getDisabled().isEmpty());
     }
 
     @Test

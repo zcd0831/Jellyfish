@@ -40,6 +40,16 @@
             <artifactId>jackson-databind</artifactId>
         </dependency>
 
+        <!-- 参数名模块是必需的，不是可选优化：会话快照这类 api 值类型是「全字段构造器 + 无 setter」
+             的不可变对象，Jackson 只能靠构造器参数名反序列化，而参数名又依赖编译期 -parameters。
+             少了它，session_persist / session_restore 会直接报「no delegate- or property-based Creator」
+             ——表现为「脚本写得出、读不回」。 -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.module</groupId>
+            <artifactId>jackson-module-parameter-names</artifactId>
+            <version>${jackson.version}</version>
+        </dependency>
+
         <!-- Apache Commons Exec：子进程启动、stdout/stderr 泵送与进程级看门狗。
              它只在 ScriptProcess（P3）里使用，但作为本模块对外承诺的依赖先声明，
              免得桥接插件的 shade 配置在 P3 才需要跟着改。 -->
@@ -62,6 +72,17 @@
         <dependency>
             <groupId>org.mockito</groupId>
             <artifactId>mockito-junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- 仅测试期使用：注册器要验证的正是「处理器真的落进了内核注册表」，
+             因此用它真实的 PluginContext / ExtensionRegistry 跑一遍，
+             而不是在测试里另造一套假注册表（那样测的就不是内核看到的东西了）。
+             注意本模块对内核契约本身仍是 provided，不带入运行期 classpath。 -->
+        <dependency>
+            <groupId>zcd</groupId>
+            <artifactId>jellyfish-infra</artifactId>
+            <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
     </dependencies>

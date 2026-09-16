@@ -19,11 +19,12 @@ class JellyfishSettingsTest {
     @Test
     void getPlugins_should_return_empty_object_when_null() {
         // When
-        JellyfishSettings settings = new JellyfishSettings(null, null);
+        JellyfishSettings settings = new JellyfishSettings(null, null, null);
 
         // Then
         assertTrue(settings.getPlugins().isEmpty());
         assertTrue(settings.getReact().isDefault());
+        assertTrue(settings.getPermission().isDefault());
         assertTrue(settings.isEmpty());
     }
 
@@ -33,7 +34,7 @@ class JellyfishSettingsTest {
         PluginsSettings plugins = new PluginsSettings(Collections.singletonList("plugin-a"), null, null);
 
         // When
-        JellyfishSettings settings = new JellyfishSettings(plugins, null);
+        JellyfishSettings settings = new JellyfishSettings(plugins, null, null);
 
         // Then
         assertSame(plugins, settings.getPlugins());
@@ -45,7 +46,7 @@ class JellyfishSettingsTest {
         ReactSettings react = new ReactSettings(3, 0, 100);
 
         // When
-        JellyfishSettings settings = new JellyfishSettings(null, react);
+        JellyfishSettings settings = new JellyfishSettings(null, react, null);
 
         // Then
         assertSame(react, settings.getReact());
@@ -80,6 +81,31 @@ class JellyfishSettingsTest {
         assertEquals(5, settings.getReact().getMaxRounds());
         assertEquals(0, settings.getReact().getContextReserveTokens());
         assertEquals(100, settings.getReact().getMaxToolOutputChars());
+    }
+
+    @Test
+    void getPermission_should_return_same_instance_when_given() {
+        // Given
+        PermissionApprovalSettings permission = new PermissionApprovalSettings(30);
+
+        // When
+        JellyfishSettings settings = new JellyfishSettings(null, null, permission);
+
+        // Then
+        assertSame(permission, settings.getPermission());
+        assertTrue(!settings.isEmpty());
+    }
+
+    @Test
+    void deserialization_should_bind_permission_section() {
+        // Given
+        String json = "{\"permission\":{\"approvalTimeoutSeconds\":30}}";
+
+        // When
+        JellyfishSettings settings = ObjectMapperWrapper.readValue(json, JellyfishSettings.class);
+
+        // Then
+        assertEquals(30, settings.getPermission().getApprovalTimeoutSeconds());
     }
 
     @Test

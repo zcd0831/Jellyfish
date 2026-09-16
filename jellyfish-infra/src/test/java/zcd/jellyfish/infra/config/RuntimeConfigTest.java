@@ -481,6 +481,45 @@ class RuntimeConfigTest {
     }
 
     @Test
+    void refresh_should_merge_permission_with_project_override() throws IOException {
+        // Given：项目级整对象覆盖全局级
+        Path global = writeFile("jellyfish-global.json", "{\"permission\":{\"approvalTimeoutSeconds\":30}}");
+        Path project = writeFile("jellyfish-project.json", "{\"permission\":{\"approvalTimeoutSeconds\":5}}");
+
+        // When
+        RuntimeConfig runtimeConfig = newRuntimeConfig(pathsTo(null, null), pathsTo(null, null),
+                pathsTo(global, project));
+
+        // Then
+        assertEquals(5, runtimeConfig.getPermissionApprovalSettings().getApprovalTimeoutSeconds());
+    }
+
+    @Test
+    void refresh_should_fall_back_to_global_permission_when_project_absent() throws IOException {
+        // Given
+        Path global = writeFile("jellyfish-global.json", "{\"permission\":{\"approvalTimeoutSeconds\":45}}");
+
+        // When
+        RuntimeConfig runtimeConfig = newRuntimeConfig(pathsTo(null, null), pathsTo(null, null),
+                pathsTo(global, null));
+
+        // Then
+        assertEquals(45, runtimeConfig.getPermissionApprovalSettings().getApprovalTimeoutSeconds());
+    }
+
+    @Test
+    void refresh_should_use_default_permission_when_not_configured() {
+        // When
+        RuntimeConfig runtimeConfig = newRuntimeConfig(pathsTo(null, null), pathsTo(null, null),
+                pathsTo(null, null));
+
+        // Then
+        assertTrue(runtimeConfig.getPermissionApprovalSettings().isDefault());
+        assertEquals(PermissionApprovalSettings.DEFAULT_APPROVAL_TIMEOUT_SECONDS,
+                runtimeConfig.getPermissionApprovalSettings().getApprovalTimeoutSeconds());
+    }
+
+    @Test
     void refresh_should_warn_when_plugin_enabled_and_disabled_at_once() throws IOException {
         // Given
         Path jellyfish = writeFile("jellyfish.json",

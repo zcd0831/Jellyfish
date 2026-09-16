@@ -27,7 +27,8 @@ public final class ShellUsage {
             + "  Ctrl+S 发送 · Enter 换行 · Esc 中断 · Ctrl+C 退出\n"
             + "  Ctrl+T 展开/折叠思考过程（同 /thinking）\n"
             + "  输入 / 唤起命令补全 · /ui 管理插件面板\n"
-            + "  PageUp / PageDown 或滚轮滚动消息区";
+            + "  PageUp / PageDown 或滚轮滚动消息区\n"
+            + "  工具需要审批时会弹出选择框：↑/↓ 选择 · Enter 确认 · Esc 拒绝并中断回合";
 
     private ShellUsage() {
     }

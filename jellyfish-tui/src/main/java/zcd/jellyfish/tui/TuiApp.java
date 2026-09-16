@@ -26,6 +26,7 @@ import zcd.jellyfish.infra.command.CommandManager;
 import zcd.jellyfish.infra.llm.LlmUsage;
 import zcd.jellyfish.infra.model.ModelManager;
 import zcd.jellyfish.infra.model.ResolvedModel;
+import zcd.jellyfish.infra.permission.ApprovalChannel;
 import zcd.jellyfish.infra.session.Session;
 import zcd.jellyfish.infra.session.SessionManager;
 import zcd.jellyfish.infra.session.SessionMessage;
@@ -107,6 +108,13 @@ public final class TuiApp extends ToolkitApp {
     /** 插件 UI 贡献门面：收集插件贡献的界面内容，并订阅「可能已过期」。 */
     private final UiContributions uiContributions;
 
+    /**
+     * 人工审批通道：本外壳是唯一的审批者（{@code -tui} 启动时挂上）。
+     * <p>
+     * 只在这里读、在这里答：{@code react} 线程在通道那头阻塞等待，本外壳每帧取件、按键回填。
+     */
+    private final ApprovalChannel approvals;
+
     /** 视图状态。 */
     private final ChatState chatState = new ChatState();
 
@@ -126,6 +134,18 @@ public final class TuiApp extends ToolkitApp {
 
     /** 二级选择页状态：只由渲染线程读写。 */
     private final CommandChoicePicker picker = new CommandChoicePicker();
+
+    /**
+     * 审批浮层的选项状态：与二级选择页共用同一套选择逻辑，但状态分开。
+     * <p>
+     * <b>为什么不与 {@link #picker} 复用同一个对象</b>：两者可能前后脚出现
+     * （在二级选择页上确认的命令问出了需要审批的工具），共用对象会让后者的候选覆盖前者，
+     * 用户回到选择页时看到的是审批的两个选项。
+     */
+    private final CommandChoicePicker approvalPicker = new CommandChoicePicker();
+
+    /** 审批浮层当前承载的请求 id：换了请求就要重建选项，否则选中态会从上一个请求继承。 */
+    private String renderedApprovalId;
 
     /** 外壳自有命令在补全清单里的条目：命令名不含前缀，与命令域清单同构。 */
     private static final CommandInfo EXIT_INFO = new CommandInfo(ShellCommand.EXIT_NAME,
@@ -197,10 +217,11 @@ public final class TuiApp extends ToolkitApp {
      * @param models   模型门面，不可为 {@code null}
      * @param agents   agent 门面，不可为 {@code null}
      * @param uiContributions 插件 UI 贡献门面，不可为 {@code null}
+     * @param approvals 人工审批通道，不可为 {@code null}
      */
     public TuiApp(AgentHarness harness, CommandManager commands, SessionManager sessions, ModelManager models,
-                  AgentManager agents, UiContributions uiContributions) {
-        this(harness, commands, sessions, models, agents, uiContributions, false);
+                  AgentManager agents, UiContributions uiContributions, ApprovalChannel approvals) {
+        this(harness, commands, sessions, models, agents, uiContributions, approvals, false);
     }
 
     /**
@@ -212,16 +233,19 @@ public final class TuiApp extends ToolkitApp {
      * @param models   模型门面，不可为 {@code null}
      * @param agents   agent 门面，不可为 {@code null}
      * @param uiContributions 插件 UI 贡献门面，不可为 {@code null}
+     * @param approvals 人工审批通道，不可为 {@code null}
      * @param thinkingExpanded 启动时是否展开思考过程（{@code --show-thinking} 置为 {@code true}）
      */
     public TuiApp(AgentHarness harness, CommandManager commands, SessionManager sessions, ModelManager models,
-                  AgentManager agents, UiContributions uiContributions, boolean thinkingExpanded) {
+                  AgentManager agents, UiContributions uiContributions, ApprovalChannel approvals,
+                  boolean thinkingExpanded) {
         this.harness = Objects.requireNonNull(harness, "harness must not be null");
         this.commands = Objects.requireNonNull(commands, "commands must not be null");
         this.sessions = Objects.requireNonNull(sessions, "sessions must not be null");
         this.models = Objects.requireNonNull(models, "models must not be null");
         this.agents = Objects.requireNonNull(agents, "agents must not be null");
         this.uiContributions = Objects.requireNonNull(uiContributions, "uiContributions must not be null");
+        this.approvals = Objects.requireNonNull(approvals, "approvals must not be null");
         this.uiCache = new UiCache(uiContributions);
         this.pluginPanelsEnabled = pluginPanelsEnabled();
         this.input = new ChatInputView(inputKeys);
@@ -343,18 +367,45 @@ public final class TuiApp extends ToolkitApp {
     /**
      * 生成本帧的浮层面板。
      * <p>
+     * <b>审批浮层的优先级最高</b>：它背后有一条阻塞等待的 {@code react} 线程，而补全面板与二级选择页
+     * 都只是输入辅助——用户不回答审批，那个回合就一直停着。因此只要通道里有待审批项，就只显示它
+     * （选择页状态不清，审批结束后下一帧自然回到用户刚才的操作）。
+     * <p>
      * 二级选择页优先于补全面板：选择页是「命令已经发出、正在挑参数」的模态交互，
      * 而补全面板是「还没发出」的输入辅助，两者不应同屏。
      *
      * @param width 面板可用列数
-     * @return 浮层；两者都没内容时返回空浮层
+     * @return 浮层；都没有内容时返回空浮层
      */
     private Overlay buildOverlay(int width) {
+        ApprovalChannel.Pending pending = approvals.pending().orElse(null);
+        if (pending != null) {
+            syncApproval(pending);
+            return new Overlay(ApprovalPrompt.TITLE, ApprovalPrompt.render(pending, approvalPicker, width));
+        }
         if (picker.isActive()) {
             return new Overlay(" " + picker.getBaseCommand() + " ",
                     CommandChoicePickerView.render(picker, width));
         }
         return ChatShell.completionOverlay(CommandCompletionView.render(completion, width));
+    }
+
+    /**
+     * 让审批选项跟上当前请求。
+     * <p>
+     * 只有换了请求（id 变了）才重建选项：它是「当前挂起的那一条」的状态，
+     * 重建会把选中态重置到首项（「允许一次」），而同一请求的重复渲染必须保留用户已经用
+     * {@code ↑}/{@code ↓} 做出的选择——每帧重建会让上下键看起来完全没用。
+     *
+     * @param pending 当前待审批请求
+     */
+    private void syncApproval(ApprovalChannel.Pending pending) {
+        if (pending.getId().equals(renderedApprovalId)) {
+            return;
+        }
+        renderedApprovalId = pending.getId();
+        approvalPicker.dismiss();
+        approvalPicker.open("", ApprovalPrompt.choices());
     }
 
     /**
@@ -845,6 +896,9 @@ public final class TuiApp extends ToolkitApp {
         @Override
         public EventResult handle(KeyEvent key) {
             InputAction action = InputKeyMapper.map(key);
+            if (approvals.pending().isPresent()) {
+                return handleApproval(action);
+            }
             if (picker.isActive()) {
                 return handlePicker(action);
             }
@@ -935,6 +989,61 @@ public final class TuiApp extends ToolkitApp {
                 completion.dismiss();
             }
             return EventResult.HANDLED;
+        }
+
+        /**
+         * 处理审批浮层的按键。
+         * <p>
+         * <b>审批浮层是最强模态</b>：除导航、确认、拒绝与退出外，其余按键一律吞掉。
+         * 它是唯一一个「背后有线程在等」的界面，误操作（例如把参数敲进输入框再发送）
+         * 只会把上一回合的输出变成一堆无效输入。
+         * <p>
+         * <b>{@code Esc} 是「拒绝 + 中断回合」而不是单纯拒绝</b>：用户的意图是「停」——
+         * 只拒绝本次调用的话，模型收到拒绝理由后很可能换个方式接着试，看起来像没停下来。
+         * 拒绝会立刻解开阻塞的 {@code react} 线程，接着取消标记会让回合在下一个检查点收敛。
+         *
+         * @param action 按键动作
+         * @return 处理结果
+         */
+        private EventResult handleApproval(InputAction action) {
+            ApprovalChannel.Pending pending = approvals.pending().orElse(null);
+            if (pending == null) {
+                // 本帧刚被超时 / 关闭裁决掉：不把这次按键算成任何操作
+                return EventResult.HANDLED;
+            }
+            syncApproval(pending);
+            switch (action) {
+                case COMPLETE_PREV:
+                    approvalPicker.moveUp();
+                    return EventResult.HANDLED;
+                case COMPLETE_NEXT:
+                    approvalPicker.moveDown();
+                    return EventResult.HANDLED;
+                case COMPLETE_ACCEPT:
+                    resolveApproval(pending, ApprovalPrompt.isApproved(approvalPicker.selected()));
+                    return EventResult.HANDLED;
+                case CANCEL:
+                    resolveApproval(pending, false);
+                    chatState.cancelTurn();
+                    return EventResult.HANDLED;
+                case QUIT:
+                    quit();
+                    return EventResult.HANDLED;
+                default:
+                    return EventResult.HANDLED;
+            }
+        }
+
+        /**
+         * 回填审批结论并收起浮层。
+         *
+         * @param pending  待审批请求
+         * @param approved 是否批准
+         */
+        private void resolveApproval(ApprovalChannel.Pending pending, boolean approved) {
+            approvals.resolve(pending.getId(), approved);
+            approvalPicker.dismiss();
+            renderedApprovalId = null;
         }
 
         /**

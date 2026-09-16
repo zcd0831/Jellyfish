@@ -66,7 +66,7 @@ public final class RuntimeSnapshot {
      */
     public static RuntimeSnapshot empty() {
         return new RuntimeSnapshot(new ModelSettings(null, null, null), new AgentSettings(null),
-                new JellyfishSettings(null, null), Collections.<Provider>emptyList(),
+                new JellyfishSettings(null, null, null), Collections.<Provider>emptyList(),
                 Collections.<Path>emptyList(), null);
     }
 

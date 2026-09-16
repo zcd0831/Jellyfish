@@ -57,13 +57,28 @@ public final class CommandChoicePickerView {
     }
 
     /**
-     * 渲染选择页的内容行。
+     * 渲染选择页的内容行（使用默认键位提示）。
      *
      * @param picker 选择页状态，可为 {@code null}
      * @param width  面板可用列数，小于 1 时按 1 处理
      * @return 视觉行列表：未激活或候选为空时返回空列表（调用方据此决定不显示面板）
      */
     public static List<VisualLine> render(CommandChoicePicker picker, int width) {
+        return render(picker, width, HINT);
+    }
+
+    /**
+     * 渲染选择页的内容行，并指定底部键位提示。
+     * <p>
+     * 提示可换是必要的：审批浮层复用本渲染，但它的 {@code Esc} 是「拒绝并中断回合」
+     * 而不是「取消本次选择」——直接把选择页的提示搬过去会让用户以为退出就没说过「不」。
+     *
+     * @param picker 选择页状态，可为 {@code null}
+     * @param width  面板可用列数，小于 1 时按 1 处理
+     * @param hint   底部键位提示文本，可为 {@code null}（不显示提示行）
+     * @return 视觉行列表：未激活或候选为空时返回空列表（调用方据此决定不显示面板）
+     */
+    public static List<VisualLine> render(CommandChoicePicker picker, int width, String hint) {
         if (picker == null || !picker.isActive()) {
             return Collections.emptyList();
         }
@@ -78,8 +93,11 @@ public final class CommandChoicePickerView {
         for (int i = from; i < from + visible; i++) {
             lines.add(renderLine(choices.get(i), i == picker.getSelectedIndex(), columns));
         }
-        lines.add(new VisualLine(Collections.singletonList(
-                new StyledSegment(CommandCompletionView.truncate(PLAIN_MARKER + HINT, columns), DESCRIPTION_STYLE))));
+        if (hint != null && !hint.isEmpty()) {
+            lines.add(new VisualLine(Collections.singletonList(
+                    new StyledSegment(CommandCompletionView.truncate(PLAIN_MARKER + hint, columns),
+                            DESCRIPTION_STYLE))));
+        }
         return lines;
     }
 

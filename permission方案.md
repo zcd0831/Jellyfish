@@ -12,7 +12,7 @@
 | 1 | 策略来自 `agents.json` 的 agent 定义，由 `AgentManager` 提供（选项 a） | `PermissionManager` 通过窄接口 `PermissionPolicyProvider` 取策略；本轮用占位实现，AgentManager 落地后由它实现该接口 |
 | 2 | 本轮不一起做 `AgentManager` | 判定矩阵靠 stub provider 单测钉住；无端到端「按 agent 拒绝」验证 |
 | 3 | PLAN 模式是**会话级可切换状态**，只读工具白名单配在**插件配置**里 | 模式随请求带入；白名单来自 `PluginRuntimeConfig` 的插件配置段 |
-| 4 | 判定三态（ALLOW / DENY / ASK），暂不可实现的写 `TODO`；策略 fail-open | 「取不到策略」→ ALLOW（fail-open）；**ASK 绝不降级为放行，一律降级为 DENY**（审批通道未落地，见 4.3） |
+| 4 | 判定三态（ALLOW / DENY / ASK）；策略 fail-open | 「取不到策略」→ ALLOW（fail-open）；**ASK 绝不降级为放行**：只认明确批准，其余一律 DENY（见 4.3） |
 | 5 | 核心策略写普通 Java 代码 | 不进注册表，`PermissionManager` 内显式 `if` 链 |
 | 6 | 管所有插件 | 拦截扩展点对全部插件开放，所有工具调用无一例外过闸 |
 | 7 | 放行也发审计事件 | 每次判定后都 `publish`，含 ALLOW |
@@ -217,7 +217,7 @@ public final class PermissionDecision {
         ALLOW,
         /** 拒绝。 */
         DENY,
-        /** 需要人工审批（审批通道未落地，见 PermissionManager 的 TODO）。 */
+        /** 需要人工审批：由 ApprovalChannel 交给审批者，拿不到批准即拒绝（见 4.3）。 */
         ASK
     }
 
@@ -425,7 +425,7 @@ public final class HandlerBinding<C extends ExtensionRequest<R>, R> {
 | `PermissionPolicyProvider` 尚未由 AgentManager 实现（本轮） | ALLOW | 同上 |
 | 策略存在且模式为 PLAN，工具不在只读白名单 | DENY | **这是策略生效的明确判定，不受 fail-open 影响** |
 | 白名单为空（没有任何插件声明只读工具） | DENY | **已裁决 Q1**：PLAN 是白名单语义，属「已生效但集合为空」，不属于「取不到策略」 |
-| 核心策略判定为 ASK（无论审批通道是否可用） | **DENY** | **已裁决 Q2**：宁拒绝、不静默放行，一律降级为拒绝（见 4.3） |
+| 核心策略判定为 ASK | 由审批者决定：**批准才 ALLOW**，其余一律 DENY | **已裁决 Q2**：宁拒绝、不静默放行（见 4.3） |
 
 fail-open 只覆盖「**取不到策略**」，不覆盖「**策略已生效但判定为否**」——否则 PLAN 模式形同虚设。
 
@@ -451,8 +451,11 @@ public PermissionDecision decide(PermissionCheckRequest request) {
         }
     }
 
-    // 3. ASK 降级：审批通道未落地（见 4.3），一律按拒绝处理
-    decision = resolveApproval(decision);
+    // 3. ASK 收口：向审批者提问（见 4.3），拿不到批准一律拒绝
+    if (decision.isAsk()) {
+        decision = resolveApproval(request, decision);
+        source = APPROVAL_SOURCE;   // 归因：这一条是人批的
+    }
 
     // 4. 审计：放行也发，best-effort，失败不影响判定
     events.publish(new PermissionDecidedEvent(request.getAgentId(), request.getToolName(), request.getMode(),
@@ -492,12 +495,14 @@ private PermissionVeto intercept(HandlerBinding<PermissionCheckRequest, Permissi
     }
 }
 
-// TODO 人工审批通道未落地：审批者永远缺席，因此 ASK 一律降级为 DENY。
-//      审批通道落地后改为「向审批者提问 → ALLOW / DENY」，ASK 才会作为终态返回。
-private static PermissionDecision resolveApproval(PermissionDecision decision) {
-    return decision.isAsk()
-            ? PermissionDecision.deny(decision.getReason() + "（审批通道未落地，按拒绝处理）")
-            : decision;
+/** ASK：交给审批通道；未挂审批者 / 超时 / 排队溢出 / 中断都由通道判为拒绝。 */
+private PermissionDecision resolveApproval(PermissionCheckRequest request, PermissionDecision decision) {
+    PermissionApprovalSettings settings = runtimeConfig.getPermissionApprovalSettings();
+    ApprovalChannel.Pending pending = new ApprovalChannel.Pending(request.getSessionId(), request.getAgentId(),
+            request.getToolName(), request.getArguments(), request.getMode(), decision.getReason());
+    PermissionDecision verdict = approvals.request(pending, Duration.ofSeconds(settings.getApprovalTimeoutSeconds()));
+    String reason = reasonOf(decision) + "；" + reasonOf(verdict);
+    return verdict.isAllowed() ? PermissionDecision.allow(reason) : PermissionDecision.deny(reason);
 }
 ```
 
@@ -506,21 +511,24 @@ private static PermissionDecision resolveApproval(PermissionDecision decision) {
 - **插件只能表达「不拦截 / 拦截」**：结果类型 `PermissionVeto` 里没有 ASK、也没有「放行」（见 3.1）。返回 `none()` 或 `null` 等价于无异议——不是类型级限制，而是**调用点的组合规则**（与「组合规则属于调用方」一致）。
 - **`invoke` 返回 `null` 必须判空**：`ExtensionRegistry.invoke` 允许 `null` 结果（`resultType.cast(null)` 通过）。
 - **异常处置（已裁决 Q3）**：捕获 `RuntimeException` → WARN + 视为无异议。同步侧本无护栏，这就是「调用点自己决定」的那一层。
-- **ASK 一律降级为 DENY（已裁决 Q2）**：`decide()` 本轮不会返回 ASK，审计事件里也不会出现 ASK。
-- **归因（已裁决 Q6）**：`source` 记录判定来源，核心策略为 `"core"`，插件拦截为拦截插件的 `pluginId`。
+- **ASK 经审批通道收口（已裁决 Q2）**：`decide()` 不返回 ASK，审计事件里也不会出现 ASK——策略提出审批后由 `ApprovalChannel` 向审批者提问，拿不到批准就拒绝。
+- **归因（已裁决 Q6）**：`source` 记录判定来源，核心策略为 `"core"`，插件拦截为拦截插件的 `pluginId`，经审批的记为 `"approval"`。
 - **审计顺序**：先判定、后发布；发布失败不改变返回值。
 
-### 4.3 ASK 的落地（本轮只留 TODO）
+### 4.3 ASK 的落地（审批通道已落地）
 
-**ASK 绝不降级为放行，一律降级为拒绝**（已裁决 Q2）。理由：策略明确说「这个工具要人看一眼」，而审批者缺席；此时放行等于**静默放宽**权限，而拒绝的代价只是工具执行失败、可被用户察觉。
+**ASK 绝不降级为放行**（已裁决 Q2）。策略明确说「这个工具要人看一眼」，因此只有**明确批准**才放行；
+审批者缺席、超时、排队溢出、通道关闭、线程被中断，一律拒绝。理由：放行等于**静默放宽**权限，
+而拒绝的代价只是工具执行失败、可被用户察觉。
 
-```java
-// TODO 人工审批通道未落地：审批者永远缺席，因此 ASK 一律降级为 DENY。
-//      审批通道落地后改为「向审批者提问 → ALLOW / DENY」，ASK 才会作为终态返回；
-//      降级发生的唯一位置是 PermissionManager.resolveApproval(...)，调用点无需再处理 ASK。
-```
+落地形态是 `infra/permission/ApprovalChannel`：一个同步等待 ↔ 每帧取件的交接点
+（`react` 线程阻塞在闩锁上，渲染线程取件并回填结论，形态与 `InflightTurn` 互为镜像）。
+**审批者只能是外壳**（`-tui` 启动时 `attach()`）——审批需要独占终端的模态交互，而插件在架构上碰不到界面，
+所以这里不开扩展点。`-cli` 与 `-server` 不挂审批者，行为与审批通道落地前完全一致。
 
-降级后的 `reason` 保留策略原文并追加降级说明（如「agent 策略要求人工审批该工具（审批通道未落地，按拒绝处理）」），让审计既能看出真实意图、又能看出实际行为。
+`reason` 保留策略原文并追加审批结论，例如
+「agent 策略要求人工审批该工具；用户已批准」/「…；无审批者（当前外壳不提供审批界面），按拒绝处理」，
+让审计既能看出真实意图、又能看出实际行为；审计 `source` 记为 `"approval"` 以区分「策略直接放行」。
 
 ### 4.4 只读白名单的来源与合并
 
@@ -622,7 +630,7 @@ private static PermissionDecision resolveApproval(PermissionDecision decision) {
 | L2 | 拦截扩展点是类型级，任何插件都能拦任何工具 | 插件 A 能 Deny 插件 B 的工具（全局闸门） | 刻意接受（已裁决 Q6 只解决「审计归因」，不限制匹配范围）；若将来要「各管各的」，需按 owner 限制可拦范围 |
 | L3 | 白名单来自装配期快照 | 插件热部署后白名单不刷新 | **已闭环**：只读性权威声明迁到 `ToolDescriptor.readOnly`（随 handler 落表），`ReadOnlyTools` 现查描述符，热部署自动跟随；配置那份仍按快照引用缓存（只为「告警不重复」，不再是唯一来源） |
 | L4 | 核心侧工具无插件配置段 | 内核自注册的工具在 PLAN 下会被拒 | **已闭环**：描述符里声明 `readOnly=true` 即可，不再依赖 `plugins.configurations` 段 |
-| L5 | ASK 无审批通道 | 策略要求审批时一律降级为拒绝 | 见 4.3；CLI 单次模式无交互、天然无法承载审批（`cli方案.md` L8），审批通道随交互式 TUI 一起落地 |
+| L5 | ~~ASK 无审批通道~~ | ~~策略要求审批时一律降级为拒绝~~ | **已闭环**：`ApprovalChannel` + TUI 审批选择框落地（`-tui` 挂审批者），策略要求审批时向用户提问；未被批准、超时、无审批者（`-cli` / `-server`）仍一律拒绝，fail-closed 不变。见 4.3 |
 | L6 | 插件无法要求人工审批 | 拦截通道在**类型上只有两态**（不拦截 / 拦截），插件写不出 ASK | 与「插件只能收窄、不能放宽」一致；真要支持需扩拦截通道的结果类型 |
 
 ## 10. 风险与缓解
@@ -641,7 +649,7 @@ private static PermissionDecision resolveApproval(PermissionDecision decision) {
 | # | 问题 | 裁决 | 落点 |
 | --- | --- | --- | --- |
 | Q1 | PLAN 模式下白名单为空 | **全拒** | 4.1 / 单测 ⑦ |
-| Q2 | ASK 的降级方向 | **降级为 DENY，绝不降级为放行** | 4.1 / 4.3 / 单测 ③ |
+| Q2 | ASK 的降级方向 | **只认明确批准，其余一律 DENY，绝不降级为放行** | 4.1 / 4.3 / 单测 ③ |
 | Q3 | 拦截处理器抛异常 | **视为无异议** + WARN | 4.2 / 单测 ⑪ |
 | Q4 | 是否加 DI 装配 | **加** | 阶段 4 |
 | Q5 | `PermissionPolicy` 三集合 | 接受 | 3.3 |

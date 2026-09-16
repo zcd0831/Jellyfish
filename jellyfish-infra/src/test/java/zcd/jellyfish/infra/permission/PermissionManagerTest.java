@@ -14,6 +14,8 @@ import zcd.jellyfish.api.extension.PermissionCheckRequest;
 import zcd.jellyfish.api.extension.PermissionDecision;
 import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.api.extension.PermissionVeto;
+import zcd.jellyfish.infra.config.PermissionApprovalSettings;
+import zcd.jellyfish.infra.config.RuntimeConfig;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.plugin.PluginRuntimeConfig;
 import zcd.jellyfish.infra.registry.TypeRegistry;
@@ -22,6 +24,7 @@ import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -54,8 +57,15 @@ class PermissionManagerTest {
     @Mock
     private EventPublisher events;
 
+    /** 运行时配置，只用到其中的审批超时。 */
+    @Mock
+    private RuntimeConfig runtimeConfig;
+
     /** 真实的同步扩展点策略。 */
     private ExtensionRegistry extensions;
+
+    /** 真实的审批通道：本测试关注的是判定编排，不是通道自身的并发语义。 */
+    private ApprovalChannel channel;
 
     /** 被测对象。 */
     private PermissionManager manager;
@@ -63,6 +73,7 @@ class PermissionManagerTest {
     @BeforeEach
     void setUp() {
         extensions = new ExtensionRegistry(new TypeRegistry());
+        channel = new ApprovalChannel();
         useReadOnlyTools();
     }
 
@@ -99,18 +110,67 @@ class PermissionManagerTest {
     }
 
     @Test
-    void decide_should_degrade_ask_to_deny_when_policy_requires_approval() {
-        // Given
+    void decide_should_deny_when_policy_requires_approval_and_no_approver() {
+        // Given：策略要求审批，但没挂审批者（-cli / -server 的情形）
+        stubApprovalTimeout();
         when(policies.policyOf("agent-a")).thenReturn(PermissionPolicy.of(null, toolSet("deploy"), null));
 
         // When
         PermissionDecision decision = manager.decide(new PermissionCheckRequest("agent-a", "deploy", null));
 
-        // Then：审批通道未落地，只能降级为拒绝，绝不降级为放行
+        // Then：审批者缺席只能拒绝，绝不降级为放行
         assertTrue(decision.isDenied());
         assertFalse(decision.isAsk());
-        assertTrue(decision.getReason().contains("agent 策略要求人工审批该工具"));
-        assertTrue(decision.getReason().contains("审批通道未落地"));
+        assertTrue(decision.getReason().contains("agent 策略要求人工审批该工具"), decision.getReason());
+        assertTrue(decision.getReason().contains(ApprovalChannel.NO_APPROVER), decision.getReason());
+    }
+
+    @Test
+    void decide_should_allow_when_approval_is_granted() {
+        // Given：策略要求审批，审批者给了批准
+        requireApproval();
+        when(policies.policyOf("agent-a")).thenReturn(PermissionPolicy.of(null, toolSet("deploy"), null));
+        answerApproval(true);
+
+        // When
+        PermissionDecision decision = manager.decide(new PermissionCheckRequest("agent-a", "deploy", null));
+
+        // Then：ASK 不作为终态外泄，拿到的就是放行
+        assertTrue(decision.isAllowed());
+        assertFalse(decision.isAsk());
+        assertTrue(decision.getReason().contains("用户已批准"), decision.getReason());
+    }
+
+    @Test
+    void decide_should_deny_when_approval_is_rejected() {
+        // Given
+        requireApproval();
+        when(policies.policyOf("agent-a")).thenReturn(PermissionPolicy.of(null, toolSet("deploy"), null));
+        answerApproval(false);
+
+        // When
+        PermissionDecision decision = manager.decide(new PermissionCheckRequest("agent-a", "deploy", null));
+
+        // Then
+        assertTrue(decision.isDenied());
+        assertTrue(decision.getReason().contains("用户已拒绝"), decision.getReason());
+    }
+
+    @Test
+    void decide_should_attribute_audit_to_approval_when_policy_requires_approval() {
+        // Given
+        requireApproval();
+        when(policies.policyOf("agent-a")).thenReturn(PermissionPolicy.of(null, toolSet("deploy"), null));
+        answerApproval(true);
+
+        // When
+        manager.decide(new PermissionCheckRequest("agent-a", "deploy", null, PermissionMode.NORMAL, "session-1"));
+
+        // Then：审计要能一眼分出「策略直接放行」与「有人在审批框上点了批准」
+        PermissionDecidedEvent event = captureEvent();
+        assertEquals(PermissionManager.APPROVAL_SOURCE, event.getSource());
+        assertEquals(PermissionDecision.Outcome.ALLOW, event.getOutcome());
+        assertEquals("session-1", event.getSessionId());
     }
 
     @Test
@@ -193,7 +253,7 @@ class PermissionManagerTest {
 
     @Test
     void decide_should_deny_and_attribute_to_plugin_when_core_requires_approval() {
-        // Given：核心要求审批（会降级为拒绝），插件也拦截
+        // Given：核心要求审批，插件也拦截
         when(policies.policyOf("agent-a")).thenReturn(PermissionPolicy.of(null, toolSet("deploy"), null));
         ExtensionHandler<PermissionCheckRequest, PermissionVeto> guard = request -> PermissionVeto.deny("插件拦截");
         extensions.contribute("guard", PermissionCheckRequest.class, null, guard, RegisterOptions.DEFAULT);
@@ -295,13 +355,17 @@ class PermissionManagerTest {
         // When / Then
         ReadOnlyTools readOnlyTools = readOnlyToolsOf();
         assertThrows(NullPointerException.class,
-                () -> new PermissionManager(null, readOnlyTools, extensions, events));
+                () -> new PermissionManager(null, readOnlyTools, extensions, events, channel, runtimeConfig));
         assertThrows(NullPointerException.class,
-                () -> new PermissionManager(policies, null, extensions, events));
+                () -> new PermissionManager(policies, null, extensions, events, channel, runtimeConfig));
         assertThrows(NullPointerException.class,
-                () -> new PermissionManager(policies, readOnlyTools, null, events));
+                () -> new PermissionManager(policies, readOnlyTools, null, events, channel, runtimeConfig));
         assertThrows(NullPointerException.class,
-                () -> new PermissionManager(policies, readOnlyTools, extensions, null));
+                () -> new PermissionManager(policies, readOnlyTools, extensions, null, channel, runtimeConfig));
+        assertThrows(NullPointerException.class,
+                () -> new PermissionManager(policies, readOnlyTools, extensions, events, null, runtimeConfig));
+        assertThrows(NullPointerException.class,
+                () -> new PermissionManager(policies, readOnlyTools, extensions, events, channel, null));
     }
 
     /**
@@ -310,7 +374,50 @@ class PermissionManagerTest {
      * @param toolNames 声明为只读的工具名，可为空
      */
     private void useReadOnlyTools(String... toolNames) {
-        manager = new PermissionManager(policies, readOnlyToolsOf(toolNames), extensions, events);
+        manager = new PermissionManager(policies, readOnlyToolsOf(toolNames), extensions, events, channel,
+                runtimeConfig);
+    }
+
+    /**
+     * 只声明审批超时，不挂审批者。
+     */
+    private void stubApprovalTimeout() {
+        when(runtimeConfig.getPermissionApprovalSettings()).thenReturn(new PermissionApprovalSettings(5));
+    }
+
+    /**
+     * 声明审批超时并挂上审批者：超时只需要长于辅助线程的轮询间隔。
+     */
+    private void requireApproval() {
+        stubApprovalTimeout();
+        channel.attach();
+    }
+
+    /**
+     * 启动一个辅助线程，对下一条挂起的审批请求给出结论。
+     * <p>
+     * 真实形态是「渲染线程每帧取件」，这里用轮询代替渲染循环：请求挂上后立刻裁决。
+     *
+     * @param approved 是否批准
+     */
+    private void answerApproval(boolean approved) {
+        Thread answer = new Thread(() -> {
+            for (int i = 0; i < 500; i++) {
+                Optional<ApprovalChannel.Pending> pending = channel.pending();
+                if (pending.isPresent()) {
+                    channel.resolve(pending.get().getId(), approved);
+                    return;
+                }
+                try {
+                    Thread.sleep(5L);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+            }
+        }, "approval-answer");
+        answer.setDaemon(true);
+        answer.start();
     }
 
     /**

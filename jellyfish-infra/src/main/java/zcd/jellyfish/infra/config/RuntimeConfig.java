@@ -279,6 +279,17 @@ public class RuntimeConfig {
     }
 
     /**
+     * 获取权限段。
+     * <p>
+     * 审批超时每轮现读而不缓存：配置刷新后无需重启即可生效，与「不持有全局当前态」同口径。
+     *
+     * @return 权限段，保证非 {@code null}
+     */
+    public PermissionApprovalSettings getPermissionApprovalSettings() {
+        return snapshot.getJellyfishSettings().getPermission();
+    }
+
+    /**
      * 获取合并后的插件段。
      * <p>
      * 不重复存放：插件段随 {@link JellyfishSettings} 一起进快照，这里只是转发。
@@ -410,7 +421,33 @@ public class RuntimeConfig {
     private static JellyfishSettings mergeJellyfishSettings(JellyfishSettings global, JellyfishSettings project) {
         return new JellyfishSettings(
                 mergePluginsSettings(pluginsOf(global), pluginsOf(project)),
-                mergeReactSettings(reactOf(global), reactOf(project)));
+                mergeReactSettings(reactOf(global), reactOf(project)),
+                mergePermissionSettings(permissionOf(global), permissionOf(project)));
+    }
+
+    /**
+     * 取一份运行期设置里的权限段，缺省时返回 {@code null}，交给合并函数按缺省处理。
+     *
+     * @param settings 运行期设置，可为 {@code null}
+     * @return 权限段，未配置时为 {@code null}
+     */
+    private static PermissionApprovalSettings permissionOf(JellyfishSettings settings) {
+        return settings == null ? null : settings.getPermission();
+    }
+
+    /**
+     * 合并全局级与项目级权限段。
+     * <p>
+     * 与 provider / agent / react 同口径的「整对象覆盖」：项目级非空则整体替换全局级，
+     * 否则回退全局级，两者都缺省时由 {@link JellyfishSettings} 的构造器落到缺省值。
+     *
+     * @param global  全局级权限段，可为 {@code null}
+     * @param project 项目级权限段，可为 {@code null}
+     * @return 合并结果，可能为 {@code null}（表示用缺省值）
+     */
+    private static PermissionApprovalSettings mergePermissionSettings(PermissionApprovalSettings global,
+                                                                       PermissionApprovalSettings project) {
+        return project != null ? project : global;
     }
 
     /**

@@ -7,8 +7,8 @@ package zcd.jellyfish.api.extension;
  * 插件侧拿到的结果类型只有「不拦截 / 拦截」两态，**写不出 ASK**——插件既不能放宽核心策略，
  * 也不能要求人工审批，能力边界由类型本身承载，而不是靠运行期判定。
  * <p>
- * {@code ASK} 的处理见 {@code PermissionManager}：审批通道未落地时它会被降级为 {@code DENY}，
- * 绝不降级为放行。
+ * {@code ASK} 的处理见 {@code PermissionManager}：它会向审批者提问，只有明确批准才放行，
+ * 其余情况（无审批者 / 超时 / 拒绝）一律降级为 {@code DENY}，绝不降级为放行。
  * <p>
  * 不可变，可安全跨线程传递。
  *
@@ -28,7 +28,7 @@ public final class PermissionDecision {
         /**
          * 需要人工审批。
          * <p>
-         * 这不是终态：审批通道未落地时内核会把它降级为 {@link #DENY}，因此调用点不需要处理 ASK。
+         * 这不是终态：内核会向审批者提问，拿不到批准就降级为 {@link #DENY}，因此调用点不需要处理 ASK。
          */
         ASK
     }

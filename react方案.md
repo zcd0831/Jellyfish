@@ -32,7 +32,7 @@
 - `LlmClient` 已提供 `chat` / `chatStream` / `cancel` 能力：`chatStream(request, listener)` 返回 `LlmStreamHandle`，流任务跑在 `llm-stream` 守护线程池；`LlmStreamListener.onComplete(LlmResponse)` 给出**聚合后的完整结果**（含工具调用），`onError` / `onCancelled` 与 `onComplete` 互斥。
 - `ModelManager` 只做解析与路由，**不持有当前态**：`resolve(provider, model)` / `resolveDefault()` → `ResolvedModel`，`getClient(ResolvedModel)` → `LlmClient`。
 - `SessionManager` 已提供 `create` / `createDefault` / `current` / `require` / `switchTo` / `close` / `all` / `appendMessage` / `updateTitle` / `bindAgent` / `switchModel` / `setPermissionMode` / `messagesOf` / `llmMessagesOf`；会话内含 `agentId` / `provider` / `model` / `permissionMode` / `SessionUsage`。
-- `PermissionManager.decide(PermissionCheckRequest)` 是内核唯一同步判定入口，**不会返回 ASK**（未落地时降级为 DENY）。
+- `PermissionManager.decide(PermissionCheckRequest)` 是内核唯一同步判定入口，**不会返回 ASK**（策略要求审批时由 `ApprovalChannel` 向审批者提问，拿不到批准即 DENY）。
 - `ExtensionRegistry` 已提供 `handlers` / `handler` / `bindings` / `invoke` / `descriptors` / `descriptorBindings`；工具描述符 `ToolDescriptor` 随 handler 落表，**无需第二份工具目录**。
 - `AgentManager` 提供 `systemPromptOf(agentId)`（原文）/ `policyOf` / `find` / `require` / `resolveDefault` / `all` / `getDefaultAgentId`。
 - `JellyfishSettings` 当前**只有 `plugins` 段**；`mergeJellyfishSettings` 只合并插件段；`RuntimeSnapshot.empty()` 直接 `new JellyfishSettings(null)`。

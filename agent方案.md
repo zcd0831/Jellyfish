@@ -812,7 +812,7 @@ public final class AgentModule {
 | 位置 | 现文 | 改为 |
 | --- | --- | --- |
 | 代码结构 infra 包列表 | `├── agent/          # Agent 定义注册表：从配置装载定义，按 agentId 提供提示词与权限策略` | 补一句落地口径：`AgentManager（门面，implements PermissionPolicyProvider）+ AgentRegistry（只读索引）；提示词拼装仍归 core/prompt` |
-| 代码结构 infra 包列表 | `├── permission/     # …待落地：AgentManager 提供的权限策略源、人工审批通道（ASK 暂时降级为拒绝）` | 去掉「AgentManager 提供的权限策略源」，只留人工审批通道 |
+| 代码结构 infra 包列表 | `├── permission/     # …待落地：AgentManager 提供的权限策略源、人工审批通道（ASK 暂时降级为拒绝）` | 三项均已落地（策略源 = AgentManager、人工审批 = ApprovalChannel）；包注释改为完整口径 |
 | 架构图 `AgentMgr` 出边 | `ReAct -->|"消息列表 / 当前 agentId / 当前模型"| SessionMgr` 与 `SessionMgr -->|"按 currentAgentId 取 system prompt / Agent 定义"| AgentMgr` | 不变（已准确） |
 | 架构图 `AgentMgr` 出边 | —— | 补 `AgentMgr -.-> publish：Agent 定义装载（AgentsLoadedEvent）`；`ModelMgr` 对称补 `ModelsLoadedEvent` |
 | 架构图 `Runtime --> AgentMgr` | `注入 Agent 定义` | 补「agents.json 全局级 + 项目级双源合并」 |

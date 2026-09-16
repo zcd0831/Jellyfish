@@ -21,6 +21,7 @@ import zcd.jellyfish.infra.event.EventChannel;
 import zcd.jellyfish.infra.event.EventChannelOptions;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.model.ModelManager;
+import zcd.jellyfish.infra.permission.ApprovalChannel;
 import zcd.jellyfish.infra.registry.TypeRegistry;
 import zcd.jellyfish.infra.session.Session;
 import zcd.jellyfish.infra.session.SessionManager;
@@ -64,6 +65,9 @@ class LauncherTest {
 
     /** 真实事件通道，仅为满足 TUI 装配。 */
     private final EventChannel eventChannel = new EventChannel(EventChannelOptions.defaults(), typeRegistry);
+
+    /** 真实审批通道，仅为满足 TUI 装配（未挂审批者，因此不会真的等答复）。 */
+    private final ApprovalChannel approvalChannel = new ApprovalChannel();
 
     @Mock
     private AgentHarness harness;
@@ -261,6 +265,7 @@ class LauncherTest {
         when(component.agentManager()).thenReturn(agents);
         when(component.extensionRegistry()).thenReturn(extensionRegistry);
         when(component.eventChannel()).thenReturn(eventChannel);
+        when(component.approvalChannel()).thenReturn(approvalChannel);
     }
 
     /**

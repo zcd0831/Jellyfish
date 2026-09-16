@@ -8,11 +8,14 @@ import zcd.jellyfish.api.extension.PermissionCheckRequest;
 import zcd.jellyfish.api.extension.PermissionDecision;
 import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.api.extension.PermissionVeto;
+import zcd.jellyfish.infra.config.PermissionApprovalSettings;
+import zcd.jellyfish.infra.config.RuntimeConfig;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.extension.HandlerBinding;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
+import java.time.Duration;
 import java.util.Objects;
 
 /**
@@ -23,7 +26,8 @@ import java.util.Objects;
  *     <li><b>核心策略</b>（普通 Java 代码，不开扩展点）：agent 策略的显式拒绝 &gt; 需人工审批 &gt;
  *     允许范围收窄 &gt; PLAN 只读白名单；</li>
  *     <li><b>插件拦截</b>：类型级扩展点，按 {@code order} 升序调用，遇到拦截即短路；</li>
- *     <li><b>ASK 降级</b>：审批通道未落地前一律降级为拒绝，绝不静默放行。</li>
+ *     <li><b>ASK 处理</b>：经 {@link ApprovalChannel} 向审批者提问，无审批者 / 超时 / 异常一律拒绝，
+ *     绝不静默放行。</li>
  * </ol>
  * 无论结果如何都会发一条 {@link PermissionDecidedEvent} 供可观测性使用（放行也发），
  * 但事件只是观察者，改不了判定结果。
@@ -45,8 +49,8 @@ public class PermissionManager {
     /** 核心策略判定的来源标识，写进审计事件，与插件 {@code pluginId} 区分开。 */
     public static final String CORE_SOURCE = "core";
 
-    /** 审批通道未落地时给 ASK 追加的说明。 */
-    private static final String APPROVAL_UNAVAILABLE = "（审批通道未落地，按拒绝处理）";
+    /** 审批结论的来源标识，写进审计事件：一眼能分出「策略直接拒绝」与「人在审批框上拒绝」。 */
+    public static final String APPROVAL_SOURCE = "approval";
 
     /** 策略来源，将来由 AgentManager 实现。 */
     private final PermissionPolicyProvider policies;
@@ -60,6 +64,12 @@ public class PermissionManager {
     /** 审计事件发布入口。 */
     private final EventPublisher events;
 
+    /** 人工审批通道。 */
+    private final ApprovalChannel approvals;
+
+    /** 运行时配置，用于现读审批超时。 */
+    private final RuntimeConfig runtimeConfig;
+
     /**
      * 构造权限管理器。
      *
@@ -67,20 +77,26 @@ public class PermissionManager {
      * @param readOnlyTools 只读工具集合
      * @param extensions    同步扩展点策略
      * @param events        审计事件发布入口
+     * @param approvals     人工审批通道
+     * @param runtimeConfig 运行时配置，提供审批超时
      */
     @Inject
     public PermissionManager(PermissionPolicyProvider policies, ReadOnlyTools readOnlyTools,
-                             ExtensionRegistry extensions, EventPublisher events) {
+                             ExtensionRegistry extensions, EventPublisher events,
+                             ApprovalChannel approvals, RuntimeConfig runtimeConfig) {
         this.policies = Objects.requireNonNull(policies, "policies must not be null");
         this.readOnlyTools = Objects.requireNonNull(readOnlyTools, "readOnlyTools must not be null");
         this.extensions = Objects.requireNonNull(extensions, "extensions must not be null");
         this.events = Objects.requireNonNull(events, "events must not be null");
+        this.approvals = Objects.requireNonNull(approvals, "approvals must not be null");
+        this.runtimeConfig = Objects.requireNonNull(runtimeConfig, "runtimeConfig must not be null");
     }
 
     /**
      * 判定一次工具调用是否放行。
      * <p>
-     * 本方法<b>不会</b>返回 ASK：策略提出「需要人工审批」时会降级为拒绝。
+     * 本方法<b>不会</b>返回 ASK：策略提出「需要人工审批」时会向审批者提问，得到批准才放行，
+     * 其余情况（拒绝 / 超时 / 无审批者）一律拒绝。
      *
      * @param request 权限检查请求，不可为 {@code null}
      * @return 判定结果，保证非 {@code null}
@@ -101,7 +117,10 @@ public class PermissionManager {
                 }
             }
         }
-        decision = resolveApproval(decision);
+        if (decision.isAsk()) {
+            decision = resolveApproval(request, decision);
+            source = APPROVAL_SOURCE;
+        }
         publishAudit(request, decision, source);
         return decision;
     }
@@ -153,24 +172,37 @@ public class PermissionManager {
     }
 
     /**
-     * 处理「需要人工审批」的判定：审批通道未落地，一律降级为拒绝。
+     * 处理「需要人工审批」的判定：把问题交给审批者，拿不到批准就拒绝。
      * <p>
-     * 之所以不降级为放行：策略已经明确表示「这个工具要人看一眼」，审批者缺席时放行等于静默放宽权限，
-     * 而拒绝的代价只是工具执行失败、可被用户察觉。降级后的理由保留策略原文，让审计既能看到真实意图、
-     * 又能看到实际行为。
+     * 之所以不降级为放行：策略已经明确表示「这个工具要人看一眼」，审批者缺席或超时时放行
+     * 等于静默放宽权限，而拒绝的代价只是工具执行失败、可被用户察觉。降级后的理由保留策略原文，
+     * 让审计既能看到真实意图、又能看到实际行为。
+     * <p>
+     * 超时每轮现读：配置刷新后不必重启，与「不持有全局当前态」同口径。
      *
-     * @param decision 策略给出的判定
-     * @return 可执行态判定：非 ASK 原样返回，ASK 降级为 DENY
+     * @param request  权限检查请求
+     * @param decision 策略给出的 ASK 判定
+     * @return 可执行态判定：批准为 ALLOW，其余一切情况为 DENY
      */
-    private static PermissionDecision resolveApproval(PermissionDecision decision) {
-        // TODO 人工审批通道未落地：审批者永远缺席，因此 ASK 一律降级为 DENY。
-        //      审批通道落地后改为「向审批者提问 → ALLOW / DENY」，ASK 才会作为终态返回；
-        //      降级发生的唯一位置就是这里，调用点无需再处理 ASK。
-        if (!decision.isAsk()) {
-            return decision;
-        }
-        String reason = decision.getReason() == null ? "" : decision.getReason();
-        return PermissionDecision.deny(reason + APPROVAL_UNAVAILABLE);
+    private PermissionDecision resolveApproval(PermissionCheckRequest request, PermissionDecision decision) {
+        PermissionApprovalSettings settings = runtimeConfig.getPermissionApprovalSettings();
+        Duration timeout = Duration.ofSeconds(settings.getApprovalTimeoutSeconds());
+        ApprovalChannel.Pending pending = new ApprovalChannel.Pending(request.getSessionId(),
+                request.getAgentId(), request.getToolName(), request.getArguments(), request.getMode(),
+                decision.getReason());
+        PermissionDecision verdict = approvals.request(pending, timeout);
+        String reason = reasonOf(decision) + "；" + reasonOf(verdict);
+        return verdict.isAllowed() ? PermissionDecision.allow(reason) : PermissionDecision.deny(reason);
+    }
+
+    /**
+     * 取判定理由原文，空值按空串处理。
+     *
+     * @param decision 判定结果
+     * @return 理由文本，保证非 {@code null}
+     */
+    private static String reasonOf(PermissionDecision decision) {
+        return decision.getReason() == null ? "" : decision.getReason();
     }
 
     /**

@@ -105,6 +105,24 @@ java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -tui
 | `/ui` | 查看与切换插件的界面贡献（同样由外壳处理，不在 `/help` 列表里） |
 | `/thinking` | 展开 / 折叠思考过程（同样由外壳处理，不在 `/help` 列表里） |
 
+工具需要审批时（agent 策略把工具写进了 `askTools`）会弹出审批选择框，它**优先于**补全面板与二级选择页：
+
+```
+╭ ⏸ 需要审批 ────────────────────────╮
+│ 工具 bash                          │
+│ 参数 {"command": "rm -rf build"}   │
+│ 理由 agent 策略要求人工审批该工具   │
+│ 会话 a1b2c3d4… · 模式 normal       │
+│                                    │
+│  ❯ 允许一次   本次调用放行…        │
+│    拒绝       本次调用按拒绝处理…  │
+│    ↑/↓ 选择 · Enter 确认 · Esc 拒绝并中断 │
+╰────────────────────────────────────╯
+```
+
+参数里的密钥（`apiKey`、`token` 等）显示为 `***`，超长参数折行显示并在截断处写明省略了几行；
+`Esc` 是「拒绝**并**中断回合」——只拒绝的话模型往往会换个方式接着试。
+
 **为什么是 `Ctrl+S` 发送而不是 `Enter` 发送**：终端在 raw 模式下，`Shift+Enter`、`Alt+Enter`、
 CSI-u 等所有「带修饰的 Enter」编码都无法被底层框架区分（一律解码成无修饰的 `Enter`），
 `Enter` 与 `\n` 也完全同形。因此「`Enter` 发送 + 修饰键换行」在任何终端上都不可实现。
@@ -199,7 +217,8 @@ CSI-u 等所有「带修饰的 Enter」编码都无法被底层框架区分（�
     "coder": {
       "description": "通用编码助手",
       "permissions": {
-        "deniedTools": ["write_file", "edit_file"]
+        "deniedTools": ["write_file", "edit_file"],
+        "askTools": ["bash"]
       }
     }
   }
@@ -207,6 +226,12 @@ CSI-u 等所有「带修饰的 Enter」编码都无法被底层框架区分（�
 ```
 
 三段工具名的语义是：**字段缺失 = 不限制**，显式写 `[]` = 该方向上一个都不放行（`allowedTools: []` 就是全拦，`enabled` / `deniedTools` 同理）。因此想表达「只显式拒绝两个工具、其余不限制」就**不要**写 `"allowedTools": []`，直接省略该字段。
+
+优先级是「`deniedTools` > `askTools` > `allowedTools`」。`askTools` 里的工具每次调用都要人工审批：
+
+- `-tui` 会弹出审批选择框（`↑`/`↓` 选，`Enter` 确认，`Esc` 拒绝并中断回合），批准才执行；
+- `-cli` / `-server` 没有审批界面（也没有审批者），因此**一律按拒绝处理**——绝不静默放行；
+- 审批框等不到答复（缺省 120 秒，见 `permission.approvalTimeoutSeconds`）同样按拒绝处理。
 
 上例的 `coder` 还需要一份 `coder.md`（与 `agents.json` 同目录），内容就是它的系统提示词，可以是多段长文。
 
@@ -235,11 +260,16 @@ CSI-u 等所有「带修饰的 Enter」编码都无法被底层框架区分（�
     "maxRounds": 16,
     "contextReserveTokens": 1024,
     "maxToolOutputChars": 20000
+  },
+  "permission": {
+    "approvalTimeoutSeconds": 120
   }
 }
 ```
 
 `react` 段控制 ReAct 循环：`maxRounds` 是单回合最大轮数；`contextReserveTokens` 是上下文预算里为系统提示词 / 插件注入的上下文预留的 token；`maxToolOutputChars` 是单个工具输出回灌模型前的截断长度。缺省值即为上表；非法值（非正数）回退到缺省值。
+
+`permission` 段当前只有 `approvalTimeoutSeconds`：`askTools` 里的工具在 TUI 上弹审批框后最多等这么久，超时按拒绝处理。它有缺省值（120 秒）而不允许「永不超时」——审批请求发生在 `react` 线程上并被同步等待，一个永远不来的答复就是一条永远不返回的线程。
 
 约定：
 

@@ -12,6 +12,7 @@ import zcd.jellyfish.infra.command.CommandManager;
 import zcd.jellyfish.infra.event.EventChannel;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.model.ModelManager;
+import zcd.jellyfish.infra.permission.ApprovalChannel;
 import zcd.jellyfish.infra.session.SessionManager;
 import zcd.jellyfish.infra.ui.UiContributions;
 import zcd.jellyfish.tui.TuiApp;
@@ -75,6 +76,14 @@ public final class TuiRunMode implements RunMode {
     /** 事件通道：UI 贡献失效订阅用。 */
     private final EventChannel events;
 
+    /**
+     * 人工审批通道：本模式是唯一会挂审批者的外壳。
+     * <p>
+     * {@code -cli} 是单次非交互、{@code -server} 尚未落地，两者都不挂——于是「策略要求人工审批」
+     * 的工具在那里一律按拒绝处理（fail-closed），与审批通道落地前的行为完全一致。
+     */
+    private final ApprovalChannel approvals;
+
     /** 输出面板：只在进入备用屏之前用于报告启动期错误。 */
     private final ConsoleIO console;
 
@@ -88,11 +97,12 @@ public final class TuiRunMode implements RunMode {
      * @param agents     agent 门面，不可为 {@code null}
      * @param extensions 同步扩展点策略，不可为 {@code null}
      * @param events     事件通道，不可为 {@code null}
+     * @param approvals  人工审批通道，不可为 {@code null}
      * @param console    输出面板，不可为 {@code null}
      */
     public TuiRunMode(AgentHarness harness, CommandManager commands, SessionManager sessions,
                       ModelManager models, AgentManager agents, ExtensionRegistry extensions,
-                      EventChannel events, ConsoleIO console) {
+                      EventChannel events, ApprovalChannel approvals, ConsoleIO console) {
         this.harness = Objects.requireNonNull(harness, "harness must not be null");
         this.commands = Objects.requireNonNull(commands, "commands must not be null");
         this.sessions = Objects.requireNonNull(sessions, "sessions must not be null");
@@ -100,6 +110,7 @@ public final class TuiRunMode implements RunMode {
         this.agents = Objects.requireNonNull(agents, "agents must not be null");
         this.extensions = Objects.requireNonNull(extensions, "extensions must not be null");
         this.events = Objects.requireNonNull(events, "events must not be null");
+        this.approvals = Objects.requireNonNull(approvals, "approvals must not be null");
         this.console = Objects.requireNonNull(console, "console must not be null");
     }
 
@@ -128,8 +139,11 @@ public final class TuiRunMode implements RunMode {
         // UI 贡献门面的生命周期归外壳：谁创建谁释放，因此放在这里而不是交给 Dagger 单例
         // （单例不会被组件自动关闭，订阅就会一直挂着）。
         UiContributions uiContributions = new UiContributions(extensions, events, UI_OWNER);
+        // 挂上审批者：本模式有能力承载「需要人工审批」的模态交互。必须在界面跑起来之前挂，
+        // 否则启动瞬间发生的工具调用会拿不到审批者而被按拒绝处理。
+        approvals.attach();
         try {
-            new TuiApp(harness, commands, sessions, models, agents, uiContributions,
+            new TuiApp(harness, commands, sessions, models, agents, uiContributions, approvals,
                     options.isShowThinking()).run();
             return ExitCodes.OK;
         } catch (JellyfishException e) {
@@ -146,6 +160,9 @@ public final class TuiRunMode implements RunMode {
                     + "（需要真实终端；请用 -cli 做单次调用）");
             return ExitCodes.RUNTIME_ERROR;
         } finally {
+            // 先摘审批者再关界面订阅：摘下会把仍在等待的审批请求一律判拒绝，
+            // 否则那些 react 线程要一直阻塞到超时（进程都要退了）。
+            approvals.detach();
             // close 幂等：它只解除本门面建立的订阅，不清空共用注册表（那是插件回收的职责）
             uiContributions.close();
         }

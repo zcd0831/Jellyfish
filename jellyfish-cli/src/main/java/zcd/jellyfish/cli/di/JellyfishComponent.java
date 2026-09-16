@@ -9,6 +9,7 @@ import zcd.jellyfish.infra.event.EventChannel;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.llm.LlmClientFactory;
 import zcd.jellyfish.infra.model.ModelManager;
+import zcd.jellyfish.infra.permission.ApprovalChannel;
 import zcd.jellyfish.infra.permission.PermissionManager;
 import zcd.jellyfish.infra.session.SessionManager;
 
@@ -68,6 +69,16 @@ public interface JellyfishComponent {
      * @return PermissionManager
      */
     PermissionManager permissionManager();
+
+    /**
+     * 获取人工审批通道。
+     * <p>
+     * 调用点是外壳装配：只有 {@code -tui} 会 {@code attach()}——它需要独占终端的模态交互；
+     * {@code -cli} 与 {@code -server} 不挂审批者，因此「需要审批」的工具一律按拒绝处理。
+     *
+     * @return ApprovalChannel
+     */
+    ApprovalChannel approvalChannel();
 
     /**
      * 获取命令域服务。

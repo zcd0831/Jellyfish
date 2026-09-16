@@ -56,7 +56,7 @@ class PythonLanguageTest {
 
         List<String> command = new PythonLanguage("python3").startCommand(gatewayDirectory);
 
-        assertEquals(Arrays.asList("python3", "/tmp/jellyfish-gateway/gateway.py"), command);
+        assertEquals(Arrays.asList("python3", "/tmp/jellyfish-gateway/script/gateway.py"), command);
     }
 
     @Test

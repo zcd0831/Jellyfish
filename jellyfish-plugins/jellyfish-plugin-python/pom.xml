@@ -88,6 +88,8 @@
                                 <includes>
                                     <include>zcd:jellyfish-script</include>
                                     <include>com.fasterxml.jackson.core:*</include>
+                                    <!-- 参数名模块：api 快照类型靠构造器参数名反序列化，缺了会「写得出、读不回」 -->
+                                    <include>com.fasterxml.jackson.module:*</include>
                                     <include>org.apache.commons:commons-exec</include>
                                 </includes>
                             </artifactSet>
@@ -108,4 +110,34 @@
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <profile>
+            <!--
+                真实解释器的端到端测试。
+
+                它需要一个真实的 python3，因此不进 `mvn test`（AGENTS.md 规定单测不访问外部资源）。
+                这里用 profile 而不是另建模块：被测对象就是本模块的插件与它的网关资源，
+                换一个模块反而要把资源再复制一份。
+
+                启用方式：mvn -Pscript-it test
+                指定解释器：mvn -Pscript-it test -Djellyfish.test.python=/path/to/python3
+            -->
+            <id>script-it</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <configuration>
+                            <!-- 覆盖默认包含规则：本 profile 只跑 *IT，普通单测由 mvn test 负责 -->
+                            <includes>
+                                <include>**/*IT.java</include>
+                            </includes>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>

@@ -47,6 +47,24 @@ final class PythonLanguage implements ScriptLanguage {
     /** 探测命令用的版本旗标。 */
     private static final String VERSION_FLAG = "--version";
 
+    /** 网关入口相对路径（相对抽取根目录）。 */
+    private static final String GATEWAY_ENTRY = "script/gateway.py";
+
+    /**
+     * 网关资源清单：由 {@code GatewayResources} 按内容摘要抽取到磁盘后交给解释器执行。
+     * <p>
+     * <b>为什么清单在这里</b>：「这门语言的网关由哪些文件组成」是桥接插件的打包事实，
+     * 只有它知道；而运行时只需要「把这几份文件落到磁盘、告诉我落在哪」。
+     * 两者用同一份常量，就不会出现「抽出来的资源」与「启动的命令」对不上。
+     * <p>
+     * 四个文件各司其职：{@code gateway.py} 是控制面（只与宿主说话），{@code worker.py} 是
+     * 每个脚本一个的数据面，{@code script_wire.py} 是两侧共用的分帧，{@code jellyfish_sdk.py}
+     * 是脚本作者看到的全部 API。后两个必须与前者同目录：网关靠自身目录做 {@code sys.path}
+     * 起点，脚本则靠它 import 到 SDK。
+     */
+    static final List<String> GATEWAY_RESOURCES = Collections.unmodifiableList(Arrays.asList(
+            GATEWAY_ENTRY, "script/worker.py", "script/script_wire.py", "script/jellyfish_sdk.py"));
+
     /** 解释器可执行文件。 */
     private final String pythonPath;
 
@@ -69,6 +87,15 @@ final class PythonLanguage implements ScriptLanguage {
         return "Python";
     }
 
+    /**
+     * 获取解释器可执行文件。
+     *
+     * @return 解释器路径或命令名
+     */
+    String pythonPath() {
+        return pythonPath;
+    }
+
     @Override
     public List<String> probeCommand() {
         return Collections.unmodifiableList(Arrays.asList(pythonPath, VERSION_FLAG));
@@ -76,9 +103,9 @@ final class PythonLanguage implements ScriptLanguage {
 
     @Override
     public List<String> startCommand(Path gatewayDirectory) {
-        // 网关入口固定叫 gateway.py（由桥接插件在网关目录里提供），运行期不做可配置：
-        // 入口名可配只会让「抽出来的资源」与「启动的命令」对不上，属于纯粹的失配来源
-        Path entry = gatewayDirectory.resolve("gateway.py");
+        // 入口路径与 GATEWAY_RESOURCES 同源，不做可配置：入口名可配只会让
+        // 「抽出来的资源」与「启动的命令」对不上，属于纯粹的失配来源
+        Path entry = gatewayDirectory.resolve(GATEWAY_ENTRY);
         return Collections.unmodifiableList(Arrays.asList(pythonPath, entry.toString()));
     }
 

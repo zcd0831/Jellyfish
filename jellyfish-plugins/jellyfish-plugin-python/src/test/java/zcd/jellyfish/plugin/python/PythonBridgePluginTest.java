@@ -14,6 +14,7 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.when;
 
@@ -87,6 +88,20 @@ class PythonBridgePluginTest {
         plugin.stop();
 
         assertNull(plugin.language());
+    }
+
+    @Test
+    @DisplayName("stop 应释放台账，使下一次 start 重新扫描")
+    void stop_should_releaseLedger_when_calledAfterStart() {
+        when(context.configuration()).thenReturn(null);
+        when(context.pluginId()).thenReturn(PLUGIN_ID);
+        PythonBridgePlugin plugin = new PythonBridgePlugin();
+        plugin.start(context);
+
+        plugin.stop();
+
+        assertEquals(0, plugin.ledger().scriptCount());
+        assertTrue(plugin.ledger().issues().isEmpty());
     }
 
     @Test

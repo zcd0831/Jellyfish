@@ -10,6 +10,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
@@ -100,5 +101,98 @@ class PythonConfigTest {
         values.put(PythonConfig.KEY_PYTHON_PATH, "");
 
         assertThrows(JellyfishException.class, () -> PythonConfig.from(values));
+    }
+
+    @Test
+    @DisplayName("网关相关键缺失时应使用与运行时一致的默认值")
+    void from_should_useRuntimeDefaults_when_gatewayKeysAreAbsent() {
+        PythonConfig config = PythonConfig.from(null);
+
+        // 默认值取自 GatewaySettings 而不是本地再写一份：两处各写一份的结果是
+        // 「用户不配时行为取决于哪个类先被改」，而那种不一致没有任何测试能发现
+        assertEquals(zcd.jellyfish.script.GatewaySettings.DEFAULT_INVOKE_TIMEOUT_SECONDS,
+                config.invokeTimeoutSeconds());
+        assertEquals(zcd.jellyfish.script.GatewaySettings.DEFAULT_WORKER_IDLE_SECONDS,
+                config.workerIdleSeconds());
+        assertEquals(zcd.jellyfish.script.GatewaySettings.DEFAULT_GATEWAY_IDLE_SECONDS,
+                config.gatewayIdleSeconds());
+        assertEquals(zcd.jellyfish.script.GatewayResources.defaultBaseDirectory(), config.gatewayRoot());
+    }
+
+    @Test
+    @DisplayName("网关相关键应被解析进设置并下发")
+    void gatewaySettings_should_carryConfiguredValues() {
+        Map<String, Object> values = new LinkedHashMap<String, Object>();
+        values.put(PythonConfig.KEY_INVOKE_TIMEOUT, Integer.valueOf(7));
+        values.put(PythonConfig.KEY_WORKER_IDLE, Integer.valueOf(11));
+        values.put(PythonConfig.KEY_GATEWAY_IDLE, Integer.valueOf(13));
+        values.put(PythonConfig.KEY_MANIFEST_STRICT, Boolean.FALSE);
+        Map<String, Object> events = new LinkedHashMap<String, Object>();
+        events.put(PythonConfig.KEY_EVENTS_ALLOW, java.util.Arrays.asList("SessionCreatedEvent"));
+        values.put(PythonConfig.KEY_EVENTS, events);
+
+        PythonConfig config = PythonConfig.from(values);
+        zcd.jellyfish.script.GatewaySettings settings = config.gatewaySettings();
+
+        assertEquals(7000L, settings.invokeTimeoutMillis());
+        assertEquals(11, settings.workerIdleSeconds());
+        assertEquals(13, settings.gatewayIdleSeconds());
+        assertFalse(settings.manifestStrict());
+        assertEquals(java.util.Arrays.asList("SessionCreatedEvent"), settings.allowedEvents());
+    }
+
+    @Test
+    @DisplayName("秒数为负应报错，而不是当成 0")
+    void from_should_rejectNegativeSeconds() {
+        Map<String, Object> values = new LinkedHashMap<String, Object>();
+        values.put(PythonConfig.KEY_INVOKE_TIMEOUT, Integer.valueOf(-1));
+
+        // 把负数当 0 处理会让「不超时」这个危险配置静默生效，因此必须报错
+        assertThrows(JellyfishException.class, () -> PythonConfig.from(values));
+    }
+
+    @Test
+    @DisplayName("秒数写成字符串应报错，而不是静默退回默认值")
+    void from_should_rejectNonNumericSeconds() {
+        Map<String, Object> values = new LinkedHashMap<String, Object>();
+        values.put(PythonConfig.KEY_WORKER_IDLE, "300");
+
+        assertThrows(JellyfishException.class, () -> PythonConfig.from(values));
+    }
+
+    @Test
+    @DisplayName("严格校验标志写成字符串应报错")
+    void from_should_rejectNonBooleanStrictFlag() {
+        Map<String, Object> values = new LinkedHashMap<String, Object>();
+        values.put(PythonConfig.KEY_MANIFEST_STRICT, "true");
+
+        assertThrows(JellyfishException.class, () -> PythonConfig.from(values));
+    }
+
+    @Test
+    @DisplayName("事件白名单结构非法应报错")
+    void from_should_rejectMalformedEventAllowList() {
+        Map<String, Object> values = new LinkedHashMap<String, Object>();
+        values.put(PythonConfig.KEY_EVENTS, java.util.Arrays.asList("x"));
+
+        assertThrows(JellyfishException.class, () -> PythonConfig.from(values));
+
+        Map<String, Object> badEntry = new LinkedHashMap<String, Object>();
+        badEntry.put(PythonConfig.KEY_EVENTS_ALLOW, java.util.Arrays.asList("ok", 1));
+        Map<String, Object> second = new LinkedHashMap<String, Object>();
+        second.put(PythonConfig.KEY_EVENTS, badEntry);
+        assertThrows(JellyfishException.class, () -> PythonConfig.from(second));
+    }
+
+    @Test
+    @DisplayName("网关资源根目录应支持 ~ 展开")
+    void gatewayRoot_should_expandTilde() {
+        Map<String, Object> values = new LinkedHashMap<String, Object>();
+        values.put(PythonConfig.KEY_GATEWAY_ROOT, "~/custom-gateway");
+
+        PythonConfig config = PythonConfig.from(values);
+
+        assertEquals(Paths.get(System.getProperty("user.home"), "custom-gateway"),
+                config.gatewayRoot());
     }
 }

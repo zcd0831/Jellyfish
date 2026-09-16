@@ -27,6 +27,7 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
@@ -223,6 +224,151 @@ class PythonScriptIT {
                         + countProcesses(gatewayDirectory) + " 个进程");
     }
 
+
+    @Test
+    @DisplayName("熔断只影响出问题的脚本，且不摘注册：同语言其它脚本照常工作")
+    void circuit_should_isolateOnlyTheBrokenScript() throws IOException {
+        writeScript("jira", TOOL_SCRIPT, FULL_MANIFEST);
+        writeScript("git", GIT_SCRIPT, GIT_MANIFEST);
+        // 一次超时就打开、冷却 1 秒：把「熔断 — 拒绝 — 冷却 — 恢复」压缩到用例能跑的时长里
+        startRuntimeWithCircuit(2, 1, 1, 5);
+
+        assertThrows(JellyfishException.class,
+                () -> invokeTool("jira_hang", Collections.<String, Object>emptyMap()));
+
+        // 同一个网关、同一个语言下的另一个脚本完全不受影响——这正是「每脚本一 worker」的直接收益
+        ToolCallResult other = invokeTool("git_status", Collections.<String, Object>emptyMap());
+        assertEquals("main 干净", other.getOutput());
+
+        // 熔断不摘注册：工具还在清单里，但调用被**立即**拒绝，且文案带剩余时间。
+        // 「立即」是这条断言的全部价值——同一个工具在没有熔断时会正常返回，
+        // 因此耗时能证明它是被拒绝的，而不是被执行的
+        long started = System.currentTimeMillis();
+        JellyfishException refusal = assertThrows(JellyfishException.class,
+                () -> invokeTool("jira_issue", Collections.<String, Object>singletonMap("key", "X")));
+        assertTrue(System.currentTimeMillis() - started < 1000,
+                "拒绝应发生在派发之前，而不是等一个超时");
+        assertTrue(refusal.getMessage().contains("熔断"), refusal.getMessage());
+
+        String status = statusCommand();
+        // 台账按脚本名排序，而这两个名字的先后是 `git` 在前——因此断言的是片段而不是整行
+        assertTrue(status.contains("jira 熔断中"), status);
+        assertTrue(status.contains("git 正常"), status);
+    }
+
+    @Test
+    @DisplayName("冷却到期后应自动半开并恢复，全程不需要 /reload")
+    void circuit_should_recoverAutomatically_afterCooldown() throws IOException {
+        writeScript("jira", TOOL_SCRIPT, FULL_MANIFEST);
+        startRuntimeWithCircuit(2, 1, 1, 5);
+
+        assertThrows(JellyfishException.class,
+                () -> invokeTool("jira_hang", Collections.<String, Object>emptyMap()));
+
+        // 「自动恢复」是这个机制存在的理由：摘注册的代价就是恢复必须走 /reload，
+        // 而这里什么都不做，只是等过冷却
+        ToolCallResult recovered = invokeUntilSucceeds("jira_issue",
+                Collections.<String, Object>singletonMap("key", "X"), 20_000L);
+
+        assertEquals("issue X 处于 OPEN（会话 s-1）", recovered.getOutput());
+        assertTrue(statusCommand().contains("jira 正常"), statusCommand());
+    }
+
+
+    @Test
+    @DisplayName("超时配 0 表示不超时：调用应正常完成，而不是被当成立即超时秒杀")
+    void invokeTimeout_should_meanNoTimeout_whenConfiguredAsZero() throws IOException {
+        // 这个用例钉的是一处**字面意思与实现相反**的缺陷：网关最初把 0 当成截止时间，
+        // 于是 `now > deadline` 恒真，任何调用都在派发的下一拍被隔离——
+        // 现象是「脚本永远跑不出结果」，而用户从配置里读到的却是「不超时」
+        writeScript("jira", TOOL_SCRIPT, FULL_MANIFEST);
+        startRuntime(0);
+
+        ToolCallResult result = invokeTool("jira_issue",
+                Collections.<String, Object>singletonMap("key", "K"));
+
+        assertEquals("issue K 处于 OPEN（会话 s-1）", result.getOutput());
+    }
+
+    @Test
+    @DisplayName("网关被强杀后，卡在用户代码里的 worker 也应自行退出（不留孤儿）")
+    void worker_should_notSurvive_when_gatewayIsKilledFiercely()
+            throws IOException, InterruptedException {
+        // 这是最难清理的一种孤儿：worker 卡在用户代码里，既读不到协议套接字的 EOF，
+        // 也轮不到事件循环里的「父进程没了」检查。它只能靠 worker 侧的定时器看门狗发现，
+        // 因此这里用操作系统的进程表直接断言——先让它真的卡住，再强杀网关
+        writeScript("jira", TOOL_SCRIPT, FULL_MANIFEST);
+        java.nio.file.Path gatewayDirectory = new zcd.jellyfish.script.GatewayResources(gatewayRoot)
+                .materialize(new PythonLanguage(interpreter()), PythonLanguage.GATEWAY_RESOURCES);
+        startRuntime(30);
+        invokeTool("jira_issue", Collections.<String, Object>singletonMap("key", "K"));
+        assertTrue(awaitProcessCount(gatewayDirectory, 2), "应先有一个 worker 在跑");
+
+        // 让脚本卡死：它会在 time.sleep 里待十分钟，期间不会回到事件循环
+        Thread hanging = new Thread(() -> {
+            try {
+                invokeTool("jira_hang", Collections.<String, Object>emptyMap());
+            } catch (JellyfishException expected) {
+                // 网关会被杀，这次调用必然失败；这里只关心进程是否残留
+            }
+        });
+        hanging.setDaemon(true);
+        hanging.start();
+        Thread.sleep(1000L);
+
+        Process kill = new ProcessBuilder("pkill", "-9", "-f", gatewayDirectory.toString()).start();
+        assertEquals(0, kill.waitFor(), "强杀网关的命令应成功");
+
+        assertTrue(awaitProcessCount(gatewayDirectory, 0),
+                "网关被强杀后不该留下任何进程，实际仍有 "
+                        + countProcesses(gatewayDirectory) + " 个");
+        hanging.join(5000L);
+    }
+
+    /**
+     * 执行一次状态命令。
+     *
+     * @return 命令输出
+     */
+    private String statusCommand() {
+        return extensions.invoke(extensions.handler(CommandRequest.class, "python"),
+                new CommandRequest("python", null, null)).getOutput();
+    }
+
+    /**
+     * 启动插件并指定熔断参数。
+     * <p>
+     * <b>为什么探测轮数要放宽</b>：冷却只有 1 秒，而被隔离的 worker 要几秒才真正退场
+     * （它可能卡在不响应信号的系统调用里，只能等强杀）。若用默认的 3 轮，用例可能把
+     * 「新 worker 还没就绪」连着记成 3 轮探测失败、直接转永久——那是配置过紧，不是被测行为错了。
+     *
+     * @param invokeTimeoutSeconds 单次调用超时秒数
+     * @param failuresToOpen       连续失败多少次打开熔断
+     * @param cooldownSeconds      冷却秒数
+     * @param roundsToPermanent    探测失败几轮转永久
+     * @throws IOException 安装插件失败时抛出
+     */
+    private void startRuntimeWithCircuit(int invokeTimeoutSeconds, int failuresToOpen,
+                                         int cooldownSeconds, int roundsToPermanent) throws IOException {
+        installPlugin();
+        Map<String, Object> breaker = new LinkedHashMap<String, Object>();
+        breaker.put(PythonConfig.KEY_FAILURES_TO_OPEN, Integer.valueOf(failuresToOpen));
+        breaker.put(PythonConfig.KEY_COOLDOWN_SECONDS, Integer.valueOf(cooldownSeconds));
+        breaker.put(PythonConfig.KEY_ROUNDS_TO_PERMANENT, Integer.valueOf(roundsToPermanent));
+        Map<String, Object> python = new LinkedHashMap<String, Object>();
+        python.put(PythonConfig.KEY_SCRIPTS_ROOT, scriptsRoot.toString());
+        python.put(PythonConfig.KEY_GATEWAY_ROOT, gatewayRoot.toString());
+        python.put(PythonConfig.KEY_INVOKE_TIMEOUT, Integer.valueOf(invokeTimeoutSeconds));
+        python.put(PythonConfig.KEY_PYTHON_PATH, interpreter());
+        python.put(PythonConfig.KEY_CIRCUIT_BREAKER, breaker);
+        Map<String, Map<String, Object>> configurations = new LinkedHashMap<String, Map<String, Object>>();
+        configurations.put("jellyfish-plugin-python", python);
+        manager = new PF4JPluginManager(new PluginContextFactory(extensions, events, registry),
+                new PluginRuntimeConfig(Collections.singletonList(pluginsRoot), null, null, configurations));
+        manager.bootstrap();
+        assertEquals(PluginState.STARTED, manager.stateOf("jellyfish-plugin-python"));
+    }
+
     /**
      * 用默认超时启动插件，并指定 worker 空闲自毁秒数。
      *
@@ -337,6 +483,23 @@ class PythonScriptIT {
             + "\"tools\":[{\"name\":\"jira_issue\",\"readOnly\":true},{\"name\":\"jira_hang\"}],"
             + "\"commands\":[{\"name\":\"jira\",\"descriptor\":{\"summary\":\"操作 Jira\"}}],"
             + "\"contributions\":[\"prompt\"]}";
+
+
+    /**
+     * 第二个脚本：用于验证「一个脚本熔断不牵连同语言的其它脚本」。
+     * <p>
+     * 它与 {@link #TOOL_SCRIPT} 分属不同目录、各自一个 worker，但在内核眼里提供的是同一批扩展点。
+     */
+    private static final String GIT_SCRIPT = ""
+            + "from jellyfish_sdk import tool\n"
+            + "\n"
+            + "@tool(name=\"git_status\", description=\"工作区状态\", read_only=True)\n"
+            + "def git_status(args, ctx):\n"
+            + "    return \"main 干净\"\n";
+
+    /** 与 {@link #GIT_SCRIPT} 逐字对应的清单。 */
+    private static final String GIT_MANIFEST = "{\"entry\":\"main.py\","
+            + "\"tools\":[{\"name\":\"git_status\",\"readOnly\":true}]}";
 
     /**
      * 启动插件并完成注册。

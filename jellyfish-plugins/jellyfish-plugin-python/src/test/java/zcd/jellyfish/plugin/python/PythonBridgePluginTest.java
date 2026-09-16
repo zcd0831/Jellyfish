@@ -128,4 +128,23 @@ class PythonBridgePluginTest {
         assertNotNull(plugin.language());
         assertNotNull(first);
     }
+
+    @Test
+    @DisplayName("start 应建立经熔断的调用入口，stop 应释放它")
+    void caller_should_beCreatedOnStart_andReleasedOnStop() {
+        when(context.configuration()).thenReturn(null);
+        when(context.pluginId()).thenReturn(PLUGIN_ID);
+        PythonBridgePlugin plugin = new PythonBridgePlugin();
+
+        plugin.start(context);
+        assertNotNull(plugin.caller(), "转发闭包必须经过熔断：注册时用的是它，而不是网关本身");
+        assertNotNull(plugin.gateway());
+        // 还没有任何调用发生过，因此不该凭空冒出熔断记录
+        assertTrue(plugin.caller().states().isEmpty());
+
+        plugin.stop();
+
+        assertNull(plugin.caller());
+        assertNull(plugin.gateway());
+    }
 }

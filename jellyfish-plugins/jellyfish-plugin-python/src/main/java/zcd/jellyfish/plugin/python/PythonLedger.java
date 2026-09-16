@@ -1,5 +1,6 @@
 package zcd.jellyfish.plugin.python;
 
+import zcd.jellyfish.script.CircuitBreakingScriptCaller;
 import zcd.jellyfish.script.ScriptGateway;
 import zcd.jellyfish.script.ScriptPlugin;
 import zcd.jellyfish.script.ScriptRegistration;
@@ -7,6 +8,7 @@ import zcd.jellyfish.script.ScriptRegistration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 已加载脚本的运行态台账：脚本清单、注册结果与启动期问题。
@@ -15,8 +17,11 @@ import java.util.List;
  * 因此 {@code /plugins} 与插件状态页看不到它们。没有一本台账，「我明明写了脚本」就只能靠翻日志判断——
  * 而清单漂移是本方案唯一的高危点，它的可观测性不该依赖日志。
  * <p>
- * <b>只是一份快照，不是可变容器</b>：记录的是 {@code start()} 那一刻的事实。运行期状态
- * （懒启动 / 运行中 / 熔断）属于将来的网关，塞进这里会让两个生命周期纠缠在一起。
+ * <b>它是一份快照，而不是可变容器</b>：注册结果与启动期问题是 {@code start()} 那一刻的事实，
+ * 不随后续变化。但运行态（进程在不在、哪些脚本被熔断了）必然是<b>活的</b>，
+ * 因此这两部分不是存下来的副本，而是转发到运行时去看一眼。
+ * 区分方式是：报告「注册了什么」用快照，报告「现在怎么样」用视图——
+ * 把后者也快照下来，会得到一份「已经过时的真相」，而它比没有更具误导性。
  * <p>
  * 不可变，可安全跨线程传递。
  *
@@ -36,6 +41,9 @@ final class PythonLedger {
     /** 脚本运行时；未接通时为 {@code null}。 */
     private final ScriptGateway gateway;
 
+    /** 带熔断的调用入口；未接通时为 {@code null}。 */
+    private final CircuitBreakingScriptCaller callers;
+
     /**
      * 构造台账。
      *
@@ -43,13 +51,15 @@ final class PythonLedger {
      * @param registrations 注册结果，不可为 {@code null}
      * @param issues        启动期问题，不可为 {@code null}
      * @param gateway       脚本运行时，可为 {@code null}
+     * @param callers       带熔断的调用入口，可为 {@code null}
      */
     PythonLedger(List<ScriptPlugin> plugins, List<ScriptRegistration> registrations, List<String> issues,
-                 ScriptGateway gateway) {
+                 ScriptGateway gateway, CircuitBreakingScriptCaller callers) {
         this.plugins = Collections.unmodifiableList(new ArrayList<ScriptPlugin>(plugins));
         this.registrations = Collections.unmodifiableList(new ArrayList<ScriptRegistration>(registrations));
         this.issues = Collections.unmodifiableList(new ArrayList<String>(issues));
         this.gateway = gateway;
+        this.callers = callers;
     }
 
     /**
@@ -59,7 +69,7 @@ final class PythonLedger {
      */
     static PythonLedger empty() {
         return new PythonLedger(new ArrayList<ScriptPlugin>(), new ArrayList<ScriptRegistration>(),
-                new ArrayList<String>(), null);
+                new ArrayList<String>(), null, null);
     }
 
     /**
@@ -130,6 +140,24 @@ final class PythonLedger {
             // 与注册数放在同一行会让人以为它们是一回事，而这两者**本来就是解耦的**：
             // 进程没起，注册照样有效；这正是这套设计最需要被看见的一点
             builder.append("\n运行时：").append(gateway.describe());
+        }
+        if (callers != null) {
+            // 熔断态也单独一行：它回答的是「哪些脚本被暂时拒绝了，还要等多久」。
+            // 只列有记录的脚本——从未调用过的脚本没有账可报
+            Map<String, String> states = callers.states();
+            builder.append("\n熔断：");
+            if (states.isEmpty()) {
+                builder.append("尚未发生调用");
+            } else {
+                boolean first = true;
+                for (Map.Entry<String, String> entry : states.entrySet()) {
+                    if (!first) {
+                        builder.append("；");
+                    }
+                    first = false;
+                    builder.append(entry.getKey()).append(' ').append(entry.getValue());
+                }
+            }
         }
         if (plugins.isEmpty()) {
             builder.append("\n（脚本目录为空，或清单都不可用）");

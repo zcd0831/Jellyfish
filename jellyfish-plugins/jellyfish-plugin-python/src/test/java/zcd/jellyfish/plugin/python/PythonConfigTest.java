@@ -12,6 +12,7 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Python 桥接插件配置解析的单元测试。
@@ -194,5 +195,95 @@ class PythonConfigTest {
 
         assertEquals(Paths.get(System.getProperty("user.home"), "custom-gateway"),
                 config.gatewayRoot());
+    }
+
+    @Test
+    @DisplayName("熔断参数缺失时应使用与运行时一致的默认值")
+    void circuitBreaker_should_useRuntimeDefaults_whenSectionIsAbsent() {
+        zcd.jellyfish.script.CircuitBreakerSettings defaults =
+                zcd.jellyfish.script.CircuitBreakerSettings.defaults();
+
+        zcd.jellyfish.script.CircuitBreakerSettings absent = PythonConfig.from(null).circuitBreakerSettings();
+        zcd.jellyfish.script.CircuitBreakerSettings empty =
+                PythonConfig.from(Collections.<String, Object>emptyMap()).circuitBreakerSettings();
+
+        assertEquals(defaults.failuresToOpen(), absent.failuresToOpen());
+        assertEquals(defaults.cooldownSeconds(), absent.cooldownSeconds());
+        assertEquals(defaults.roundsToPermanent(), absent.roundsToPermanent());
+        assertEquals(defaults.failuresToOpen(), empty.failuresToOpen());
+    }
+
+    @Test
+    @DisplayName("熔断参数应被解析，且只读它下面那一层")
+    void circuitBreaker_should_carryConfiguredValues() {
+        Map<String, Object> breaker = new LinkedHashMap<String, Object>();
+        breaker.put(PythonConfig.KEY_FAILURES_TO_OPEN, Integer.valueOf(5));
+        breaker.put(PythonConfig.KEY_COOLDOWN_SECONDS, Integer.valueOf(7));
+        breaker.put(PythonConfig.KEY_ROUNDS_TO_PERMANENT, Integer.valueOf(1));
+        Map<String, Object> values = new LinkedHashMap<String, Object>();
+        values.put(PythonConfig.KEY_CIRCUIT_BREAKER, breaker);
+
+        zcd.jellyfish.script.CircuitBreakerSettings settings =
+                PythonConfig.from(values).circuitBreakerSettings();
+
+        assertEquals(5, settings.failuresToOpen());
+        assertEquals(7, settings.cooldownSeconds());
+        assertEquals(1, settings.roundsToPermanent());
+    }
+
+    @Test
+    @DisplayName("熔断段写成非对象应报错，而不是当成「没配」")
+    void circuitBreaker_should_rejectNonObjectSection() {
+        Map<String, Object> values = new LinkedHashMap<String, Object>();
+        values.put(PythonConfig.KEY_CIRCUIT_BREAKER, "2");
+
+        String message = assertThrows(JellyfishException.class,
+                () -> PythonConfig.from(values)).getMessage();
+
+        assertTrue(message.contains(PythonConfig.KEY_CIRCUIT_BREAKER), message);
+    }
+
+    @Test
+    @DisplayName("熔断次数写成非整数应报错，且报错文案说的是「整数」而不是「秒数」")
+    void circuitBreaker_should_rejectNonNumericCount() {
+        Map<String, Object> breaker = new LinkedHashMap<String, Object>();
+        breaker.put(PythonConfig.KEY_FAILURES_TO_OPEN, "两次");
+        Map<String, Object> values = new LinkedHashMap<String, Object>();
+        values.put(PythonConfig.KEY_CIRCUIT_BREAKER, breaker);
+
+        String message = assertThrows(JellyfishException.class,
+                () -> PythonConfig.from(values)).getMessage();
+
+        // 把一个「失败几次」的字段报成「必须是整数秒数」，会让写错的人按错误的单位去理解配置
+        assertTrue(message.contains("非负整数"), message);
+        assertTrue(message.contains(PythonConfig.KEY_FAILURES_TO_OPEN), message);
+    }
+
+    @Test
+    @DisplayName("熔断参数为负应报错，而不是当成 0（0 是「关闭」的合法写法）")
+    void circuitBreaker_should_rejectNegativeValues() {
+        Map<String, Object> breaker = new LinkedHashMap<String, Object>();
+        breaker.put(PythonConfig.KEY_COOLDOWN_SECONDS, Integer.valueOf(-1));
+        Map<String, Object> values = new LinkedHashMap<String, Object>();
+        values.put(PythonConfig.KEY_CIRCUIT_BREAKER, breaker);
+
+        String message = assertThrows(JellyfishException.class,
+                () -> PythonConfig.from(values)).getMessage();
+
+        assertTrue(message.contains(PythonConfig.KEY_COOLDOWN_SECONDS), message);
+    }
+
+    @Test
+    @DisplayName("熔断参数配成 0 应原样生效，而不是退回默认值")
+    void circuitBreaker_should_keepZeroValues() {
+        Map<String, Object> breaker = new LinkedHashMap<String, Object>();
+        breaker.put(PythonConfig.KEY_FAILURES_TO_OPEN, Integer.valueOf(0));
+        Map<String, Object> values = new LinkedHashMap<String, Object>();
+        values.put(PythonConfig.KEY_CIRCUIT_BREAKER, breaker);
+
+        zcd.jellyfish.script.CircuitBreakerSettings settings =
+                PythonConfig.from(values).circuitBreakerSettings();
+
+        assertEquals(0, settings.failuresToOpen(), "0 是「显式关闭熔断」，不能被当成缺省");
     }
 }

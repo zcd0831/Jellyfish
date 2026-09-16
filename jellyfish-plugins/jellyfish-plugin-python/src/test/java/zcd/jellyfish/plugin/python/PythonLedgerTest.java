@@ -2,8 +2,20 @@ package zcd.jellyfish.plugin.python;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import zcd.jellyfish.api.JellyfishException;
+import zcd.jellyfish.script.CircuitBreakerSettings;
+import zcd.jellyfish.script.CircuitBreakingScriptCaller;
+import zcd.jellyfish.script.ScriptCircuitBreaker;
+import zcd.jellyfish.script.ScriptManifest;
+import zcd.jellyfish.script.ScriptPlugin;
+import zcd.jellyfish.script.ScriptRegistration;
+import zcd.jellyfish.script.codec.ExtensionCodecs;
+
+import java.nio.file.Paths;
+import java.util.ArrayList;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -48,10 +60,54 @@ class PythonLedgerTest {
 
         String rendered = new PythonLedger(new java.util.ArrayList<zcd.jellyfish.script.ScriptPlugin>(),
                 new java.util.ArrayList<zcd.jellyfish.script.ScriptRegistration>(),
-                issues, null).render("Python");
+                issues, null, null).render("Python");
 
         assertTrue(rendered.contains("问题 2 条"), rendered);
         assertTrue(rendered.contains("缺少 manifest.json"), rendered);
         assertTrue(rendered.contains("工具注册失败"), rendered);
+    }
+
+    @Test
+    @DisplayName("熔断态应单独成行；没有记录时说「尚未发生调用」而不是省略")
+    void render_should_showCircuitState() {
+        CircuitBreakingScriptCaller callers = new CircuitBreakingScriptCaller(
+                (plugin, type, request) -> {
+                    throw new JellyfishException("脚本炸了");
+                },
+                CircuitBreakerSettings.builder().failuresToOpen(1).build(), null);
+        ScriptPlugin jira = scriptOf("jira");
+        assertThrows(JellyfishException.class, () -> callers.call(jira, "tool", null));
+
+        String rendered = new PythonLedger(new ArrayList<ScriptPlugin>(), new ArrayList<ScriptRegistration>(),
+                new ArrayList<String>(), null, callers).render("Python");
+
+        assertEquals(ScriptCircuitBreaker.State.OPEN, callers.stateOf("jira"));
+        assertTrue(rendered.contains("熔断：jira 熔断中"), rendered);
+    }
+
+    @Test
+    @DisplayName("从未调用过的脚本不该出现在熔断行里")
+    void render_should_sayNotCalledYet_whenNoCallHappened() {
+        CircuitBreakingScriptCaller callers = new CircuitBreakingScriptCaller(
+                (plugin, type, request) -> null, CircuitBreakerSettings.defaults(), null);
+
+        String rendered = new PythonLedger(new ArrayList<ScriptPlugin>(), new ArrayList<ScriptRegistration>(),
+                new ArrayList<String>(), null, callers).render("Python");
+
+        assertTrue(rendered.contains("熔断：尚未发生调用"), rendered);
+        assertTrue(callers.states().isEmpty());
+    }
+
+    /**
+     * 造一个只用于熔断建档的脚本。
+     * <p>
+     * 清单正文里没有声明任何能力：这条用例关心的是「以谁的名义记账」，不是注册。
+     *
+     * @param id 脚本标识
+     * @return 脚本
+     */
+    private static ScriptPlugin scriptOf(String id) {
+        return new ScriptPlugin(id, Paths.get("/tmp/scripts").resolve(id),
+                ScriptManifest.parse("{\"entry\":\"main.py\"}", id, ExtensionCodecs.DEFAULTS));
     }
 }

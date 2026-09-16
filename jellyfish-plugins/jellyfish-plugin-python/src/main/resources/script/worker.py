@@ -44,6 +44,9 @@ READ_CHUNK = 64 * 1024
 # 因此它的上限必须存在且很小，而不能由配置决定（配成 0 也照样要检查）。
 MAX_CHECK_INTERVAL = 5.0
 
+# 孤儿看门狗的检查周期（秒）。它必须由**定时器**驱动而不是放在事件循环里，见 _install_orphan_watchdog。
+ORPHAN_CHECK_SECONDS = 2.0
+
 
 class _Stopping(object):
     """退出标志。
@@ -61,6 +64,42 @@ class _Stopping(object):
             self.reason = reason
 
 
+def _die_now(script_id, which):
+    """收到终止信号：立刻退出，不等主循环。
+
+    **只置一个标志位是不够的**，这一点是实测出来的：脚本可能正卡在自己的代码里
+    （``time.sleep(600)`` 之类），而 CPython 在信号处理函数返回后会**恢复**那个被中断的
+    系统调用。于是主循环永远轮不到，「父进程没了」也永远查不到——现场是
+    gateway 早已退出、这个 worker 却要等到用户代码自己醒来才消失（十分钟量级），
+    而日志里没有任何一条指向它。
+
+    发出信号的一方（网关：超时隔离 / 空闲自毁 / 关闭 / 拒绝服务）已经判定不需要
+    这个 worker 的任何输出，因此这里直接退出；半行协议帧由网关的脏行容忍吃掉。
+    """
+    print("[%s] 收到 %s，立即退出" % (script_id, which), file=sys.stderr, flush=True)
+    os._exit(0)
+
+
+def _install_orphan_watchdog(script_id):
+    """装上定时器检查，使「父进程没了就退出」不依赖主线程配合。
+
+    worker 的常规退出路径有三条：网关发 SIGTERM、协议套接字读到 EOF、事件循环顶部检查
+    ``os.getppid()``。**三条都要求主线程回到事件循环**，而一段卡在用户代码里的脚本
+    （这正是最该被清理的情形——它已经让宿主超时了一次）可能十几分钟不回来。
+    届时若网关是被强杀的（没人给它发信号），这个 worker 就成了没有任何人知道它存在的孤儿。
+
+    定时器 + 信号处理函数是唯一不依赖主线程配合的手段：即使主线程正卡在 ``time.sleep``
+    里，处理函数也会被调用，而 PEP 475 会随后恢复那个调用（脚本不受影响）。
+    """
+    def _check(*_):
+        if os.getppid() == 1:
+            print("[%s] 父进程已退出，自行退出" % script_id, file=sys.stderr, flush=True)
+            os._exit(0)
+
+    signal.signal(signal.SIGALRM, _check)
+    signal.setitimer(signal.ITIMER_REAL, ORPHAN_CHECK_SECONDS, ORPHAN_CHECK_SECONDS)
+
+
 def serve(sock, script_id, script_dir, entry_name, manifest, strict, idle_seconds):
     """worker 主函数，由网关在 ``fork`` 之后直接调用。
 
@@ -74,8 +113,9 @@ def serve(sock, script_id, script_dir, entry_name, manifest, strict, idle_second
     :return: 退出码
     """
     stopping = _Stopping()
-    signal.signal(signal.SIGTERM, lambda *_: stopping.request("term"))
-    signal.signal(signal.SIGINT, lambda *_: stopping.request("int"))
+    signal.signal(signal.SIGTERM, lambda *_: _die_now(script_id, "SIGTERM"))
+    signal.signal(signal.SIGINT, lambda *_: _die_now(script_id, "SIGINT"))
+    _install_orphan_watchdog(script_id)
 
     if script_dir not in sys.path:
         sys.path.insert(0, script_dir)

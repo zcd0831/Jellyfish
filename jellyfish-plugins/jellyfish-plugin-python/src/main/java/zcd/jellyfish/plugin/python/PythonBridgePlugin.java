@@ -5,9 +5,12 @@ import org.slf4j.LoggerFactory;
 import zcd.jellyfish.api.extension.CommandDescriptor;
 import zcd.jellyfish.api.extension.CommandRequest;
 import zcd.jellyfish.api.extension.CommandResult;
+import zcd.jellyfish.api.event.notification.ConfigWarningEvent;
 import zcd.jellyfish.api.plugin.JellyfishPlugin;
 import zcd.jellyfish.api.plugin.PluginContext;
+import zcd.jellyfish.script.CircuitBreakingScriptCaller;
 import zcd.jellyfish.script.GatewayResources;
+import zcd.jellyfish.script.ScriptCircuitBreaker;
 import zcd.jellyfish.script.ScriptGateway;
 import zcd.jellyfish.script.ScriptIssue;
 import zcd.jellyfish.script.ScriptPlugin;
@@ -58,6 +61,9 @@ public final class PythonBridgePlugin implements JellyfishPlugin {
     /** 脚本运行时，在 {@code start()} 现造、{@code stop()} 释放。 */
     private ScriptGateway gateway;
 
+    /** 带熔断的调用入口，在 {@code start()} 现造、{@code stop()} 释放。 */
+    private CircuitBreakingScriptCaller caller;
+
     /** 脚本台账，在 {@code start()} 现造、{@code stop()} 释放。 */
     private PythonLedger ledger = PythonLedger.empty();
 
@@ -100,6 +106,7 @@ public final class PythonBridgePlugin implements JellyfishPlugin {
         }
         language = null;
         gateway = null;
+        caller = null;
         ledger = PythonLedger.empty();
     }
 
@@ -131,6 +138,15 @@ public final class PythonBridgePlugin implements JellyfishPlugin {
     }
 
     /**
+     * 获取带熔断的调用入口，供测试断言「每一个脚本调用都真的经过熔断」。
+     *
+     * @return 调用入口；未启动时为 {@code null}
+     */
+    CircuitBreakingScriptCaller caller() {
+        return caller;
+    }
+
+    /**
      * 扫描脚本目录并逐脚本注册。
      *
      * @param context 能力上下文
@@ -151,13 +167,59 @@ public final class PythonBridgePlugin implements JellyfishPlugin {
                 .settings(config.gatewaySettings())
                 .scripts(scan.plugins())
                 .build();
-        ScriptRegistrar registrar = new ScriptRegistrar(ExtensionCodecs.DEFAULTS, gateway);
+        // 转发闭包拿到的就是这个带熔断的入口：因此「拒绝派发」发生在注册好的处理器内部，
+        // 而**不需要把注册摘掉**——工具仍在清单里，模型看到的是一条带剩余时间的错误
+        caller = new CircuitBreakingScriptCaller(gateway, config.circuitBreakerSettings(),
+                new CircuitWarningPublisher(context));
+        ScriptRegistrar registrar = new ScriptRegistrar(ExtensionCodecs.DEFAULTS, caller);
         List<ScriptRegistration> registrations = new ArrayList<ScriptRegistration>();
         for (ScriptPlugin plugin : scan.plugins()) {
             ScriptRegistration registration = registrar.register(context.subContext(plugin.id()), plugin);
             registrations.add(registration);
         }
-        return new PythonLedger(scan.plugins(), registrations, issues, gateway);
+        return new PythonLedger(scan.plugins(), registrations, issues, gateway, caller);
+    }
+
+    /**
+     * 把熔断状态变化发成进程级告警。
+     * <p>
+     * <b>为什么是事件而不是日志</b>：熔断的直接后果是「模型开始拿到一个奇怪的失败」，
+     * 而这条线索只有调用点看得见。发成事件后，日志、指标、TUI 都能各自决定怎么呈现，
+     * 而桥接插件不必知道谁来读。
+     * <p>
+     * <b>为什么只在转移时发</b>：熔断期间每次调用都失败，每次都发一条会把「打开了」这件事
+     * 淹没在噪声里；而它本来只需被看见一次。恢复也发一条——否则日志里留下的只有
+     * 「某个工具坏了」，而它其实已经好了。
+     */
+    private static final class CircuitWarningPublisher implements zcd.jellyfish.script.ScriptCircuitListener {
+
+        /** 告警来源：配置段名，与用户在 {@code jellyfish.json} 里写的那一段对应。 */
+        private final static String SOURCE = "plugins.configurations.jellyfish-plugin-python";
+
+        /** 能力上下文，用于发布事件。 */
+        private final PluginContext context;
+
+        /**
+         * 构造告警发布者。
+         *
+         * @param context 能力上下文
+         */
+        private CircuitWarningPublisher(PluginContext context) {
+            this.context = context;
+        }
+
+        @Override
+        public void onOpened(String scriptId, ScriptCircuitBreaker.State state, String detail) {
+            context.emit(new ConfigWarningEvent(SOURCE,
+                    "脚本 " + scriptId + " 已熔断（" + state.displayName() + "）：" + detail
+                            + "；工具仍在清单里，熔断期满会自动恢复"));
+        }
+
+        @Override
+        public void onRecovered(String scriptId, String detail) {
+            context.emit(new ConfigWarningEvent(SOURCE,
+                    "脚本 " + scriptId + " 已恢复：" + detail));
+        }
     }
 
     /**

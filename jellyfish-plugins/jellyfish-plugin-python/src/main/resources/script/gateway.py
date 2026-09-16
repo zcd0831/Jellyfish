@@ -312,7 +312,11 @@ class Gateway(object):
         # 截止时间从「派发」起算而不是「到达」起算：排队等待不是脚本的错，
         # 而超时的语义是「脚本执行太久」。真要排太久的队，前一个请求的超时
         # 会先把整个 worker 杀掉，队列里的人也一起拿到明确失败
-        pending["deadline"] = time.time() + self.settings["invokeTimeoutSeconds"]
+        # 超时配 0 表示「不超时」（宿主那侧同样如此），因此要显式落成 None 而不是
+        # 拿 0 当截止时间——那会让 `now > deadline` 恒真，任何调用都在派发的下一拍被秒杀，
+        # 而现象是「脚本永远跑不出结果」，与配置的字面意思完全相反
+        timeout = self.settings["invokeTimeoutSeconds"]
+        pending["deadline"] = (time.time() + timeout) if timeout else None
         data = wire.encode({"id": pending["seq"], "method": "invoke",
                             "type": pending["type"], "request": pending["request"]})
         try:
@@ -326,8 +330,8 @@ class Gateway(object):
         for state in list(self.states.values()):
             current = state.worker
             if current is not None:
-                if current.kill_at is None and state.inflight is not None \
-                        and now > state.inflight["deadline"]:
+                deadline = state.inflight["deadline"] if state.inflight is not None else None
+                if current.kill_at is None and deadline is not None and now > deadline:
                     timeout = self.settings["invokeTimeoutSeconds"]
                     self._log("[%s] 请求超时（%ss），隔离该 worker" % (state.script_id, timeout))
                     # 只失败在途的那一个：它可能已经在脚本里跑了一半，重试会重复执行。

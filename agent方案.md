@@ -873,8 +873,8 @@ public final class AgentModule {
 | # | 限制 | 影响 | 后续 |
 | --- | --- | --- | --- |
 | L1 | 「会话创建时自动绑定默认 agent」的**调用点**本轮不落地 | `resolveDefault()` 已就绪但无人调用 | **已由 session 轮闭环**：`SessionManager.create(...)` 在 agentId 空白时调用 `resolveDefault()` 并写入会话的当前 agentId（无 agent 时仍为 `null`，fail-open 不变）；本轮按要求只在依赖它的实现处留 `TODO` 注释（不在 `SessionManager` 里写占位实现），见 §3.2 |
-| L2 | 无配置热更新 | 只能靠显式 `refresh(true)` | 与 `ModelManager` 一起做文件监听 |
-| L3 | 装载事件不代表「配置变更」 | 无法区分首次装载与热更新 | 需要保存上一份快照做 diff |
+| L2 | 无配置热更新 | 只能靠显式 `refresh(true)` | **已闭环**：`ConfigReloader` + 手动 `/reload`（重读配置 → 重建模型 / agent 索引 → 刷新插件快照 → 按差异重启插件）；未做文件监听，属有意选择；见 `配置热更新方案.md` |
+| L3 | 装载事件不代表「配置变更」 | 无法区分首次装载与热更新 | **已接受**：`AgentsLoadedEvent` 仍表示「索引已重建」，不 diff 新旧快照；配置重载另发 `ConfigReloadedEvent`，两者职责分开 |
 | L4 | Agent 定义不校验工具是否存在 | 配了不存在的工具名不会报错 | 归 `ReActLooper` / `ToolCallRequest` 的 `NO_HANDLER` |
 | L5 | 提示词不支持插值与外部文件引用 | 多 agent 共享提示词片段只能复制 | 需要时再设计（注意与 `${}` 的冲突） |
 | L6 | 白名单仍不随插件**热部署**变化 | 热部署新插件后其 `readOnlyTools` 不刷新 | **已闭环**（R1）：只读性迁到 `ToolDescriptor.readOnly` 并现查描述符，热部署自动跟随 |

@@ -5,6 +5,11 @@
 > **不接**任何外壳（CLI / TUI / Server / Web 都还没落地）、**不实现**任何系统命令（`/help` / `/model` / `/agent` / `/mode` / `/new` / `/exit` 一律留 `TODO`，见 §9 L9）、**不做**补全与交互、**不发**命令审计事件。
 >
 > **服务面澄清（用户口径）**：命令域**不是 CLI 专属**。TUI / Server / Web 同样会用命令创建会话、切换模型 / agent 等；因此本模块的入口**不假设输入一定是一行原文**，输出**不假设一定打到终端**（见 §11.2 的 Q13～Q15）。
+>
+> ⚠️ **状态更新（命令轮之后的后续轮）**：
+> · 系统命令已全部落地（含 `/delete` `/compact`），另新增 `/reload`（配置热更新）——见 §9 L9；
+> · `CommandManager` **已注入窄接口 `EventPublisher`**，每次分发结束广播 `CommandExecutedEvent`（`OK` / `ERROR` / `UNKNOWN` 都发），§9 L7 闭环；`options(...)` 只读候选查询不发；
+> · 命令文案与命令清单已同步到 `AGENTS.md` / `README.md`。
 
 ## 0. 口径草案与裁决状态
 
@@ -698,9 +703,9 @@ private CommandResult dispatch(String name, CommandArguments arguments, String s
 | L4 | 帮助是纯文本（`commands()` 已提供结构化替代） | 想要更多元信息（分组、权限、参数类型）需再扩 `CommandInfo` | 等真出现需求（如 Web 端按插件分组）再加 |
 | L5 | 无补全 / 历史 / 高亮 | 交互体验缺口 | 外壳职责 |
 | L6 | 每次执行与渲染都现算别名索引 | O(命令数)；命令极多时才有感知 | 人类节奏可忽略；换来热部署天然正确 |
-| L7 | 命令执行不发事件 | 无法从事件通道审计「谁执行了什么命令」 | 架构图无此边；需要时由外壳或处理器自己发 |
+| L7 | 命令执行不发事件 | 无法从事件通道审计「谁执行了什么命令」 | **已闭环**：`CommandManager` 注入窄接口 `EventPublisher`，每次分发结束（`OK` / `ERROR` / `UNKNOWN`）广播 `api/event/notification/CommandExecutedEvent`，带用户原文、命中命令名、结果三态、处理器 owner（经 `ExtensionRegistry.bindings` 归因）与耗时；不带输出文本。它是 best-effort（与 `PermissionDecidedEvent` 同口径），审计级可靠性需另开同步通道 |
 | L8 | `execute` 吞掉插件异常转 `ERROR` | 插件缺陷不会让外壳崩溃，但也意味着「异常即失败」不再是硬约束（有 WARN 日志） | 与权限轮「调用点决定异常处置」一致 |
-| L9 | **系统命令（`/help` `/model` `/agent` `/mode` `/new` `/exit`）本轮不落地** | 命令域只有机制、没有一条真命令；端到端示例只能靠单测里注册的假命令 | **已闭环**：十条系统命令由 `core/command/SystemCommands` 以 owner = `core` 注册（react 轮），并由 CLI 外壳 `CliRunMode` 通过 `isCommand` 分流真实调用（`cli方案.md`）；`/exit` 归外壳，`/compact` 仍待落地 |
+| L9 | **系统命令（`/help` `/model` `/agent` `/mode` `/new` `/exit`）本轮不落地** | 命令域只有机制、没有一条真命令；端到端示例只能靠单测里注册的假命令 | **已闭环**：`/help` `/new` `/session` `/resume` `/model` `/agent` `/mode` `/status` `/usage` `/delete` `/compact` `/reload` 由 `core/command/SystemCommands` 以 owner = `core` 注册，并由 CLI / TUI 外壳通过 `isCommand` 分流真实调用；`/exit` 归外壳 |
 | L10 | `CommandResult` 不带机器可读数据（Q13 推荐口径） | 结果里的标识只能靠文本；外壳需要状态时得另读域服务 | 若将来真出现「必须从结果里机器读标识」的场景，再考虑加 `data` 字段 |
 
 ## 10. 风险与缓解

@@ -407,7 +407,9 @@ public final class PluginContextFactory {
 `publish` 在 `start()` 之前入缓冲队列（有界，溢出计数丢弃），`start()` 回放。保留原因：`RuntimeConfig.refresh()` 期间的配置告警必须不因订阅者尚未注册而丢失（`AgentHarness.bootstrap()` 顺序：`eventChannel.start()` → `runtimeConfig.refresh()` → `modelManager.refresh(false)`）。
 
 ### 5.7 指标边界
-只保留 `EventChannelStats`（published/dropped/pendingReplayed/pendingOverflow/unmatched/subscriberErrors/activeThreads/queueSize）。**同步侧不加指标**：失败即抛给调用方，调用方自己感知；`infra/metrics` 留待后续统一可观测性时再消费。
+只保留 `EventChannelStats`（published/dropped/pendingReplayed/pendingOverflow/unmatched/subscriberErrors/activeThreads/queueSize）。**同步侧不加指标**：失败即抛给调用方，调用方自己感知。
+
+> **已闭环（后续轮）**：`infra/metrics` 已落地并按本文口径消费——`MetricsRegistry`（计数 + 仪表）+ `MetricsSubscriber`（纯订阅者，把内核事件折算成指标，**不发布事件**，避开自指循环）+ `HealthCheck`（可插拔检查项，由装配根拼装 `infra` 与 `core` 两侧的项）；出口是程序化快照 + 关闭时日志汇总（刻意不加 `/metrics` 命令）。`EventChannel` 另补了一个只读的 `isRunning()` 供健康检查使用。
 
 ### 5.8 异常与日志
 - 同步侧：处理器抛出的 `RuntimeException` 原样上抛；受检异常包装为 `JellyfishException`（接口不声明受检异常）。

@@ -5,6 +5,10 @@
 > 范围：交付 `jellyfish-cli` 的 `main` / 启动参数解析 / 启动模式分发 / CLI 单次执行 / 输出与诊断分流 / 日志落 stderr / 可执行 jar 打包 / 单测 / 文档同步。
 > **不动** `jellyfish-api` / `jellyfish-infra` / `jellyfish-core` 的任何生产代码——本轮唯一的例外是给 `JellyfishComponent` 加一个 `sessionManager()` getter，那属于 `jellyfish-cli` 自己的 DI 面。
 > 顺序（已裁决）：**CLI → TUI → Server**。
+>
+> ⚠️ **状态更新（后续轮）**
+> · `-tui` 已落地（`jellyfish-tui`：TamboUI 界面、命令补全、审批浮层、插件面板）；目前只剩 `-server` 仍是占位（`ServerRunMode`）。本文档中「`-tui` / `-server` 只落占位」的陈述是**本轮当时的事实**，现状见 §8 的 L2。
+> · 会话持久化（L1）、人工审批（L8）、命令审计（L6）均已闭环，见 §8。
 
 ---
 
@@ -473,16 +477,16 @@ public final class SessionBootstrap {
 
 | # | 限制 | 影响 | 后续 |
 | --- | --- | --- | --- |
-| L1 | 无会话持久化 | `-cli` 每次进程都是新会话；`--session` 实际不可用 | 持久化轮（同步扩展点 + 插件） |
-| L2 | 无 TUI / Server | 交互与服务化能力缺失 | 按 CLI → TUI → Server 顺序另开轮 |
+| L1 | 无会话持久化 | `-cli` 每次进程都是新会话；`--session` 实际不可用 | **已闭环**：`jellyfish-plugin-session-file` 经同步扩展点（`SessionPersistRequest` / `SessionRestoreRequest` / `SessionDeleteRequest`）把会话写成一份份 JSON 文件并用 git 管理历史；启动期由 `SessionBootstrap` 校验 `--session` / `--agent` / `--model` 的存在性，`/resume` `/delete` 因此可用 |
+| L2 | 无 TUI / Server | 交互与服务化能力缺失 | **TUI 已闭环**：`jellyfish-tui`（TamboUI 界面、多行输入、命令补全与选择页、审批浮层、插件状态栏 / 面板、markdown 渲染、思考折叠）；**Server 仍待落地**（`ServerRunMode` 是占位，不启动内核直接退 5） |
 | L3 | Ctrl+C 只能整体退出，不能「只取消当前回合」 | 流式回答中途 Ctrl+C 会连进程一起结束 | 若真需要，用 JLine 的信号能力在 TUI 轮一并解决（避免 `sun.misc.Signal` 内部 API） |
 | L4 | 无补全 / 历史 / Markdown 渲染 | 终端体验朴素 | `-tui` 轮 |
 | L5 | 单次模式每次都要重新加载配置与插件 | 冷启动有开销（PF4J 扫描 + HTTP 客户端建池） | 需要脚本批量调用时再考虑常驻模式 |
-| L6 | 无命令审计事件 | 无法从事件通道审计「谁执行了什么命令」 | command 方案 L7，架构图无此边 |
+| L6 | 无命令审计事件 | 无法从事件通道审计「谁执行了什么命令」 | **已闭环**：命令轮之后补上了 `CommandExecutedEvent`（见 `command方案.md` §9 L7）；架构图随之增加「`CommandMgr -.-> EventCh`」这条边 |
 | L7 | 未用 `AppConfig.processName` | 用法文本里的程序名是常量 | 若将来要多入口共用进程名再接线 |
-| L8 | 人工审批通道仍未落地 | CLI 单次模式无交互，天然无法承载审批；`ASK` 继续降级为 `DENY` | 审批轮（依赖交互外壳，TUI） |
+| L8 | 人工审批通道仍未落地 | CLI 单次模式无交互，天然无法承载审批；`ASK` 继续降级为 `DENY` | **已闭环**：`ApprovalChannel` + TUI 审批浮层落地（`-tui` 挂审批者）；`-cli` / `-server` 无审批者时仍 fail-closed 拒绝。见 `permission方案.md` §9 L5 |
 
-代码内 TODO 落点：`TuiRunMode` / `ServerRunMode` 的类注释（实现要点与前置条件）、`ConsoleIO.readLine`（TUI 轮若无 TUI 库的降级形态）、`Launcher` 的占位分支注释。
+代码内 TODO 落点（现状）：`ServerRunMode` 的类注释（实现要点与前置条件）、`JellyfishApplication` 关于 `-tui` 的参数解析注释。`TuiRunMode` 已实现，其类注释已不再是「占位」描述。
 
 ---
 

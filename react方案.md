@@ -4,6 +4,8 @@
 > 范围：交付 `core/prompt`（提示词与上下文组装 + 机械裁剪 + pending todo 注入）、`core/ReActLooper`（**流式**驱动的思考 → 行动 → 观察循环，异步可取消）、`core/command/SystemCommands`（系统命令）、`infra/config` 的 `react` 配置段、`infra/session` 的 pending todo 运行态、`AgentHarness` 唯一门面方法，以及单测 + 文档同步；
 > **不接**任何外壳（CLI / TUI / Server / Web 仍未落地）、**不做**会话持久化、**不做**人工审批通道、**不做**插件配置热更新、**不做** `infra/metrics`、**不做**跨语言脚本模块。
 > 注：本文写作时还「不做摘要式压缩」，该能力已由 `/compact` 轮落地（见 `五项增强方案.md` §3）：摘要进 system prompt 且在插件贡献之后，消息按压缩边界截断后再做窗口裁剪。
+>
+> ⚠️ **状态更新（后续轮）**：本文档 L3～L6 / L8 中列为「后续」的能力已逐项闭环——`todo_write` 由官方插件提供并声明只读、会话持久化由 session-file 插件提供、人工审批通道由 `ApprovalChannel` + TUI 审批浮层提供、**插件配置热更新由 `ConfigReloader` + `/reload` 提供**（见 `配置热更新方案.md`）、`infra/metrics` 已落地（`MetricsRegistry` / `MetricsSubscriber` / `HealthCheck`）。详见 §8。
 
 ## 0. 口径草案与裁决状态
 
@@ -344,13 +346,13 @@ public final class ReActResult {
 | L1 | **无 CLI / TUI / Server 外壳** | 端到端只能靠单测与将来的外壳 | **CLI 单次模式已由外壳轮闭环**（`main` / `Launcher` / `CliRunMode`，见 `cli方案.md`）；TUI / Server 另开轮 |
 | ~~L2~~ | ~~无摘要式压缩~~ | 长会话只能机械丢弃旧消息，信息会损失 | **已闭环**（R5）：非破坏式压缩 + 滚动摘要，摘要进 system prompt、消息按边界截断；并在每轮组装后按 `ContextUsage`（缺省 80% 或本次已发生裁剪）自动触发；见 `五项增强方案.md` §3 |
 | L3 | **无 `todo_write` 核心工具** | 模型不能自行维护待办，只能靠 `/todo` 命令 | **只读声明路径已闭合**（R1）：只读性已迁到 `ToolDescriptor.readOnly`；`todo_write` 由官方插件提供并在描述符里声明只读（`react方案.md` L8 也已随插件轮闭环） |
-| L4 | **无会话持久化** | `/resume` 仅进程内；进程退出即丢 | 持久化轮（同步扩展点 + 插件） |
-| L5 | **无人工审批通道** | `ASK` 继续降级为 `DENY` | 审批轮（依赖交互外壳） |
-| L6 | **无插件配置热更新** | 插件配置段变更不自动重读（PLAN 白名单的**描述符**那一半已随 R1 跟随热部署，只剩配置追加那份） | 配置热更新轮 |
+| L4 | **无会话持久化** | `/resume` 仅进程内；进程退出即丢 | **已闭环**：`jellyfish-plugin-session-file`（同步扩展点 + 插件），启动期 `SessionManager.restore()` 向插件要回会话 |
+| L5 | **无人工审批通道** | `ASK` 继续降级为 `DENY` | **已闭环**：`ApprovalChannel` + TUI 审批浮层，`-tui` 挂审批者 |
+| L6 | **无插件配置热更新** | 插件配置段变更不自动重读（PLAN 白名单的**描述符**那一半已随 R1 跟随热部署，只剩配置追加那份） | **已闭环**：`ConfigReloader` 编排「重读配置 → 重建模型 / agent 索引 → 刷新插件快照 → 按差异重启插件」，由手动 `/reload` 触发；见 `配置热更新方案.md` |
 | L7 | `react` 执行器规模为固定常量 | 无并发调参手段 | 真有压力时再配置化 |
-| L8 | pending todo 无插件贡献通道 | 插件不能注入待办 | 随持久化 / 扩展点轮 |
+| L8 | pending todo 无插件贡献通道 | 插件不能注入待办 | **已闭环**：`PromptContributionRequest` → `PromptContribution` 是插件把自有状态送进 system prompt 的唯一入口，`jellyfish-plugin-todo` 正走它 |
 
-代码内 TODO 落点：`SessionManager.appendMessage` 的持久化说明（`SystemCommands` 类注释里的 `/compact` 待落地说明已随 R5 删除）。
+代码内 TODO 落点（现状）：已全部删除。`SessionManager.appendMessage` 的持久化说明已改为「同步派发 `SessionPersistRequest`，失败上抛」；`SystemCommands` 的 `/compact` 待落地说明已随 R5 删除。
 
 ## 9. 风险与缓解
 

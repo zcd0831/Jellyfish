@@ -56,6 +56,13 @@ echo "/help" | java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -
 `/help` `/session` `/status` `/model` `/compact preview` 这些命令不需要模型配置，可以离线验证安装是否正常
 （`/todo` 由待办插件提供；`/compact preview` 是纯只读的，无参 `/compact` 会真的发起一次摘要调用）。
 
+改了配置文件（`models.json` / `agents.json` / `jellyfish.json`）后不用重启进程，敲一条 **`/reload`** 即可生效：
+它会重读配置、重建模型 / agent 索引，并**只重启配置段变了的插件**（同步等结果，毫秒级）。
+目录与启用 / 禁用名单的变化同样在这一次里收敛；新增 / 删除插件 jar 仍需重启进程（见「配置」一节）。
+
+进程退出时会往日志里打一份**健康检查**（模型 / 插件 / 事件通道 / 压缩）与一份**运行期指标汇总**（命令、工具、权限、
+会话、压缩、事件通道队列等），用于事后排查；指标只做程序化输出，没有 `/metrics` 命令。
+
 ### TUI 模式
 
 > **在 IDEA 里调试**：IDEA 的运行控制台默认不是真终端，直接跑 `-tui` 会命中「需要可交互终端」的检查。
@@ -238,6 +245,9 @@ TUI 状态栏也会追加 `已压缩 N 条（丢弃 M 条）`；压缩期间状�
 ```
 
 仓库里的 `config.json` 就是这份：**全局级约定目录 `~/jellyfish/`、项目级约定目录 `<工作目录>/jellyfish/`**，四类配置的文件名固定。要换位置只改 `config.json`。
+
+> **改完不用重启**：`models.json` / `agents.json` / `jellyfish.json` 的内容改动敲 `/reload` 即生效（重建索引 + 按差异重启受影响的插件）。
+> **`config.json` 不参与热更新**：它是「去哪个文件读配置、去哪个目录找插件」的部署事实，改它要重启进程；同理，新增 / 删除插件 jar 也仍需重启（扫描目录与插件集合只在启动期确定）。
 
 `plugins.roots` 是插件 jar 的扫描根目录（PF4J 在目录下一层找 `plugin.properties`）：顺序即扫描顺序，相对路径相对**进程工作目录**解析，条目行首的 `~` 展开为用户主目录；留空则回退默认值 `plugins`。为什么它在这里而不是 `jellyfish.json`：它与「去哪个文件读配置」同属部署事实；`jellyfish.json` 的 `plugins` 段只保留加载后的运行期设置。
 

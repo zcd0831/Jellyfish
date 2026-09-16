@@ -847,9 +847,9 @@ public final class SessionMessageAppendedEvent extends AbstractJellyfishEvent {
 
 | # | 限制 | 原因 / 后续 |
 | --- | --- | --- |
-| L1 | 会话**不持久化**，进程退出即丢 | 持久化由插件经同步扩展点完成（`SessionMgr ==> ExtReg`）；`appendMessage` 内已留 TODO 落点 |
-| L2 | **无上下文裁剪 / token 预算** | `core/prompt` 未落地；`SessionUsage` 只做计量，不参与裁剪决策 |
-| L3 | pending todo **未落字段** | `ReActLooper` 未落地，无调用点（Q16） |
+| L1 | 会话**不持久化**，进程退出即丢 | **已闭环**：持久化由 `jellyfish-plugin-session-file` 经同步扩展点完成（`SessionMgr ==> ExtReg`）；每个变更入口同步派发 `SessionPersistRequest`，失败上抛 |
+| L2 | **无上下文裁剪 / token 预算** | **已闭环**：`core/prompt` 落地（`ContextWindow` + `TokenEstimator`），裁剪只影响本次请求，会话里存的历史一条不动 |
+| L3 | pending todo **未落字段** | **已闭环**：待办不再进会话字段——`jellyfish-plugin-todo` 按 `sessionId` 自持存储，经 `PromptContributionRequest` 注入 system prompt；内核不新增任何会话字段 |
 | L4 | `thinking`（推理过程）**不进会话消息** | `LlmMessage` 不含该字段，`LlmResponse.getThinking()` 目前只在调用点可见 | **已闭环（R2）**：给 `SessionMessage` 加 `thinking` 字段（与 `usage` 同类，刻意不扩 `LlmMessage`——那是要发给厂商的请求模型），`ReActLooper` 落库时带上，`SessionMessageSnapshot` 随快照持久化 |
 | L5 | 不存**系统提示词快照** | 提示词由 `currentAgentId` 反查 `AgentManager`；agent 定义热更新后历史会话会用新提示词（回放一致性属于持久化那一轮的问题） |
 | L6 | `title` **不自动生成** | 「首条用户消息截断」是 UI/命令层策略，放会话域会让纯数据类承担展示逻辑 |

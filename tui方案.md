@@ -4,6 +4,8 @@
 > 范围：抽 `jellyfish-tui` 模块、TamboUI 接线、声明式界面、TUI 版 `ReActListener`、线程契约、键位与焦点、滚动跟随、日志隔离、打包、单测、文档同步。
 > **不动** `jellyfish-api` / `jellyfish-infra` / `jellyfish-core` 的任何生产代码——`-tui` 所需的接缝（`AgentHarness.chat` / `CommandManager` / `SessionManager` / `ReActTurn.cancel`）**已全部就绪**，本轮不需要内核新增任何能力。
 > 顺序（已裁决）：**CLI ✅ → TUI（本轮）→ Server**。
+>
+> ⚠️ **状态更新（后续轮）**：§8 的 TODO-1（会话侧边栏）已随「插件面板贡献」轮闭环；L5（会话持久化）已随会话持久化插件闭环；markdown 渲染与审批弹窗（TODO-2 / TODO-3）也已闭环。
 
 ---
 
@@ -629,9 +631,9 @@ TUI 独占备用屏，**任何写 stderr 的日志都会直接糊在画面上**�
 | L2 | 官方文档示例是 Java 17 语法 | 见 §1.1；编码时只能对着 `javap` 写 |
 | L3 | 不支持鼠标选中复制（备用屏 + raw mode） | 终端本身的限制，非本方案引入 |
 | L4 | 长会话性能尚未实测 | 等 §1.3 未知项 A 结论；500 条消息下的帧率**暂不写入验收标准** |
-| L5 | 会话持久化未落地 | 沿用 `cli方案.md` §8 L1；TUI 里同样「进程退出即丢」 |
+| L5 | 会话持久化未落地 | 沿用 `cli方案.md` §8 L1；TUI 里同样「进程退出即丢」 | **已闭环**：`jellyfish-plugin-session-file` 提供持久化，`/resume` `/delete` 在 TUI 上可用；裸 `-tui` 刻意不建会话，从首页进入 |
 | L6 | 无主题/配置段 | 不做 `tui.json`；颜色硬编码在 `*View` 里 |
-| TODO-1 | 会话侧边栏 | `DockElement.left` 已预留（T8.1） |
+| ~~TODO-1~~ | 会话侧边栏 | **已闭环**：插件面板贡献（`PanelContributionRequest` → `PanelContribution`）+ 外壳侧 `UiPlacement` 落位仲裁 + `DockElement.left/right` 停靠，取代了「TUI 自带侧边栏」的设想——侧边栏现在的内容由插件贡献，外壳只管落位 |
 | ~~TODO-2~~ | Markdown 渲染 | **已闭环**：`tui/text/MarkdownRenderer`（commonmark 0.21.0 只作 AST 解析器）+ `TranscriptProjector` 接入 + `RenderSmokeTest` 端到端冒烟 |
 | ~~TODO-3~~ | 权限 ASK 审批弹窗 | **已闭环**：`ApprovalChannel` + 复用 `CommandChoicePicker(View)` 的选择框（`Source` 见 `permission方案.md` 4.3）|
 

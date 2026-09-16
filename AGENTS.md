@@ -54,7 +54,8 @@ flowchart TB
             subgraph "支撑基础设施"
                 direction LR
                 Runtime["RuntimeConfig<br>配置解析/合并/注入<br>（启动期装配，非运行期总线）"]
-                Metrics["可观测性<br>Metrics/Health/Logging<br>（纯事件订阅者）"]
+                Reloader["ConfigReloader<br>配置热更新编排<br>（/reload 触发，单飞不回滚）"]
+                Metrics["可观测性<br>MetricsRegistry / MetricsSubscriber<br>HealthCheck（纯事件订阅者）"]
             end
         end
     end
@@ -131,6 +132,12 @@ flowchart TB
     %% ===================== 命令域：handler 与描述符同落一份注册表，CommandManager 只做解析、分发与清单 =====================
     CommandMgr ==>|"handler(命令名) + invoke：两条入口共用同一条分发路径"| ExtReg
     CommandMgr ==>|"descriptorBindings 取命令名 / 别名 / 帮助（无缓存，现算）"| ExtReg
+    CommandMgr -.->|"publish：命令审计（CommandExecutedEvent，OK/ERROR/UNKNOWN 都发）"| EventCh
+
+    %% ===================== 配置热更新：/reload 触发的一次性编排（非运行期总线） =====================
+    Reloader -->|"重读配置（modelManager.refresh(true)）+ 刷新快照"| Runtime
+    Reloader ==>|"按差异启停 / 重启插件"| PluginMgr
+    Reloader -.->|"publish：ConfigReloadedEvent"| EventCh
 
     %% ===================== 边界 -> 插件（下行） =====================
     PluginCtx -->|"插件唯一入口"| Plugins
@@ -161,7 +168,7 @@ flowchart TB
     class ReAct app
     class SessionMgr,AgentMgr,ModelMgr,LLMClient,PermMgr,CommandMgr kernel
     class Registry,ExtReg,EventCh,PluginMgr,PluginCtx extlayer
-    class Runtime,Metrics support
+    class Runtime,Reloader,Metrics support
     class LLM,Plugins,Scripts,Jelly,Agents ext
     class Legend1,Legend2,Legend3 legend
 ```
@@ -225,7 +232,7 @@ flowchart LR
 jellyfish-api/src/main/java/zcd/jellyfish/api/
 ├── JellyfishException.java        # 统一运行时异常，插件抛错也能被 core 统一捕获
 ├── extension/                     # 扩展点对外模型（同步派发侧）：类型即地址的请求类型（ExtensionRequest / ExtensionHandler / XxxRequest）与结果类型；工具名片 ToolDescriptor 带 readOnly（会不会产生副作用的唯一权威声明，随 handler 落表）；结果类型按能力开洞，例如权限判定用三态 PermissionDecision、插件拦截用两态 PermissionVeto、命令用三态 CommandResult（配 CommandDescriptor 名片与 CommandArguments 参数）；会话压缩用 CompactionStrategyRequest → CompactionStrategy（插件只定策略，只带数字与标识、不带消息正文，触发原因见 CompactionTrigger）；会话持久化额外带一套快照值类型（SessionSnapshot / SessionMessageSnapshot / SessionToolCallSnapshot / SessionUsageSnapshot / TokenUsageSnapshot / SessionCompactionSnapshot）作为请求载荷，其中 SessionMessageSnapshot 带可空 thinking，SessionSnapshot 带可空 compaction（压缩边界 + 摘要 + 被丢弃条数，从未压缩过时为空）（思考过程随消息落盘，展开态才有的看）；提示词注入用 PromptContributionRequest → PromptContribution，状态栏片段用 StatusLineContributionRequest → StatusLineContribution，面板用 PanelContributionRequest → PanelContribution（带标题、内容行与**软建议**落位区域，真正的落位归外壳）；只有数据与接口，没有任何调用语义参数
-├── event/                         # 事件通道对外模型（异步派发侧）：事件基类、发布订阅入口与注册选项，以及 notification/ 下的具体通知（含 UiInvalidatedEvent：插件主动告诉外壳「我贡献的界面内容已过期」的唯一通道，CompactionAppliedEvent：压缩推进了边界）；只有数据与接口，没有任何调用语义参数
+├── event/                         # 事件通道对外模型（异步派发侧）：事件基类、发布订阅入口与注册选项，以及 notification/ 下的具体通知（含 UiInvalidatedEvent：插件主动告诉外壳「我贡献的界面内容已过期」的唯一通道，CompactionAppliedEvent：压缩推进了边界，CommandExecutedEvent：命令分发的审计事件（OK / ERROR / UNKNOWN 都发），ConfigReloadedEvent：配置重载完成（重启了哪些插件、耗时多久））；只有数据与接口，没有任何调用语义参数
 ├── ui/                            # 插件界面内容的渲染无关模型：UiLine / UiSegment / UiEmphasis（语义强调档位而非颜色）/ UiRegion（软建议区域）；api 是零依赖的，因此这里不能出现渲染引擎类型（Style / Element），否则插件自带的同名类会在「子优先」类加载器下与内核那份不是同一个 Class
 └── plugin/                        # 插件 SPI：插件总入口（JellyfishPlugin）、插件上下文（PluginContext）与插件声明（PluginDeclaration），面向仓库外插件作者的唯一稳定契约
 
@@ -235,14 +242,14 @@ jellyfish-infra/src/main/java/zcd/jellyfish/infra/
 ├── event/          # 异步派发策略 EventChannel：线程池 + 有界队列、无返回值、可丢弃；纯通知，带白名单与限流
 ├── session/        # 会话运行态：会话隔离、消息列表、token 统计、压缩摘要（SessionCompaction：边界消息 + 摘要正文 + 被丢弃条数，消息一条不删），以及会话内当前 agentId / 当前模型 / 权限模式（仅内存态；无配置段）；消息除 token 用量外还带 thinking（思考过程，与 usage 同属会话域元信息，刻意不进厂商无关的 LlmMessage）；SessionManager 是唯一变更入口，每次变更同步派发 SessionPersistRequest（失败上抛），删除时同步派发 SessionDeleteRequest（先删插件那一份、成功后才从表里移除），启动期用 SessionRestoreRequest 向插件要回会话；applyCompaction 推进压缩边界并发 CompactionAppliedEvent、recordUsage 记一次「不产生消息的调用」的用量（/compact 的摘要调用就是这种）；SessionSnapshots 负责会话模型 ↔ api 快照的双向映射，Session.restore 由快照还原
 ├── agent/          # Agent 定义注册表：AgentManager（门面，implements PermissionPolicyProvider，按 agentId 提供提示词原文与权限策略，默认 agent 恒为内置）+ AgentRegistry（定义与策略的只读索引；内置 agent 优先，同名用户条目跳过并告警）；提示词拼装归 core/prompt，新增事件 AgentsLoadedEvent
-├── command/        # 命令域服务 CommandManager：输入解析 / 别名解析 / 分发 / 结构化清单（CommandInfo）/ 帮助渲染 / 只读候选查询（options → CommandOptionRequest → CommandOptions，供「选中命令即弹选择页」且不执行命令），按类型查询注册表；只注入 ExtensionRegistry，对外壳（cli / tui / server）中立；系统命令与插件命令同源，系统命令由 core/command/SystemCommands 以 owner=core 注册
+├── command/        # 命令域服务 CommandManager：输入解析 / 别名解析 / 分发 / 结构化清单（CommandInfo）/ 帮助渲染 / 只读候选查询（options → CommandOptionRequest → CommandOptions，供「选中命令即弹选择页」且不执行命令），按类型查询注册表；只注入 ExtensionRegistry 与窄接口 EventPublisher，对外壳（cli / tui / server）中立；系统命令与插件命令同源，系统命令由 core/command/SystemCommands 以 owner=core 注册；每个分发出口经 finish() 收口并在任何结果下恰好广播一次 CommandExecutedEvent（带用户原文、命中命令名、结果三态、处理器 owner（经 ExtensionRegistry.bindings 归因）与耗时；发布失败只记 WARN，审计故障不得变成命令故障）；options 只读候选查询不发
 ├── model/          # 模型注册与路由：维护 provider/model 索引，按名字解析模型并给出 LLM 客户端（不持有全局当前态）
 ├── llm/            # LLM 调用抽象：统一的同步/流式调用接口与各厂商实现
-├── plugin/         # 插件运行时：Java 插件加载、热部署、描述符体检与上下文供给，按统一 SPI 看待桥接插件，不感知底层脚本进程；装配输入 PluginRuntimeConfig 由「config.json 的 plugins.roots（扫描目录）+ jellyfish.json 的 plugins 段（名单/配置段）」两处组装，且是「引用稳定、快照可换」的发布点
+├── plugin/         # 插件运行时：Java 插件加载、热部署、描述符体检与上下文供给，按统一 SPI 看待桥接插件，不感知底层脚本进程；装配输入 PluginRuntimeConfig 由「config.json 的 plugins.roots（扫描目录）+ jellyfish.json 的 plugins 段（名单/配置段）」两处组装，且是「引用稳定、快照可换」的发布点。reload(changedPluginIds) 是配置热更新的落点（先以配置为权威重建启用状态，再按差异启停、并重启配置段变了的插件）；「重启」= safeStop + safeStart，成立的前提是 JellyfishPluginAdapter 在**每次 start()** 现造能力上下文（PF4J 的插件实例是装载期创建并长期缓存的，stop 不会丢弃它），因此重新启动就能读到新配置段，无需卸载重装 jar。ConfigPluginStatusProvider 因此把配置放成不可变快照 + volatile 整体替换，attach 同时清空运行期启停开关（重载 = 回到配置说的样子）
 ├── permission/     # 权限控制：核心策略（agent 授权）→ PLAN 只读白名单（工具提供方在 ToolDescriptor.readOnly 声明 ∪ plugins.configurations.<pluginId>.readOnlyTools 用户追加，取并集且现查描述符，热部署后立刻跟随）→ 插件两态拦截 → ASK 交 ApprovalChannel 问审批者，判定后发审计事件；权限检查不经扩展层下发，由调用点同步询问；策略来源由 AgentManager 实现 PermissionPolicyProvider。ApprovalChannel 是「react 线程同步等答复 ↔ 渲染线程每帧取件」的唯一交接点，审批者只能是外壳（不开扩展点），未挂审批者 / 超时 / 排队溢出 / 通道关闭 / 中断一律拒绝
 ├── ui/             # UI 贡献门面 UiContributions：外壳向插件收集界面内容、并订阅「内容可能已过期」的唯一入口（外壳不直接认识 ExtensionRegistry / EventChannel）；两类贡献的区别只在「能否共存」——状态栏片段是拼接型（多插件共存，按 owner 去重），面板是独占型（带上 owner 交给外壳与用户仲裁）；调用模型是「失效时收集」而不是「每帧收集」，因此空闲时零插件调用，代价是失效触发源必须记全；单处理器抛错只跳过它自己
-├── metrics/        # 可观测性：指标采集、健康检查与日志上报
-├── config/         # 配置加载：全局级 + 项目级双源读取与合并，只读；四类配置类与文件一一对应：AppConfig(config.json) / ModelSettings(models.json) / AgentSettings(agents.json) / JellyfishSettings(jellyfish.json，含 plugins / react / permission 段；react 段除轮数与上下文预留外还管压缩的保留条数、摘要上限与自动压缩阈值)；AppConfig 额外承载 PluginPaths(config.json 的 plugins.roots，插件扫描目录，不是双源段)；另有不走双源的内置 agent 定义：BuiltinAgentLoader(classpath:default-agent.json) + AgentPromptLoader({agentId}.md 的路径安全校验与加载)
+├── metrics/        # 可观测性：MetricsRegistry（LongAdder 计数 + Supplier 仪表，snapshot 产出不可变快照，零第三方依赖）+ MetricsSnapshot（不可变 + render）+ MetricsSubscriber（**纯订阅者**：把内核事件折算成指标，不发布任何事件以避免「事件 → 指标 → 事件」自激循环；事件通道自身的统计直接作仪表读取）+ HealthLevel / HealthResult / HealthIndicator / HealthReport / HealthCheck（三档 UP/WARN/DOWN、单项失败隔离、检查项可插拔：infra 侧有 ModelHealthIndicator / PluginHealthIndicator / EventChannelHealthIndicator，core 侧的 CompactionHealthIndicator 由装配根拼入，避免基础层反向依赖应用层）。出口是程序化快照 + 关闭时日志汇总，刻意不加 /metrics 命令
+├── config/         # 配置加载：全局级 + 项目级双源读取与合并，只读；四类配置类与文件一一对应：AppConfig(config.json) / ModelSettings(models.json) / AgentSettings(agents.json) / JellyfishSettings(jellyfish.json，含 plugins / react / permission 段；react 段除轮数与上下文预留外还管压缩的保留条数、摘要上限与自动压缩阈值)；AppConfig 额外承载 PluginPaths(config.json 的 plugins.roots，插件扫描目录，不是双源段)；另有不走双源的内置 agent 定义：BuiltinAgentLoader(classpath:default-agent.json) + AgentPromptLoader({agentId}.md 的路径安全校验与加载)。ConfigReloader + ReloadOutcome 是配置热更新的编排：modelManager.refresh(true)（唯一重读文件的一步，并清 LLM 客户端缓存）→ agentManager.refresh(false)（复用同一份新快照）→ pluginRuntimeConfig.refresh → 比较插件配置段差异 → pluginManager.reload → 广播 ConfigReloadedEvent；整体 synchronized 单飞，失败不回滚
 └── support/        # 通用支撑：序列化封装、类型常量等底层工具
 
 jellyfish-core/src/main/java/zcd/jellyfish/core/
@@ -253,7 +260,7 @@ jellyfish-core/src/main/java/zcd/jellyfish/core/
 ├── ReActResult.java               # 回合结果：completed / truncated / cancelled
 ├── prompt/                        # 系统提示词与上下文组装：PromptAssembler（system prompt = agent 提示词 → 插件贡献 → 历史摘要；消息先按压缩边界截断再做窗口裁剪；assemble 同时产出 ContextUsage）/ PromptAssembly / ContextUsage / ToolCatalog / ContextWindow / TokenEstimator
 ├── compact/                       # 会话压缩机制：ConversationCompactor（自持守护线程池 + 每会话 IDLE/RUNNING/DONE/FAILED 状态机供外壳轮询；plan 纯本地、start 只起头、autoCompactIfNeeded 供每轮挂钩、isAvailable 只查注册表）/ CompactionPlan（预览与执行共用同一份计划）/ CompactionUnavailableException（压缩功能缺席，与「没什么可压」分开）/ 摘要指令本身不在这里——它归插件
-└── command/                       # 内核系统命令 SystemCommands（owner=core，含 /compact：无参执行 / preview 只看，都只起头不等结果）
+└── command/                       # 内核系统命令 SystemCommands（owner=core，含 /compact：无参执行 / preview 只看，都只起头不等结果；/reload：同步执行配置热更新并回报插件变动）
 
 jellyfish-cli/src/main/java/zcd/jellyfish/cli/
 ├── JellyfishApplication.java       # main：解析启动参数后交给 Launcher；-h / -V 就地返回
@@ -464,6 +471,9 @@ jellyfish-cli/src/main/resources/log4j2-tui.xml      # TUI 专用日志：root �
 - **摘要指令是插件自带的资源**：`summary-prompt.md`（jar 根目录，不镜像包名——它是给人改的文本，不是按包名匹配的数据），用**插件自己的类加载器**读（插件对 `jellyfish-infra` 没有依赖，没有 `SettingsReader` 可用），启动期一次性读完，处理器因此永远是纯内存操作。资源跟着读者走：读它的类在插件里，它就在插件的 jar 里，内核的 classpath 上不出现任何摘要措辞。缺文件/内容空白在**启动期**直接抛（这个插件少了它就等于没装）。占位符 `{maxSummaryChars}`（不用 `%d`：提示词里天然可能出现 `%`；常量 `CompactionStrategy.MAX_CHARS_PLACEHOLDER` 放在 api，因为它是插件与内核的契约）由内核替换；**缺占位符只告警不失败**——与内核自带资源时期不同：指令现在是别人写的，为了一句没写的占位符让整功能不可用，失败面大于收益，而超长摘要本来就有本地截断兜底。表头与角色标签（`[...]`）是**输入格式的结构标记**，仍留在内核代码里。
 - **资源跟着读者走，不跟着入口走**：读它的类在哪个模块，资源就放哪个模块的 `src/main/resources`——`default-agent.json` 与 `{agentId}.md`（内置 `jellyfish.md`）归 **infra**（`BuiltinAgentLoader` 在那里），摘要指令归**压缩插件**（`CompactPlugin` 在那里），`config.json`（部署事实：读哪几份文件、插件扫哪个目录）与 `log4j2*.xml`（日志策略）归**外壳** cli。这条规则不是洁癖：资源放错模块意味着「内核的一份必需数据由外壳提供」，将来换一个 composition root（如 `jellyfish-server`）就会以「内置默认 agent 配置缺失」的方式启动失败，而单测全绿没人发现——本仓库为此付过的代价正是 infra 里那份 `src/test/resources/config.json` 副本，以及把所有 loader 都 mock 掉、没人盯打包的测试。
 - **插件上下文注入只走 system prompt，不写回历史**：`PromptContributionRequest` → `PromptContribution` 是插件把自有状态（待办、召回的记忆……）送进模型的唯一入口：内核按 `order` 依次询问、拼接进 system prompt（`\n\n` 分隔），**不追加进 `messages`**，否则会被后续每轮重复 append 回会话，导致重复累积、回放与 token 统计失真。请求带 `sessionId`，就是插件找回自己那份状态的钥匙；没有处理器时内核不下发额外上下文。单个处理器抛错只记 WARN 跳过——贡献是锦上添花，不该让整个对话发不出去。
+- **配置热更新是「重新按配置说话」，不是「监听文件」**：`ConfigReloader.reload()` 的顺序固定为「`modelManager.refresh(true)`（**唯一**重读配置文件的一步，它顺带清掉按旧 apiKey / baseUrl 建好的 LLM 客户端缓存）→ `agentManager.refresh(false)`（复用同一份新快照；若也传 `true`，配置会被读第二遍，并在两遍之间出现「模型用了新配置、agent 还在用旧配置」的窗口）→ `pluginRuntimeConfig.refresh(...)` → 比较插件配置段差异 → `pluginManager.reload(changed)` → 广播 `ConfigReloadedEvent`」，整体 `synchronized` 单飞。**不做失败回滚**：配置的真相在文件里，回滚只会制造「内存与文件不一致」这种更难查的状态。**插件配置段变了只重启那个插件**，用整段相等对比而不是逐字段 diff——插件配置段是自由映射，内核既不知道哪些键有语义，也无从判断哪个字段更重要。**触发只有手动 `/reload`**（同步等结果，因为重载不发起模型调用，只有文件读取与索引重建）；文件监听与插件 jar 热部署刻意不做。
+- **「重启插件」= `stopPlugin` + `startPlugin`，前提是能力上下文在每次 `start()` 现造**：PF4J 的插件实例在**装载期创建并长期缓存**（`PluginWrapper.getPlugin()` 懒创建后不再丢弃），`stopPlugin` 不会重置它。因此 `JellyfishPluginAdapter` 持有的是 `Supplier<PluginContext>` 而不是一个现成对象，工厂传入 `() -> manager.contextOf(manager.declarationOf(descriptor))`——**`declarationOf` 那一步才读 `PluginRuntimeConfig.configurationOf(pluginId)`**，于是「停止再启动」自然完成了「读到新配置段」，无需卸载重装 jar（也就不必新建类加载器）。`ConfigPluginStatusProvider` 相应把配置改成**不可变快照 + `volatile` 整体替换**（原先的可变集在重载线程与插件线程之间有竞态），`attach` 同时清空运行期启停开关——重载的语义就是「回到配置说的样子」。
+- **可观测性是纯订阅者，自己绝不发事件**：`MetricsSubscriber` 只订阅 `EventChannel`、只写 `MetricsRegistry`，否则会形成「事件 → 指标 → 事件」的自激循环；事件通道自身的统计直接作**仪表**读取（不走事件通道，同一道理）。它必须只订阅异步侧——少记一个计数不该影响业务结果，而审计级可靠性由调用点自己负责。`AgentHarness.bootstrap()` 在 `eventChannel.start()` 之后、`runtimeConfig.refresh()` **之前**启动它（否则配置告警计不到）；`shutdown()` **先**打健康检查（此刻插件与通道还在运行，报告才有诊断价值），关闭流程末尾退订并打一份指标汇总。**诊断输出必须比它诊断的对象更稳**：单个坏仪表只跳过自己、单个检查项抛错只降级为一条 `DOWN`、关闭路径上的日志失败只记 WARN。健康检查用三档（`UP` / `WARN` / `DOWN`），`WARN` 不算不健康——「插件没装」「没装压缩插件」都是合法配置；检查项是可插拔的 `HealthIndicator`，由装配根跨层拼装（`infra` 侧看得到模型 / 插件 / 事件通道，`core` 侧才看得到压缩器），因此 `infra/metrics` 不必反向依赖 `core`。出口只有程序化快照 + 关闭时日志汇总，刻意不加 `/metrics` 命令。
 - **异常**：统一抛 `JellyfishException`。
 - **序列化与反序列化**: 读写统一走 `ObjectMapperWrapper`，不要直接 new `ObjectMapper`。
 - **请求/消息模型**：`LlmRequest`、`LlmMessage`、`LlmTool` 是与厂商无关的统一模型，`LlmRequest` 用 builder 构建。
@@ -479,7 +489,7 @@ jellyfish-cli/src/main/resources/log4j2-tui.xml      # TUI 专用日志：root �
 - **同步派发的护栏由调用方负责**：`ExtensionRegistry` 在调用点线程内联执行 handler，没有超时、没有白名单、没有异常隔离——这是刻意的，因为调用方需要拿到确定结果。调用方若不能容忍插件阻塞或抛错，必须自己在调用点设超时 / 捕获；`EventChannel` 侧的白名单 / 限流 / 有界队列不能替代同步侧。
 - **组合规则属于调用方**：注册表只保证**有序查找**，调用几个、按什么顺序、什么时候停止、结果怎么合并都由内核在各调用点自己决定（写出显式的循环），不存在按类型硬编码的调度参数。等到需要「跳过某个处理器也不能算失败」「同一个处理器失败要换个策略」这类规则时，改动只会落在调用点。
 - **「没有可压的历史」与「压完了」是两回事**：无参 `/compact` 在待压范围为空时报 `ERROR`（用户要的动作没发生）；`/compact preview` 同样情况返回 `OK` 加一句说明（它要的只是信息）。预览与执行共用 `CompactionPlan`——预览说「将压缩 42 条」，执行就必须真的压那 42 条，各算一遍就会因为中间插入一条消息而对不上，而用户已经照着预览做了决定。因此预览那条路径**连模型都不解析**（模型解析做成「尽力而为」）：一台没配模型的机器上 `/compact preview` 该回答「没什么可压」，而不是「没有可用模型」。
-- **命令域只解析与分发，不拥有命令**：`CommandManager` 不注册处理器、不持有会话、不发事件、不缓存索引（每次现算，插件热部署后立刻可见）；命令名即路由键，别名与用法来自随 handler 落表的 `CommandDescriptor`（名片不含名字，避免「名片上的名字 ≠ 路由键」）。原文入口（输入框）与结构化入口（Web/TUI 直接给命令名 + 参数）共用同一条分发路径，且**对外壳中立**——cli / tui / server 谁调都一样；结果只有三态 + 文本，命令的副作用写回对应域服务，外壳执行后读域服务拿状态。内核系统命令（`/help` `/new` `/session` `/resume` `/model` `/agent` `/mode` `/status` `/usage` `/delete`）由 `core/command/SystemCommands` 以 owner=`core` 注册进同一份注册表；`/todo` 由 `jellyfish-plugin-todo` 注册，与其它插件命令**完全同源**，`/exit` 归外壳。**候选查询是与执行平行的一条只读路径**：需要用户挑参数的命令（`/agent` `/model` `/mode` `/resume` `/delete`）额外注册 `CommandOptionRequest` → `CommandOptions` 处理器，外壳选中命令时先查候选、有候选就弹二级选择页——不执行命令，因此不会误触 `/new` 这类副作用；`CommandResult` 的 choices 仅用于「直接发送无参命令」这条路径。
+- **命令域只解析与分发，不拥有命令**：`CommandManager` 不注册处理器、不持有会话、不缓存索引（每次现算，插件热部署后立刻可见）；命令名即路由键，别名与用法来自随 handler 落表的 `CommandDescriptor`（名片不含名字，避免「名片上的名字 ≠ 路由键」）。原文入口（输入框）与结构化入口（Web/TUI 直接给命令名 + 参数）共用同一条分发路径，且**对外壳中立**——cli / tui / server 谁调都一样；结果只有三态 + 文本，命令的副作用写回对应域服务，外壳执行后读域服务拿状态。内核系统命令（`/help` `/new` `/session` `/resume` `/model` `/agent` `/mode` `/status` `/usage` `/delete` `/compact` `/reload`）由 `core/command/SystemCommands` 以 owner=`core` 注册进同一份注册表；`/todo` 由 `jellyfish-plugin-todo` 注册，与其它插件命令**完全同源**，`/exit` 归外壳。**候选查询是与执行平行的一条只读路径**：需要用户挑参数的命令（`/agent` `/model` `/mode` `/resume` `/delete`）额外注册 `CommandOptionRequest` → `CommandOptions` 处理器，外壳选中命令时先查候选、有候选就弹二级选择页——不执行命令，因此不会误触 `/new` 这类副作用；`CommandResult` 的 choices 仅用于「直接发送无参命令」这条路径。**命令审计是这条路径上唯一的外发事件**：每个出口经 `finish()` 收口，任何结果（`OK` / `ERROR` / `UNKNOWN`）下恰好广播一次 `CommandExecutedEvent`，带用户原文、命中命令名、结果三态、处理器 owner（经 `ExtensionRegistry.bindings` 归因）与耗时，不带输出文本；语法上不是命令的输入与只读的 `options` 查询都不发；发布失败只记 WARN（审计故障不得变成命令故障），且它是 best-effort——审计级可靠性需另开同步通道。
 - **权限判定的三层与 fail-open 的适用域**：`PermissionManager` 依次走「核心策略（普通 Java 代码）→ PLAN 只读白名单 → 插件拦截（两态、只收紧）」，再统一处理 ASK 与审计。**ASK 由 `ApprovalChannel` 收口**：策略要求人工审批时，判定线程阻塞等待、外壳每帧取件并回填结论，只有**明确批准**才放行——无审批者（`-cli` / `-server` 不挂）、超时、排队溢出、通道关闭、线程被中断一律拒绝（fail-closed，绝不静默放行）；超时秒数来自 `jellyfish.json` 的 `permission.approvalTimeoutSeconds`（缺省 120，每轮现读），审计 `source` 记为 `approval` 以便与「策略直接放行」区分。fail-open 只覆盖「取不到策略」（未绑定 agent、无策略）；策略一旦生效，它的否定结论就是硬结论，否则 PLAN 模式形同虚设。插件侧结果类型独立为两态 `PermissionVeto`，因此「插件只能 Deny、不能要求人工审批」是编译期约束，不靠运行期判定。**只读白名单有两个来源**：权威来源是 `ToolDescriptor.readOnly`（工具提供方自己声明，随 handler 一起落表，因此工具装上/卸下/热部署时自动跟随，不需要任何通知边），用户追加来源是 `plugins.configurations.<pluginId>.readOnlyTools`（只能追加、不能撤销提供方声明）；两者取并集，由 `ReadOnlyTools` 现算。
 - **插件模型**：Java 插件与跨语言桥接插件在 `PF4JPluginManager` 眼里完全同构，都只经 `PluginContext`（`handle` / `contribute` / `observe` / `emit`）与内核交互：前两者写同一份类型注册表，后两者读写事件通道；脚本进程只是桥接插件背后的一台「无状态计算器」。
 - **插件碰不到会话、也拿不到工作目录**：`PluginContext` 只有身份与四个注册订阅方法，`ToolCallRequest` / `CommandRequest` 只带 `sessionId` 这类标识。两个直接后果：插件读写不了会话内部结构（消息列表、权限模式）；工具的相对路径只能按**进程工作目录**解析（`ToolPaths` 把这个基准集中在一处，将来补会话级 cwd 只改那里）。这不是缺陷而是边界——**只要一份状态能按 `sessionId` 归属，插件就完全能自己持有它**：`jellyfish-plugin-todo` 就是这样把待办从内核搬走的（自持文件 + 提示词贡献），内核不用新增会话字段，也不必为它保留任何调用点。

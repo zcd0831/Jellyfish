@@ -24,7 +24,7 @@ import javax.inject.Singleton;
  */
 @Singleton
 @Component(modules = {ConfigModule.class, LlmModule.class, ExtensionModule.class, EventModule.class,
-        PluginModule.class, AgentModule.class, PermissionModule.class, CommandModule.class})
+        PluginModule.class, AgentModule.class, PermissionModule.class, CommandModule.class, MetricsModule.class})
 public interface JellyfishComponent {
 
     /**

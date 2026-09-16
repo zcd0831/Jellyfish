@@ -1,10 +1,16 @@
 package zcd.jellyfish.core;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import zcd.jellyfish.core.command.SystemCommands;
 import zcd.jellyfish.core.compact.ConversationCompactor;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.config.RuntimeConfig;
 import zcd.jellyfish.infra.event.EventChannel;
+import zcd.jellyfish.infra.metrics.HealthCheck;
+import zcd.jellyfish.infra.metrics.MetricsRegistry;
+import zcd.jellyfish.infra.metrics.MetricsSubscriber;
 import zcd.jellyfish.infra.model.ModelManager;
 import zcd.jellyfish.infra.plugin.PF4JPluginManager;
 import zcd.jellyfish.infra.plugin.PluginRuntimeConfig;
@@ -39,6 +45,9 @@ import javax.inject.Singleton;
 @Singleton
 public class AgentHarness {
 
+    /** 日志。 */
+    private static final Logger LOG = LoggerFactory.getLogger(AgentHarness.class);
+
     /** 运行时配置门面，负责配置的双源读取与合并。 */
     private final RuntimeConfig runtimeConfig;
 
@@ -69,6 +78,15 @@ public class AgentHarness {
     /** 会话域服务：启动末期向插件要回历史会话。 */
     private final SessionManager sessionManager;
 
+    /** 指标订阅者：可观测性这条边上的唯一写入方。 */
+    private final MetricsSubscriber metricsSubscriber;
+
+    /** 指标注册表：关闭时打一份汇总日志。 */
+    private final MetricsRegistry metricsRegistry;
+
+    /** 健康检查：关闭时打一份诊断快照。 */
+    private final HealthCheck healthCheck;
+
     /**
      * 构造运行时宿主。
      *
@@ -82,12 +100,17 @@ public class AgentHarness {
      * @param systemCommands       内核系统命令注册器
      * @param sessionManager       会话域服务
      * @param conversationCompactor 会话压缩器
+     * @param metricsSubscriber    指标订阅者
+     * @param metricsRegistry      指标注册表
+     * @param healthCheck          健康检查
      */
     @Inject
     public AgentHarness(RuntimeConfig runtimeConfig, EventChannel eventChannel, ModelManager modelManager,
                         AgentManager agentManager, PluginRuntimeConfig pluginRuntimeConfig,
                         PF4JPluginManager pluginManager, ReActLooper reActLooper, SystemCommands systemCommands,
-                        SessionManager sessionManager, ConversationCompactor conversationCompactor) {
+                        SessionManager sessionManager, ConversationCompactor conversationCompactor,
+                        MetricsSubscriber metricsSubscriber, MetricsRegistry metricsRegistry,
+                        HealthCheck healthCheck) {
         this.runtimeConfig = runtimeConfig;
         this.eventChannel = eventChannel;
         this.modelManager = modelManager;
@@ -98,6 +121,9 @@ public class AgentHarness {
         this.systemCommands = systemCommands;
         this.sessionManager = sessionManager;
         this.conversationCompactor = conversationCompactor;
+        this.metricsSubscriber = metricsSubscriber;
+        this.metricsRegistry = metricsRegistry;
+        this.healthCheck = healthCheck;
     }
 
     /**
@@ -112,6 +138,8 @@ public class AgentHarness {
      */
     public void bootstrap() {
         eventChannel.start();
+        // 必须在 runtimeConfig.refresh() 之前：配置加载期发出的告警要能被计数
+        metricsSubscriber.start();
         systemCommands.register();
         runtimeConfig.refresh();
         modelManager.refresh(false);
@@ -136,12 +164,15 @@ public class AgentHarness {
     }
 
     /**
-     * 关闭应用：先停 ReAct 循环与压缩器（不再接新回合、不再起新压缩），再回收核心命令，
-     * 再停插件（并按 owner 回收注册），最后收敛事件通道。幂等。
+     * 关闭应用：先打一份健康检查（此刻各组件还在运行，报告才有诊断价值），
+     * 再停 ReAct 循环与压缩器（不再接新回合、不再起新压缩），再回收核心命令，
+     * 再停插件（并按 owner 回收注册），最后收敛事件通道；收尾时退订指标并打一份运行期指标汇总。幂等。
      * <p>
      * 顺序与 {@link #bootstrap()} 相反；任何一步失败都不阻断后续步骤，保证运行总能收敛。
      */
     public void shutdown() {
+        // 先报健康：此刻插件与通道还在运行，报告才有诊断价值（关闭后每项都会是 DOWN）
+        LOG.info("健康检查: {}", healthReportText());
         try {
             reActLooper.close();
             conversationCompactor.close();
@@ -155,6 +186,42 @@ public class AgentHarness {
                     eventChannel.close();
                 }
             }
+        }
+        try {
+            // 指标是累计值，放在关闭之后不影响可读性；先退订再读快照，避免读到一半又变
+            metricsSubscriber.close();
+        } finally {
+            LOG.info("运行期指标: {}", metricsSnapshotText());
+        }
+    }
+
+    /**
+     * 渲染健康报告，检查失败时退化为一句说明。
+     *
+     * @return 报告文本
+     */
+    private String healthReportText() {
+        try {
+            return healthCheck.check().render();
+        } catch (RuntimeException e) {
+            // 关闭路径上的诊断日志绝不能把关闭本身弄失败
+            LOG.warn("健康检查失败", e);
+            return "（检查失败）";
+        }
+    }
+
+    /**
+     * 渲染运行期指标，取快照失败时退化为一句说明。
+     *
+     * @return 指标文本
+     */
+    private String metricsSnapshotText() {
+        try {
+            return metricsRegistry.snapshot().render();
+        } catch (RuntimeException e) {
+            // 关闭路径上的诊断日志绝不能把关闭本身弄失败
+            LOG.warn("指标快照生成失败", e);
+            return "（快照生成失败）";
         }
     }
 }

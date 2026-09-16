@@ -12,6 +12,9 @@ import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.config.PluginsSettings;
 import zcd.jellyfish.infra.config.RuntimeConfig;
 import zcd.jellyfish.infra.event.EventChannel;
+import zcd.jellyfish.infra.metrics.HealthCheck;
+import zcd.jellyfish.infra.metrics.MetricsRegistry;
+import zcd.jellyfish.infra.metrics.MetricsSubscriber;
 import zcd.jellyfish.infra.model.ModelManager;
 import zcd.jellyfish.infra.plugin.PF4JPluginManager;
 import zcd.jellyfish.infra.plugin.PluginRuntimeConfig;
@@ -77,6 +80,18 @@ class AgentHarnessTest {
     @Mock
     private ConversationCompactor conversationCompactor;
 
+    /** 指标订阅者。 */
+    @Mock
+    private MetricsSubscriber metricsSubscriber;
+
+    /** 指标注册表。 */
+    @Mock
+    private MetricsRegistry metricsRegistry;
+
+    /** 健康检查。 */
+    @Mock
+    private HealthCheck healthCheck;
+
     @Test
     void bootstrap_should_start_in_fixed_order() {
         // Given
@@ -89,10 +104,12 @@ class AgentHarnessTest {
         // When
         harness.bootstrap();
 
-        // Then：事件订阅者就绪 → 注册核心命令 → 配置 → 各索引 → 插件配置 → 插件启动 → 会话恢复
-        InOrder order = inOrder(eventChannel, systemCommands, runtimeConfig, modelManager, agentManager,
-                pluginRuntimeConfig, pluginManager, sessionManager);
+        // Then：事件订阅者就绪 → 注册指标 → 注册核心命令 → 配置 → 各索引 → 插件配置 → 插件启动 → 会话恢复
+        InOrder order = inOrder(eventChannel, metricsSubscriber, systemCommands, runtimeConfig, modelManager,
+                agentManager, pluginRuntimeConfig, pluginManager, sessionManager);
         order.verify(eventChannel).start();
+        // 必须在 runtimeConfig.refresh() 之前：配置加载期的告警要能被计数
+        order.verify(metricsSubscriber).start();
         order.verify(systemCommands).register();
         order.verify(runtimeConfig).refresh();
         order.verify(modelManager).refresh(false);
@@ -132,6 +149,8 @@ class AgentHarnessTest {
         order.verify(systemCommands).close();
         order.verify(pluginManager).close();
         order.verify(eventChannel).close();
+        // 收尾：指标退订
+        verify(metricsSubscriber).close();
     }
 
     @Test
@@ -158,6 +177,7 @@ class AgentHarnessTest {
      */
     private AgentHarness newHarness() {
         return new AgentHarness(runtimeConfig, eventChannel, modelManager, agentManager, pluginRuntimeConfig,
-                pluginManager, reActLooper, systemCommands, sessionManager, conversationCompactor);
+                pluginManager, reActLooper, systemCommands, sessionManager, conversationCompactor,
+                metricsSubscriber, metricsRegistry, healthCheck);
     }
 }

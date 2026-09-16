@@ -214,6 +214,22 @@ class EventChannelTest {
     }
 
     @Test
+    void isRunning_should_track_start_and_close() {
+        // Given：未启动
+        assertFalse(channel.isRunning());
+
+        // When
+        channel.start();
+
+        // Then
+        assertTrue(channel.isRunning());
+
+        // When：关闭后不再接收
+        channel.close();
+        assertFalse(channel.isRunning());
+    }
+
+    @Test
     void subscribe_should_reject_null_arguments() {
         // When / Then
         assertThrows(NullPointerException.class, () -> channel.subscribe("owner", null, null, event -> {

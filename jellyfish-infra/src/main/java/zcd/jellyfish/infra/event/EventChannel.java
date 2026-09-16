@@ -116,6 +116,18 @@ public final class EventChannel implements EventPublisher, AutoCloseable {
     }
 
     /**
+     * 判断通道是否正在接收通知。
+     * <p>
+     * 给健康检查用：{@code start()} 与 {@code close()} 都是幂等的状态切换，
+     * 外部需要一个只读的观察点来判断「现在提交的通知会不会被真正派发」。
+     *
+     * @return 已启动且未关闭时返回 {@code true}
+     */
+    public boolean isRunning() {
+        return started && !closed;
+    }
+
+    /**
      * 异步广播一条通知，立即返回。
      * <p>
      * 未 {@link #start()} 时先进入启动期缓冲；已启动时提交线程池，队列满按

@@ -23,7 +23,7 @@ java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -cli -p "今天�
 | --- | --- |
 | `-cli` / `-tui` / `-server` | 模式旗标，三选一且必填；`-server` 可带位置端口 |
 | `-p, --print <输入>` | 单次模式的输入；缺省时从 stdin 读到 EOF（管道可用） |
-| `--session <会话>` | 切换到已有会话（会话不持久化，单次模式下实际不可用） |
+| `--session <会话>` | 切换到已有会话（需安装 `jellyfish-session-file` 等持久化插件；会话不存在时按用法错误退出 `2`） |
 | `--agent <agentId>` | 新建会话时绑定 agent |
 | `--model <provider/模型>` | 新建会话时指定模型，必须含 `/` |
 | `--mode <plan\|normal>` | 新建会话的权限模式（`plan` 仅允许只读工具） |
@@ -148,8 +148,9 @@ CSI-u 等所有「带修饰的 Enter」编码都无法被底层框架区分（�
 要赌终端的字宽表，算错了比不对齐更误导）。**用户消息保持纯文本**（用户打的多是自然语言，渲染收益低，
 还可能吞掉原文空白），工具轨迹不变。图片与 HTML 原样显示源码，不请求也不解释。
 
-**滚轮不可用**是刻意的（除非显式打开鼠标捕获）：滚轮事件要求应用捕获鼠标，而捕获后终端的鼠标选择会被应用截走
-（复制屏幕文本需按住修饰键）。消息区滚动也可以直接用 `PageUp` / `PageDown` / `End`。
+**滚轮可用，代价是终端选择需按住修饰键**：滚轮事件要求应用捕获鼠标（`TuiConfig.mouseCapture(true)`，**默认开启**），
+而捕获后终端的鼠标选择会被应用截走——复制屏幕文本需按住修饰键（macOS 为 Option）。若不能接受这个代价，用
+`-Djellyfish.tui.mouseCapture=false` 退回：代价是滚轮在多数终端下**根本到不了应用**，消息区滚动改用 `PageUp` / `PageDown` / `End`。
 
 **与 `-cli` 的口径差异**：TUI 独占备用屏，因此**没有 stdout 契约**（`> answer.txt` 不适用），
 退出后也不回显会话内容。日志在 TUI 模式下改写到文件 `<用户主目录>/jellyfish/jellyfish-tui.log`（可用 `-Djellyfish.log.file=...` 改路径），

@@ -176,7 +176,7 @@ public final class TuiApp extends ToolkitApp {
      * {@code /resume} 是切到<b>已有</b>会话，{@code /delete} 是删掉某个会话。尤其是 {@code /delete}：
      * 若它也在首页先建一个空会话，就会变成「删了一个、又造了一个」，净效果为零，
      * 正好与用户要的清理目标相反；{@code /new} 若先建一个，一次会多出一条空会话。
-     * 其余命令（含 {@code /session}）一律先建会话再执行——这是用户裁决的口径，见 tui方案.md。
+     * 其余命令（含 {@code /session}）一律先建会话再执行。
      * <p>
      * 命令名与别名镜像 {@code core/command/SystemCommands} 的注册。与 {@link ShellCommand}
      * 硬编码外壳命令名是同一类取舍：外壳需要知道少数几条命令的语义来分流。

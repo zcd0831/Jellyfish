@@ -12,6 +12,7 @@ import zcd.jellyfish.api.event.Subscription;
 import zcd.jellyfish.api.extension.CompactionStrategy;
 import zcd.jellyfish.api.extension.CompactionStrategyRequest;
 import zcd.jellyfish.core.compact.ConversationCompactor;
+import zcd.jellyfish.infra.config.ConfigReloader;
 import zcd.jellyfish.infra.config.Model;
 import zcd.jellyfish.infra.config.Provider;
 import zcd.jellyfish.infra.config.ReactSettings;
@@ -80,6 +81,10 @@ class SystemCommandsTest {
     @Mock
     private RuntimeConfig runtimeConfig;
 
+    /** 配置重载器：{@code /reload} 的执行体。 */
+    @Mock
+    private ConfigReloader configReloader;
+
     /** 真实会话压缩器：{@code /compact} 的执行体。 */
     private ConversationCompactor compactor;
 
@@ -98,7 +103,7 @@ class SystemCommandsTest {
     @BeforeEach
     void setUp() {
         ExtensionRegistry extensions = new ExtensionRegistry(new TypeRegistry());
-        commandManager = new CommandManager(extensions);
+        commandManager = new CommandManager(extensions, events);
         sessionManager = new SessionManager(agentManager, events, extensions);
         // 只有 /compact 需要它，用 lenient 免得其余用例因「多余打桩」被 Mockito 判失败
         lenient().when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
@@ -110,7 +115,7 @@ class SystemCommandsTest {
         compactor = new ConversationCompactor(sessionManager, modelManager, runtimeConfig,
                 strategyRegistry, events);
         systemCommands = new SystemCommands(extensions, commandManager, sessionManager, modelManager, agentManager,
-                events, compactor, runtimeConfig);
+                events, compactor, runtimeConfig, configReloader);
         systemCommands.register();
     }
 
@@ -122,8 +127,8 @@ class SystemCommandsTest {
 
         // Then
         assertTrue(names.containsAll(Arrays.asList("help", "new", "session", "resume", "model", "agent", "mode",
-                "status", "usage", "delete", "compact")));
-        assertEquals(11, names.size());
+                "status", "usage", "delete", "compact", "reload")));
+        assertEquals(12, names.size());
     }
 
     @Test

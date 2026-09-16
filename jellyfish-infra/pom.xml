@@ -68,5 +68,12 @@
             <artifactId>mockito-junit-jupiter</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- 内联 mock maker：本模块的 ConfigReloader 依赖 PF4JPluginManager 这类 final 运行时组件，
+             只有内联模式才能对它做行为与顺序断言（与 jellyfish-core 同一口径） -->
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-inline</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 </project>

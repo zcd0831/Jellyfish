@@ -5,8 +5,6 @@ import org.pf4j.PluginFactory;
 import org.pf4j.PluginWrapper;
 import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.plugin.JellyfishPlugin;
-import zcd.jellyfish.api.plugin.PluginContext;
-import zcd.jellyfish.api.plugin.PluginDeclaration;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Modifier;
@@ -18,6 +16,9 @@ import java.util.Objects;
  * 这是「插件作者完全不需要知道 PF4J 存在」的落点：描述符里的 {@code plugin.class} 指向的是
  * {@code JellyfishPlugin} 实现类，而不是 {@code org.pf4j.Plugin} 子类，因此 PF4J 默认的
  * {@code DefaultPluginFactory}（会强转 {@code org.pf4j.Plugin}）被本类替换。
+ * <p>
+ * <b>能力上下文不在这里创建</b>：PF4J 的插件实例是装载期创建并长期缓存的，
+ * 而配置段必须「每次启动现读」，因此上下文由 {@link JellyfishPluginAdapter#start()} 在每次启动时现造。
  * <p>
  * 实例化要求公开无参构造器：插件由插件的类加载器加载，无法走 Dagger 装配。
  *
@@ -39,11 +40,11 @@ final class JellyfishPluginFactory implements PluginFactory {
 
     @Override
     public Plugin create(PluginWrapper wrapper) {
-        JellyfishPluginDescriptor descriptor = JellyfishPluginDescriptor.of(wrapper);
-        JellyfishPlugin plugin = instantiate(descriptor, wrapper.getPluginClassLoader());
-        PluginDeclaration declaration = manager.declarationOf(descriptor);
-        PluginContext context = manager.contextOf(declaration);
-        return new JellyfishPluginAdapter(wrapper, plugin, context);
+        final JellyfishPluginDescriptor descriptor = JellyfishPluginDescriptor.of(wrapper);
+        final JellyfishPlugin plugin = instantiate(descriptor, wrapper.getPluginClassLoader());
+        // 上下文在每次 start 时重建：描述符里的配置段那一刻才读，因此重启即拿到新配置
+        return new JellyfishPluginAdapter(wrapper, plugin,
+                () -> manager.contextOf(manager.declarationOf(descriptor)));
     }
 
     /**

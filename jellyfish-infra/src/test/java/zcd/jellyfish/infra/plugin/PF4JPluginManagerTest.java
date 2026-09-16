@@ -14,6 +14,7 @@ import zcd.jellyfish.api.plugin.JellyfishPlugin;
 import zcd.jellyfish.api.plugin.PluginContext;
 import zcd.jellyfish.infra.event.EventChannel;
 import zcd.jellyfish.infra.event.EventChannelOptions;
+import zcd.jellyfish.infra.config.PluginsSettings;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.registry.TypeRegistry;
 
@@ -22,8 +23,10 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 
@@ -225,6 +228,88 @@ class PF4JPluginManagerTest {
         manager.close();
     }
 
+    @Test
+    void reload_should_be_noop_when_not_bootstrapped() throws IOException {
+        // Given：还没启动就重载，插件集合为空，重载只能是什么都不做
+        writePlugin("sample", RecordingPlugin.class.getName(), "");
+        PF4JPluginManager manager = newManager(null, null);
+
+        // When
+        PluginReloadReport report = manager.reload(Collections.singleton("sample"));
+
+        // Then
+        assertTrue(report.isEmpty());
+    }
+
+    @Test
+    void reload_should_restart_reconfigured_plugin_with_new_configuration() throws IOException {
+        // Given：插件在 start 时记录自己的配置段
+        writePlugin("sample", ConfigEchoPlugin.class.getName(), "");
+        PluginRuntimeConfig config = newConfig(null, null, configurations("sample", "v1"));
+        PF4JPluginManager manager = newManager(config);
+        manager.bootstrap();
+        assertTrue(RECORDED.contains("config:v1"));
+
+        // When：配置段变了，重载后插件必须拿到新值
+        config.refresh(Collections.singletonList(pluginsRoot),
+                new PluginsSettings(null, null, configurations("sample", "v2")));
+        PluginReloadReport report = manager.reload(Collections.singleton("sample"));
+
+        // Then
+        assertTrue(RECORDED.contains("stop"), "重启应先停止旧实例");
+        assertTrue(RECORDED.contains("config:v2"), "重启后的上下文必须读到新配置段");
+        assertEquals(Collections.singletonList("sample"), report.getRestarted());
+        assertEquals(PluginState.STARTED, manager.stateOf("sample"));
+        // 重启后注册仍可用：旧注册已按 owner 回收，新注册已建立
+        assertEquals("ok", callTool("echo").getOutput());
+    }
+
+    @Test
+    void reload_should_not_restart_plugin_whose_configuration_is_unchanged() throws IOException {
+        // Given
+        writePlugin("sample", ConfigEchoPlugin.class.getName(), "");
+        PluginRuntimeConfig config = newConfig(null, null, configurations("sample", "v1"));
+        PF4JPluginManager manager = newManager(config);
+        manager.bootstrap();
+
+        // When：配置段一模一样，重载不应重启它
+        config.refresh(Collections.singletonList(pluginsRoot),
+                new PluginsSettings(null, null, configurations("sample", "v1")));
+        PluginReloadReport report = manager.reload(Collections.<String>emptySet());
+
+        // Then
+        assertFalse(report.touchedPluginIds().contains("sample"));
+    }
+
+    @Test
+    void reload_should_stop_plugin_that_became_disabled_and_start_it_again() throws IOException {
+        // Given
+        writePlugin("sample", RecordingPlugin.class.getName(), "");
+        PluginRuntimeConfig config = newConfig(null, null, null);
+        PF4JPluginManager manager = newManager(config);
+        manager.bootstrap();
+        assertEquals(PluginState.STARTED, manager.stateOf("sample"));
+
+        // When：配置把它禁用了
+        config.refresh(Collections.singletonList(pluginsRoot),
+                new PluginsSettings(null, Collections.singletonList("sample"), null));
+        PluginReloadReport disabling = manager.reload(Collections.<String>emptySet());
+
+        // Then：不仅要不在运行，注册也必须回收干净
+        assertFalse(manager.stateOf("sample").isStarted());
+        assertEquals(Collections.singletonList("sample"), disabling.getStopped());
+        assertThrows(ExtensionException.class, () -> callTool("echo"));
+
+        // When：又启用了
+        config.refresh(Collections.singletonList(pluginsRoot), new PluginsSettings(null, null, null));
+        PluginReloadReport enabling = manager.reload(Collections.<String>emptySet());
+
+        // Then
+        assertEquals(PluginState.STARTED, manager.stateOf("sample"));
+        assertEquals(Collections.singletonList("sample"), enabling.getStarted());
+        assertEquals("ok", callTool("echo").getOutput());
+    }
+
     /**
      * 以调用点的方式调用工具：先查找处理器，再执行它。
      *
@@ -244,9 +329,45 @@ class PF4JPluginManagerTest {
      * @return 插件管理器门面
      */
     private PF4JPluginManager newManager(Set<String> enabled, Set<String> disabled) {
-        PluginRuntimeConfig config = new PluginRuntimeConfig(
-                Collections.singletonList(pluginsRoot), enabled, disabled, null);
+        return newManager(newConfig(enabled, disabled, null));
+    }
+
+    /**
+     * 构造可运行期刷新的装配输入。
+     *
+     * @param enabled        启用名单，可为 {@code null}
+     * @param disabled       禁用名单，可为 {@code null}
+     * @param configurations 插件配置段，可为 {@code null}
+     * @return 装配输入
+     */
+    private PluginRuntimeConfig newConfig(Set<String> enabled, Set<String> disabled,
+                                          Map<String, Map<String, Object>> configurations) {
+        return new PluginRuntimeConfig(Collections.singletonList(pluginsRoot), enabled, disabled, configurations);
+    }
+
+    /**
+     * 以装配输入构造门面。
+     *
+     * @param config 装配输入
+     * @return 插件管理器门面
+     */
+    private PF4JPluginManager newManager(PluginRuntimeConfig config) {
         return new PF4JPluginManager(contexts, config);
+    }
+
+    /**
+     * 构造单个插件的配置段。
+     *
+     * @param pluginId 插件标识
+     * @param marker   标记值
+     * @return 配置段映射
+     */
+    private static Map<String, Map<String, Object>> configurations(String pluginId, String marker) {
+        Map<String, Object> section = new LinkedHashMap<String, Object>();
+        section.put("marker", marker);
+        Map<String, Map<String, Object>> configurations = new LinkedHashMap<String, Map<String, Object>>();
+        configurations.put(pluginId, section);
+        return configurations;
     }
 
     /**
@@ -301,6 +422,28 @@ class PF4JPluginManagerTest {
             // 订阅调用本身即可证明注册入口可用；事件是否到达不在本测试范围内
             context.observe(ConfigWarningEvent.class, event -> RECORDED.add("notified"));
             RECORDED.add("subscribed");
+        }
+    }
+
+    /**
+     * 测试用插件：把启动时拿到的配置段记录进共享列表。
+     * <p>
+     * 存在的意义只有一个：证明「上下文在每次启动时重建」——配置段变了，重启后的插件必须看到新值。
+     *
+     * @author zcd
+     */
+    public static final class ConfigEchoPlugin implements JellyfishPlugin {
+
+        @Override
+        public void start(PluginContext context) {
+            Object marker = context.configuration().get("marker");
+            RECORDED.add("config:" + marker);
+            context.handle(ToolCallRequest.class, "echo", callback -> new ToolCallResult("echo", "ok"));
+        }
+
+        @Override
+        public void stop() {
+            RECORDED.add("stop");
         }
     }
 

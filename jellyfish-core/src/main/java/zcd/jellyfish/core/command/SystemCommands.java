@@ -1,6 +1,8 @@
 package zcd.jellyfish.core.command;
 
 import org.apache.commons.lang3.StringUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.event.EventPublisher;
 import zcd.jellyfish.api.event.RegisterOptions;
@@ -22,11 +24,14 @@ import zcd.jellyfish.core.compact.ConversationCompactor;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.command.CommandManager;
 import zcd.jellyfish.infra.config.AgentDefinition;
+import zcd.jellyfish.infra.config.ConfigReloader;
 import zcd.jellyfish.infra.config.Model;
 import zcd.jellyfish.infra.config.Provider;
+import zcd.jellyfish.infra.config.ReloadOutcome;
 import zcd.jellyfish.infra.config.RuntimeConfig;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.model.ModelManager;
+import zcd.jellyfish.infra.plugin.PluginReloadReport;
 import zcd.jellyfish.infra.session.Session;
 import zcd.jellyfish.infra.session.SessionCompaction;
 import zcd.jellyfish.infra.session.SessionManager;
@@ -64,6 +69,9 @@ import java.util.Objects;
  */
 @Singleton
 public class SystemCommands {
+
+    /** 日志。 */
+    private static final Logger LOG = LoggerFactory.getLogger(SystemCommands.class);
 
     /** 内核系统命令的 owner 标识，与插件 {@code pluginId} 区分开。 */
     public static final String OWNER = "core";
@@ -114,6 +122,9 @@ public class SystemCommands {
     /** 运行时配置门面：读 {@code react} 段的压缩参数用于展示默认档位。 */
     private final RuntimeConfig runtimeConfig;
 
+    /** 配置重载器：{@code /reload} 的执行体。 */
+    private final ConfigReloader configReloader;
+
     /** 已注册的命令句柄，{@link #close()} 时回收。 */
     private final List<Subscription> subscriptions = new ArrayList<Subscription>();
 
@@ -128,12 +139,13 @@ public class SystemCommands {
      * @param events         通知发布入口
      * @param compactor      会话压缩器
      * @param runtimeConfig  运行时配置门面
+     * @param configReloader 配置重载器
      */
     @Inject
     public SystemCommands(ExtensionRegistry extensions, CommandManager commandManager,
                           SessionManager sessionManager, ModelManager modelManager, AgentManager agentManager,
                           EventPublisher events, ConversationCompactor compactor,
-                          RuntimeConfig runtimeConfig) {
+                          RuntimeConfig runtimeConfig, ConfigReloader configReloader) {
         this.extensions = Objects.requireNonNull(extensions, "extensions must not be null");
         this.commandManager = Objects.requireNonNull(commandManager, "commandManager must not be null");
         this.sessionManager = Objects.requireNonNull(sessionManager, "sessionManager must not be null");
@@ -142,6 +154,7 @@ public class SystemCommands {
         this.events = Objects.requireNonNull(events, "events must not be null");
         this.compactor = Objects.requireNonNull(compactor, "compactor must not be null");
         this.runtimeConfig = Objects.requireNonNull(runtimeConfig, "runtimeConfig must not be null");
+        this.configReloader = Objects.requireNonNull(configReloader, "configReloader must not be null");
     }
 
     /**
@@ -171,6 +184,8 @@ public class SystemCommands {
                 aliases("rm")), this::deleteSession));
         subscriptions.add(register("compact", new CommandDescriptor("把更早的对话压成摘要",
                 "[preview]", null), this::compact));
+        subscriptions.add(register("reload", new CommandDescriptor("重新加载配置（模型 / agent / 插件）",
+                null, null), this::reload));
         // 只读候选查询：与执行处理器平行，外壳「选中命令就弹选择页」时走这条路径，不产生任何副作用
         subscriptions.add(registerOptions("resume", this::resumeOptions));
         subscriptions.add(registerOptions("model", this::modelOptions));
@@ -661,6 +676,65 @@ public class SystemCommands {
                 + "（输入 " + session.getUsage().getPromptTokens()
                 + "，输出 " + session.getUsage().getCompletionTokens()
                 + "，调用 " + session.getUsage().getLlmCalls() + " 次）");
+    }
+
+    /**
+     * {@code /reload}：重新读取并应用全部配置。
+     * <p>
+     * <b>同步等结果</b>：与 {@code /compact} 不同，配置重载不发起模型调用，只做文件读取与索引重建，
+     * 耗时在毫秒级；把「做完没做完」交给用户猜反而不如直接回答。
+     * <p>
+     * <b>失败原样告知</b>：不做回滚（配置的真相在文件里），错误文本带上原因，让用户知道该看哪个文件。
+     *
+     * @param request 命令请求
+     * @return 结果
+     */
+    private CommandResult reload(CommandRequest request) {
+        ReloadOutcome outcome;
+        try {
+            outcome = configReloader.reload();
+        } catch (RuntimeException e) {
+            LOG.error("配置重载失败", e);
+            return CommandResult.error("配置重载失败：" + e.getMessage());
+        }
+        return CommandResult.ok(renderReload(outcome));
+    }
+
+    /**
+     * 渲染重载结果。
+     *
+     * @param outcome 重载结果
+     * @return 文本
+     */
+    private static String renderReload(ReloadOutcome outcome) {
+        StringBuilder text = new StringBuilder("配置已重载（耗时 ")
+                .append(outcome.getDurationMillis()).append(" ms）。");
+        PluginReloadReport report = outcome.getPluginReport();
+        appendPluginChanges(text, "重启", report.getRestarted());
+        appendPluginChanges(text, "启动", report.getStarted());
+        appendPluginChanges(text, "停止", report.getStopped());
+        appendPluginChanges(text, "失败", report.getFailed());
+        if (report.isEmpty()) {
+            text.append("\n插件：无变化。");
+        }
+        if (!report.getFailed().isEmpty()) {
+            text.append("\n（启动失败的插件请查看日志：多为配置错误或依赖不满足。）");
+        }
+        return text.toString();
+    }
+
+    /**
+     * 追加一类插件变动。
+     *
+     * @param text    目标
+     * @param label   变动类型文案
+     * @param plugins 插件标识
+     */
+    private static void appendPluginChanges(StringBuilder text, String label, List<String> plugins) {
+        if (plugins.isEmpty()) {
+            return;
+        }
+        text.append("\n插件").append(label).append("：").append(String.join("、", plugins));
     }
 
     /**

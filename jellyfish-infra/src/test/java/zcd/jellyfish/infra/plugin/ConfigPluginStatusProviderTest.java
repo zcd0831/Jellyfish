@@ -109,6 +109,37 @@ class ConfigPluginStatusProviderTest {
         assertFalse(provider.isPluginDisabled("b"));
     }
 
+    @Test
+    void attach_should_reset_runtime_overrides_to_config() {
+        // Given：先有运行期开关（比如运行期启用、又运行期禁用）
+        ConfigPluginStatusProvider provider = new ConfigPluginStatusProvider(config(setOf("a"), null));
+        provider.enablePlugin("b");
+        provider.disablePlugin("a");
+        assertFalse(provider.isPluginDisabled("b"));
+        assertTrue(provider.isPluginDisabled("a"));
+
+        // When：配置重载——语义是「回到配置说的样子」
+        provider.attach(config(setOf("a"), null));
+
+        // Then：运行期开关被清掉，一切以配置为准
+        assertFalse(provider.isPluginDisabled("a"));
+        assertTrue(provider.isPluginDisabled("b"));
+    }
+
+    @Test
+    void attach_should_take_effect_immediately_for_readers() {
+        // Given
+        ConfigPluginStatusProvider provider = new ConfigPluginStatusProvider(config(null, null));
+        assertFalse(provider.isPluginDisabled("a"));
+
+        // When：名单改成白名单
+        provider.attach(config(setOf("b"), null));
+
+        // Then
+        assertTrue(provider.isPluginDisabled("a"));
+        assertFalse(provider.isPluginDisabled("b"));
+    }
+
     /**
      * 构造插件运行时配置。
      *

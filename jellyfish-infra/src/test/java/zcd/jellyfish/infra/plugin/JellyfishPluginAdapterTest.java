@@ -13,7 +13,10 @@ import zcd.jellyfish.api.plugin.JellyfishPlugin;
 import zcd.jellyfish.api.plugin.PluginContext;
 
 import java.nio.file.Paths;
+import java.util.concurrent.atomic.AtomicInteger;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
@@ -41,16 +44,36 @@ class JellyfishPluginAdapterTest {
 
     @BeforeEach
     void setUp() {
-        adapter = new JellyfishPluginAdapter(wrapper(), delegate, context);
+        adapter = new JellyfishPluginAdapter(wrapper(), delegate, () -> context);
     }
 
     @Test
-    void start_should_delegate_with_same_context() {
+    void start_should_delegate_with_context_from_factory() {
         // When
         adapter.start();
 
         // Then
         verify(delegate).start(context);
+    }
+
+    @Test
+    void start_should_ask_for_a_fresh_context_each_time() {
+        // Given：每次启动都必须现造上下文，否则「停止再启动」读不到新配置段
+        AtomicInteger calls = new AtomicInteger();
+        PluginContext first = mock(PluginContext.class);
+        PluginContext second = mock(PluginContext.class);
+        JellyfishPluginAdapter fresh = new JellyfishPluginAdapter(wrapper(), delegate,
+                () -> calls.incrementAndGet() == 1 ? first : second);
+
+        // When
+        fresh.start();
+        fresh.start();
+
+        // Then
+        assertEquals(2, calls.get());
+        assertNotSame(first, second);
+        verify(delegate).start(first);
+        verify(delegate).start(second);
     }
 
     @Test

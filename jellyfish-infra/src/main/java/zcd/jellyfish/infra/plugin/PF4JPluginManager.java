@@ -91,6 +91,102 @@ public final class PF4JPluginManager implements AutoCloseable {
     }
 
     /**
+     * 按最新配置重载插件运行时：重建启用状态、重启配置段变化的插件、按名单差异启停。
+     * <p>
+     * <b>不做 jar 热部署</b>：扫描目录与插件集合在启动期就定了（{@code config.json} 不参与热更新），
+     * 本方法只处理「同在的插件读新配置」与「名单变化」。新增 / 删除插件 jar 属另一条路径。
+     * <p>
+     * <b>「重启」= 停止再启动</b>：PF4J 的插件实例在装载期创建并长期缓存，但本项目的适配器
+     * 在每次 {@code start()} 现造能力上下文，因此重新启动就能读到新的配置段，无需卸载重装 jar。
+     * <p>
+     * 顺序有意固定为「先重启配置变化的、再按名单启停」：后者是兜底，保证无论前一步把插件弄到什么状态，
+     * 最终都收敛到「配置说的样子」。
+     *
+     * @param reconfiguredPluginIds 配置段发生变化的插件标识，可为 {@code null}
+     * @return 重载报告，保证非 {@code null}
+     */
+    public synchronized PluginReloadReport reload(Set<String> reconfiguredPluginIds) {
+        if (manager == null) {
+            // 尚未启动过：没有插件可重载，调用方照常把配置刷进 PluginRuntimeConfig
+            return PluginReloadReport.empty();
+        }
+        JellyfishPluginManager current = manager;
+        // 名单以配置为权威重建：重载的语义就是「回到配置说的样子」
+        current.reattachStatus(runtimeConfig);
+        PluginReloadReport report = new PluginReloadReport();
+        restartReconfigured(current, reconfiguredPluginIds, report);
+        applyRoster(current, report);
+        LOG.info("插件配置重载完成: started={} stopped={} restarted={} failed={}",
+                report.getStarted(), report.getStopped(), report.getRestarted(), report.getFailed());
+        return report;
+    }
+
+    /**
+     * 重启配置段发生变化的插件（停止后再启动，启动时现造上下文就拿到新配置）。
+     * <p>
+     * 只处理当前已在运行的：没在运行的插件由随后的名单收敛负责启动，那时它一样会读到新配置。
+     *
+     * @param current               内部管理器
+     * @param reconfiguredPluginIds 配置段变化的插件标识，可为 {@code null}
+     * @param report                重载报告
+     */
+    private void restartReconfigured(JellyfishPluginManager current, Set<String> reconfiguredPluginIds,
+                                     PluginReloadReport report) {
+        if (reconfiguredPluginIds == null) {
+            return;
+        }
+        for (String pluginId : reconfiguredPluginIds) {
+            PluginWrapper wrapper = current.getPlugin(pluginId);
+            if (wrapper == null || blocked.contains(pluginId)) {
+                continue;
+            }
+            if (wrapper.getPluginState().isStarted()) {
+                current.safeStop(pluginId);
+                report.recordRestarted(pluginId);
+            }
+        }
+    }
+
+    /**
+     * 把每个已解析插件的实际状态收敛到「配置说的样子」。
+     * <p>
+     * 先算差异再执行：停止与启动分开两轮，避免「边遍历边改状态」导致后半个列表看到半新半旧的状态。
+     * 启动交给 PF4J 的 {@code startPlugin}，它自带依赖先行语义。
+     *
+     * @param current 内部管理器
+     * @param report  重载报告
+     */
+    private void applyRoster(JellyfishPluginManager current, PluginReloadReport report) {
+        List<String> toStop = new ArrayList<String>();
+        List<String> toStart = new ArrayList<String>();
+        for (PluginWrapper wrapper : new ArrayList<PluginWrapper>(current.getResolvedPlugins())) {
+            String pluginId = wrapper.getPluginId();
+            if (blocked.contains(pluginId)) {
+                continue;
+            }
+            boolean desired = !current.disabledByConfig(pluginId);
+            boolean started = wrapper.getPluginState().isStarted();
+            if (!desired && started) {
+                toStop.add(pluginId);
+            } else if (desired && !started) {
+                toStart.add(pluginId);
+            }
+        }
+        for (String pluginId : toStop) {
+            current.safeStop(pluginId);
+            report.recordStopped(pluginId);
+        }
+        for (String pluginId : toStart) {
+            PluginState state = current.safeStart(pluginId);
+            if (state.isStarted()) {
+                report.recordStarted(pluginId);
+            } else {
+                report.recordFailed(pluginId);
+            }
+        }
+    }
+
+    /**
      * 获取指定插件的状态。
      *
      * @param pluginId 插件标识

@@ -101,6 +101,28 @@ final class JellyfishPluginManager extends DefaultPluginManager {
     }
 
     /**
+     * 以最新配置重建启用状态（配置重载时调用）。
+     * <p>
+     * 由门面转发而不是让门面直接改状态提供者：状态提供者是 PF4J 在父类构造器里创建的，
+     * 只有子类知道它现在是谁。
+     *
+     * @param config 最新装配输入，不可为 {@code null}
+     */
+    void reattachStatus(PluginRuntimeConfig config) {
+        statusProvider.attach(config);
+    }
+
+    /**
+     * 按配置判断插件是否应被禁用（不含运行期开关的影响以外的逻辑）。
+     *
+     * @param pluginId 插件标识
+     * @return 配置（含运行期开关）判定为禁用时返回 {@code true}
+     */
+    boolean disabledByConfig(String pluginId) {
+        return isPluginDisabled(pluginId);
+    }
+
+    /**
      * 为插件声明创建能力上下文。
      *
      * @param declaration 插件声明，不可为 {@code null}

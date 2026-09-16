@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+         http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>zcd</groupId>
+        <artifactId>jellyfish</artifactId>
+        <version>0.0.1-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>jellyfish-script</artifactId>
+    <name>Jellyfish Script</name>
+    <description>跨语言插件运行时：协议、清单、进程生命周期、事件桥接与熔断（语言无关机制层）。</description>
+
+    <dependencies>
+        <!-- 内核契约：必须 provided。本模块会被桥接插件 shade 进插件包，而
+             PluginClasspathGuard 禁止插件包内出现 zcd/jellyfish/api —— 自带会让
+             JellyfishPlugin / PluginContext 在子优先类加载器下出现两份互不相识的类型。 -->
+        <dependency>
+            <groupId>zcd</groupId>
+            <artifactId>jellyfish-api</artifactId>
+            <version>${project.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- 日志：与内核同源（宿主已有 slf4j），同样走 provided 由父加载器提供。 -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- Jackson：内核的 ObjectMapperWrapper 在 jellyfish-infra 里、插件看不到它，
+             因此本模块自带一份并 shade 进插件包（与 jellyfish-plugin-todo 同款做法）。 -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+        </dependency>
+
+        <!-- Apache Commons Exec：子进程启动、stdout/stderr 泵送与进程级看门狗。
+             它只在 ScriptProcess（P3）里使用，但作为本模块对外承诺的依赖先声明，
+             免得桥接插件的 shade 配置在 P3 才需要跟着改。 -->
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-exec</artifactId>
+        </dependency>
+
+        <!-- 单元测试 -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

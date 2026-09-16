@@ -24,5 +24,7 @@
         <module>jellyfish-plugin-todo</module>
         <module>jellyfish-plugin-project</module>
         <module>jellyfish-plugin-compact</module>
+        <!-- 跨语言桥接插件：脚本进程由它承载，机制层（jellyfish-script）被 shade 进它的插件包 -->
+        <module>jellyfish-plugin-python</module>
     </modules>
 </project>

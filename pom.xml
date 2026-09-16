@@ -16,6 +16,8 @@
         <module>jellyfish-core</module>
         <module>jellyfish-tui</module>
         <module>jellyfish-cli</module>
+        <!-- 跨语言插件运行时：语言无关的机制层，被桥接插件各自 shade，不进内核 classpath -->
+        <module>jellyfish-script</module>
         <!-- 官方插件：不在内核依赖链上，只经 jellyfish-api 与内核交互 -->
         <module>jellyfish-plugins</module>
     </modules>

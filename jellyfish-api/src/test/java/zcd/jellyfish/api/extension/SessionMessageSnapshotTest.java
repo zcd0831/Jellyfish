@@ -9,6 +9,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -22,7 +23,7 @@ class SessionMessageSnapshotTest {
     @Test
     void constructor_should_keepAllFields() {
         SessionMessageSnapshot snapshot = new SessionMessageSnapshot("m-1", 5L, "assistant", "内容",
-                "call-1", "read_file", null, new TokenUsageSnapshot(1, 2, 3));
+                "call-1", "read_file", null, new TokenUsageSnapshot(1, 2, 3), "想了一下");
 
         assertEquals("m-1", snapshot.getMessageId());
         assertEquals(5L, snapshot.getTimestamp());
@@ -31,26 +32,44 @@ class SessionMessageSnapshotTest {
         assertEquals("call-1", snapshot.getToolCallId());
         assertEquals("read_file", snapshot.getName());
         assertEquals(3, snapshot.getUsage().getTotalTokens());
+        assertEquals("想了一下", snapshot.getThinking());
     }
 
     @Test
     void constructor_should_defaultToolCallsToEmptyList() {
         SessionMessageSnapshot snapshot = new SessionMessageSnapshot("m-1", 0L, "user", "内容",
-                null, null, null, null);
+                null, null, null, null, null);
 
         assertTrue(snapshot.getToolCalls().isEmpty());
     }
 
     @Test
+    void constructor_should_keepThinkingNull_when_absent() {
+        SessionMessageSnapshot snapshot = new SessionMessageSnapshot("m-1", 0L, "user", "内容",
+                null, null, null, null, null);
+
+        assertNull(snapshot.getThinking());
+    }
+
+    @Test
+    void of_should_buildSnapshotWithoutThinking() {
+        SessionMessageSnapshot snapshot = SessionMessageSnapshot.of("m-1", 0L, "user", "内容",
+                null, null, null, null);
+
+        assertEquals("内容", snapshot.getContent());
+        assertNull(snapshot.getThinking());
+    }
+
+    @Test
     void constructor_should_fail_when_messageIdBlank() {
         assertThrows(JellyfishException.class, () -> new SessionMessageSnapshot(" ", 0L, "user", null,
-                null, null, null, null));
+                null, null, null, null, null));
     }
 
     @Test
     void constructor_should_fail_when_roleBlank() {
         assertThrows(JellyfishException.class, () -> new SessionMessageSnapshot("m-1", 0L, "", null,
-                null, null, null, null));
+                null, null, null, null, null));
     }
 
     @Test
@@ -58,7 +77,7 @@ class SessionMessageSnapshotTest {
         List<SessionToolCallSnapshot> toolCalls = new ArrayList<SessionToolCallSnapshot>();
         toolCalls.add(new SessionToolCallSnapshot(0, "call-1", "read_file", "{}"));
         SessionMessageSnapshot snapshot = new SessionMessageSnapshot("m-1", 0L, "assistant", null,
-                null, null, toolCalls, null);
+                null, null, toolCalls, null, null);
 
         toolCalls.clear();
 
@@ -71,13 +90,14 @@ class SessionMessageSnapshotTest {
     void constructor_should_rejectNullToolCallElement() {
         assertThrows(JellyfishException.class, () -> new SessionMessageSnapshot("m-1", 0L, "assistant", null,
                 null, null, Arrays.asList(new SessionToolCallSnapshot(0, "call-1", "read_file", "{}"), null),
-                null));
+                null, null));
     }
 
     @Test
     void toString_should_showRoleAndToolCallCount() {
         SessionMessageSnapshot snapshot = new SessionMessageSnapshot("m-1", 0L, "assistant", null,
-                null, null, Arrays.asList(new SessionToolCallSnapshot(0, "call-1", "read_file", "{}")), null);
+                null, null, Arrays.asList(new SessionToolCallSnapshot(0, "call-1", "read_file", "{}")), null,
+                null);
 
         assertFalse(snapshot.toString().isEmpty());
         assertTrue(snapshot.toString().contains("assistant"));

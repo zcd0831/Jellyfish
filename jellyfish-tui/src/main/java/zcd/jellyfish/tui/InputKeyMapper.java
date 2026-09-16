@@ -48,6 +48,9 @@ final class InputKeyMapper {
         if (isCtrl(key, 'c')) {
             return InputAction.QUIT;
         }
+        if (isCtrl(key, 't')) {
+            return InputAction.TOGGLE_THINKING;
+        }
         if (key.isKey(KeyCode.PAGE_UP)) {
             return InputAction.PAGE_UP;
         }

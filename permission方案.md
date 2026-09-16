@@ -536,8 +536,9 @@ private static PermissionDecision resolveApproval(PermissionDecision decision) {
 - 合并结果是一个**扁平的全局工具名集合** `{read_file, list_dir, grep}`。
 - **不需要「工具 → 插件」归因**：工具名全局唯一由 `ToolCallRequest` + `PluginContext.handle`（同键唯一）保证，因此「哪个插件声明的」不影响判定结果。这也让 `ExtensionRegistry` 不必新增 owner 归因能力。
 - **容错**：配置值不是 `List`、列表里不是 `String`、工具名为空白 → 跳过该项并 `publish(ConfigWarningEvent)`（照本仓库「配置可疑但不中断启动」的既有做法）。
-- **刷新**：`PluginRuntimeConfig` 是装配期快照，本轮不做热更新；插件热部署后白名单不刷新，写入 TODO。
-- **核心侧工具**：内核将来自己注册的工具没有插件配置段，PLAN 下无法声明只读 → TODO 预留保留段（如 `plugins.core.readOnlyTools`）（已裁决 Q7：本轮只留 `TODO`，不实现）。
+- **刷新（已改）**：R1 起只读性的权威来源迁到 `ToolDescriptor.readOnly`（随 handler 落表），`ReadOnlyTools` 每次现查描述符，因此**插件热部署自动跟随**；配置追加那一份仍按快照引用缓存，只为「非法配置的告警不重复发」。
+- **核心侧工具（已改）**：内核自注册的工具只要在描述符里声明 `readOnly=true` 即可，不再需要预留 `plugins.core.readOnlyTools` 这类保留段。
+- **两个来源取并集**：描述符声明 ∪ 用户配置追加；配置只能追加、不能撤销提供方的声明。
 
 ## 5. 触达点改造清单
 
@@ -619,8 +620,8 @@ private static PermissionDecision resolveApproval(PermissionDecision decision) {
 | --- | --- | --- | --- |
 | L1 | `EventChannel` 是 best-effort（有界队列、可丢弃） | 「放行也发」≠「放行也审计到」；真审计级可靠需另开同步落盘通道 | 不属本模块 |
 | L2 | 拦截扩展点是类型级，任何插件都能拦任何工具 | 插件 A 能 Deny 插件 B 的工具（全局闸门） | 刻意接受（已裁决 Q6 只解决「审计归因」，不限制匹配范围）；若将来要「各管各的」，需按 owner 限制可拦范围 |
-| L3 | 白名单来自装配期快照 | 插件热部署后白名单不刷新 | 插件配置热更新落地时一并处理 |
-| L4 | 核心侧工具无插件配置段 | 内核自注册的工具在 PLAN 下会被拒 | 见 4.4（已裁决 Q7：只留 TODO） |
+| L3 | 白名单来自装配期快照 | 插件热部署后白名单不刷新 | **已闭环**：只读性权威声明迁到 `ToolDescriptor.readOnly`（随 handler 落表），`ReadOnlyTools` 现查描述符，热部署自动跟随；配置那份仍按快照引用缓存（只为「告警不重复」，不再是唯一来源） |
+| L4 | 核心侧工具无插件配置段 | 内核自注册的工具在 PLAN 下会被拒 | **已闭环**：描述符里声明 `readOnly=true` 即可，不再依赖 `plugins.configurations` 段 |
 | L5 | ASK 无审批通道 | 策略要求审批时一律降级为拒绝 | 见 4.3；CLI 单次模式无交互、天然无法承载审批（`cli方案.md` L8），审批通道随交互式 TUI 一起落地 |
 | L6 | 插件无法要求人工审批 | 拦截通道在**类型上只有两态**（不拦截 / 拦截），插件写不出 ASK | 与「插件只能收窄、不能放宽」一致；真要支持需扩拦截通道的结果类型 |
 

@@ -135,6 +135,10 @@ public final class TuiApp extends ToolkitApp {
     private static final CommandInfo UI_INFO = new CommandInfo(UiCommand.NAME,
             new CommandDescriptor("查看与切换插件的界面贡献", null, null));
 
+    /** {@code /thinking} 在补全清单里的条目。 */
+    private static final CommandInfo THINKING_INFO = new CommandInfo(ShellCommand.THINKING_NAME,
+            new CommandDescriptor("展开 / 折叠思考过程", null, null));
+
     /**
      * 「会话域命令」：在首页上执行时<b>不</b>先建当前会话的那些命令。
      * <p>
@@ -196,6 +200,22 @@ public final class TuiApp extends ToolkitApp {
      */
     public TuiApp(AgentHarness harness, CommandManager commands, SessionManager sessions, ModelManager models,
                   AgentManager agents, UiContributions uiContributions) {
+        this(harness, commands, sessions, models, agents, uiContributions, false);
+    }
+
+    /**
+     * 构造 TUI 外壳，并指定思考过程的初始展开状态。
+     *
+     * @param harness  智能入口，不可为 {@code null}
+     * @param commands 命令域服务，不可为 {@code null}
+     * @param sessions 会话域服务，不可为 {@code null}
+     * @param models   模型门面，不可为 {@code null}
+     * @param agents   agent 门面，不可为 {@code null}
+     * @param uiContributions 插件 UI 贡献门面，不可为 {@code null}
+     * @param thinkingExpanded 启动时是否展开思考过程（{@code --show-thinking} 置为 {@code true}）
+     */
+    public TuiApp(AgentHarness harness, CommandManager commands, SessionManager sessions, ModelManager models,
+                  AgentManager agents, UiContributions uiContributions, boolean thinkingExpanded) {
         this.harness = Objects.requireNonNull(harness, "harness must not be null");
         this.commands = Objects.requireNonNull(commands, "commands must not be null");
         this.sessions = Objects.requireNonNull(sessions, "sessions must not be null");
@@ -206,6 +226,7 @@ public final class TuiApp extends ToolkitApp {
         this.pluginPanelsEnabled = pluginPanelsEnabled();
         this.input = new ChatInputView(inputKeys);
         this.shell = new ChatShell(input);
+        chatState.setThinkingExpanded(thinkingExpanded);
     }
 
     /**
@@ -349,6 +370,7 @@ public final class TuiApp extends ToolkitApp {
             List<CommandInfo> infos = new ArrayList<CommandInfo>(commands.commands());
             infos.add(EXIT_INFO);
             infos.add(UI_INFO);
+            infos.add(THINKING_INFO);
             infos.sort(Comparator.comparing(CommandInfo::getName));
             return infos;
         } catch (RuntimeException e) {
@@ -410,7 +432,9 @@ public final class TuiApp extends ToolkitApp {
         String text = input.takeText();
         // 外壳自有命令必须先截胡：交给命令域只会得到 UNKNOWN，而外壳其实完全听得懂
         if (ShellCommand.isShellCommand(text)) {
-            if (UiCommand.isUi(text)) {
+            if (ShellCommand.isThinkingCommand(text)) {
+                toggleThinking();
+            } else if (UiCommand.isUi(text)) {
                 executeUi(text);
             } else {
                 quit();
@@ -460,6 +484,20 @@ public final class TuiApp extends ToolkitApp {
             // 命令的副作用写在各自的域服务里，插件可能因此改了自家状态：这是外壳能看到的兜底失效点之一
             uiCache.invalidate();
         }
+    }
+
+    /**
+     * 切换思考过程展开状态，并把新状态贴成一条外壳提示。
+     * <p>
+     * <b>为什么要回一条提示</b>：折叠态与展开态在屏幕上的差别是「一行的还是一片」，
+     * 而当前屏幕可能压根<em>没有</em>思考块（比如刚启动）——那时候按 {@code Ctrl+T} 屏幕毫无变化，
+     * 没有提示就与「按键没生效」无法区分。
+     * <p>
+     * 提示不进会话，因此不会污染发给模型的历史；它也<b>不建会话</b>，在首页上按也一样能用。
+     */
+    private void toggleThinking() {
+        boolean expanded = chatState.toggleThinking();
+        chatState.appendNotice("思考过程：" + (expanded ? "已展开" : "已折叠"), ShellNotice.Kind.INFO);
     }
 
     /**
@@ -826,6 +864,9 @@ public final class TuiApp extends ToolkitApp {
                     // 先收起补全面板再谈中断：无进行中回合时 cancelTurn 是空操作，两者可以共存
                     completion.dismiss();
                     chatState.cancelTurn();
+                    return EventResult.HANDLED;
+                case TOGGLE_THINKING:
+                    toggleThinking();
                     return EventResult.HANDLED;
                 case QUIT:
                     quit();

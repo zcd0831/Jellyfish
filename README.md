@@ -29,7 +29,7 @@ java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -cli -p "今天�
 | `--mode <plan\|normal>` | 新建会话的权限模式（`plan` 仅允许只读工具） |
 | `--port <端口>` | 服务器端口（等价于 `-server` 的位置参数，缺省 `9096`） |
 | `--host <地址>` | 服务器绑定地址（缺省 `127.0.0.1`） |
-| `--show-thinking` | 把模型的思考过程打到 stderr |
+| `--show-thinking` | 展示模型的思考过程：`-cli` 打到 stderr，`-tui` 置为启动时展开 |
 | `--verbose` | 日志级别降到 DEBUG（也可用 `-Djellyfish.log.level=DEBUG`） |
 | `-h, --help` / `-V, --version` | 帮助 / 版本号 |
 
@@ -97,16 +97,24 @@ java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -tui
 | `Enter` | **换行**（可写多行，输入框 1～6 行自适应） |
 | `Ctrl+S` | **发送** |
 | `Ctrl+C` | 退出 |
+| `Ctrl+T` | 展开 / 折叠思考过程（与 `/thinking` 等价） |
 | `Esc` | 中断当前回合（输入框内容保留） |
 | `PageUp` / `PageDown` | 消息区翻页 |
 | `End` | 跳到底部并恢复跟随 |
 | `/exit` | 退出（由外壳处理，不在 `/help` 列表里） |
 | `/ui` | 查看与切换插件的界面贡献（同样由外壳处理，不在 `/help` 列表里） |
+| `/thinking` | 展开 / 折叠思考过程（同样由外壳处理，不在 `/help` 列表里） |
 
 **为什么是 `Ctrl+S` 发送而不是 `Enter` 发送**：终端在 raw 模式下，`Shift+Enter`、`Alt+Enter`、
 CSI-u 等所有「带修饰的 Enter」编码都无法被底层框架区分（一律解码成无修饰的 `Enter`），
 `Enter` 与 `\n` 也完全同形。因此「`Enter` 发送 + 修饰键换行」在任何终端上都不可实现。
 反转之后 `Enter` 稳定换行，发送交给一个可稳定识别的组合键。
+
+**思考过程默认折叠**：模型返回的思考过程（reasoning）会随消息一起落进会话，但屏幕上默认只占一行
+——`✻ 思考过程（N 字，Ctrl+T 展开）`，流式期间是 `✻ 思考中…（N 字）`。想读全文按 `Ctrl+T`
+（或敲 `/thinking`），这是一个**全局**开关：要么所有思考都展开，要么都折叠（屏幕上没有「选中某条消息」
+这种交互，逐块展开只会换来一套选择态与焦点管理）。`--show-thinking` 让 TUI 启动时就是展开态，
+与 `-cli` 的语义一致。
 
 **滚轮不可用**是刻意的：滚轮事件要求应用捕获鼠标，而捕获后终端的鼠标选择会被应用截走
 （复制屏幕文本需按住修饰键）。消息区滚动请用 `PageUp` / `PageDown` / `End`。
@@ -273,6 +281,8 @@ CSI-u 等所有「带修饰的 Enter」编码都无法被底层框架区分（�
 | `list_dir` | `path` | 只列一层，目录优先 + `/` 后缀，不过滤 `target` 之类 |
 | `grep_files` | `pattern`、`path`、`max_results` | 逐行正则，返回 `文件:行号:内容`；跳过 `.git`/`target`/`node_modules` 与二进制文件 |
 
+其中 `read_file`、`list_dir`、`grep_files` 在描述符里声明为**只读**，PLAN 模式下开箱可用；`write_file` 与 `edit_file` 会改动工作目录，PLAN 模式下会被拒绝。
+
 打包与安装（扫描目录由 `config.json` 的 `plugins.roots` 决定，默认是**工作目录**下的 `plugins/`，该目录不入版本库）：
 
 ```bash
@@ -306,7 +316,11 @@ cp jellyfish-plugins/jellyfish-plugin-project/target/jellyfish-plugin-project-*.
 }
 ```
 
-- `readOnlyTools` 是**跨插件的约定键**（`jellyfish.json` 里位于插件配置段下）：PLAN 模式下只有列在这里的工具能执行。没列的工具在 PLAN 模式一律拒绝。
+- `readOnlyTools` 是**跨插件的约定键**（`jellyfish.json` 里位于插件配置段下），作用是**追加** PLAN 模式的只读白名单。
+  - 工具的只读性**默认由工具提供方在 `ToolDescriptor` 里声明**，不需要用户再写一遍：`read_file` / `list_dir` / `grep_files`（`jellyfish-tools`）与 `todo_write`（`jellyfish-todo`）开箱即在 PLAN 白名单里；`write_file` / `edit_file` 不是。
+  - 配置里的声明只能**追加**，用于把提供方没标只读的工具自行纳入，不能撤销提供方的声明。
+  - 两个来源取**并集**，且不依赖任何缓存：插件热部署（装上 / 卸下 / 重载）后白名单立刻跟着变。
+  - PLAN 模式下不在白名单里的工具一律拒绝。
 - `sessionDir`（默认 `~/jellyfish/sessions`）：会话文件目录。会话是跨项目的运行态数据，因此默认放全局级目录。
 - `gitEnabled`（默认 `true`）：首次落盘时在 `sessionDir` 里 `git init`，此后**每次内容变化的落盘留一次提交**（内容没变则不写文件、也不提交）。机器上没有 git 时只告警，文件照常落盘。
 - `todoDir`（默认 `~/jellyfish/todos`）：待办文件目录，一个会话一个 JSON 文件，空表会删掉文件。
@@ -328,7 +342,7 @@ cp jellyfish-plugins/jellyfish-plugin-project/target/jellyfish-plugin-project-*.
 
 面板是「独占型」贡献：它建议落在右栏，但外壳可以忽略这个建议（终端太窄时侧栏整体隐藏，也可能被用户用 `/ui` 改到别处）。
 
-`todo_write` 是写操作，PLAN 模式下默认被权限拒绝；上面配置里的 `readOnlyTools: ["todo_write"]` 就是「计划模式下也允许维护计划」的声明，不需要可以去掉。
+`todo_write` 只写插件自己的待办文件、不动工作目录里的项目文件，因此它**在描述符里就声明了只读**：PLAN 模式下开箱即可用，不需要任何配置。上面示例里的 `readOnlyTools: ["todo_write"]` 现在只是冗余写法，可以去掉（保留也不会出错）；配置那份只用于追加拿不写声明的工具。
 
 会话恢复：启动时内核向所有注册了恢复处理器的插件要回会话，因此上次退出前的会话在下次启动时立即可见（`/session` 会列出来）。
 

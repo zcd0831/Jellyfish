@@ -314,19 +314,21 @@ class PermissionManagerTest {
     }
 
     /**
-     * 构造只读工具集合：模拟某个插件在配置里声明白名单。
+     * 构造只读工具集合：模拟某个插件在配置里追加白名单。
+     * <p>
+     * 描述符那一份由真实的 {@link ExtensionRegistry} 提供，本测试不注册只读工具，因此结果等价于配置内容。
      *
      * @param toolNames 声明为只读的工具名，可为空
      * @return 只读工具集合
      */
-    private static ReadOnlyTools readOnlyToolsOf(String... toolNames) {
+    private ReadOnlyTools readOnlyToolsOf(String... toolNames) {
         Map<String, Object> pluginConfig = new LinkedHashMap<>();
         pluginConfig.put(PermissionSettings.READ_ONLY_TOOLS, Arrays.asList(toolNames));
         Map<String, Map<String, Object>> configurations = new LinkedHashMap<>();
         configurations.put("readonly-plugin", pluginConfig);
         // 告警在本测试里不是关注点，用空实现避免噪音
         return new ReadOnlyTools(new PluginRuntimeConfig(null, null, null, configurations), event -> {
-        });
+        }, extensions);
     }
 
     /**

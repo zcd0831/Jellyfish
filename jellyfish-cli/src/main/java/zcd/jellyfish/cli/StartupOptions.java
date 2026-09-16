@@ -88,7 +88,7 @@ public final class StartupOptions {
     /** 服务器模式绑定地址。 */
     private final String host;
 
-    /** 是否把思考过程打到 stderr。 */
+    /** 是否展示思考过程（cli 模式打到 stderr，tui 模式决定启动时的展开状态）。 */
     private final boolean showThinking;
 
     /** 是否把日志级别降到 DEBUG。 */
@@ -213,7 +213,7 @@ public final class StartupOptions {
     }
 
     /**
-     * 判断是否把思考过程打到 stderr。
+     * 判断是否需要展示思考过程。
      *
      * @return 需要显示返回 {@code true}
      */
@@ -284,7 +284,7 @@ public final class StartupOptions {
         /** 服务器模式绑定地址。 */
         private String host = DEFAULT_HOST;
 
-        /** 是否把思考过程打到 stderr。 */
+        /** 是否展示思考过程。 */
         private boolean showThinking;
 
         /** 是否把日志级别降到 DEBUG。 */
@@ -385,9 +385,9 @@ public final class StartupOptions {
         }
 
         /**
-         * 设置是否把思考过程打到 stderr。
+         * 设置是否展示思考过程。
          *
-         * @param showThinking 需要显示传 {@code true}
+         * @param showThinking 需要展示传 {@code true}
          * @return 本构建器
          */
         public Builder showThinking(boolean showThinking) {

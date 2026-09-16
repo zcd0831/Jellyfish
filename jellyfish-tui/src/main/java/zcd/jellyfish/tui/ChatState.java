@@ -62,6 +62,9 @@ public final class ChatState {
     /** 最近一次投影使用的消息上限。 */
     private int lastMaxMessages = -1;
 
+    /** 最近一次投影时的思考展开状态。 */
+    private boolean lastThinkingExpanded;
+
     /** 最近一次投影时的提示版本号。 */
     private int lastNoticeVersion = -1;
 
@@ -70,6 +73,17 @@ public final class ChatState {
 
     /** 外壳提示缓冲（命令结果等），参与投影时按时间戳与会话消息归并。 */
     private final List<ShellNotice> notices = new ArrayList<ShellNotice>();
+
+    /**
+     * 思考过程是否展开。
+     * <p>
+     * <b>为什么是全局开关而不是逐块展开</b>：屏幕上没有「选中某条消息」这种交互模型，
+     * 逐块展开就必须引入选择态、焦点管理以及「滚动位置该锚在哪里」这套账；
+     * 而用户真正想要的是「一堆思考要么都看、要么都不看」。
+     * <p>
+     * 默认折叠：思考过程通常比正文长好几倍，默认展开会把正文推到屏幕外。
+     */
+    private boolean thinkingExpanded;
 
     /** 提示缓冲版本号，参与投影缓存判据。 */
     private int noticeVersion;
@@ -106,6 +120,34 @@ public final class ChatState {
      */
     public void appendNotice(String text, ShellNotice.Kind kind) {
         appendNotice(null, text, kind);
+    }
+
+    /**
+     * 切换思考过程展开状态。
+     *
+     * @return 切换后的状态（{@code true} 为已展开）
+     */
+    public boolean toggleThinking() {
+        thinkingExpanded = !thinkingExpanded;
+        return thinkingExpanded;
+    }
+
+    /**
+     * 设置思考过程展开状态。
+     *
+     * @param expanded 是否展开
+     */
+    public void setThinkingExpanded(boolean expanded) {
+        this.thinkingExpanded = expanded;
+    }
+
+    /**
+     * 判断思考过程是否展开。
+     *
+     * @return 展开返回 {@code true}
+     */
+    public boolean isThinkingExpanded() {
+        return thinkingExpanded;
     }
 
     /**
@@ -301,6 +343,7 @@ public final class ChatState {
         String lastId = source.isEmpty() ? null : source.get(source.size() - 1).getMessageId();
         boolean unchanged = lastWidth == width
                 && lastMaxMessages == maxMessages
+                && lastThinkingExpanded == thinkingExpanded
                 && lastMessageCount == source.size()
                 && lastNoticeVersion == noticeVersion
                 && Objects.equals(lastMessageId, lastId)
@@ -318,10 +361,12 @@ public final class ChatState {
             // 无当前会话 = 首页：投影字标与外壳提示（见 TranscriptProjector.home）
             projected = TranscriptProjector.home(notices, width);
         } else {
-            projected = TranscriptProjector.project(source, notices, snapshot, width, maxMessages);
+            projected = TranscriptProjector.project(source, notices, snapshot, width, maxMessages,
+                    thinkingExpanded);
         }
         lastWidth = width;
         lastMaxMessages = maxMessages;
+        lastThinkingExpanded = thinkingExpanded;
         lastMessageCount = source.size();
         lastMessageId = lastId;
         lastSessionId = sessionId;

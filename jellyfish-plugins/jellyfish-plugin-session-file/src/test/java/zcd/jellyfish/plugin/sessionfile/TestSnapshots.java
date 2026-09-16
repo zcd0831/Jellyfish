@@ -31,13 +31,13 @@ final class TestSnapshots {
      */
     static SessionSnapshot full(String sessionId) {
         List<SessionMessageSnapshot> messages = Arrays.asList(
-                new SessionMessageSnapshot("m-1", 1L, "user", "你好", null, null, null, null),
+                SessionMessageSnapshot.of("m-1", 1L, "user", "你好", null, null, null, null),
                 new SessionMessageSnapshot("m-2", 2L, "assistant", "我来读文件", null, null,
                         Arrays.asList(new SessionToolCallSnapshot(0, "call-1", "read_file",
                                 "{\"path\":\"a.txt\"}")),
-                        new TokenUsageSnapshot(7, 8, 15)),
-                new SessionMessageSnapshot("m-3", 3L, "tool", "文件内容", "call-1", "read_file", null, null),
-                new SessionMessageSnapshot("m-4", 4L, "assistant", "读完了", null, null, null, null));
+                        new TokenUsageSnapshot(7, 8, 15), "先读文件"),
+                SessionMessageSnapshot.of("m-3", 3L, "tool", "文件内容", "call-1", "read_file", null, null),
+                SessionMessageSnapshot.of("m-4", 4L, "assistant", "读完了", null, null, null, null));
         return new SessionSnapshot(sessionId, 100L, 200L, "标题", "coder", "openai", "gpt-4o",
                 PermissionMode.PLAN, messages, new SessionUsageSnapshot(7L, 8L, 15L, 4L));
     }

@@ -58,6 +58,24 @@ class SessionMessageTest {
     }
 
     @Test
+    void of_should_keep_thinking_null_when_not_provided() {
+        // When
+        SessionMessage message = SessionMessage.of(LlmMessage.assistant("ok"), new LlmUsage(1, 2, 3));
+
+        // Then
+        assertNull(message.getThinking());
+    }
+
+    @Test
+    void of_should_keep_provided_thinking() {
+        // When
+        SessionMessage message = SessionMessage.of(LlmMessage.assistant("ok"), null, "想一下");
+
+        // Then
+        assertEquals("想一下", message.getThinking());
+    }
+
+    @Test
     void getRole_should_project_from_llm_message() {
         // When
         SessionMessage message = SessionMessage.of(LlmMessage.tool("call-1", "read_file", "content"));

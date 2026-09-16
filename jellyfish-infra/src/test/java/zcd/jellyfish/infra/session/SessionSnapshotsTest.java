@@ -92,6 +92,22 @@ class SessionSnapshotsTest {
     }
 
     @Test
+    @DisplayName("思考过程必须随消息一起落盘与回放：丢了就只能重新问一次")
+    void restore_should_keepThinking() {
+        Session restored = Session.restore(SessionSnapshots.capture(fullSession()));
+
+        assertEquals("先看看 a.txt", restored.getMessages().get(1).getThinking());
+    }
+
+    @Test
+    @DisplayName("未产生的思考回放后仍为空，不能变成空串")
+    void restore_should_keepMissingThinkingAsNull() {
+        Session restored = Session.restore(SessionSnapshots.capture(fullSession()));
+
+        assertNull(restored.getMessages().get(0).getThinking());
+    }
+
+    @Test
     @DisplayName("未返回用量的消息回放后用量仍为空，不能变成零用量")
     void restore_should_keepMissingUsageAsNull() {
         Session restored = Session.restore(SessionSnapshots.capture(fullSession()));
@@ -138,7 +154,7 @@ class SessionSnapshotsTest {
         session.append(SessionMessage.of(
                 LlmMessage.assistant("我来读文件", Arrays.asList(new LlmToolCall(0, "call-1", "read_file",
                         "{\"path\":\"a.txt\"}"))),
-                new LlmUsage(7, 8, 15)));
+                new LlmUsage(7, 8, 15), "先看看 a.txt"));
         session.append(SessionMessage.of(LlmMessage.tool("call-1", "read_file", "文件内容")));
         session.append(SessionMessage.of(LlmMessage.assistant("读完了")));
         // 再改一次标题以确保 updatedAt 与 createdAt 不同
@@ -184,6 +200,7 @@ class SessionSnapshotsTest {
         assertEquals(expected.getContent(), actual.getContent());
         assertEquals(expected.getToolCallId(), actual.getToolCallId());
         assertEquals(expected.getName(), actual.getName());
+        assertEquals(expected.getThinking(), actual.getThinking());
         assertEquals(expected.getUsage() == null, actual.getUsage() == null);
         if (expected.getUsage() != null) {
             assertEquals(expected.getUsage().getPromptTokens(), actual.getUsage().getPromptTokens());

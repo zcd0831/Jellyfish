@@ -103,7 +103,7 @@ public final class StartupOptionsParser {
             + "                          新建会话的权限模式\n"
             + "      --port <端口>       服务器端口（等价于 -server 的位置参数）\n"
             + "      --host <地址>       服务器绑定地址，缺省 " + StartupOptions.DEFAULT_HOST + "\n"
-            + "      --show-thinking     把思考过程打到 stderr\n"
+            + "      --show-thinking     展示思考过程（cli：打到 stderr；tui：启动时展开）\n"
             + "      --verbose           日志级别降到 DEBUG\n"
             + "  -h, --help              显示本帮助\n"
             + "  -V, --version           显示版本号\n"

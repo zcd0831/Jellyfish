@@ -33,7 +33,37 @@ public final class SessionMessage {
     private final LlmUsage usage;
 
     /**
+     * 本次模型调用返回的思考过程，仅 assistant 消息可能非 {@code null}。
+     * <p>
+     * <b>为什么不放进 {@link LlmMessage}</b>：思考是本地展示信息，不回灌给模型；
+     * 而 {@code LlmMessage} 是「要发给厂商的请求」模型，添字段就等于把它下发给厂商。
+     * 与 {@code usage} 同类，因此都放在会话域这一层。
+     */
+    private final String thinking;
+
+    /**
      * 构造一条会话消息。
+     *
+     * @param messageId 消息唯一标识，不可为空白
+     * @param timestamp 消息产生时间戳（epoch millis）
+     * @param message   消息本体，不可为 {@code null}
+     * @param usage     token 用量，可为 {@code null}
+     * @param thinking  思考过程，可为 {@code null}
+     * @throws JellyfishException 消息标识为空白，或消息本体为 {@code null} 时抛出
+     */
+    public SessionMessage(String messageId, long timestamp, LlmMessage message, LlmUsage usage, String thinking) {
+        if (messageId == null || messageId.trim().isEmpty()) {
+            throw new JellyfishException("messageId must not be blank");
+        }
+        this.messageId = messageId;
+        this.timestamp = timestamp;
+        this.message = Objects.requireNonNull(message, "message must not be null");
+        this.usage = usage;
+        this.thinking = thinking;
+    }
+
+    /**
+     * 构造一条不带思考过程的会话消息。
      *
      * @param messageId 消息唯一标识，不可为空白
      * @param timestamp 消息产生时间戳（epoch millis）
@@ -42,13 +72,7 @@ public final class SessionMessage {
      * @throws JellyfishException 消息标识为空白，或消息本体为 {@code null} 时抛出
      */
     public SessionMessage(String messageId, long timestamp, LlmMessage message, LlmUsage usage) {
-        if (messageId == null || messageId.trim().isEmpty()) {
-            throw new JellyfishException("messageId must not be blank");
-        }
-        this.messageId = messageId;
-        this.timestamp = timestamp;
-        this.message = Objects.requireNonNull(message, "message must not be null");
-        this.usage = usage;
+        this(messageId, timestamp, message, usage, null);
     }
 
     /**
@@ -69,7 +93,20 @@ public final class SessionMessage {
      * @return 会话消息
      */
     public static SessionMessage of(LlmMessage message, LlmUsage usage) {
-        return new SessionMessage(UUID.randomUUID().toString(), System.currentTimeMillis(), message, usage);
+        return of(message, usage, null);
+    }
+
+    /**
+     * 用当前时刻与自动生成的标识构造一条带 token 用量与思考过程的消息。
+     *
+     * @param message  消息本体，不可为 {@code null}
+     * @param usage    token 用量，可为 {@code null}
+     * @param thinking 思考过程，可为 {@code null}
+     * @return 会话消息
+     */
+    public static SessionMessage of(LlmMessage message, LlmUsage usage, String thinking) {
+        return new SessionMessage(UUID.randomUUID().toString(), System.currentTimeMillis(), message, usage,
+                thinking);
     }
 
     /**
@@ -106,6 +143,15 @@ public final class SessionMessage {
      */
     public LlmUsage getUsage() {
         return usage;
+    }
+
+    /**
+     * 获取本次模型调用返回的思考过程。
+     *
+     * @return 思考过程，仅 assistant 消息可能非 {@code null}
+     */
+    public String getThinking() {
+        return thinking;
     }
 
     /**

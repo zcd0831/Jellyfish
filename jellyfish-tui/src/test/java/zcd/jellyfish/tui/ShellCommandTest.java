@@ -22,6 +22,23 @@ class ShellCommandTest {
         assertEquals("/exit", ShellCommand.EXIT);
         assertEquals("ui", UiCommand.NAME);
         assertEquals("/ui", UiCommand.PREFIX);
+        assertEquals("thinking", ShellCommand.THINKING_NAME);
+        assertEquals("/thinking", ShellCommand.THINKING);
+    }
+
+    @Test
+    @DisplayName("/thinking 是外壳命令，且与 /exit /ui 互不误判")
+    void isThinkingCommand_should_onlyMatchThinking() {
+        assertTrue(ShellCommand.isThinkingCommand("/thinking"));
+        assertTrue(ShellCommand.isThinkingCommand("  /thinking  "));
+        assertTrue(ShellCommand.isThinkingCommand("/thinking on"));
+        assertTrue(ShellCommand.isShellCommand("/thinking"));
+
+        assertFalse(ShellCommand.isThinkingCommand("/think"));
+        assertFalse(ShellCommand.isThinkingCommand("/exit"));
+        assertFalse(ShellCommand.isThinkingCommand("/ui"));
+        assertFalse(ShellCommand.isThinkingCommand("thinking"));
+        assertFalse(ShellCommand.isThinkingCommand(null));
     }
 
     @Test
@@ -49,6 +66,7 @@ class ShellCommandTest {
         assertTrue(ShellCommand.isShellCommand("  /exit  "));
         assertTrue(ShellCommand.isShellCommand("/ui"));
         assertTrue(ShellCommand.isShellCommand("/ui dock off"));
+        assertTrue(ShellCommand.isShellCommand("/thinking"));
     }
 
     @Test

@@ -877,7 +877,7 @@ public final class AgentModule {
 | L3 | 装载事件不代表「配置变更」 | 无法区分首次装载与热更新 | 需要保存上一份快照做 diff |
 | L4 | Agent 定义不校验工具是否存在 | 配了不存在的工具名不会报错 | 归 `ReActLooper` / `ToolCallRequest` 的 `NO_HANDLER` |
 | L5 | 提示词不支持插值与外部文件引用 | 多 agent 共享提示词片段只能复制 | 需要时再设计（注意与 `${}` 的冲突） |
-| L6 | 白名单仍不随插件**热部署**变化 | 热部署新插件后其 `readOnlyTools` 不刷新 | 插件配置热更新落地时一并处理（原 permission L3 的一半已随本轮的按引用缓存修掉） |
+| L6 | 白名单仍不随插件**热部署**变化 | 热部署新插件后其 `readOnlyTools` 不刷新 | **已闭环**（R1）：只读性迁到 `ToolDescriptor.readOnly` 并现查描述符，热部署自动跟随 |
 | L7 | 事件是 best-effort | 「装载完成」不等于「订阅者都看到了」 | 不属本模块 |
 | L8 | 配置文件与配置类的对应关系曾不统一（`jellyfish.json` ↔ `ModelSettings`，`plugins` 段无独立根类） | 看代码与看文件对不上 | **已随 Q11 裁决消除**：`config.json`→`AppConfig`、`models.json`→`ModelSettings`、`agents.json`→`AgentSettings`、`jellyfish.json`→`JellyfishSettings` |
 

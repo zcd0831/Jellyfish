@@ -342,10 +342,10 @@ public final class ReActResult {
 | --- | --- | --- | --- |
 | L1 | **无 CLI / TUI / Server 外壳** | 端到端只能靠单测与将来的外壳 | **CLI 单次模式已由外壳轮闭环**（`main` / `Launcher` / `CliRunMode`，见 `cli方案.md`）；TUI / Server 另开轮 |
 | L2 | **无摘要式压缩** | 长会话只能机械丢弃旧消息，信息会损失 | `/compact` 轮（读法 2），依赖持久化 |
-| L3 | **无 `todo_write` 核心工具** | 模型不能自行维护待办，只能靠 `/todo` 命令 | 与 `ReadOnlyTools` 核心工具只读声明同批（预留 `plugins.configurations.core.readOnlyTools` 或把只读性迁到 `ToolDescriptor`） |
+| L3 | **无 `todo_write` 核心工具** | 模型不能自行维护待办，只能靠 `/todo` 命令 | **只读声明路径已闭合**（R1）：只读性已迁到 `ToolDescriptor.readOnly`；`todo_write` 由官方插件提供并在描述符里声明只读（`react方案.md` L8 也已随插件轮闭环） |
 | L4 | **无会话持久化** | `/resume` 仅进程内；进程退出即丢 | 持久化轮（同步扩展点 + 插件） |
 | L5 | **无人工审批通道** | `ASK` 继续降级为 `DENY` | 审批轮（依赖交互外壳） |
-| L6 | **无插件配置热更新** | PLAN 白名单不随热部署刷新 | 配置热更新轮 |
+| L6 | **无插件配置热更新** | 插件配置段变更不自动重读（PLAN 白名单的**描述符**那一半已随 R1 跟随热部署，只剩配置追加那份） | 配置热更新轮 |
 | L7 | `react` 执行器规模为固定常量 | 无并发调参手段 | 真有压力时再配置化 |
 | L8 | pending todo 无插件贡献通道 | 插件不能注入待办 | 随持久化 / 扩展点轮 |
 

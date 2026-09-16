@@ -288,17 +288,31 @@ public class SessionManager {
      * @param sessionId 会话标识，不可为空白
      * @param message   消息本体，不可为 {@code null}
      * @param usage     本次模型调用的 token 用量，可为 {@code null}
+     * @param thinking  本次模型调用的思考过程，可为 {@code null}
      * @return 追加后的会话消息
      * @throws JellyfishException 会话不存在时抛出
      */
-    public SessionMessage appendMessage(String sessionId, LlmMessage message, LlmUsage usage) {
+    public SessionMessage appendMessage(String sessionId, LlmMessage message, LlmUsage usage, String thinking) {
         Session session = require(sessionId);
-        SessionMessage sessionMessage = SessionMessage.of(message, usage);
+        SessionMessage sessionMessage = SessionMessage.of(message, usage, thinking);
         session.append(sessionMessage);
         persist(session);
         publish(new SessionMessageAppendedEvent(session.getSessionId(), sessionMessage.getMessageId(),
                 sessionMessage.getRole()));
         return sessionMessage;
+    }
+
+    /**
+     * 追加一条不带思考过程的消息并累加 token 用量，随后同步落盘并广播事件。
+     *
+     * @param sessionId 会话标识，不可为空白
+     * @param message   消息本体，不可为 {@code null}
+     * @param usage     本次模型调用的 token 用量，可为 {@code null}
+     * @return 追加后的会话消息
+     * @throws JellyfishException 会话不存在时抛出
+     */
+    public SessionMessage appendMessage(String sessionId, LlmMessage message, LlmUsage usage) {
+        return appendMessage(sessionId, message, usage, null);
     }
 
     /**

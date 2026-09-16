@@ -322,7 +322,7 @@ class SessionManagerPersistenceTest {
      * @return 会话快照
      */
     private static SessionSnapshot snapshot(String sessionId) {
-        SessionMessageSnapshot message = new SessionMessageSnapshot("m-1", 1L, LlmMessage.ROLE_USER, "你好",
+        SessionMessageSnapshot message = SessionMessageSnapshot.of("m-1", 1L, LlmMessage.ROLE_USER, "你好",
                 null, null, null, null);
         return new SessionSnapshot(sessionId, 1L, 2L, "标题", "coder", "openai", "gpt-4o",
                 PermissionMode.NORMAL, Collections.singletonList(message),

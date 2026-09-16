@@ -58,7 +58,8 @@ public final class GrepFilesTool implements PluginTool {
                     "pattern", ToolSchema.string("Java 正则表达式，对每一行做查找（不是整文件匹配）"),
                     "path", ToolSchema.string("搜索起点，可以是文件或目录，相对路径按进程工作目录解析；缺省为当前工作目录"),
                     "max_results", ToolSchema.integer("最多返回多少处匹配，缺省 " + DEFAULT_MAX_RESULTS)),
-            Arrays.asList("pattern"));
+            Arrays.asList("pattern"),
+            true);
 
     @Override
     public ToolDescriptor descriptor() {

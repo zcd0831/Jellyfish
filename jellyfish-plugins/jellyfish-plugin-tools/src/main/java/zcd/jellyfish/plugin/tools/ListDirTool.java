@@ -36,7 +36,8 @@ public final class ListDirTool implements PluginTool {
             "列举一个目录的直接子项（不递归）。目录名以 / 结尾，文件带字节数。",
             ToolSchema.properties(
                     "path", ToolSchema.string("目录路径，相对路径按进程工作目录解析；缺省为当前工作目录")),
-            Arrays.<String>asList());
+            Arrays.<String>asList(),
+            true);
 
     @Override
     public ToolDescriptor descriptor() {

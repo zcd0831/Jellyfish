@@ -104,7 +104,7 @@ class TranscriptProjectorTest {
     @Test
     @DisplayName("进行中的回合把思考与正文都画出来，思考在正文之前")
     void project_should_render_inflight_thinking_before_text() {
-        List<VisualLine> lines = project(Collections.<SessionMessage>emptyList(),
+        List<VisualLine> lines = projectExpanded(Collections.<SessionMessage>emptyList(),
                 running("答案是 42", "用户想算加法"));
 
         assertEquals(Arrays.asList(
@@ -112,6 +112,81 @@ class TranscriptProjectorTest {
                 "  \u23fa jellyfish",
                 "      \u273b 用户想算加法",
                 "    答案是 42"), texts(lines));
+    }
+
+    @Test
+    @DisplayName("默认折叠：历史里的思考压成一行并报码点数")
+    void project_should_fold_history_thinking_by_default() {
+        SessionMessage message = SessionMessage.of(LlmMessage.assistant("答案 42"), null, "先算一加一");
+
+        List<VisualLine> lines = project(Collections.singletonList(message), completed());
+
+        assertEquals(Arrays.asList(
+                "",
+                "  \u23fa jellyfish",
+                "      \u273b 思考过程（5 字，Ctrl+T 展开）",
+                "    答案 42"), texts(lines));
+    }
+
+    @Test
+    @DisplayName("展开态：历史里的思考铺全部内容，思考仍在正文之前")
+    void project_should_expand_history_thinking_when_toggled() {
+        SessionMessage message = SessionMessage.of(LlmMessage.assistant("答案 42"), null, "先算一加一");
+
+        List<VisualLine> lines = projectExpanded(Collections.singletonList(message), completed());
+
+        assertEquals(Arrays.asList(
+                "",
+                "  \u23fa jellyfish",
+                "      \u273b 先算一加一",
+                "    答案 42"), texts(lines));
+    }
+
+    @Test
+    @DisplayName("折叠时仍能看出模型正在思考，并给出已产出的字数")
+    void project_should_fold_inflight_thinking_with_count() {
+        List<VisualLine> lines = project(Collections.<SessionMessage>emptyList(),
+                running("答案 42", "用户想算加法"));
+
+        assertEquals(Arrays.asList(
+                "",
+                "  \u23fa jellyfish",
+                "      \u273b 思考中\u2026（6 字）",
+                "    答案 42"), texts(lines));
+    }
+
+    @Test
+    @DisplayName("只有思考、没有正文的助手消息也占一个块，不因正文为空而整条消失")
+    void project_should_render_assistant_message_with_only_thinking() {
+        SessionMessage message = SessionMessage.of(LlmMessage.assistant(""), null, "还没想好");
+
+        List<VisualLine> lines = project(Collections.singletonList(message), completed());
+
+        assertEquals(Arrays.asList(
+                "",
+                "  \u23fa jellyfish",
+                "      \u273b 思考过程（4 字，Ctrl+T 展开）"), texts(lines));
+    }
+
+    @Test
+    @DisplayName("思考字数按码点数：代理对算一个字符")
+    void project_should_count_thinking_by_codePoint() {
+        SessionMessage message = SessionMessage.of(LlmMessage.assistant("好"), null, "\ud83d\ude00\ud83d\ude01");
+
+        List<VisualLine> lines = project(Collections.singletonList(message), completed());
+
+        assertTrue(texts(lines).contains("      \u273b 思考过程（2 字，Ctrl+T 展开）"),
+                "实际：" + texts(lines));
+    }
+
+    @Test
+    @DisplayName("空白思考不占行：nil 与全空白同等处理")
+    void project_should_skip_blank_thinking() {
+        SessionMessage message = SessionMessage.of(LlmMessage.assistant("答案"), null, "   ");
+
+        List<VisualLine> lines = project(Collections.singletonList(message), completed());
+
+        assertEquals(Arrays.asList("", "  \u23fa jellyfish", "    答案"), texts(lines));
     }
 
     @Test
@@ -389,8 +464,7 @@ class TranscriptProjectorTest {
      */
     private static List<VisualLine> project(List<SessionMessage> messages, List<ShellNotice> notices,
                                             InflightTurn.Snapshot inflight) {
-        return TranscriptProjector.project(messages, notices, inflight, WIDE,
-                TranscriptProjector.DEFAULT_MAX_MESSAGES);
+        return project(messages, notices, inflight, WIDE, TranscriptProjector.DEFAULT_MAX_MESSAGES);
     }
 
     /**
@@ -419,7 +493,20 @@ class TranscriptProjectorTest {
      */
     private static List<VisualLine> project(List<SessionMessage> messages, List<ShellNotice> notices,
                                             InflightTurn.Snapshot inflight, int width, int maxMessages) {
-        return TranscriptProjector.project(messages, notices, inflight, width, maxMessages);
+        return TranscriptProjector.project(messages, notices, inflight, width, maxMessages, false);
+    }
+
+    /**
+     * 以「思考过程已展开」执行一次投影。
+     *
+     * @param messages 消息列表
+     * @param inflight 暂存区快照
+     * @return 视觉行列表
+     */
+    private static List<VisualLine> projectExpanded(List<SessionMessage> messages,
+                                                    InflightTurn.Snapshot inflight) {
+        return TranscriptProjector.project(messages, Collections.<ShellNotice>emptyList(), inflight, WIDE,
+                TranscriptProjector.DEFAULT_MAX_MESSAGES, true);
     }
 
     /**

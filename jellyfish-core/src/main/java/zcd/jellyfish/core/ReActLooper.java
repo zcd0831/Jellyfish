@@ -218,7 +218,8 @@ public class ReActLooper implements AutoCloseable {
                 return cancel(sessionId, listener, round - 1);
             }
             List<LlmToolCall> toolCalls = normalizeToolCalls(response.getToolCalls());
-            sessionManager.appendMessage(sessionId, assistantMessage(response, toolCalls), response.getUsage());
+            sessionManager.appendMessage(sessionId, assistantMessage(response, toolCalls), response.getUsage(),
+                    response.getThinking());
             if (toolCalls.isEmpty()) {
                 ReActResult result = ReActResult.completed(sessionId, response.getContent(), round);
                 listener.onComplete(result);

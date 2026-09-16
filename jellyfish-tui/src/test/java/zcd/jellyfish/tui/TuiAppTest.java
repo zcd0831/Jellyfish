@@ -100,6 +100,8 @@ class TuiAppTest {
         assertFalse(TuiApp.isSessionDomainCommand("/session"));
         assertFalse(TuiApp.isSessionDomainCommand("/help"));
         assertFalse(TuiApp.isSessionDomainCommand("/model gpt-4"));
+        // /thinking 是外壳命令，在首页上按不能留下空会话
+        assertFalse(TuiApp.isSessionDomainCommand("/thinking"));
         assertFalse(TuiApp.isSessionDomainCommand("你好"));
         // 无前缀的普通对话不得被当成命令，否则首页上会跳过建会话
         assertFalse(TuiApp.isSessionDomainCommand("resume this"));

@@ -146,6 +146,21 @@ class ReActLooperTest {
     }
 
     @Test
+    void chat_should_persist_thinking_when_model_returns_it() {
+        // Given
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        stubResponses(new LlmResponse("最终答复", "先想一下", null, new LlmUsage(1, 2, 3), "stop"));
+        Session session = sessionManager.createDefault();
+
+        // When
+        newLooper().chat(session.getSessionId(), "你好", new RecordingListener()).await();
+
+        // Then：思考过程与消息同时落库，否则“展开思考”在历史里无内容可展
+        assertEquals("先想一下", session.getMessages().get(1).getThinking());
+        assertEquals("最终答复", session.getMessages().get(1).getMessage().getContent());
+    }
+
+    @Test
     void chat_should_execute_tool_then_return() {
         // Given
         when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());

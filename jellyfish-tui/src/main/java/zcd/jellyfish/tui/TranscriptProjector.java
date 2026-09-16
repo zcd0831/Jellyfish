@@ -55,6 +55,9 @@ public final class TranscriptProjector {
     /** 思考过程前缀。 */
     static final String THINKING_PREFIX = "      \u273b ";
 
+    /** 展开态思考过程的开关提示；折叠态才带，展开后重复提示只是噪音。 */
+    private static final String THINKING_EXPAND_HINT = "，Ctrl+T 展开";
+
     /** 提示行前缀（中断 / 错误 / 截断）。 */
     static final String NOTICE_PREFIX = "      \u23bf ";
 
@@ -157,10 +160,12 @@ public final class TranscriptProjector {
      * @param inflight    进行中回合快照，不可为 {@code null}
      * @param width       可用列数，小于 1 时按 1 处理
      * @param maxMessages 参与投影的最近消息条数上限；小于 1 时使用 {@link #DEFAULT_MAX_MESSAGES}
+     * @param thinkingExpanded 是否展开思考过程：{@code false} 时每个思考块压成一行
      * @return 视觉行列表，保证非 {@code null}
      */
     public static List<VisualLine> project(List<SessionMessage> messages, List<ShellNotice> notices,
-                                           InflightTurn.Snapshot inflight, int width, int maxMessages) {
+                                           InflightTurn.Snapshot inflight, int width, int maxMessages,
+                                           boolean thinkingExpanded) {
         List<SessionMessage> source = messages == null ? Collections.<SessionMessage>emptyList() : messages;
         List<ShellNotice> noticeSource = notices == null ? Collections.<ShellNotice>emptyList() : notices;
         int limit = maxMessages < 1 ? DEFAULT_MAX_MESSAGES : maxMessages;
@@ -188,7 +193,8 @@ public final class TranscriptProjector {
                 appendUser(out, content, width);
                 insideAssistantBlock = false;
             } else if (LlmMessage.ROLE_ASSISTANT.equals(role)) {
-                insideAssistantBlock = appendAssistant(out, insideAssistantBlock, content, width);
+                insideAssistantBlock = appendAssistant(out, insideAssistantBlock, content,
+                        message.getThinking(), thinkingExpanded, width);
             } else if (LlmMessage.ROLE_TOOL.equals(role)) {
                 insideAssistantBlock = appendToolTrace(out, insideAssistantBlock, message, width);
             }
@@ -199,7 +205,7 @@ public final class TranscriptProjector {
             out.addAll(notice(noticeSource.get(noticeIndex), width));
             noticeIndex++;
         }
-        appendInflight(out, inflight, width);
+        appendInflight(out, inflight, thinkingExpanded, width);
         return out;
     }
 
@@ -355,12 +361,16 @@ public final class TranscriptProjector {
      * @param out          输出列表
      * @param inBlock      当前是否已处于助手块内
      * @param content      正文
+     * @param thinking     思考过程，可为 {@code null}
+     * @param expanded     是否展开思考过程
      * @param width        可用列数
      * @return 投影后是否处于助手块内
      */
-    private static boolean appendAssistant(List<VisualLine> out, boolean inBlock, String content, int width) {
-        boolean blank = isBlank(content);
-        if (blank) {
+    private static boolean appendAssistant(List<VisualLine> out, boolean inBlock, String content,
+                                           String thinking, boolean expanded, int width) {
+        boolean hasBody = !isBlank(content);
+        boolean hasThinking = !isBlank(thinking);
+        if (!hasBody && !hasThinking) {
             // 只带工具调用的轮次没有正文，此处不落任何行；表头由随后的 tool 轨迹补上
             return inBlock;
         }
@@ -368,9 +378,55 @@ public final class TranscriptProjector {
             out.add(VisualLine.EMPTY);
             out.add(VisualLine.of(new StyledSegment(ASSISTANT_HEADER, ASSISTANT_HEADER_STYLE)));
         }
-        out.addAll(LineWrapper.wrap(new StyledSegment(BODY_INDENT, Style.EMPTY),
-                wrapBody(content, BODY_STYLE), width));
+        if (hasThinking) {
+            appendThinking(out, thinking, expanded, false, width);
+        }
+        if (hasBody) {
+            out.addAll(LineWrapper.wrap(new StyledSegment(BODY_INDENT, Style.EMPTY),
+                    wrapBody(content, BODY_STYLE), width));
+        }
         return true;
+    }
+
+    /**
+     * 投影一个思考块：展开态铺全部内容，折叠态压成一行并报字数。
+     * <p>
+     * <b>为什么折叠态也要报字数</b>：只给一个「思考过程」标签的话，用户无法判断这块值不值得展开；
+     * 字数是一个不用展开就能得到的「性价比」信号。字数用 {@code codePointCount} 数，
+     * 否则一个 emoji（代理对）会被算成两个字。
+     * <p>
+     * <b>为什么折叠提示带 {@code Ctrl+T} 而流式提示不带</b>：历史块是「已封存的思考」，
+     * 用户看到它时的疑问是「怎么看全文」；流式块还在增长，此刻想说的是「模型正在想」，
+     * 而且这时按 {@code Ctrl+T} 也会立刻生效，提示反而抢走注意力。
+     *
+     * @param out       输出列表
+     * @param thinking  思考过程正文，保证非空白
+     * @param expanded  是否展开
+     * @param streaming 是否来自进行中回合（只影响折叠态文案）
+     * @param width     可用列数
+     */
+    private static void appendThinking(List<VisualLine> out, String thinking, boolean expanded,
+                                       boolean streaming, int width) {
+        if (expanded) {
+            out.addAll(LineWrapper.wrap(new StyledSegment(THINKING_PREFIX, THINKING_STYLE),
+                    wrapBody(thinking, THINKING_STYLE), width));
+            return;
+        }
+        String label = streaming
+                ? "思考中\u2026（" + charCount(thinking) + " 字）"
+                : "思考过程（" + charCount(thinking) + " 字" + THINKING_EXPAND_HINT + "）";
+        out.addAll(LineWrapper.wrap(new StyledSegment(THINKING_PREFIX, FOLDED_STYLE),
+                wrapBody(label, FOLDED_STYLE), width));
+    }
+
+    /**
+     * 数一段文本的码点数。
+     *
+     * @param text 文本，保证非 {@code null}
+     * @return 码点数
+     */
+    private static int charCount(String text) {
+        return text.codePointCount(0, text.length());
     }
 
     /**
@@ -400,9 +456,11 @@ public final class TranscriptProjector {
      *
      * @param out      输出列表
      * @param inflight 暂存区快照
+     * @param thinkingExpanded 是否展开思考过程
      * @param width    可用列数
      */
-    private static void appendInflight(List<VisualLine> out, InflightTurn.Snapshot inflight, int width) {
+    private static void appendInflight(List<VisualLine> out, InflightTurn.Snapshot inflight,
+                                       boolean thinkingExpanded, int width) {
         String thinking = inflight.getThinking();
         String text = inflight.getText();
         InflightTurn.Outcome outcome = inflight.getOutcome();
@@ -417,8 +475,7 @@ public final class TranscriptProjector {
             out.add(VisualLine.EMPTY);
             out.add(VisualLine.of(new StyledSegment(ASSISTANT_HEADER, ASSISTANT_HEADER_STYLE)));
             if (!isBlank(thinking)) {
-                out.addAll(LineWrapper.wrap(new StyledSegment(THINKING_PREFIX, THINKING_STYLE),
-                        wrapBody(thinking, THINKING_STYLE), width));
+                appendThinking(out, thinking, thinkingExpanded, true, width);
             }
             if (!isBlank(text)) {
                 out.addAll(LineWrapper.wrap(new StyledSegment(BODY_INDENT, Style.EMPTY),

@@ -35,7 +35,8 @@ public final class ReadFileTool implements PluginTool {
                     "path", ToolSchema.string("文件路径，相对路径按进程工作目录解析"),
                     "offset", ToolSchema.integer("起始行号，从 1 开始；缺省从第一行开始"),
                     "limit", ToolSchema.integer("最多读取多少行；缺省读到文件末尾")),
-            Arrays.asList("path"));
+            Arrays.asList("path"),
+            true);
 
     @Override
     public ToolDescriptor descriptor() {

@@ -54,6 +54,15 @@ class ShellUsageTest {
     }
 
     @Test
+    @DisplayName("必须提示思考折叠键位，否则用户不知道 Ctrl+T 存在")
+    void text_should_mentionThinkingToggle() {
+        String text = ShellUsage.text();
+
+        assertTrue(text.contains("Ctrl+T"));
+        assertTrue(text.contains("/thinking"));
+    }
+
+    @Test
     @DisplayName("必须提示补全与插件面板入口")
     void text_should_mentionCompletionAndUiEntry() {
         String text = ShellUsage.text();

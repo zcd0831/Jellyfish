@@ -43,8 +43,18 @@ public final class SessionMessageSnapshot {
     /** 本条消息的 token 用量，未返回时可为 {@code null}。 */
     private final TokenUsageSnapshot usage;
 
+    /** 本条消息的思考过程，未产生或未开启时可为 {@code null}。 */
+    private final String thinking;
+
     /**
      * 构造消息快照。
+     * <p>
+     * <b>为什么这里只有唯一一个构造器</b>：本类型靠 Jackson 的「隐式属性构造器」反序列化
+     * （{@code -parameters} + {@code ParameterNamesModule}，见 {@code SnapshotJson}），
+     * 而 Jackson 只在「恰好一个可见构造器」时才认它为隐式创建器；多出一个重载会让
+     * 整个快照类型<b>直接反序列化失败</b>（实测报 {@code no delegate- or property-based Creator}），
+     * 代价是整段会话读不回来。因此新增字段时不要加「兼容构造器」，
+     * 兼容入口请改用静态工厂（见 {@link #of(String, long, String, String, String, String, List, TokenUsageSnapshot)}）。
      *
      * @param messageId  消息唯一标识，不可为空白
      * @param timestamp  消息产生时间戳（epoch millis）
@@ -54,11 +64,12 @@ public final class SessionMessageSnapshot {
      * @param name       工具名，可为 {@code null}
      * @param toolCalls  工具调用列表，可为 {@code null}（等价空列表）
      * @param usage      token 用量，可为 {@code null}
+     * @param thinking   思考过程，可为 {@code null}
      * @throws JellyfishException 消息标识或角色为空白时抛出
      */
     public SessionMessageSnapshot(String messageId, long timestamp, String role, String content,
                                   String toolCallId, String name, List<SessionToolCallSnapshot> toolCalls,
-                                  TokenUsageSnapshot usage) {
+                                  TokenUsageSnapshot usage, String thinking) {
         if (messageId == null || messageId.trim().isEmpty()) {
             throw new JellyfishException("message id must not be blank");
         }
@@ -73,6 +84,31 @@ public final class SessionMessageSnapshot {
         this.name = name;
         this.toolCalls = copyToolCalls(toolCalls);
         this.usage = usage;
+        this.thinking = thinking;
+    }
+
+    /**
+     * 构造不含思考过程的快照（旧签名的兼容入口）。
+     * <p>
+     * 与构造器等价，只是不能写成构造器重载（见
+     * {@link #SessionMessageSnapshot(String, long, String, String, String, String, List, TokenUsageSnapshot, String)}）。
+     *
+     * @param messageId  消息唯一标识，不可为空白
+     * @param timestamp  消息产生时间戳（epoch millis）
+     * @param role       消息角色，不可为空白
+     * @param content    消息文本内容，可为 {@code null}
+     * @param toolCallId 工具调用标识，可为 {@code null}
+     * @param name       工具名，可为 {@code null}
+     * @param toolCalls  工具调用列表，可为 {@code null}（等价空列表）
+     * @param usage      token 用量，可为 {@code null}
+     * @return 消息快照
+     * @throws JellyfishException 消息标识或角色为空白时抛出
+     */
+    public static SessionMessageSnapshot of(String messageId, long timestamp, String role, String content,
+                                            String toolCallId, String name,
+                                            List<SessionToolCallSnapshot> toolCalls, TokenUsageSnapshot usage) {
+        return new SessionMessageSnapshot(messageId, timestamp, role, content, toolCallId, name, toolCalls,
+                usage, null);
     }
 
     /**
@@ -145,6 +181,15 @@ public final class SessionMessageSnapshot {
      */
     public TokenUsageSnapshot getUsage() {
         return usage;
+    }
+
+    /**
+     * 获取思考过程。
+     *
+     * @return 思考过程，可为 {@code null}
+     */
+    public String getThinking() {
+        return thinking;
     }
 
     @Override

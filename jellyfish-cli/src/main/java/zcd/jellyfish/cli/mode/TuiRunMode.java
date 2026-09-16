@@ -129,7 +129,8 @@ public final class TuiRunMode implements RunMode {
         // （单例不会被组件自动关闭，订阅就会一直挂着）。
         UiContributions uiContributions = new UiContributions(extensions, events, UI_OWNER);
         try {
-            new TuiApp(harness, commands, sessions, models, agents, uiContributions).run();
+            new TuiApp(harness, commands, sessions, models, agents, uiContributions,
+                    options.isShowThinking()).run();
             return ExitCodes.OK;
         } catch (JellyfishException e) {
             // 回合未收敛仍然只算正常结束：它是「答完了但没收敛」，不是执行失败。

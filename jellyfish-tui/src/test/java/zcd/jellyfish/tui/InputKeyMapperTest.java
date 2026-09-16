@@ -46,6 +46,19 @@ class InputKeyMapperTest {
     }
 
     @Test
+    @DisplayName("Ctrl+T 应判定为思考折叠开关")
+    void map_should_returnToggleThinking_when_ctrlT() {
+        assertEquals(InputAction.TOGGLE_THINKING, InputKeyMapper.map(ctrl('t')));
+        assertEquals(InputAction.TOGGLE_THINKING, InputKeyMapper.map(ctrl('T')));
+    }
+
+    @Test
+    @DisplayName("无修饰的 t 不得被当成折叠开关：它是正文里的普通字符")
+    void map_should_notReturnToggleThinking_when_plainT() {
+        assertEquals(InputAction.EDIT, InputKeyMapper.map(KeyEvent.ofChar('t')));
+    }
+
+    @Test
     @DisplayName("Esc 应判定为中断")
     void map_should_returnCancel_when_escape() {
         assertEquals(InputAction.CANCEL, InputKeyMapper.map(KeyEvent.ofKey(KeyCode.ESCAPE)));
@@ -126,6 +139,7 @@ class InputKeyMapperTest {
     void map_should_notHit_when_noCtrl() {
         assertNotEquals(InputAction.SEND, InputKeyMapper.map(KeyEvent.ofChar('s')));
         assertNotEquals(InputAction.QUIT, InputKeyMapper.map(KeyEvent.ofChar('c')));
+        assertNotEquals(InputAction.TOGGLE_THINKING, InputKeyMapper.map(KeyEvent.ofChar('t')));
     }
 
     @Test

@@ -100,6 +100,6 @@ class SessionSnapshotTest {
      * @return 消息快照
      */
     private static SessionMessageSnapshot message(String messageId) {
-        return new SessionMessageSnapshot(messageId, 0L, "user", "内容", null, null, null, null);
+        return SessionMessageSnapshot.of(messageId, 0L, "user", "内容", null, null, null, null);
     }
 }

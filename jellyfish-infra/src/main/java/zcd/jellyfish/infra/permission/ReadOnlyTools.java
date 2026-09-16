@@ -2,6 +2,9 @@ package zcd.jellyfish.infra.permission;
 
 import zcd.jellyfish.api.event.EventPublisher;
 import zcd.jellyfish.api.event.notification.ConfigWarningEvent;
+import zcd.jellyfish.api.extension.ToolCallRequest;
+import zcd.jellyfish.api.extension.ToolDescriptor;
+import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.plugin.PluginRuntimeConfig;
 
 import javax.inject.Inject;
@@ -14,56 +17,63 @@ import java.util.Objects;
 import java.util.Set;
 
 /**
- * 只读工具集合：把各插件在 {@code jellyfish.json} 里声明的只读工具白名单合并成一张全局集合，
- * 供 {@code PermissionManager} 在 PLAN 模式下判定「这个工具能不能读」。
+ * 只读工具集合：给出 PLAN 模式下「这个工具能不能读」的判据，供 {@code PermissionManager} 使用。
  * <p>
+ * 工具名来自两处，取<b>并集</b>：
+ * <ol>
+ *     <li><b>工具描述符</b>（权威来源）：{@link ToolDescriptor#isReadOnly()} 由工具提供方在注册时声明。
+ *     只有提供方知道自己的工具有没有副作用；描述符随 handler 一起落库，插件下架或热部署时它自动跟着变，
+ *     因此无需任何「插件变更通知」这类额外的边；</li>
+ *     <li><b>插件配置</b>（用户追加）：{@code jellyfish.json} 的
+ *     {@code plugins.configurations.<pluginId>.readOnlyTools}，用于把提供方<b>没标</b>只读的工具
+ *     自行纳入 PLAN 白名单。只能追加，不能撤销提供方的声明。</li>
+ * </ol>
  * <b>为什么不按「工具 → 插件」归因</b>：工具名全局唯一这一点已由「{@code ToolCallRequest} + 同键唯一注册」
- * 保证，因此「哪个插件声明的只读」不影响判定结果，直接合并成扁平集合即可——也就不需要给扩展层
+ * 保证，因此「哪个来源声明的只读」不影响判定结果，直接合并成扁平集合即可——也就不需要给扩展层
  * 新增 owner 归因能力。
- * <p>
- * <b>只读性为什么由插件声明</b>：只有工具提供方知道自己的工具会不会产生副作用，所以白名单写在插件
- * 自己那一节配置里，用户还能在项目级配置中覆盖。
  * <p>
  * 配置可疑（不是数组、含非字符串项）只发 {@link ConfigWarningEvent} 并跳过该项，不中断启动——
  * 与本仓库「配置好坏不阻断启动」的既有口径一致。
  * <p>
- * <b>为什么按快照引用缓存而不是构造期解析一次</b>：本对象由 Dagger 懒加载，构造时机不确定，
- * 完全可能早于 {@code AgentHarness.bootstrap()} 里的配置刷新；只解析一次会永久读到空集合。
- * 因此改为「读的时候比对快照引用，换过就重算」——{@code PluginRuntimeConfig} 保证同一快照期内
- * 返回同一个 configurations 实例，引用比较即可判定，正常路径下没有重复解析开销。
- * <p>
- * TODO 白名单只跟随插件配置快照：插件<b>热部署</b>不会改动配置段，因此那份白名单不会随之刷新，
- *      需要随「插件配置热更新」一起处理。
+ * <b>为什么描述符侧现算、配置侧却按快照缓存</b>：描述符现算是为了跟随热部署（与 {@code ToolCatalog}
+ * 同口径，O(工具数) 的投影可以忽略）；配置侧若也现算，同一条非法配置会在<b>每次权限判定</b>时重复发告警，
+ * 因此仍按快照引用缓存一份解析结果。{@code PluginRuntimeConfig} 保证同一快照期内返回同一个
+ * configurations 实例，引用比较即可判定，正常路径下没有重复解析开销。
  *
  * @author zcd
  */
 @Singleton
 public final class ReadOnlyTools {
 
-    /** 插件运行时装配输入，白名单的来源。 */
+    /** 插件运行时装配输入，用户追加白名单的来源。 */
     private final PluginRuntimeConfig pluginConfig;
 
     /** 事件发布入口，用于广播配置告警。 */
     private final EventPublisher events;
 
-    /** 上次解析所依据的插件配置快照，用于判断是否需要重算。 */
+    /** 同步扩展点策略，工具描述符的唯一来源。 */
+    private final ExtensionRegistry extensions;
+
+    /** 上次解析配置所依据的插件配置快照，用于判断是否需要重算。 */
     private Map<String, Map<String, Object>> parsedFrom;
 
-    /** 由 {@link #parsedFrom} 派生的只读工具名集合。 */
-    private volatile Set<String> names = Collections.emptySet();
+    /** 由 {@link #parsedFrom} 派生的用户追加白名单。 */
+    private volatile Set<String> declaredNames = Collections.emptySet();
 
     /**
      * 构造只读工具集合。
      * <p>
-     * 构造期不解析：此时配置多半尚未刷新，读到的必然是空集合。
+     * 构造期不解析配置：此时配置多半尚未刷新，读到的必然是空集合。
      *
      * @param pluginConfig 插件运行时装配输入，提供各插件配置段
      * @param events       事件发布入口，用于广播配置告警
+     * @param extensions   同步扩展点策略，提供工具描述符
      */
     @Inject
-    public ReadOnlyTools(PluginRuntimeConfig pluginConfig, EventPublisher events) {
+    public ReadOnlyTools(PluginRuntimeConfig pluginConfig, EventPublisher events, ExtensionRegistry extensions) {
         this.pluginConfig = Objects.requireNonNull(pluginConfig, "pluginConfig must not be null");
         this.events = Objects.requireNonNull(events, "events must not be null");
+        this.extensions = Objects.requireNonNull(extensions, "extensions must not be null");
     }
 
     /**
@@ -77,21 +87,36 @@ public final class ReadOnlyTools {
     }
 
     /**
-     * 获取全部只读工具名，供诊断使用。
+     * 获取全部只读工具名（描述符声明 ∪ 用户追加），供权限判定与诊断使用。
+     *
+     * @return 不可修改集合，两处都没有声明时为空集合
+     */
+    public Set<String> names() {
+        Set<String> collected = new LinkedHashSet<>(declared());
+        for (ToolDescriptor descriptor : extensions.descriptors(ToolCallRequest.class, ToolDescriptor.class)) {
+            if (descriptor.isReadOnly()) {
+                collected.add(descriptor.getName());
+            }
+        }
+        return Collections.unmodifiableSet(collected);
+    }
+
+    /**
+     * 获取用户追加的只读工具名，按插件配置快照缓存。
      *
      * @return 不可修改集合，未配置任何只读工具时为空集合
      */
-    public Set<String> names() {
+    private Set<String> declared() {
         Map<String, Map<String, Object>> current = pluginConfig.getPluginConfigurations();
         if (current != parsedFrom) {
             synchronized (this) {
                 if (current != parsedFrom) {
-                    names = parse(current, events);
+                    declaredNames = parse(current, events);
                     parsedFrom = current;
                 }
             }
         }
-        return names;
+        return declaredNames;
     }
 
     /**
@@ -127,9 +152,6 @@ public final class ReadOnlyTools {
                 }
             }
         }
-        // TODO 只读白名单只认插件配置段：若将来内核自己注册工具（没有 plugins.configurations 段），
-        //      它在 PLAN 模式下无法声明只读，会被一律拒绝。届时需要预留一个保留配置段
-        //      （例如 plugins.configurations.core.readOnlyTools），或把只读性迁到 ToolDescriptor。
         return Collections.unmodifiableSet(collected);
     }
 

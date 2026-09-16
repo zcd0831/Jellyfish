@@ -297,6 +297,47 @@ class ChatStateTest {
         assertTrue(blocks.contains("    \u23bf n" + (ChatState.MAX_NOTICES + 9)), "最新的提示必须保留");
     }
 
+    @Test
+    @DisplayName("默认折叠思考过程：历史里只留一行带字数的提示")
+    void view_should_fold_thinking_by_default() {
+        List<String> body = texts(view(thinkingMessages(), 20));
+
+        assertTrue(body.contains("      \u273b 思考过程（4 字，Ctrl+T 展开）"), "实际：" + body);
+        assertFalse(body.contains("      \u273b 先想一下"));
+    }
+
+    @Test
+    @DisplayName("切换思考开关必须重投影：否则缓存会把开关吃掉")
+    void view_should_reproject_when_thinkingToggled() {
+        // 先投影一帧把缓存填上，消息列表与尺寸都不再变化
+        view(thinkingMessages(), 20);
+
+        assertTrue(state.toggleThinking(), "首次切换后应为已展开");
+        List<String> body = texts(view(thinkingMessages(), 20));
+
+        assertTrue(body.contains("      \u273b 先想一下"), "展开后应铺出全文，实际：" + body);
+        assertFalse(body.contains("Ctrl+T 展开"));
+    }
+
+    @Test
+    @DisplayName("预置展开态：构造 --show-thinking 启动时的初始状态")
+    void setThinkingExpanded_should_seed_initial_state() {
+        state.setThinkingExpanded(true);
+
+        assertTrue(state.isThinkingExpanded());
+        assertTrue(texts(view(thinkingMessages(), 20)).contains("      \u273b 先想一下"));
+    }
+
+    /**
+     * 构造一条带思考过程的助手消息。
+     *
+     * @return 消息列表
+     */
+    private static List<SessionMessage> thinkingMessages() {
+        return Collections.singletonList(
+                SessionMessage.of(LlmMessage.assistant("答案"), null, "先想一下"));
+    }
+
     /**
      * 以默认宽度与上限执行一次 view。
      *

@@ -81,7 +81,7 @@ final class TodoWriteTool implements ExtensionHandler<ToolCallRequest, ToolCallR
                 "创建或更新本会话的待办清单。开始一项需要多步的工作时，先把计划写成待办，"
                         + "并在推进过程中把完成的项标记为 completed，让用户能看到进度。"
                         + "内容要简短、可执行；同一时间只应有一项是当前正在做的。",
-                properties, Collections.singletonList("todos"));
+                properties, Collections.singletonList("todos"), true);
     }
 
     @Override

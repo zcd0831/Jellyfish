@@ -7,8 +7,14 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import zcd.jellyfish.api.event.EventPublisher;
 import zcd.jellyfish.api.event.RegisterOptions;
+import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.api.extension.PromptContribution;
 import zcd.jellyfish.api.extension.PromptContributionRequest;
+import zcd.jellyfish.api.extension.SessionCompactionSnapshot;
+import zcd.jellyfish.api.extension.SessionMessageSnapshot;
+import zcd.jellyfish.api.extension.SessionRestoreRequest;
+import zcd.jellyfish.api.extension.SessionRestoreResult;
+import zcd.jellyfish.api.extension.SessionSnapshot;
 import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.config.Model;
@@ -27,6 +33,7 @@ import zcd.jellyfish.infra.session.SessionManager;
 import java.util.Collections;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.when;
@@ -211,7 +218,148 @@ class PromptAssemblerTest {
      * @return 会话运行态
      */
     private Session newSession() {
-        return new SessionManager(agentManager, events, new ExtensionRegistry(new TypeRegistry())).createDefault();
+        return newSessionManager().createDefault();
+    }
+
+    /**
+     * 创建一个会话域服务：需要「建会话 + 改会话」两步时才用它。
+     *
+     * @return 会话域服务
+     */
+    private SessionManager newSessionManager() {
+        return new SessionManager(agentManager, events, new ExtensionRegistry(new TypeRegistry()));
+    }
+
+    @Test
+    void buildRequest_should_sendOnlyMessagesAfterBoundary_when_compacted() {
+        // Given：三条消息，压缩边界落在第二条
+        SessionManager sessions = newSessionManager();
+        Session session = sessions.createDefault();
+        String sessionId = session.getSessionId();
+        sessions.appendMessage(sessionId, LlmMessage.user("一"), null);
+        sessions.appendMessage(sessionId, LlmMessage.user("二"), null);
+        sessions.appendMessage(sessionId, LlmMessage.user("三"), null);
+        sessions.applyCompaction(sessionId, "早前对话的摘要", session.getMessages().get(1).getMessageId(), 0);
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+
+        // When
+        LlmRequest request = assembler.buildRequest(session, resolvedModel(128_000, 4096));
+
+        // Then：只剩边界之后的那一条；被压掉的原文不再进请求
+        assertEquals(1, request.getMessages().size());
+        assertEquals("三", request.getMessages().get(0).getContent());
+    }
+
+    @Test
+    void buildRequest_should_putSummaryInSystemPrompt_afterPluginContributions() {
+        // Given
+        SessionManager sessions = newSessionManager();
+        Session session = sessions.createDefault();
+        String sessionId = session.getSessionId();
+        sessions.appendMessage(sessionId, LlmMessage.user("一"), null);
+        sessions.applyCompaction(sessionId, "早前对话的摘要", session.getMessages().get(0).getMessageId(), 0);
+        when(agentManager.systemPromptOf(null)).thenReturn("agent 提示词");
+        contribute("plugin-a", 0, "插件贡献");
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+
+        // When
+        LlmRequest request = assembler.buildRequest(session, resolvedModel(128_000, 4096));
+
+        // Then：agent → 插件 → 历史摘要，摘要必须在最后
+        String systemPrompt = request.getSystemPrompt();
+        assertTrue(systemPrompt.contains("agent 提示词"), systemPrompt);
+        assertTrue(systemPrompt.contains("插件贡献"), systemPrompt);
+        assertTrue(systemPrompt.contains("早前对话的摘要"), systemPrompt);
+        assertTrue(systemPrompt.indexOf("插件贡献") < systemPrompt.indexOf("早前对话的摘要"), systemPrompt);
+        assertTrue(systemPrompt.contains("更早的 1 条消息已不在上下文中"), systemPrompt);
+    }
+
+    @Test
+    void buildRequest_should_ignoreCompaction_when_boundaryMessageMissing() {
+        // Given：恢复一份「手工改过、边界指向不存在的消息」的会话——
+        // 这是该状态唯一可能的来源，正常路径下 SessionManager 会拦住它
+        ExtensionRegistry registry = new ExtensionRegistry(new TypeRegistry());
+        SessionManager sessions = new SessionManager(agentManager, events, registry);
+        registry.contribute("restorer", SessionRestoreRequest.class, null,
+                request -> SessionRestoreResult.of(Collections.singletonList(orphanSnapshot())),
+                RegisterOptions.DEFAULT);
+        sessions.restore();
+        Session session = sessions.require("s-1");
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+
+        // When
+        LlmRequest request = assembler.buildRequest(session, resolvedModel(128_000, 4096));
+
+        // Then：按未压缩处理，既不截消息也不注入那段无人认领的摘要
+        assertEquals(1, request.getMessages().size());
+        assertEquals("一", request.getMessages().get(0).getContent());
+        assertNull(request.getSystemPrompt());
+    }
+
+    @Test
+    void assemble_should_reportUsage_matchingWhatWillBeSent() {
+        // Given：一条历史 + 一段 system prompt
+        SessionManager sessions = newSessionManager();
+        Session session = sessions.createDefault();
+        sessions.appendMessage(session.getSessionId(), LlmMessage.user("你好"), null);
+        when(agentManager.systemPromptOf(null)).thenReturn("agent 提示词");
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+
+        // When
+        PromptAssembly assembly = assembler.assemble(session, resolvedModel(128_000, 4096));
+
+        // Then：用量 = system prompt + 实际发出的历史；分母是扣掉输出与预留之后的预算
+        ContextUsage usage = assembly.getUsage();
+        int expectedUsed = TokenEstimator.estimate("agent 提示词")
+                + TokenEstimator.estimateMessages(assembly.getRequest().getMessages());
+        assertEquals(expectedUsed, usage.getUsedTokens());
+        assertEquals(128_000 - 4096 - ReactSettings.DEFAULT_CONTEXT_RESERVE_TOKENS,
+                usage.getBudgetTokens());
+        assertTrue(usage.getUsedTokens() > 0);
+    }
+
+    @Test
+    void assemble_should_flagTruncation_when_historyOverBudget() {
+        // Given：窗口小到装不下两条历史
+        SessionManager sessions = newSessionManager();
+        Session session = sessions.createDefault();
+        sessions.appendMessage(session.getSessionId(), LlmMessage.user("第一条很长的历史内容"), null);
+        sessions.appendMessage(session.getSessionId(), LlmMessage.user("第二条很长的历史内容"), null);
+        when(agentManager.systemPromptOf(null)).thenReturn("agent 提示词");
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+
+        // When：预算设得极小（上下文窗口 8、输出 0）
+        PromptAssembly assembly = assembler.assemble(session, resolvedModel(8, 0));
+
+        // Then：已裁剪这个事实必须传出来——它就是「该压缩了」的报警信号
+        assertTrue(assembly.getUsage().isTruncated());
+    }
+
+    @Test
+    void assemble_should_reportUnknownUsage_when_contextLengthMissing() {
+        // Given：模型没配上下文窗口（这条路径不需要读 react 配置，因此不桩它）
+        Session session = newSession();
+        when(agentManager.systemPromptOf(null)).thenReturn("agent 提示词");
+
+        // When
+        PromptAssembly assembly = assembler.assemble(session, resolvedModel(0, 0));
+
+        // Then：比例无从判断（分母为 0），但请求照发
+        assertEquals(0, assembly.getUsage().getBudgetTokens());
+        assertFalse(assembly.getUsage().exceeds(80));
+    }
+
+    /**
+     * 构造一份压缩边界指向不存在消息的会话快照。
+     *
+     * @return 会话快照
+     */
+    private static SessionSnapshot orphanSnapshot() {
+        SessionMessageSnapshot message = SessionMessageSnapshot.of("m-1", 1L, LlmMessage.ROLE_USER, "一",
+                null, null, null, null);
+        return new SessionSnapshot("s-1", 1L, 2L, null, null, null, null, PermissionMode.NORMAL,
+                Collections.singletonList(message), null,
+                SessionCompactionSnapshot.of("孤儿摘要", "ghost", 3L));
     }
 
     /**

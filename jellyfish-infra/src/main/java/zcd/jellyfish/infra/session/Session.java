@@ -3,6 +3,7 @@ package zcd.jellyfish.infra.session;
 import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.api.extension.SessionMessageSnapshot;
 import zcd.jellyfish.api.extension.SessionSnapshot;
+import zcd.jellyfish.infra.llm.LlmUsage;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -17,7 +18,7 @@ import java.util.List;
  *     {@code updatedAt}、{@code title}；</li>
  *     <li><b>会话级选择</b>：当前 {@code agentId}、当前 {@code provider} / {@code model}、
  *     当前 {@link PermissionMode}；</li>
- *     <li><b>内容与计量</b>：消息列表、token 累计。</li>
+ *     <li><b>内容与计量</b>：消息列表、token 累计、压缩摘要（{@code /compact} 的边界与摘要）。</li>
  * </ol>
  * <b>变更方法一律包级可见</b>：外部只能经 {@link SessionManager} 修改会话，事件广播与将来的持久化
  * 派发都挂在那一个入口上；本类只保证「单会话内的原子性与快照安全」，因此它<b>不感知</b>事件通道、
@@ -62,6 +63,14 @@ public final class Session {
     private SessionUsage usage = SessionUsage.EMPTY;
 
     /**
+     * 压缩摘要，{@code null} 表示从未压缩过。
+     * <p>
+     * <b>注意它不影响消息列表</b>：压缩是非破坏式的，消息一条不删（屏幕投影、持久化都照旧），
+     * 摘要只决定「发给模型的请求从哪里开始」。
+     */
+    private SessionCompaction compaction;
+
+    /**
      * 构造会话运行态，仅供 {@link SessionManager} 调用。
      *
      * @param sessionId      会话唯一标识
@@ -98,6 +107,7 @@ public final class Session {
         session.title = snapshot.getTitle();
         session.updatedAt = snapshot.getUpdatedAt();
         session.usage = SessionSnapshots.toSessionUsage(snapshot.getUsage());
+        session.compaction = SessionSnapshots.toCompaction(snapshot.getCompaction());
         for (SessionMessageSnapshot message : snapshot.getMessages()) {
             session.messages.add(SessionSnapshots.toMessage(message));
         }
@@ -186,6 +196,15 @@ public final class Session {
     }
 
     /**
+     * 获取压缩摘要。
+     *
+     * @return 压缩摘要，从未压缩过时为 {@code null}
+     */
+    public synchronized SessionCompaction getCompaction() {
+        return compaction;
+    }
+
+    /**
      * 获取消息条数。
      *
      * @return 消息条数
@@ -204,6 +223,27 @@ public final class Session {
     }
 
     /**
+     * 定位一条消息在会话里的下标。
+     * <p>
+     * 供压缩边界解析用：边界以 {@code messageId} 记账而不是下标（消息只会追加，但快照跨进程传递，
+     * 下标的意义依赖当时的列表，换一处就错）。
+     *
+     * @param messageId 消息标识，可为 {@code null}
+     * @return 下标；{@code null} 或不存在的消息返回 {@code -1}
+     */
+    public synchronized int indexOfMessage(String messageId) {
+        if (messageId == null) {
+            return -1;
+        }
+        for (int index = 0; index < messages.size(); index++) {
+            if (messageId.equals(messages.get(index).getMessageId())) {
+                return index;
+            }
+        }
+        return -1;
+    }
+
+    /**
      * 追加一条消息并累加 token 用量。
      * <p>
      * 包级可见：只有 {@link SessionManager} 能改会话，事件广播与将来的落盘派发都在那里统一发生。
@@ -216,6 +256,28 @@ public final class Session {
         usage = usage.plus(message.getUsage());
         updatedAt = System.currentTimeMillis();
         return messages.size();
+    }
+
+    /**
+     * 累加一次模型调用的 token 用量（不追加消息）。
+     * <p>
+     * 给「不产生会话消息的调用」留的口子：{@code /compact} 的摘要调用花的是真金白银的 token，
+     * 但它不该在对话里留下一条消息——把它混进消息列表会让屏幕投影多出一条谁也没说过的话。
+     *
+     * @param callUsage 一次调用的用量，可为 {@code null}（厂商未返回时只累加调用次数）
+     */
+    synchronized void recordUsage(LlmUsage callUsage) {
+        usage = usage.plus(callUsage);
+    }
+
+    /**
+     * 设置压缩摘要。
+     *
+     * @param compaction 压缩摘要，可为 {@code null}（表示清除）
+     */
+    synchronized void setCompaction(SessionCompaction compaction) {
+        this.compaction = compaction;
+        this.updatedAt = System.currentTimeMillis();
     }
 
     /**

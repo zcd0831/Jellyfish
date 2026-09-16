@@ -1,6 +1,7 @@
 package zcd.jellyfish.plugin.sessionfile;
 
 import zcd.jellyfish.api.extension.PermissionMode;
+import zcd.jellyfish.api.extension.SessionCompactionSnapshot;
 import zcd.jellyfish.api.extension.SessionMessageSnapshot;
 import zcd.jellyfish.api.extension.SessionSnapshot;
 import zcd.jellyfish.api.extension.SessionToolCallSnapshot;
@@ -39,7 +40,8 @@ final class TestSnapshots {
                 SessionMessageSnapshot.of("m-3", 3L, "tool", "文件内容", "call-1", "read_file", null, null),
                 SessionMessageSnapshot.of("m-4", 4L, "assistant", "读完了", null, null, null, null));
         return new SessionSnapshot(sessionId, 100L, 200L, "标题", "coder", "openai", "gpt-4o",
-                PermissionMode.PLAN, messages, new SessionUsageSnapshot(7L, 8L, 15L, 4L));
+                PermissionMode.PLAN, messages, new SessionUsageSnapshot(7L, 8L, 15L, 4L),
+                new SessionCompactionSnapshot("早前对话的摘要", "m-2", 300L, 4));
     }
 
     /**
@@ -49,7 +51,7 @@ final class TestSnapshots {
      * @return 会话快照
      */
     static SessionSnapshot minimal(String sessionId) {
-        return new SessionSnapshot(sessionId, 1L, 1L, null, null, null, null, PermissionMode.NORMAL,
+        return SessionSnapshot.of(sessionId, 1L, 1L, null, null, null, null, PermissionMode.NORMAL,
                 null, null);
     }
 }

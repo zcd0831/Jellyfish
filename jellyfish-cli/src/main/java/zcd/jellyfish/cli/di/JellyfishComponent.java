@@ -2,6 +2,7 @@ package zcd.jellyfish.cli.di;
 
 import dagger.Component;
 import zcd.jellyfish.core.AgentHarness;
+import zcd.jellyfish.core.compact.ConversationCompactor;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.command.CommandManager;
 import zcd.jellyfish.infra.config.RuntimeConfig;
@@ -79,6 +80,16 @@ public interface JellyfishComponent {
      * @return ApprovalChannel
      */
     ApprovalChannel approvalChannel();
+
+    /**
+     * 获取会话压缩器。
+     * <p>
+     * 调用点是外壳装配：{@code TuiRunMode} 把它交给界面用于展示压缩状态；
+     * 命令侧（{@code /compact}）由内核系统命令直接注入，不经外壳。
+     *
+     * @return ConversationCompactor
+     */
+    ConversationCompactor conversationCompactor();
 
     /**
      * 获取命令域服务。

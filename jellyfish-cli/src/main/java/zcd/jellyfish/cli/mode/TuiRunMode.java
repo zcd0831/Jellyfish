@@ -7,6 +7,7 @@ import zcd.jellyfish.cli.ExitCodes;
 import zcd.jellyfish.cli.StartupOptions;
 import zcd.jellyfish.cli.console.ConsoleIO;
 import zcd.jellyfish.core.AgentHarness;
+import zcd.jellyfish.core.compact.ConversationCompactor;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.command.CommandManager;
 import zcd.jellyfish.infra.event.EventChannel;
@@ -84,6 +85,9 @@ public final class TuiRunMode implements RunMode {
      */
     private final ApprovalChannel approvals;
 
+    /** 会话压缩器：{@code /compact} 的执行体，交界面每帧读状态。 */
+    private final ConversationCompactor compactor;
+
     /** 输出面板：只在进入备用屏之前用于报告启动期错误。 */
     private final ConsoleIO console;
 
@@ -98,11 +102,13 @@ public final class TuiRunMode implements RunMode {
      * @param extensions 同步扩展点策略，不可为 {@code null}
      * @param events     事件通道，不可为 {@code null}
      * @param approvals  人工审批通道，不可为 {@code null}
+     * @param compactor  会话压缩器，不可为 {@code null}
      * @param console    输出面板，不可为 {@code null}
      */
     public TuiRunMode(AgentHarness harness, CommandManager commands, SessionManager sessions,
                       ModelManager models, AgentManager agents, ExtensionRegistry extensions,
-                      EventChannel events, ApprovalChannel approvals, ConsoleIO console) {
+                      EventChannel events, ApprovalChannel approvals, ConversationCompactor compactor,
+                      ConsoleIO console) {
         this.harness = Objects.requireNonNull(harness, "harness must not be null");
         this.commands = Objects.requireNonNull(commands, "commands must not be null");
         this.sessions = Objects.requireNonNull(sessions, "sessions must not be null");
@@ -111,6 +117,7 @@ public final class TuiRunMode implements RunMode {
         this.extensions = Objects.requireNonNull(extensions, "extensions must not be null");
         this.events = Objects.requireNonNull(events, "events must not be null");
         this.approvals = Objects.requireNonNull(approvals, "approvals must not be null");
+        this.compactor = Objects.requireNonNull(compactor, "compactor must not be null");
         this.console = Objects.requireNonNull(console, "console must not be null");
     }
 
@@ -144,7 +151,7 @@ public final class TuiRunMode implements RunMode {
         approvals.attach();
         try {
             new TuiApp(harness, commands, sessions, models, agents, uiContributions, approvals,
-                    options.isShowThinking()).run();
+                    compactor, options.isShowThinking()).run();
             return ExitCodes.OK;
         } catch (JellyfishException e) {
             // 回合未收敛仍然只算正常结束：它是「答完了但没收敛」，不是执行失败。

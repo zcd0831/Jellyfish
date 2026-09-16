@@ -19,6 +19,7 @@ import zcd.jellyfish.api.extension.CommandResult;
 import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.api.ui.UiRegion;
 import zcd.jellyfish.core.AgentHarness;
+import zcd.jellyfish.core.compact.ConversationCompactor;
 import zcd.jellyfish.core.ReActTurn;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.command.CommandInfo;
@@ -115,6 +116,15 @@ public final class TuiApp extends ToolkitApp {
      */
     private final ApprovalChannel approvals;
 
+    /**
+     * 会话压缩器：{@code /compact} 的执行体。
+     * <p>
+     * <b>只读状态，不驱动它</b>：压缩跑在 {@code compact} 线程上，本外壳每帧取一次状态
+     * ——{@code RUNNING} 显示在状态栏，从 {@code RUNNING} 变为 {@code DONE}/{@code FAILED} 时贴一条提示。
+     * 这与审批通道是同一类「把线程间的交接点放在渲染线程上」的形态，区别是审批要回填、压缩不用。
+     */
+    private final ConversationCompactor compactor;
+
     /** 视图状态。 */
     private final ChatState chatState = new ChatState();
 
@@ -208,6 +218,9 @@ public final class TuiApp extends ToolkitApp {
     /** 上一帧是否处于「回合进行中」，用于识别回合收敛并补一次插件内容失效。 */
     private boolean renderedTurnRunning;
 
+    /** 压缩在界面上的那一层：状态栏标记与「压完了」的一次性提示。 */
+    private final CompactionView compactionView = new CompactionView();
+
     /**
      * 构造 TUI 外壳。
      *
@@ -218,10 +231,12 @@ public final class TuiApp extends ToolkitApp {
      * @param agents   agent 门面，不可为 {@code null}
      * @param uiContributions 插件 UI 贡献门面，不可为 {@code null}
      * @param approvals 人工审批通道，不可为 {@code null}
+     * @param compactor 会话压缩器，不可为 {@code null}
      */
     public TuiApp(AgentHarness harness, CommandManager commands, SessionManager sessions, ModelManager models,
-                  AgentManager agents, UiContributions uiContributions, ApprovalChannel approvals) {
-        this(harness, commands, sessions, models, agents, uiContributions, approvals, false);
+                  AgentManager agents, UiContributions uiContributions, ApprovalChannel approvals,
+                  ConversationCompactor compactor) {
+        this(harness, commands, sessions, models, agents, uiContributions, approvals, compactor, false);
     }
 
     /**
@@ -234,11 +249,12 @@ public final class TuiApp extends ToolkitApp {
      * @param agents   agent 门面，不可为 {@code null}
      * @param uiContributions 插件 UI 贡献门面，不可为 {@code null}
      * @param approvals 人工审批通道，不可为 {@code null}
+     * @param compactor 会话压缩器，不可为 {@code null}
      * @param thinkingExpanded 启动时是否展开思考过程（{@code --show-thinking} 置为 {@code true}）
      */
     public TuiApp(AgentHarness harness, CommandManager commands, SessionManager sessions, ModelManager models,
                   AgentManager agents, UiContributions uiContributions, ApprovalChannel approvals,
-                  boolean thinkingExpanded) {
+                  ConversationCompactor compactor, boolean thinkingExpanded) {
         this.harness = Objects.requireNonNull(harness, "harness must not be null");
         this.commands = Objects.requireNonNull(commands, "commands must not be null");
         this.sessions = Objects.requireNonNull(sessions, "sessions must not be null");
@@ -246,6 +262,7 @@ public final class TuiApp extends ToolkitApp {
         this.agents = Objects.requireNonNull(agents, "agents must not be null");
         this.uiContributions = Objects.requireNonNull(uiContributions, "uiContributions must not be null");
         this.approvals = Objects.requireNonNull(approvals, "approvals must not be null");
+        this.compactor = Objects.requireNonNull(compactor, "compactor must not be null");
         this.uiCache = new UiCache(uiContributions);
         this.pluginPanelsEnabled = pluginPanelsEnabled();
         this.input = new ChatInputView(inputKeys);
@@ -353,6 +370,8 @@ public final class TuiApp extends ToolkitApp {
                 layout.getMessageRows(), TranscriptProjector.DEFAULT_MAX_MESSAGES);
 
         String status = StatusBarView.render(statusInfoOf(session, contextTokensOf(messages)));
+        // 压缩状态是「正在进行 / 已经压过一部分」的事实，模型与屏幕的差异必须有个出口
+        status = status + syncCompaction(session, sessionId);
         // 插件片段紧跟内核字段：宽度预算按终端总列数算，最后一个装不下的片段整块丢弃
         status = StatusBarView.appendFragments(status, fragments, size.width());
         String hint = view.hiddenBelowHint();
@@ -362,6 +381,25 @@ public final class TuiApp extends ToolkitApp {
             status = status + "   " + hint;
         }
         return shell.render(view, title(session), status, overlay, panels, layout);
+    }
+
+    /**
+     * 对表压缩状态：把状态栏标记返回给调用方，并在「压缩中 → 终态」时贴一条提示。
+     * <p>
+     * <b>为什么状态栏也要有一份</b>：提示贴进消息流后会随滚动移出视野，而「这个会话的历史已被压过」
+     * 是一个<b>持续有效</b>的事实（模型确实看不到那些原文了），只贴一次提示不足以让人一直记得。
+     *
+     * @param session   当前会话，可为 {@code null}
+     * @param sessionId 当前会话标识，可为 {@code null}
+     * @return 接到状态栏尾部的标记文本，可能为空串
+     */
+    private String syncCompaction(Session session, String sessionId) {
+        ConversationCompactor.State state = compactor.status(sessionId);
+        CompactionView.Notice notice = compactionView.sync(sessionId, state);
+        if (notice != null) {
+            chatState.appendNotice("/compact", notice.getText(), notice.getKind());
+        }
+        return CompactionView.label(session, state);
     }
 
     /**

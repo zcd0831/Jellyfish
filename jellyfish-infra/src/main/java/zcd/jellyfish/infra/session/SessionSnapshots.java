@@ -1,5 +1,6 @@
 package zcd.jellyfish.infra.session;
 
+import zcd.jellyfish.api.extension.SessionCompactionSnapshot;
 import zcd.jellyfish.api.extension.SessionMessageSnapshot;
 import zcd.jellyfish.api.extension.SessionSnapshot;
 import zcd.jellyfish.api.extension.SessionToolCallSnapshot;
@@ -48,7 +49,36 @@ public final class SessionSnapshots {
         }
         return new SessionSnapshot(session.getSessionId(), session.getCreatedAt(), session.getUpdatedAt(),
                 session.getTitle(), session.getAgentId(), session.getProvider(), session.getModel(),
-                session.getPermissionMode(), messages, captureUsage(session.getUsage()));
+                session.getPermissionMode(), messages, captureUsage(session.getUsage()),
+                captureCompaction(session.getCompaction()));
+    }
+
+    /**
+     * 投影压缩摘要。
+     *
+     * @param compaction 压缩摘要，可为 {@code null}
+     * @return 摘要快照，入参为 {@code null} 时返回 {@code null}
+     */
+    private static SessionCompactionSnapshot captureCompaction(SessionCompaction compaction) {
+        if (compaction == null) {
+            return null;
+        }
+        return new SessionCompactionSnapshot(compaction.getSummary(), compaction.getBoundaryMessageId(),
+                compaction.getCreatedAt(), compaction.getDroppedMessageCount());
+    }
+
+    /**
+     * 还原压缩摘要。
+     *
+     * @param snapshot 摘要快照，可为 {@code null}
+     * @return 压缩摘要，入参为 {@code null} 时返回 {@code null}
+     */
+    static SessionCompaction toCompaction(SessionCompactionSnapshot snapshot) {
+        if (snapshot == null) {
+            return null;
+        }
+        return new SessionCompaction(snapshot.getSummary(), snapshot.getBoundaryMessageId(),
+                snapshot.getCreatedAt(), snapshot.getDroppedMessageCount());
     }
 
     /**

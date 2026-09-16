@@ -18,6 +18,8 @@ import zcd.jellyfish.api.extension.PermissionDecision;
 import zcd.jellyfish.api.extension.ToolCallRequest;
 import zcd.jellyfish.api.extension.ToolCallResult;
 import zcd.jellyfish.api.extension.ToolDescriptor;
+import zcd.jellyfish.core.compact.ConversationCompactor;
+import zcd.jellyfish.core.prompt.ContextUsage;
 import zcd.jellyfish.core.prompt.PromptAssembler;
 import zcd.jellyfish.core.prompt.ToolCatalog;
 import zcd.jellyfish.infra.agent.AgentManager;
@@ -55,6 +57,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -107,6 +110,10 @@ class ReActLooperTest {
     /** 真实提示词组装器。 */
     private PromptAssembler promptAssembler;
 
+    /** 会话压缩器：本轮只验证它被按用量询问过，因此用 mock。 */
+    @Mock
+    private ConversationCompactor conversationCompactor;
+
     @BeforeEach
     void setUp() {
         executor = Executors.newSingleThreadExecutor();
@@ -143,6 +150,24 @@ class ReActLooperTest {
         assertEquals("你好", session.getMessages().get(0).getMessage().getContent());
         assertEquals("最终答复", session.getMessages().get(1).getMessage().getContent());
         assertEquals(Collections.singletonList(result), listener.completed);
+    }
+
+    @Test
+    void chat_should_askCompactorWithContextUsage_beforeEachRound() {
+        // Given
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        stubResponses(LlmResponse.text("最终答复"));
+        Session session = sessionManager.createDefault();
+        ArgumentCaptor<ContextUsage> usage = ArgumentCaptor.forClass(ContextUsage.class);
+
+        // When
+        newLooper().chat(session.getSessionId(), "你好", new RecordingListener()).await();
+
+        // Then：压缩的触发判据必须来自组装请求的那一次计算，否则两处判据会漂移
+        verify(conversationCompactor).autoCompactIfNeeded(eq(session.getSessionId()), usage.capture());
+        // 共享桩里的模型没配上下文窗口 → 比例无从判断（预算 0），但用量本身仍如实带出
+        assertEquals(0, usage.getValue().getBudgetTokens());
+        assertTrue(usage.getValue().getUsedTokens() >= 0);
     }
 
     @Test
@@ -244,7 +269,7 @@ class ReActLooperTest {
     @Test
     void chat_should_truncate_when_max_rounds_reached() {
         // Given：每轮都请求工具，轮次上限为 1
-        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings(1, 0, 20000));
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings(1, 0, 20000, null, null, null));
         when(permissionManager.decide(any(PermissionCheckRequest.class)))
                 .thenReturn(PermissionDecision.allow(null));
         registerTool("read", request -> new ToolCallResult("read", "ok"));
@@ -342,7 +367,7 @@ class ReActLooperTest {
      */
     private ReActLooper newLooper() {
         return new ReActLooper(sessionManager, modelManager, permissionManager, extensions, events,
-                promptAssembler, runtimeConfig, executor);
+                promptAssembler, runtimeConfig, conversationCompactor, executor);
     }
 
     /**

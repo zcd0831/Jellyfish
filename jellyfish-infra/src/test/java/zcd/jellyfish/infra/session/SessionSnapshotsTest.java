@@ -100,6 +100,32 @@ class SessionSnapshotsTest {
     }
 
     @Test
+    @DisplayName("压缩摘要必须随会话落盘与回放：丢了重启后模型会突然收到一整份远古历史")
+    void restore_should_keepCompaction() {
+        Session session = fullSession();
+        session.setCompaction(new SessionCompaction("摘要正文", "m-2", 42L, 3));
+
+        Session restored = Session.restore(SessionSnapshots.capture(session));
+
+        assertNotNull(restored.getCompaction());
+        assertEquals("摘要正文", restored.getCompaction().getSummary());
+        assertEquals("m-2", restored.getCompaction().getBoundaryMessageId());
+        assertEquals(42L, restored.getCompaction().getCreatedAt());
+        // 丢弃条数必须一起往返：它是「哪些历史真的没了」的唯一记账，丢了就再也说不清
+        assertEquals(3, restored.getCompaction().getDroppedMessageCount());
+    }
+
+    @Test
+    @DisplayName("从未压缩过的会话回放后压缩仍为空，不能被填成空摘要")
+    void restore_should_keepMissingCompactionAsNull() {
+        Session session = new Session("session-3", null, null, null, null, CREATED_AT);
+
+        Session restored = Session.restore(SessionSnapshots.capture(session));
+
+        assertNull(restored.getCompaction());
+    }
+
+    @Test
     @DisplayName("未产生的思考回放后仍为空，不能变成空串")
     void restore_should_keepMissingThinkingAsNull() {
         Session restored = Session.restore(SessionSnapshots.capture(fullSession()));
@@ -159,6 +185,7 @@ class SessionSnapshotsTest {
         session.append(SessionMessage.of(LlmMessage.assistant("读完了")));
         // 再改一次标题以确保 updatedAt 与 createdAt 不同
         session.setTitle("标题");
+        session.setCompaction(new SessionCompaction("早前对话的摘要", "m-2", 7L, 0));
         return session;
     }
 
@@ -181,6 +208,13 @@ class SessionSnapshotsTest {
         assertEquals(expected.getUsage().getCompletionTokens(), actual.getUsage().getCompletionTokens());
         assertEquals(expected.getUsage().getTotalTokens(), actual.getUsage().getTotalTokens());
         assertEquals(expected.getUsage().getLlmCalls(), actual.getUsage().getLlmCalls());
+        assertEquals(expected.getCompaction() == null, actual.getCompaction() == null);
+        if (expected.getCompaction() != null) {
+            assertEquals(expected.getCompaction().getSummary(), actual.getCompaction().getSummary());
+            assertEquals(expected.getCompaction().getBoundaryMessageId(),
+                    actual.getCompaction().getBoundaryMessageId());
+            assertEquals(expected.getCompaction().getCreatedAt(), actual.getCompaction().getCreatedAt());
+        }
         assertEquals(expected.getMessages().size(), actual.getMessages().size());
         for (int i = 0; i < expected.getMessages().size(); i++) {
             assertMessageEquals(expected.getMessages().get(i), actual.getMessages().get(i));

@@ -43,7 +43,7 @@ class JellyfishSettingsTest {
     @Test
     void getReact_should_return_same_instance_when_given() {
         // Given
-        ReactSettings react = new ReactSettings(3, 0, 100);
+        ReactSettings react = new ReactSettings(3, 0, 100, null, null, null);
 
         // When
         JellyfishSettings settings = new JellyfishSettings(null, react, null);

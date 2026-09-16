@@ -16,14 +16,19 @@ import zcd.jellyfish.api.extension.CommandResult;
 import zcd.jellyfish.api.extension.ExtensionHandler;
 import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.core.ReActLooper;
+import zcd.jellyfish.api.extension.CompactionTrigger;
+import zcd.jellyfish.core.compact.CompactionPlan;
+import zcd.jellyfish.core.compact.ConversationCompactor;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.command.CommandManager;
 import zcd.jellyfish.infra.config.AgentDefinition;
 import zcd.jellyfish.infra.config.Model;
 import zcd.jellyfish.infra.config.Provider;
+import zcd.jellyfish.infra.config.RuntimeConfig;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.model.ModelManager;
 import zcd.jellyfish.infra.session.Session;
+import zcd.jellyfish.infra.session.SessionCompaction;
 import zcd.jellyfish.infra.session.SessionManager;
 
 import javax.inject.Inject;
@@ -47,12 +52,13 @@ import java.util.Objects;
  * <b>副作用写回域服务</b>：切模型 / 绑 agent / 建会话都改域服务状态，结果文本只给人看；
  * 外壳需要机器可读状态时执行后读对应域服务（例如 {@link SessionManager#current()}）。
  * <p>
- * <b>不做</b>：{@code /exit} 属外壳职责（进程退出），不进注册表；
- * <ul>
- *     <li>{@code /todo} 与待办状态归 {@code jellyfish-plugin-todo}（插件自持存储，经
- *     {@code PromptContributionRequest} 注入 system prompt），内核不再持有该领域；</li>
- *     <li>{@code /compact}（摘要式压缩，读法 2）依赖会话持久化与额外模型调用，也留待后续轮。</li>
- * </ul>
+ * <b>不做</b>：{@code /exit} 属外壳职责（进程退出），不进注册表；{@code /todo} 与待办状态归
+ * {@code jellyfish-plugin-todo}（插件自持存储，经 {@code PromptContributionRequest} 注入
+ * system prompt），内核不再持有该领域。
+ * <p>
+ * <b>{@code /compact} 只起头、不等结果</b>：它派发给 {@link ConversationCompactor} 后立刻返回，
+ * 真正的结果由外壳轮询压缩状态呈现（见 {@code ConversationCompactor.Status}）。在渲染线程上同步等
+ * 一次完整的模型调用等于把界面冻住——命令是给界面用的，不能让界面等它。
  *
  * @author zcd
  */
@@ -67,6 +73,22 @@ public class SystemCommands {
 
     /** 权限模式取值：常规模式。 */
     private static final String MODE_NORMAL = "normal";
+
+    /** {@code /compact} 用法文本。 */
+    private static final String COMPACT_USAGE = "用法：/compact [preview]";
+
+    /** {@code /compact} 的预览档位取值：只看不发。 */
+    private static final String COMPACT_PREVIEW = "preview";
+
+    /**
+     * 压缩不可用时的用户提示。
+     * <p>
+     * 文案落在命令层而不是压缩器：压缩器那边只负责「不可用」这个事实（抛
+     * {@code CompactionUnavailableException}），该对用户说什么、下一步该做什么，是给界面用的措辞。
+     */
+    private static final String COMPACT_UNAVAILABLE_HINT =
+            "压缩不可用：没有插件提供压缩策略。压缩由插件决定（摘要指令与参数），内核只负责执行；"
+                    + "安装并启用压缩插件后即可使用（会话历史未受影响）。";
 
     /** 同步扩展点策略。 */
     private final ExtensionRegistry extensions;
@@ -86,6 +108,12 @@ public class SystemCommands {
     /** 通知发布入口，用于在切换到无提示词的 agent 时广播配置告警。 */
     private final EventPublisher events;
 
+    /** 会话压缩器：{@code /compact} 只负责起头，执行与状态由它承担。 */
+    private final ConversationCompactor compactor;
+
+    /** 运行时配置门面：读 {@code react} 段的压缩参数用于展示默认档位。 */
+    private final RuntimeConfig runtimeConfig;
+
     /** 已注册的命令句柄，{@link #close()} 时回收。 */
     private final List<Subscription> subscriptions = new ArrayList<Subscription>();
 
@@ -98,17 +126,22 @@ public class SystemCommands {
      * @param modelManager   模型门面
      * @param agentManager   agent 门面
      * @param events         通知发布入口
+     * @param compactor      会话压缩器
+     * @param runtimeConfig  运行时配置门面
      */
     @Inject
     public SystemCommands(ExtensionRegistry extensions, CommandManager commandManager,
                           SessionManager sessionManager, ModelManager modelManager, AgentManager agentManager,
-                          EventPublisher events) {
+                          EventPublisher events, ConversationCompactor compactor,
+                          RuntimeConfig runtimeConfig) {
         this.extensions = Objects.requireNonNull(extensions, "extensions must not be null");
         this.commandManager = Objects.requireNonNull(commandManager, "commandManager must not be null");
         this.sessionManager = Objects.requireNonNull(sessionManager, "sessionManager must not be null");
         this.modelManager = Objects.requireNonNull(modelManager, "modelManager must not be null");
         this.agentManager = Objects.requireNonNull(agentManager, "agentManager must not be null");
         this.events = Objects.requireNonNull(events, "events must not be null");
+        this.compactor = Objects.requireNonNull(compactor, "compactor must not be null");
+        this.runtimeConfig = Objects.requireNonNull(runtimeConfig, "runtimeConfig must not be null");
     }
 
     /**
@@ -136,6 +169,8 @@ public class SystemCommands {
                 this::usage));
         subscriptions.add(register("delete", new CommandDescriptor("删除会话（含持久化文件）", "<sessionId>",
                 aliases("rm")), this::deleteSession));
+        subscriptions.add(register("compact", new CommandDescriptor("把更早的对话压成摘要",
+                "[preview]", null), this::compact));
         // 只读候选查询：与执行处理器平行，外壳「选中命令就弹选择页」时走这条路径，不产生任何副作用
         subscriptions.add(registerOptions("resume", this::resumeOptions));
         subscriptions.add(registerOptions("model", this::modelOptions));
@@ -489,6 +524,107 @@ public class SystemCommands {
     }
 
     /**
+     * {@code /compact}：把更早的对话压成摘要。
+     * <p>
+     * <b>只有两个形态</b>：无参按默认档位压一次；{@code preview} 只回报将要发生什么。
+     * 刻意不做「保留 5 条 / 全压」这类档位——保留多少是「一次请求长什么样」的一部分，
+     * 归 {@code react.compactKeepRecentMessages} 与插件策略管；把同一件事同时开成命令参数与配置项，
+     * 只会让「我明明配了 20 条，怎么压成 5 条了」变成一个查不出来的疑问。
+     *
+     * @param request 命令请求
+     * @return 结果
+     */
+    private CommandResult compact(CommandRequest request) {
+        Session session = resolveSession(request);
+        if (session == null) {
+            return CommandResult.error("当前没有会话，可用 /new 新建。");
+        }
+        if (request.getArguments().size() > 1) {
+            return CommandResult.error(COMPACT_USAGE);
+        }
+        if (!request.getArguments().isEmpty()
+                && !COMPACT_PREVIEW.equals(request.getArguments().getTokens().get(0).toLowerCase())) {
+            return CommandResult.error(COMPACT_USAGE);
+        }
+        if (!request.getArguments().isEmpty()) {
+            return previewCompaction(session);
+        }
+        if (!compactor.isAvailable()) {
+            // 先判可用性：不可用时 start 也会报错，但那里的措辞面向日志与自动路径，命令层自己说到底
+            return CommandResult.error(COMPACT_UNAVAILABLE_HINT);
+        }
+        try {
+            compactor.start(session.getSessionId(), CompactionTrigger.MANUAL);
+        } catch (JellyfishException e) {
+            // 会话不存在 / 没有足够历史 / 已在压：都是用户当场就该看到的原因，原样回报
+            return CommandResult.error("无法压缩：" + e.getMessage());
+        }
+        return CommandResult.ok("已开始压缩，完成后会提示；期间可以继续对话。");
+    }
+
+    /**
+     * {@code /compact preview}：只回报将会压多少条，不发起任何模型调用。
+     *
+     * @param session 会话
+     * @return 结果
+     */
+    private CommandResult previewCompaction(Session session) {
+        if (!compactor.isAvailable()) {
+            return CommandResult.error(COMPACT_UNAVAILABLE_HINT);
+        }
+        CompactionPlan plan;
+        try {
+            plan = compactor.plan(session.getSessionId());
+        } catch (JellyfishException e) {
+            return CommandResult.error("无法预览压缩：" + e.getMessage());
+        }
+        StringBuilder text = new StringBuilder(compactState(session));
+        if (plan == null) {
+            return CommandResult.ok(text.append("\n本次没有可压缩的历史（剩余条数不足或已全部压完）。").toString());
+        }
+        text.append("\n将压缩 ").append(plan.getCompressedCount()).append(" 条消息，保留最近 ")
+                .append(plan.getKeepCount()).append(" 条原文，摘要输入约 ")
+                .append(plan.getEstimatedTokens()).append(" token。");
+        if (plan.hasDropped()) {
+            text.append("\n（其中最早的 ").append(plan.getDroppedCount())
+                    .append(" 条超出摘要输入预算，不会进摘要也不再发送——它们的信息本次会真正丢失。）");
+        }
+        return CommandResult.ok(text.toString());
+    }
+
+    /**
+     * 渲染当前压缩状态。
+     *
+     * @param session 会话
+     * @return 状态文本
+     */
+    private String compactState(Session session) {
+        if (!compactor.isAvailable()) {
+            return "压缩上下文：把更早的对话压成摘要，之后每次请求只带摘要与最近若干条原文"
+                    + "（会话历史一条不删，界面与 /resume 不受影响）。"
+                    + "\n当前：不可用（没有插件提供压缩策略，压缩由插件决定）。";
+        }
+        SessionCompaction compaction = session.getCompaction();
+        if (compaction == null) {
+            return "压缩上下文：把更早的对话压成摘要，之后每次请求只带摘要与最近若干条原文"
+                    + "（会话历史一条不删，界面与 /resume 不受影响）。\n当前：未压缩。";
+        }
+        int covered = session.indexOfMessage(compaction.getBoundaryMessageId()) + 1;
+        if (covered <= 0) {
+            return "压缩上下文：把更早的对话压成摘要，之后每次请求只带摘要与最近若干条原文"
+                    + "（会话历史一条不删，界面与 /resume 不受影响）。"
+                    + "\n当前：压缩记录已失效（边界消息不在会话里），下次请求会带上完整历史。";
+        }
+        StringBuilder text = new StringBuilder("压缩上下文：把更早的对话压成摘要，之后每次请求只带摘要与最近若干条原文"
+                + "（会话历史一条不删，界面与 /resume 不受影响）。"
+                + "\n当前：已压缩 " + covered + " 条更早的消息（摘要 " + compaction.getSummary().length() + " 字");
+        if (compaction.getDroppedMessageCount() > 0) {
+            text.append("，其中 ").append(compaction.getDroppedMessageCount()).append(" 条超出摘要预算未收录");
+        }
+        return text.append("）。").toString();
+    }
+
+    /**
      * {@code /status}：显示当前会话概要。
      *
      * @param request 命令请求
@@ -504,6 +640,7 @@ public class SystemCommands {
                 + "\n  agent：" + nullToDash(session.getAgentId())
                 + "\n  权限模式：" + session.getPermissionMode().name().toLowerCase()
                 + "\n  消息数：" + session.size()
+                + "\n  压缩：" + compactionLabel(session)
                 + "\n  token：" + session.getUsage().getTotalTokens()
                 + "（输入 " + session.getUsage().getPromptTokens()
                 + " / 输出 " + session.getUsage().getCompletionTokens() + "）");
@@ -524,6 +661,33 @@ public class SystemCommands {
                 + "（输入 " + session.getUsage().getPromptTokens()
                 + "，输出 " + session.getUsage().getCompletionTokens()
                 + "，调用 " + session.getUsage().getLlmCalls() + " 次）");
+    }
+
+    /**
+     * 渲染会话压缩状态的一行说明。
+     * <p>
+     * <b>为什么要显示它</b>：压缩之后「屏幕上看到的」与「模型收到的」不再一致。不给出口，
+     * 「模型为什么忘了刚才说的话」会变成一个从界面查不出来的谜。
+     *
+     * @param session 会话
+     * @return 说明文本
+     */
+    private String compactionLabel(Session session) {
+        if (!compactor.isAvailable()) {
+            return "不可用（没有插件提供压缩策略）";
+        }
+        SessionCompaction compaction = session.getCompaction();
+        if (compaction == null) {
+            return "未压缩";
+        }
+        int covered = session.indexOfMessage(compaction.getBoundaryMessageId()) + 1;
+        if (covered <= 0) {
+            return "压缩记录已失效（边界消息不在会话里，本次按未压缩发送）";
+        }
+        String label = "已压缩 " + covered + " 条更早消息（摘要 " + compaction.getSummary().length() + " 字"
+                + (compaction.getDroppedMessageCount() > 0
+                ? "，其中 " + compaction.getDroppedMessageCount() + " 条未收录" : "") + "）";
+        return label;
     }
 
     /**

@@ -7,6 +7,22 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.event.EventPublisher;
+import zcd.jellyfish.api.event.RegisterOptions;
+import zcd.jellyfish.api.event.Subscription;
+import zcd.jellyfish.api.extension.CompactionStrategy;
+import zcd.jellyfish.api.extension.CompactionStrategyRequest;
+import zcd.jellyfish.core.compact.ConversationCompactor;
+import zcd.jellyfish.infra.config.Model;
+import zcd.jellyfish.infra.config.Provider;
+import zcd.jellyfish.infra.config.ReactSettings;
+import zcd.jellyfish.infra.config.RuntimeConfig;
+import zcd.jellyfish.infra.llm.LlmClient;
+import zcd.jellyfish.infra.llm.LlmMessage;
+import zcd.jellyfish.infra.llm.LlmRequest;
+import zcd.jellyfish.infra.llm.LlmResponse;
+import zcd.jellyfish.infra.llm.LlmStreamHandle;
+import zcd.jellyfish.infra.llm.LlmStreamListener;
+import zcd.jellyfish.infra.model.ResolvedModel;
 import zcd.jellyfish.api.extension.CommandChoice;
 import zcd.jellyfish.api.extension.CommandResult;
 import zcd.jellyfish.api.extension.PermissionMode;
@@ -30,9 +46,11 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
 
 /**
@@ -58,6 +76,16 @@ class SystemCommandsTest {
     @Mock
     private EventPublisher events;
 
+    /** 运行时配置门面：提供压缩默认档位。 */
+    @Mock
+    private RuntimeConfig runtimeConfig;
+
+    /** 真实会话压缩器：{@code /compact} 的执行体。 */
+    private ConversationCompactor compactor;
+
+    /** 压缩策略的注册句柄：部分用例把它关掉，模拟「没装压缩插件」。 */
+    private Subscription strategySubscription;
+
     /** 真实命令域服务。 */
     private CommandManager commandManager;
 
@@ -72,8 +100,17 @@ class SystemCommandsTest {
         ExtensionRegistry extensions = new ExtensionRegistry(new TypeRegistry());
         commandManager = new CommandManager(extensions);
         sessionManager = new SessionManager(agentManager, events, extensions);
+        // 只有 /compact 需要它，用 lenient 免得其余用例因「多余打桩」被 Mockito 判失败
+        lenient().when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        // 压缩策略由插件提供：命令层用例备一个兜底策略，模拟「装了压缩插件」
+        ExtensionRegistry strategyRegistry = new ExtensionRegistry(new TypeRegistry());
+        strategySubscription = strategyRegistry.contribute("test-plugin", CompactionStrategyRequest.class, null,
+                request -> new CompactionStrategy("压成摘要，不超过 {maxSummaryChars} 字", null, null),
+                RegisterOptions.DEFAULT);
+        compactor = new ConversationCompactor(sessionManager, modelManager, runtimeConfig,
+                strategyRegistry, events);
         systemCommands = new SystemCommands(extensions, commandManager, sessionManager, modelManager, agentManager,
-                events);
+                events, compactor, runtimeConfig);
         systemCommands.register();
     }
 
@@ -85,8 +122,8 @@ class SystemCommandsTest {
 
         // Then
         assertTrue(names.containsAll(Arrays.asList("help", "new", "session", "resume", "model", "agent", "mode",
-                "status", "usage", "delete")));
-        assertEquals(10, names.size());
+                "status", "usage", "delete", "compact")));
+        assertEquals(11, names.size());
     }
 
     @Test
@@ -375,6 +412,212 @@ class SystemCommandsTest {
         assertEquals(CommandResult.Kind.OK, result.getKind());
         assertTrue(result.hasChoices());
         assertEquals(1, result.getChoices().size());
+    }
+
+    @Test
+    void compact_should_reportUnavailable_when_noPluginProvidesStrategy() {
+        // Given：把压缩策略的注册关掉 —— 模拟「没装压缩插件」
+        commandManager.execute("/new");
+        strategySubscription.close();
+
+        // When
+        CommandResult result = commandManager.execute("/compact");
+
+        // Then：压不了要说清是「功能缺席」，而不是「没什么可压」
+        assertEquals(CommandResult.Kind.ERROR, result.getKind());
+        assertTrue(result.getOutput().contains("没有插件提供压缩策略"), result.getOutput());
+    }
+
+    @Test
+    void compactPreview_should_reportUnavailable_when_noPluginProvidesStrategy() {
+        // Given
+        givenHistory(25);
+        strategySubscription.close();
+
+        // When
+        CommandResult result = commandManager.execute("/compact preview");
+
+        // Then：预览也要说清是功能缺席，并且不去解析模型（预览不该因为没模型而报别的错）
+        assertEquals(CommandResult.Kind.ERROR, result.getKind());
+        assertTrue(result.getOutput().contains("没有插件提供压缩策略"), result.getOutput());
+    }
+
+    @Test
+    void status_should_markCompactionUnavailable_when_noPluginProvidesStrategy() {
+        // Given
+        commandManager.execute("/new");
+        strategySubscription.close();
+
+        // When
+        CommandResult result = commandManager.execute("/status");
+
+        // Then：用户在状态里就该看到压缩不可用
+        assertEquals(CommandResult.Kind.OK, result.getKind());
+        assertTrue(result.getOutput().contains("压缩：不可用"), result.getOutput());
+    }
+
+    @Test
+    void compact_without_argument_should_reportError_when_noHistory() {
+        // Given：新会话没有任何历史
+        commandManager.execute("/new");
+
+        // When
+        CommandResult result = commandManager.execute("/compact");
+
+        // Then：无参即「按默认档位压一次」，没有可压的历史就是错误——用户要的动作没有发生
+        assertEquals(CommandResult.Kind.ERROR, result.getKind());
+        assertTrue(result.getOutput().contains("没有足够的历史可压缩"), result.getOutput());
+        assertFalse(result.hasChoices());
+    }
+
+    @Test
+    void compact_should_reject_unknown_value() {
+        // Given
+        commandManager.execute("/new");
+
+        // When
+        CommandResult result = commandManager.execute("/compact recent-3");
+
+        // Then
+        assertEquals(CommandResult.Kind.ERROR, result.getKind());
+        assertTrue(result.getOutput().contains("用法：/compact [preview]"), result.getOutput());
+    }
+
+    @Test
+    void compact_should_report_error_when_historyIsTooShort() {
+        // Given：只有一条消息，没有可压的历史
+        commandManager.execute("/new");
+        sessionManager.appendMessage(sessionManager.current().getSessionId(), LlmMessage.user("你好"), null);
+
+        // When
+        CommandResult result = commandManager.execute("/compact");
+
+        // Then
+        assertEquals(CommandResult.Kind.ERROR, result.getKind());
+        assertTrue(result.getOutput().contains("没有足够的历史可压缩"), result.getOutput());
+    }
+
+    @Test
+    void compact_should_report_error_when_no_current_session() {
+        // When：没有任何会话
+        CommandResult result = commandManager.execute("/compact");
+
+        // Then
+        assertEquals(CommandResult.Kind.ERROR, result.getKind());
+        assertTrue(result.getOutput().contains("/new"), result.getOutput());
+    }
+
+    @Test
+    void compactPreview_should_report_plan_without_calling_model() {
+        // Given：比缺省保留条数（20）多 5 条历史；只解析模型，不提供客户端
+        givenHistory(25);
+        givenCompactionModel();
+
+        // When
+        CommandResult result = commandManager.execute("/compact preview");
+
+        // Then：预览只说会压多少条；若它真的去调模型，未打桩的客户端会当场炸掉
+        assertEquals(CommandResult.Kind.OK, result.getKind());
+        assertTrue(result.getOutput().contains("将压缩 5 条消息"), result.getOutput());
+        assertTrue(result.getOutput().contains("保留最近 20 条原文"), result.getOutput());
+    }
+
+    @Test
+    void compactPreview_should_report_error_when_no_historyToCompress() {
+        // Given：历史比保留条数还少
+        givenHistory(3);
+
+        // When
+        CommandResult result = commandManager.execute("/compact preview");
+
+        // Then：这是「没什么可压」的信息，不是失败
+        assertEquals(CommandResult.Kind.OK, result.getKind());
+        assertTrue(result.getOutput().contains("没有可压缩的历史"), result.getOutput());
+    }
+
+    @Test
+    void compact_should_startAndReport_when_historyEnough() throws Exception {
+        // Given：模型门面能解析出模型（真压缩的细节由 ConversationCompactor 自有用例覆盖）
+        givenHistory(25);
+        ResolvedModel resolved = givenCompactionModel();
+        when(modelManager.getClient(resolved)).thenReturn(chatClient());
+
+        // When
+        CommandResult result = commandManager.execute("/compact");
+
+        // Then：命令只起头，文本明确「完成后会提示」而不是假装已经压完
+        assertEquals(CommandResult.Kind.OK, result.getKind());
+        assertTrue(result.getOutput().contains("已开始压缩"), result.getOutput());
+        // 等它真的收敛：既证明接线通了，也避免打桩在用例结束前还没被用到
+        assertEquals(ConversationCompactor.Status.DONE, awaitCompaction());
+    }
+
+    /**
+     * 建一个当前会话并追加指定条数的历史消息。
+     *
+     * @param count 消息条数
+     */
+    private void givenHistory(int count) {
+        commandManager.execute("/new");
+        String sessionId = sessionManager.current().getSessionId();
+        for (int index = 1; index <= count; index++) {
+            sessionManager.appendMessage(sessionId, LlmMessage.user("第 " + index + " 条"), null);
+        }
+    }
+
+    /**
+     * 桩上压缩用的模型解析链路：未配上下文窗口，因此整段历史一次压完。
+     *
+     * @return 解析出的模型
+     */
+    private ResolvedModel givenCompactionModel() {
+        Model model = new Model("gpt-4o", "gpt-4o", 0, 0);
+        Provider provider = new Provider("openai", "openai", null, null, null);
+        ResolvedModel resolved = new ResolvedModel(provider, model);
+        when(modelManager.resolveDefault()).thenReturn(resolved);
+        return resolved;
+    }
+
+    /**
+     * 等压缩离开进行中状态。
+     *
+     * @return 收敛后的状态
+     * @throws InterruptedException 等待被中断时抛出
+     */
+    private ConversationCompactor.Status awaitCompaction() throws InterruptedException {
+        String sessionId = sessionManager.current().getSessionId();
+        for (int attempt = 0; attempt < 100; attempt++) {
+            ConversationCompactor.Status status = compactor.status(sessionId).getStatus();
+            if (status != ConversationCompactor.Status.RUNNING) {
+                return status;
+            }
+            Thread.sleep(20L);
+        }
+        return compactor.status(sessionId).getStatus();
+    }
+
+    /**
+     * 构造一个立刻返回摘要的假客户端：真压缩的细节由 ConversationCompactor 的用例覆盖。
+     *
+     * @return LLM 客户端
+     */
+    private static LlmClient chatClient() {
+        return new LlmClient() {
+            @Override
+            public Provider getProvider() {
+                return new Provider("openai", "openai", null, null, null);
+            }
+
+            @Override
+            public LlmResponse chat(LlmRequest request) {
+                return LlmResponse.text("摘要");
+            }
+
+            @Override
+            public LlmStreamHandle chatStream(LlmRequest request, LlmStreamListener listener) {
+                throw new UnsupportedOperationException("压缩不走流式");
+            }
+        };
     }
 
     @Test

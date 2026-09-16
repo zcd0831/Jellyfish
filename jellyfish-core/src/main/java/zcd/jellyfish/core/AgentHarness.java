@@ -1,6 +1,7 @@
 package zcd.jellyfish.core;
 
 import zcd.jellyfish.core.command.SystemCommands;
+import zcd.jellyfish.core.compact.ConversationCompactor;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.config.RuntimeConfig;
 import zcd.jellyfish.infra.event.EventChannel;
@@ -62,6 +63,9 @@ public class AgentHarness {
     /** 内核系统命令注册器：{@code /help} 等。 */
     private final SystemCommands systemCommands;
 
+    /** 会话压缩器：{@code /compact} 的执行体，关闭时要先停掉它的线程池。 */
+    private final ConversationCompactor conversationCompactor;
+
     /** 会话域服务：启动末期向插件要回历史会话。 */
     private final SessionManager sessionManager;
 
@@ -77,12 +81,13 @@ public class AgentHarness {
      * @param reActLooper          ReAct 循环器
      * @param systemCommands       内核系统命令注册器
      * @param sessionManager       会话域服务
+     * @param conversationCompactor 会话压缩器
      */
     @Inject
     public AgentHarness(RuntimeConfig runtimeConfig, EventChannel eventChannel, ModelManager modelManager,
                         AgentManager agentManager, PluginRuntimeConfig pluginRuntimeConfig,
                         PF4JPluginManager pluginManager, ReActLooper reActLooper, SystemCommands systemCommands,
-                        SessionManager sessionManager) {
+                        SessionManager sessionManager, ConversationCompactor conversationCompactor) {
         this.runtimeConfig = runtimeConfig;
         this.eventChannel = eventChannel;
         this.modelManager = modelManager;
@@ -92,6 +97,7 @@ public class AgentHarness {
         this.reActLooper = reActLooper;
         this.systemCommands = systemCommands;
         this.sessionManager = sessionManager;
+        this.conversationCompactor = conversationCompactor;
     }
 
     /**
@@ -130,14 +136,15 @@ public class AgentHarness {
     }
 
     /**
-     * 关闭应用：先停 ReAct 循环（不再接新回合），再回收核心命令，再停插件（并按 owner 回收注册），
-     * 最后收敛事件通道。幂等。
+     * 关闭应用：先停 ReAct 循环与压缩器（不再接新回合、不再起新压缩），再回收核心命令，
+     * 再停插件（并按 owner 回收注册），最后收敛事件通道。幂等。
      * <p>
      * 顺序与 {@link #bootstrap()} 相反；任何一步失败都不阻断后续步骤，保证运行总能收敛。
      */
     public void shutdown() {
         try {
             reActLooper.close();
+            conversationCompactor.close();
         } finally {
             try {
                 systemCommands.close();

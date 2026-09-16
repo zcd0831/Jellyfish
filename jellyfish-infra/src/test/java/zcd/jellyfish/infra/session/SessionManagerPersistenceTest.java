@@ -281,6 +281,63 @@ class SessionManagerPersistenceTest {
     }
 
     @Test
+    @DisplayName("应用压缩要落盘，且落盘的那一份已经带着摘要与边界")
+    void applyCompaction_should_persist() {
+        List<SessionSnapshot> persisted = capturePersistedSnapshots();
+        Session session = manager.create(null, null, null, null);
+        String sessionId = session.getSessionId();
+        manager.appendMessage(sessionId, LlmMessage.user("一"), null);
+        manager.appendMessage(sessionId, LlmMessage.user("二"), null);
+        String boundary = manager.messagesOf(sessionId).get(0).getMessageId();
+
+        manager.applyCompaction(sessionId, "摘要正文", boundary, 0);
+
+        SessionSnapshot last = persisted.get(persisted.size() - 1);
+        assertTrue(last.getCompaction() != null);
+        assertEquals("摘要正文", last.getCompaction().getSummary());
+        assertEquals(boundary, last.getCompaction().getBoundaryMessageId());
+        assertEquals(2, last.getMessages().size(), "压缩是非破坏式的：消息一条都不删");
+    }
+
+    @Test
+    @DisplayName("压缩边界必须指向会话里真实存在的消息，否则当场抛错")
+    void applyCompaction_should_reject_unknownBoundary() {
+        String sessionId = manager.create(null, null, null, null).getSessionId();
+
+        assertThrows(JellyfishException.class,
+                () -> manager.applyCompaction(sessionId, "摘要", "ghost", 0));
+    }
+
+    @Test
+    @DisplayName("压缩落盘失败必须上抛：内存里已推进的边界会等下一次落盘补上")
+    void applyCompaction_should_propagate_whenPersistFails() {
+        String sessionId = manager.create(null, null, null, null).getSessionId();
+        manager.appendMessage(sessionId, LlmMessage.user("一"), null);
+        String boundary = manager.messagesOf(sessionId).get(0).getMessageId();
+        extensions.contribute("broken", SessionPersistRequest.class, null, request -> {
+            throw new JellyfishException("磁盘满了");
+        }, RegisterOptions.DEFAULT);
+
+        JellyfishException error = assertThrows(JellyfishException.class,
+                () -> manager.applyCompaction(sessionId, "摘要", boundary, 0));
+
+        assertEquals("磁盘满了", error.getMessage());
+    }
+
+    @Test
+    @DisplayName("不产生消息的用量也要落盘：压缩的 token 花在会话之外")
+    void recordUsage_should_persistWithoutAddingMessage() {
+        List<SessionSnapshot> persisted = capturePersistedSnapshots();
+        String sessionId = manager.create(null, null, null, null).getSessionId();
+
+        manager.recordUsage(sessionId, new zcd.jellyfish.infra.llm.LlmUsage(10, 5, 15));
+
+        SessionSnapshot last = persisted.get(persisted.size() - 1);
+        assertEquals(15L, last.getUsage().getTotalTokens());
+        assertEquals(0, last.getMessages().size());
+    }
+
+    @Test
     @DisplayName("恢复出的会话是可读写的活会话，不是只读快照")
     void restoredSession_should_beFullyUsable() {
         contributeRestore(SessionRestoreResult.of(Collections.singletonList(snapshot("s-1"))));
@@ -324,7 +381,7 @@ class SessionManagerPersistenceTest {
     private static SessionSnapshot snapshot(String sessionId) {
         SessionMessageSnapshot message = SessionMessageSnapshot.of("m-1", 1L, LlmMessage.ROLE_USER, "你好",
                 null, null, null, null);
-        return new SessionSnapshot(sessionId, 1L, 2L, "标题", "coder", "openai", "gpt-4o",
+        return SessionSnapshot.of(sessionId, 1L, 2L, "标题", "coder", "openai", "gpt-4o",
                 PermissionMode.NORMAL, Collections.singletonList(message),
                 new SessionUsageSnapshot(0L, 0L, 0L, 0L));
     }

@@ -54,8 +54,18 @@ public final class SessionSnapshot {
     /** 会话累计 token 用量，可为 {@code null}（按零用量处理）。 */
     private final SessionUsageSnapshot usage;
 
+    /** 会话的压缩摘要，从未压缩过时为 {@code null}。 */
+    private final SessionCompactionSnapshot compaction;
+
     /**
      * 构造会话快照。
+     * <p>
+     * <b>为什么这里只有唯一一个构造器</b>：本类型靠 Jackson 的「隐式属性构造器」反序列化
+     * （{@code -parameters} + {@code ParameterNamesModule}，见 {@code SnapshotJson}），
+     * 而 Jackson 只在「恰好一个可见构造器」时才认它为隐式创建器；多出一个重载会让整个快照类型
+     * <b>直接反序列化失败</b>，代价是整段会话读不回来。因此新增字段时不要加「兼容构造器」，
+     * 兼容入口请改用静态工厂（见
+     * {@link #of(String, long, long, String, String, String, String, PermissionMode, List, SessionUsageSnapshot)}）。
      *
      * @param sessionId      会话标识，不可为空白
      * @param createdAt      创建时间戳（epoch millis）
@@ -67,11 +77,13 @@ public final class SessionSnapshot {
      * @param permissionMode 权限模式，不可为 {@code null}
      * @param messages       消息列表，可为 {@code null}
      * @param usage          累计用量，可为 {@code null}
+     * @param compaction     压缩摘要，可为 {@code null}
      * @throws JellyfishException 会话标识为空白或权限模式为 {@code null} 时抛出
      */
     public SessionSnapshot(String sessionId, long createdAt, long updatedAt, String title, String agentId,
                            String provider, String model, PermissionMode permissionMode,
-                           List<SessionMessageSnapshot> messages, SessionUsageSnapshot usage) {
+                           List<SessionMessageSnapshot> messages, SessionUsageSnapshot usage,
+                           SessionCompactionSnapshot compaction) {
         if (sessionId == null || sessionId.trim().isEmpty()) {
             throw new JellyfishException("session id must not be blank");
         }
@@ -88,6 +100,35 @@ public final class SessionSnapshot {
         this.permissionMode = permissionMode;
         this.messages = copyMessages(messages);
         this.usage = usage;
+        this.compaction = compaction;
+    }
+
+    /**
+     * 构造不含压缩摘要的会话快照（旧签名的兼容入口）。
+     * <p>
+     * 与构造器等价，只是不能写成构造器重载（见
+     * {@link #SessionSnapshot(String, long, long, String, String, String, String, PermissionMode, List,
+     * SessionUsageSnapshot, SessionCompactionSnapshot)}）。
+     *
+     * @param sessionId      会话标识，不可为空白
+     * @param createdAt      创建时间戳（epoch millis）
+     * @param updatedAt      最后变更时间戳（epoch millis）
+     * @param title          标题，可为 {@code null}
+     * @param agentId        agentId，可为 {@code null}
+     * @param provider       provider 名，可为 {@code null}
+     * @param model          model 名，可为 {@code null}
+     * @param permissionMode 权限模式，不可为 {@code null}
+     * @param messages       消息列表，可为 {@code null}
+     * @param usage          累计用量，可为 {@code null}
+     * @return 不含压缩摘要的会话快照
+     * @throws JellyfishException 会话标识为空白或权限模式为 {@code null} 时抛出
+     */
+    public static SessionSnapshot of(String sessionId, long createdAt, long updatedAt, String title,
+                                     String agentId, String provider, String model,
+                                     PermissionMode permissionMode, List<SessionMessageSnapshot> messages,
+                                     SessionUsageSnapshot usage) {
+        return new SessionSnapshot(sessionId, createdAt, updatedAt, title, agentId, provider, model,
+                permissionMode, messages, usage, null);
     }
 
     /**
@@ -178,6 +219,15 @@ public final class SessionSnapshot {
      */
     public SessionUsageSnapshot getUsage() {
         return usage;
+    }
+
+    /**
+     * 获取会话的压缩摘要。
+     *
+     * @return 压缩摘要，从未压缩过时为 {@code null}
+     */
+    public SessionCompactionSnapshot getCompaction() {
+        return compaction;
     }
 
     @Override

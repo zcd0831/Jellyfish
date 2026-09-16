@@ -23,5 +23,6 @@
         <module>jellyfish-plugin-session-file</module>
         <module>jellyfish-plugin-todo</module>
         <module>jellyfish-plugin-project</module>
+        <module>jellyfish-plugin-compact</module>
     </modules>
 </project>

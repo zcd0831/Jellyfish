@@ -6,6 +6,7 @@ import org.slf4j.LoggerFactory;
 import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.event.EventPublisher;
 import zcd.jellyfish.api.event.JellyfishEvent;
+import zcd.jellyfish.api.event.notification.CompactionAppliedEvent;
 import zcd.jellyfish.api.event.notification.SessionClosedEvent;
 import zcd.jellyfish.api.event.notification.SessionCreatedEvent;
 import zcd.jellyfish.api.event.notification.SessionMessageAppendedEvent;
@@ -41,7 +42,8 @@ import java.util.concurrent.atomic.AtomicReference;
  * 本类是<b>可变运行态</b>——不读配置、不建索引、不广播装载事件，只维护「sessionId → Session」表与一个
  * 进程内的当前会话指针。
  * <p>
- * <b>唯一变更入口</b>：所有会话运行态变更（追加消息 / 改标题 / 绑 agent / 切模型 / 切权限模式）
+ * <b>唯一变更入口</b>：所有会话运行态变更（追加消息 / 改标题 / 绑 agent / 切模型 / 切权限模式 /
+ * 应用压缩 / 记一次不产生消息的用量）
  * 都必须经本类。因为这些变更要连带做两件横切的事——广播通知、同步落盘扩展点
  * （架构图 {@code SessionMgr ==> ExtReg}）——集中在一处才不会每个调用点各写一遍。
  * <p>
@@ -313,6 +315,59 @@ public class SessionManager {
      */
     public SessionMessage appendMessage(String sessionId, LlmMessage message, LlmUsage usage) {
         return appendMessage(sessionId, message, usage, null);
+    }
+
+    /**
+     * 应用一次压缩结果：记下摘要与新的边界，同步落盘并广播 {@link CompactionAppliedEvent}。
+     * <p>
+     * <b>消息一条不删</b>：压缩是非破坏式的，本方法只改「请求从哪里开始」这一笔账。屏幕投影、
+     * 持久化与 {@code /resume} 拿到的会话都还是完整历史，只有发给模型的那条链路会按边界截断
+     * （见 {@code core/prompt/PromptAssembler}）。
+     * <p>
+     * <b>为什么要校验边界比旧边界更靠后</b>：边界只能向后移。允许它回退，就意味着「已经不在请求里的
+     * 那一段」会重新出现在请求里，而摘要仍然覆盖着它——同一段内容被讲两遍，且新旧摘要互相矛盾。
+     * 调用点在派发之前就拦住这种情况（那属于逻辑错误，不该走到落盘）。
+     *
+     * @param sessionId         会话标识，不可为空白
+     * @param summary           摘要正文，不可为空白
+     * @param boundaryMessageId 摘要覆盖到的最后一条消息标识，不可为空白
+     * @param droppedMessageCount 本次因超出摘要输入预算而被直接丢弃的条数，负数按 0 处理
+     * @return 变更后的会话运行态
+     * @throws JellyfishException 会话不存在、参数为空白，或边界消息不在会话里时抛出
+     */
+    public Session applyCompaction(String sessionId, String summary, String boundaryMessageId,
+                                   int droppedMessageCount) {
+        Session session = require(sessionId);
+        int boundaryIndex = session.indexOfMessage(boundaryMessageId);
+        if (boundaryIndex < 0) {
+            throw new JellyfishException("compaction boundary message not found: " + boundaryMessageId);
+        }
+        int compressedCount = boundaryIndex + 1 - Math.max(0, droppedMessageCount);
+        session.setCompaction(new SessionCompaction(summary, boundaryMessageId, System.currentTimeMillis(),
+                droppedMessageCount));
+        persist(session);
+        publish(new CompactionAppliedEvent(sessionId, boundaryMessageId, compressedCount,
+                Math.max(0, droppedMessageCount), summary.length()));
+        return session;
+    }
+
+    /**
+     * 把一次不产生会话消息的模型调用计入会话用量，并同步落盘。
+     * <p>
+     * <b>为什么需要它</b>：{@code /compact} 的摘要调用花的是真实的 token，但它不该在对话里留下一条
+     * 消息（屏幕投影会多出一条谁也没说过的话）。用量是「会话花掉了多少」这一笔账，与消息列表无关，
+     * 因此给它一个独立入口。<b>不广播事件</b>：用量变化没有对应的通知类型，{@code /usage} 读的是状态。
+     *
+     * @param sessionId 会话标识，不可为空白
+     * @param usage     一次调用的用量，可为 {@code null}（只累加调用次数）
+     * @return 变更后的会话运行态
+     * @throws JellyfishException 会话不存在时抛出
+     */
+    public Session recordUsage(String sessionId, LlmUsage usage) {
+        Session session = require(sessionId);
+        session.recordUsage(usage);
+        persist(session);
+        return session;
     }
 
     /**

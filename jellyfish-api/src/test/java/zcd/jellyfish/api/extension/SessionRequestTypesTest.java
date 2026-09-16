@@ -17,7 +17,7 @@ class SessionRequestTypesTest {
 
     @Test
     void persistRequest_should_carrySnapshotAndSessionId() {
-        SessionSnapshot snapshot = new SessionSnapshot("s-1", 0L, 0L, null, null, null, null,
+        SessionSnapshot snapshot = SessionSnapshot.of("s-1", 0L, 0L, null, null, null, null,
                 PermissionMode.NORMAL, null, null);
 
         SessionPersistRequest request = new SessionPersistRequest(snapshot);
@@ -29,7 +29,7 @@ class SessionRequestTypesTest {
 
     @Test
     void persistRequest_should_haveNullRouteKey() {
-        SessionSnapshot snapshot = new SessionSnapshot("s-1", 0L, 0L, null, null, null, null,
+        SessionSnapshot snapshot = SessionSnapshot.of("s-1", 0L, 0L, null, null, null, null,
                 PermissionMode.NORMAL, null, null);
 
         assertNull(new SessionPersistRequest(snapshot).getRouteKey());
@@ -51,7 +51,7 @@ class SessionRequestTypesTest {
 
     @Test
     void restoreResult_should_carrySnapshots() {
-        SessionSnapshot snapshot = new SessionSnapshot("s-1", 0L, 0L, null, null, null, null,
+        SessionSnapshot snapshot = SessionSnapshot.of("s-1", 0L, 0L, null, null, null, null,
                 PermissionMode.NORMAL, null, null);
 
         SessionRestoreResult result = SessionRestoreResult.of(java.util.Collections.singletonList(snapshot));

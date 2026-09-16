@@ -1,6 +1,7 @@
 package zcd.jellyfish.infra.session;
 
 import org.junit.jupiter.api.Test;
+import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.infra.llm.LlmMessage;
 import zcd.jellyfish.infra.llm.LlmUsage;
@@ -176,6 +177,52 @@ class SessionTest {
         // Then
         assertNull(session.getProvider());
         assertNull(session.getModel());
+    }
+
+    @Test
+    void indexOfMessage_should_return_position_and_minusOne_when_absent() {
+        // Given
+        Session session = new Session("session-1", null, null, null, null, CREATED_AT);
+        session.append(SessionMessage.of(LlmMessage.user("一")));
+        session.append(SessionMessage.of(LlmMessage.user("二")));
+
+        // When / Then
+        assertEquals(1, session.indexOfMessage(session.getMessages().get(1).getMessageId()));
+        assertEquals(-1, session.indexOfMessage("ghost"));
+        assertEquals(-1, session.indexOfMessage(null));
+    }
+
+    @Test
+    void recordUsage_should_accumulate_without_adding_message() {
+        // Given：上下文压缩这类「不产生消息的调用」只该涨用量
+        Session session = new Session("session-1", null, null, null, null, CREATED_AT);
+
+        // When
+        session.recordUsage(new LlmUsage(10, 5, 15));
+
+        // Then
+        assertEquals(0, session.size());
+        assertEquals(15L, session.getUsage().getTotalTokens());
+        assertEquals(1L, session.getUsage().getLlmCalls());
+    }
+
+    @Test
+    void setCompaction_should_replace_and_allow_clearing() {
+        // Given
+        Session session = new Session("session-1", null, null, null, null, CREATED_AT);
+
+        // When / Then
+        assertNull(session.getCompaction());
+        session.setCompaction(new SessionCompaction("摘要", "m-1", 5L, 0));
+        assertEquals("摘要", session.getCompaction().getSummary());
+        session.setCompaction(null);
+        assertNull(session.getCompaction());
+    }
+
+    @Test
+    void compaction_should_reject_blank_fields() {
+        assertThrows(JellyfishException.class, () -> new SessionCompaction(" ", "m-1", 0L, 0));
+        assertThrows(JellyfishException.class, () -> new SessionCompaction("摘要", null, 0L, 0));
     }
 
     @Test

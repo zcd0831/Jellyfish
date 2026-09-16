@@ -7,12 +7,15 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * {@code jellyfish.json} 的 {@code react} 段：ReAct 循环的运行期参数。
  * <p>
  * 这是<b>用户可见</b>的配置结构（以 {@code Settings} 结尾），只承载单份文件的内容。
- * 三项参数分别约束「一个回合最多几轮」「上下文预算给系统提示词留多少」「单个工具输出截多长」，
- * 都属于「用户可能想调、但内核必须有安全缺省」的量，因此缺省值写在类里而不是配置里。
+ * 六项参数分别约束「一个回合最多几轮」「上下文预算给系统提示词留多少」「单个工具输出截多长」
+ * 「上下文用到多少就自动压缩」与压缩的两项（保留多少条原文、摘要最多多长）——后面几项归这里
+ * 而不是新开一段，是因为它们与前三项同属「ReAct 运行期的一次请求长什么样」，放在一处才看得出
+ * 它们互相牵制（预留越多、可压的越少；阈值越低、自动压缩越频繁）。
+ * 它们都属于「用户可能想调、但内核必须有安全缺省」的量，因此缺省值写在类里而不是配置里。
  * <p>
  * 非法值（轮数与输出长度为非正数、预留为负数）一律回退到缺省值而不是报错：配置问题不阻断启动
  * 是本仓库的既有口径，真正的轮次约束与裁剪在运行期由 {@code ReActLooper} 与 {@code ContextWindow}
- * 兜底。预留 token 数允许显式配 {@code 0}（表示不留预留），因此缺省判定以 {@code null} 区分
+ * 兜底。预留 token 数与自动压缩百分比允许显式配 {@code 0}，因此缺省判定以 {@code null} 区分
  * 「未配置」与「配了 0」。
  * <p>
  * 不可变：所有字段在构造时确定，不存在 setter。
@@ -30,6 +33,31 @@ public class ReactSettings {
     /** 单个工具输出写入会话与回灌模型前允许的最大字符数。 */
     public static final int DEFAULT_MAX_TOOL_OUTPUT_CHARS = 20000;
 
+    /**
+     * {@code /compact} 默认保留的最近消息条数。
+     * <p>
+     * 缺省不把历史压干：最后几条消息里通常有用户正在追问的那件事，全压进摘要会让模型立刻失忆一次。
+     */
+    public static final int DEFAULT_COMPACT_KEEP_RECENT_MESSAGES = 20;
+
+    /** 压缩摘要的长度上限（字符数）：超出按本地截断处理，避免摘要本身又变成一份长上下文。 */
+    public static final int DEFAULT_COMPACT_MAX_SUMMARY_CHARS = 4000;
+
+    /**
+     * 上下文用到多少百分比就自动压缩一次。
+     * <p>
+     * 默认为 80 而不是 100 是有意的：{@code ContextWindow} 在 100% 时会从最旧侧<b>静默丢弃</b>历史，
+     * 而那正是信息真正丢失的时刻。在 80% 时先压一次，丢掉的是「一段旧对话的细节」，
+     * 换回来的是「对话能继续下去」。
+     */
+    public static final int DEFAULT_AUTO_COMPACT_PERCENT = 80;
+
+    /** 插件策略能给的摘要长度上限下限：再小就压不住任何东西了。 */
+    public static final int MIN_COMPACT_MAX_SUMMARY_CHARS = 200;
+
+    /** 插件策略能给的摘要长度上限上限：再大摘要本身就成了一轮长上下文。 */
+    public static final int MAX_COMPACT_MAX_SUMMARY_CHARS = 20000;
+
     /** 最大循环轮数。 */
     private final int maxRounds;
 
@@ -39,29 +67,52 @@ public class ReactSettings {
     /** 单个工具输出最大字符数。 */
     private final int maxToolOutputChars;
 
+    /** {@code /compact} 默认保留的最近消息条数。 */
+    private final int compactKeepRecentMessages;
+
+    /** 压缩摘要长度上限（字符数）。 */
+    private final int compactMaxSummaryChars;
+
+    /** 上下文用到多少百分比就自动压缩（{@code 0} 表示关闭）。 */
+    private final int autoCompactPercent;
+
     /**
      * 构造缺省运行期参数。
      */
     public ReactSettings() {
-        this(null, null, null);
+        this(null, null, null, null, null, null);
     }
 
     /**
      * 反序列化与合并共用的构造器。
      *
-     * @param maxRounds            最大循环轮数，非正数或缺省按缺省值处理
-     * @param contextReserveTokens 上下文预留 token 数，负数或缺省按缺省值处理，{@code 0} 合法
-     * @param maxToolOutputChars   单个工具输出最大字符数，非正数或缺省按缺省值处理
+     * @param maxRounds                 最大循环轮数，非正数或缺省按缺省值处理
+     * @param contextReserveTokens      上下文预留 token 数，负数或缺省按缺省值处理，{@code 0} 合法
+     * @param maxToolOutputChars        单个工具输出最大字符数，非正数或缺省按缺省值处理
+     * @param compactKeepRecentMessages {@code /compact} 保留的最近消息条数，负数或缺省按缺省值处理；
+     *                                  {@code 0} 合法（表示全压）
+     * @param compactMaxSummaryChars    摘要长度上限，非正数或缺省按缺省值处理
+     * @param autoCompactPercent        自动压缩的触发百分比，负数或缺省按缺省值处理；
+     *                                  {@code 0} 合法（关闭自动压缩），超过 100 按 100 处理
      */
     @JsonCreator
     public ReactSettings(@JsonProperty("maxRounds") Integer maxRounds,
                          @JsonProperty("contextReserveTokens") Integer contextReserveTokens,
-                         @JsonProperty("maxToolOutputChars") Integer maxToolOutputChars) {
+                         @JsonProperty("maxToolOutputChars") Integer maxToolOutputChars,
+                         @JsonProperty("compactKeepRecentMessages") Integer compactKeepRecentMessages,
+                         @JsonProperty("compactMaxSummaryChars") Integer compactMaxSummaryChars,
+                         @JsonProperty("autoCompactPercent") Integer autoCompactPercent) {
         this.maxRounds = maxRounds != null && maxRounds > 0 ? maxRounds : DEFAULT_MAX_ROUNDS;
         this.contextReserveTokens = contextReserveTokens != null && contextReserveTokens >= 0
                 ? contextReserveTokens : DEFAULT_CONTEXT_RESERVE_TOKENS;
         this.maxToolOutputChars = maxToolOutputChars != null && maxToolOutputChars > 0
                 ? maxToolOutputChars : DEFAULT_MAX_TOOL_OUTPUT_CHARS;
+        this.compactKeepRecentMessages = compactKeepRecentMessages != null && compactKeepRecentMessages >= 0
+                ? compactKeepRecentMessages : DEFAULT_COMPACT_KEEP_RECENT_MESSAGES;
+        this.compactMaxSummaryChars = compactMaxSummaryChars != null && compactMaxSummaryChars > 0
+                ? compactMaxSummaryChars : DEFAULT_COMPACT_MAX_SUMMARY_CHARS;
+        this.autoCompactPercent = autoCompactPercent != null && autoCompactPercent >= 0
+                ? Math.min(autoCompactPercent, 100) : DEFAULT_AUTO_COMPACT_PERCENT;
     }
 
     /**
@@ -92,16 +143,46 @@ public class ReactSettings {
     }
 
     /**
+     * 获取 {@code /compact} 默认保留的最近消息条数。
+     *
+     * @return 保留条数，保证非负；{@code 0} 表示默认不保留原文
+     */
+    public int getCompactKeepRecentMessages() {
+        return compactKeepRecentMessages;
+    }
+
+    /**
+     * 获取压缩摘要长度上限。
+     *
+     * @return 字符数上限，保证为正
+     */
+    public int getCompactMaxSummaryChars() {
+        return compactMaxSummaryChars;
+    }
+
+    /**
+     * 获取自动压缩的触发百分比。
+     *
+     * @return 百分比，{@code 0} 表示关闭自动压缩，否则落在 {@code (0, 100]}
+     */
+    public int getAutoCompactPercent() {
+        return autoCompactPercent;
+    }
+
+    /**
      * 判断是否与缺省值完全一致。
      * <p>
      * 供 {@link JellyfishSettings#isEmpty()} 判断「整份运行期设置是否什么都没配」，
      * 因此只比较是否等于缺省，不比较字段来源。
      *
-     * @return 三项都等于缺省值返回 {@code true}
+     * @return 六项都等于缺省值返回 {@code true}
      */
     public boolean isDefault() {
         return maxRounds == DEFAULT_MAX_ROUNDS
                 && contextReserveTokens == DEFAULT_CONTEXT_RESERVE_TOKENS
-                && maxToolOutputChars == DEFAULT_MAX_TOOL_OUTPUT_CHARS;
+                && maxToolOutputChars == DEFAULT_MAX_TOOL_OUTPUT_CHARS
+                && compactKeepRecentMessages == DEFAULT_COMPACT_KEEP_RECENT_MESSAGES
+                && compactMaxSummaryChars == DEFAULT_COMPACT_MAX_SUMMARY_CHARS
+                && autoCompactPercent == DEFAULT_AUTO_COMPACT_PERCENT;
     }
 }

@@ -22,7 +22,7 @@ class SessionSnapshotTest {
 
     @Test
     void constructor_should_keepAllFields() {
-        SessionSnapshot snapshot = new SessionSnapshot("s-1", 1L, 2L, "标题", "coder", "openai", "gpt-4o",
+        SessionSnapshot snapshot = SessionSnapshot.of("s-1", 1L, 2L, "标题", "coder", "openai", "gpt-4o",
                 PermissionMode.PLAN, null, null);
 
         assertEquals("s-1", snapshot.getSessionId());
@@ -45,13 +45,13 @@ class SessionSnapshotTest {
 
     @Test
     void constructor_should_fail_when_sessionIdBlank() {
-        assertThrows(JellyfishException.class, () -> new SessionSnapshot("  ", 0L, 0L, null, null, null, null,
+        assertThrows(JellyfishException.class, () -> SessionSnapshot.of("  ", 0L, 0L, null, null, null, null,
                 PermissionMode.NORMAL, null, null));
     }
 
     @Test
     void constructor_should_fail_when_permissionModeNull() {
-        assertThrows(JellyfishException.class, () -> new SessionSnapshot("s-1", 0L, 0L, null, null, null, null,
+        assertThrows(JellyfishException.class, () -> SessionSnapshot.of("s-1", 0L, 0L, null, null, null, null,
                 null, null, null));
     }
 
@@ -59,7 +59,7 @@ class SessionSnapshotTest {
     void getMessages_should_returnUnmodifiableCopy() {
         List<SessionMessageSnapshot> messages = new ArrayList<SessionMessageSnapshot>();
         messages.add(message("m-1"));
-        SessionSnapshot snapshot = new SessionSnapshot("s-1", 0L, 0L, null, null, null, null,
+        SessionSnapshot snapshot = SessionSnapshot.of("s-1", 0L, 0L, null, null, null, null,
                 PermissionMode.NORMAL, messages, null);
 
         messages.clear();
@@ -70,16 +70,51 @@ class SessionSnapshotTest {
 
     @Test
     void constructor_should_rejectNullMessageElement() {
-        assertThrows(JellyfishException.class, () -> new SessionSnapshot("s-1", 0L, 0L, null, null, null, null,
+        assertThrows(JellyfishException.class, () -> SessionSnapshot.of("s-1", 0L, 0L, null, null, null, null,
                 PermissionMode.NORMAL, Arrays.asList(message("m-1"), null), null));
     }
 
     @Test
     void toString_should_notDumpMessageBodies() {
-        SessionSnapshot snapshot = new SessionSnapshot("s-1", 0L, 0L, null, null, null, null,
+        SessionSnapshot snapshot = SessionSnapshot.of("s-1", 0L, 0L, null, null, null, null,
                 PermissionMode.NORMAL, Collections.singletonList(message("m-1")), null);
 
         assertEquals("SessionSnapshot{sessionId=s-1, messages=1}", snapshot.toString());
+    }
+
+    @Test
+    void of_should_leave_compactionNull() {
+        // When：旧签名入口（不含压缩字段）
+        SessionSnapshot snapshot = minimal("s-1");
+
+        // Then：压缩为 null，表示「从未压缩过」
+        assertNull(snapshot.getCompaction());
+    }
+
+    @Test
+    void constructor_should_keep_compaction() {
+        // Given
+        SessionCompactionSnapshot compaction = new SessionCompactionSnapshot("摘要", "m-9", 7L, 4);
+
+        // When
+        SessionSnapshot snapshot = new SessionSnapshot("s-1", 0L, 0L, null, null, null, null,
+                PermissionMode.NORMAL, null, null, compaction);
+
+        // Then
+        assertEquals(compaction, snapshot.getCompaction());
+    }
+
+    @Test
+    void compaction_should_reject_blank_summary_and_boundary() {
+        assertThrows(JellyfishException.class, () -> new SessionCompactionSnapshot("  ", "m-9", 0L, 0));
+        assertThrows(JellyfishException.class, () -> new SessionCompactionSnapshot("摘要", " ", 0L, 0));
+    }
+
+    @Test
+    void compaction_toString_should_not_dump_summary() {
+        SessionCompactionSnapshot compaction = new SessionCompactionSnapshot("很长的一段摘要", "m-9", 0L, 0);
+
+        assertEquals("SessionCompactionSnapshot{boundaryMessageId=m-9, summaryLength=7}", compaction.toString());
     }
 
     /**
@@ -89,7 +124,7 @@ class SessionSnapshotTest {
      * @return 会话快照
      */
     private static SessionSnapshot minimal(String sessionId) {
-        return new SessionSnapshot(sessionId, 0L, 0L, null, null, null, null, PermissionMode.NORMAL,
+        return SessionSnapshot.of(sessionId, 0L, 0L, null, null, null, null, PermissionMode.NORMAL,
                 null, null);
     }
 

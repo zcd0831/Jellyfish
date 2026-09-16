@@ -2,7 +2,8 @@
 
 > 状态：**口径已全部裁决**（见 §11 裁决记录），本文档为落地依据。
 > 范围：交付 `core/prompt`（提示词与上下文组装 + 机械裁剪 + pending todo 注入）、`core/ReActLooper`（**流式**驱动的思考 → 行动 → 观察循环，异步可取消）、`core/command/SystemCommands`（系统命令）、`infra/config` 的 `react` 配置段、`infra/session` 的 pending todo 运行态、`AgentHarness` 唯一门面方法，以及单测 + 文档同步；
-> **不接**任何外壳（CLI / TUI / Server / Web 仍未落地）、**不做**摘要式压缩（`/compact`）、**不做**会话持久化、**不做**人工审批通道、**不做**插件配置热更新、**不做** `infra/metrics`、**不做**跨语言脚本模块。
+> **不接**任何外壳（CLI / TUI / Server / Web 仍未落地）、**不做**会话持久化、**不做**人工审批通道、**不做**插件配置热更新、**不做** `infra/metrics`、**不做**跨语言脚本模块。
+> 注：本文写作时还「不做摘要式压缩」，该能力已由 `/compact` 轮落地（见 `五项增强方案.md` §3）：摘要进 system prompt 且在插件贡献之后，消息按压缩边界截断后再做窗口裁剪。
 
 ## 0. 口径草案与裁决状态
 
@@ -18,7 +19,7 @@
 | 8 | pending todo | **本轮落地**：会话态字段 + `/todo` 命令 + 注入 system prompt | 注入**不写回**会话历史 | **已裁决：做** |
 | 9 | `todo_write` 核心工具 | **后续做**（已记 TODO） | 与 `ReadOnlyTools`「核心工具只读声明」TODO 同批闭环 | **已裁决：后做** |
 | 10 | 上下文裁剪 | **机械裁剪**（读法 1）：只裁本次发给 LLM 的 prompt（system + 历史 + 注入），**会话历史一条不动** | 预算 = `contextLength - maxOutputTokens - contextReserveTokens` | **已裁决：读法 1** |
-| 11 | 摘要式压缩（读法 2） | **后续做**（已记 TODO），随 `/compact` 落地 | 需额外 LLM 调用 + 摘要写回，复杂度高 | **已裁决：后做** |
+| 11 | 摘要式压缩（读法 2） | ~~后续做~~ → **已落地**（随 `/compact` 轮） | 需额外 LLM 调用 + 摘要写回，复杂度高 | **已裁决：后做**；R5 已实现 |
 | 12 | 配置段 | `jellyfish.json` 新增 `react` 段：`maxRounds` / `contextReserveTokens` / `maxToolOutputChars` | 走既有双源合并，项目级整对象覆盖 | **已裁决：加配置** |
 | 13 | 系统提示词为空 | **不下发** system prompt，不内置默认提示词 | 与 `LlmClients.isNotBlank(request.getSystemPrompt())` 的既有判断一致 | **已裁决：按推荐** |
 | 14 | 事件 | **不新增事件** | 每轮可见性用既有 `SessionMessageAppendedEvent`；工具埋点用既有 `ToolCallStartedEvent` / `ToolCallCompletedEvent` | 默认 |
@@ -341,7 +342,7 @@ public final class ReActResult {
 | # | 限制 | 影响 | 后续 |
 | --- | --- | --- | --- |
 | L1 | **无 CLI / TUI / Server 外壳** | 端到端只能靠单测与将来的外壳 | **CLI 单次模式已由外壳轮闭环**（`main` / `Launcher` / `CliRunMode`，见 `cli方案.md`）；TUI / Server 另开轮 |
-| L2 | **无摘要式压缩** | 长会话只能机械丢弃旧消息，信息会损失 | `/compact` 轮（读法 2），依赖持久化 |
+| ~~L2~~ | ~~无摘要式压缩~~ | 长会话只能机械丢弃旧消息，信息会损失 | **已闭环**（R5）：非破坏式压缩 + 滚动摘要，摘要进 system prompt、消息按边界截断；并在每轮组装后按 `ContextUsage`（缺省 80% 或本次已发生裁剪）自动触发；见 `五项增强方案.md` §3 |
 | L3 | **无 `todo_write` 核心工具** | 模型不能自行维护待办，只能靠 `/todo` 命令 | **只读声明路径已闭合**（R1）：只读性已迁到 `ToolDescriptor.readOnly`；`todo_write` 由官方插件提供并在描述符里声明只读（`react方案.md` L8 也已随插件轮闭环） |
 | L4 | **无会话持久化** | `/resume` 仅进程内；进程退出即丢 | 持久化轮（同步扩展点 + 插件） |
 | L5 | **无人工审批通道** | `ASK` 继续降级为 `DENY` | 审批轮（依赖交互外壳） |
@@ -349,7 +350,7 @@ public final class ReActResult {
 | L7 | `react` 执行器规模为固定常量 | 无并发调参手段 | 真有压力时再配置化 |
 | L8 | pending todo 无插件贡献通道 | 插件不能注入待办 | 随持久化 / 扩展点轮 |
 
-代码内 TODO 落点：`ReadOnlyTools` 的 `todo_write` 说明、`SessionManager.appendMessage` 的持久化说明、`SystemCommands` 类注释的 `/compact` 说明。
+代码内 TODO 落点：`SessionManager.appendMessage` 的持久化说明（`SystemCommands` 类注释里的 `/compact` 待落地说明已随 R5 删除）。
 
 ## 9. 风险与缓解
 
@@ -378,7 +379,7 @@ public final class ReActResult {
 | Q8 | 最大轮次 | **配置化**（`react.maxRounds`） |
 | Q9 | 系统提示词为空 | 不下发，不内置默认 |
 | Q10 | `todo_write` | **后续做**，已记 TODO |
-| Q11 | 摘要式压缩（读法 2） | **后续做**，随 `/compact` |
+| Q11 | 摘要式压缩（读法 2） | ~~后续做~~ → **已落地**（R5 `core/compact`） |
 
 ## 11. 落地记录（P1～P7 完成）
 
@@ -410,6 +411,6 @@ P2 落地的 `PendingTodo` / `Session` 待办字段与 `SessionManager` 的四�
 ### 遗留（后续轮）
 
 - `todo_write` 核心工具 + `ReadOnlyTools` 核心工具只读声明；
-- `/compact` 摘要式压缩（读法 2）；
+- ~~`/compact` 摘要式压缩（读法 2）~~：**已闭环**（R5）；
 - ~~CLI / TUI / Server 外壳~~：**CLI 单次模式已闭环**（`cli方案.md`，2026-09 外壳轮），TUI / Server 仍待落地；
 - 会话持久化同步扩展点、人工审批通道、插件配置热更新、`infra/metrics`、跨语言脚本模块。

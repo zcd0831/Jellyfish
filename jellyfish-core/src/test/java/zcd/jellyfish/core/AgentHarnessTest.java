@@ -7,6 +7,7 @@ import org.mockito.Mock;
 import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
 import zcd.jellyfish.core.command.SystemCommands;
+import zcd.jellyfish.core.compact.ConversationCompactor;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.config.PluginsSettings;
 import zcd.jellyfish.infra.config.RuntimeConfig;
@@ -71,6 +72,10 @@ class AgentHarnessTest {
     /** 内核系统命令注册器。 */
     @Mock
     private SystemCommands systemCommands;
+
+    /** 会话压缩器。 */
+    @Mock
+    private ConversationCompactor conversationCompactor;
 
     @Test
     void bootstrap_should_start_in_fixed_order() {
@@ -153,6 +158,6 @@ class AgentHarnessTest {
      */
     private AgentHarness newHarness() {
         return new AgentHarness(runtimeConfig, eventChannel, modelManager, agentManager, pluginRuntimeConfig,
-                pluginManager, reActLooper, systemCommands, sessionManager);
+                pluginManager, reActLooper, systemCommands, sessionManager, conversationCompactor);
     }
 }

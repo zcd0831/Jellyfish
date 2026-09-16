@@ -7,6 +7,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import zcd.jellyfish.api.JellyfishException;
+import zcd.jellyfish.api.event.EventPublisher;
 import zcd.jellyfish.api.extension.CommandResult;
 import zcd.jellyfish.cli.console.RecordingConsoleIO;
 import zcd.jellyfish.cli.di.JellyfishComponent;
@@ -21,6 +22,8 @@ import zcd.jellyfish.infra.event.EventChannel;
 import zcd.jellyfish.infra.event.EventChannelOptions;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.model.ModelManager;
+import zcd.jellyfish.core.compact.ConversationCompactor;
+import zcd.jellyfish.infra.config.RuntimeConfig;
 import zcd.jellyfish.infra.permission.ApprovalChannel;
 import zcd.jellyfish.infra.registry.TypeRegistry;
 import zcd.jellyfish.infra.session.Session;
@@ -69,6 +72,15 @@ class LauncherTest {
     /** 真实审批通道，仅为满足 TUI 装配（未挂审批者，因此不会真的等答复）。 */
     private final ApprovalChannel approvalChannel = new ApprovalChannel();
 
+    /**
+     * 真实会话压缩器，仅为满足 TUI 装配。
+     * <p>
+     * 在 {@code setUp} 里建而不是字段初始化：它的构造参数里有 {@code sessions}，
+     * 而那个字段要到 {@code setUp} 才被赋值（字段初始化先于 {@code @BeforeEach}）。
+     * 全程不提交任务，因此它一个线程都不会起。
+     */
+    private ConversationCompactor conversationCompactor;
+
     @Mock
     private AgentHarness harness;
 
@@ -80,6 +92,14 @@ class LauncherTest {
 
     @Mock
     private AgentManager agents;
+
+    /** 运行时配置门面：只为满足压缩器装配（本测试不真的压缩）。 */
+    @Mock
+    private RuntimeConfig runtimeConfig;
+
+    /** 通知发布入口：压缩器只在「该压了却没插件」时用它，本用例不关心。 */
+    @Mock
+    private EventPublisher events;
 
     private SessionManager sessions;
 
@@ -95,6 +115,8 @@ class LauncherTest {
         sessions = SessionTestSupport.newSessionManager();
         session = sessions.createDefault();
         sessions.switchTo(session.getSessionId());
+conversationCompactor = new ConversationCompactor(sessions, models, runtimeConfig,
+                new ExtensionRegistry(new TypeRegistry()), events);
         launcher = new Launcher(component, console);
     }
 
@@ -266,6 +288,7 @@ class LauncherTest {
         when(component.extensionRegistry()).thenReturn(extensionRegistry);
         when(component.eventChannel()).thenReturn(eventChannel);
         when(component.approvalChannel()).thenReturn(approvalChannel);
+        when(component.conversationCompactor()).thenReturn(conversationCompactor);
     }
 
     /**

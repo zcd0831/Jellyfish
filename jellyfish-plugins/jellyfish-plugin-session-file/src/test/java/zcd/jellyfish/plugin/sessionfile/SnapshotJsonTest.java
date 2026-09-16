@@ -7,6 +7,7 @@ import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.api.extension.SessionSnapshot;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -51,6 +52,29 @@ class SnapshotJsonTest {
         assertEquals("{\"path\":\"a.txt\"}", restored.getMessages().get(1).getToolCalls().get(0).getArguments());
         assertEquals(15, restored.getMessages().get(1).getUsage().getTotalTokens());
         assertEquals(4L, restored.getUsage().getLlmCalls());
+        // 压缩摘要三个字段成组出现，缺一个都会让重启后的请求带上不该带的远古历史
+        assertEquals("早前对话的摘要", restored.getCompaction().getSummary());
+        assertEquals("m-2", restored.getCompaction().getBoundaryMessageId());
+        assertEquals(300L, restored.getCompaction().getCreatedAt());
+        // 丢弃条数漏了会静默失真：重启后会声称「这些历史都在摘要里」
+        assertEquals(4, restored.getCompaction().getDroppedMessageCount());
+    }
+
+    @Test
+    @DisplayName("旧版本落盘的文件没有 compaction 字段，也必须读得回来")
+    void read_should_tolerate_missingCompaction() {
+        // Given：把新写出的 JSON 里的 compaction 整块删掉，模拟升级前留下的文件
+        String withCompaction = SnapshotJson.write(TestSnapshots.full("session-1"));
+        String legacy = withCompaction.replaceAll("(?s),?\\s*\"compaction\"\\s*:\\s*\\{[^}]*}", "");
+        assertTrue(legacy.length() < withCompaction.length(), "测试自身没删掉 compaction 字段");
+
+        // When
+        SessionSnapshot restored = SnapshotJson.read(legacy, "test");
+
+        // Then：缺字段按「从未压缩过」读回，其余字段照旧
+        assertEquals("session-1", restored.getSessionId());
+        assertEquals(4, restored.getMessages().size());
+        assertNull(restored.getCompaction());
     }
 
     @Test

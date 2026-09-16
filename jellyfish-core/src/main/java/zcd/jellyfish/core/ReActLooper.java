@@ -14,8 +14,9 @@ import zcd.jellyfish.api.extension.PermissionCheckRequest;
 import zcd.jellyfish.api.extension.PermissionDecision;
 import zcd.jellyfish.api.extension.ToolCallRequest;
 import zcd.jellyfish.api.extension.ToolCallResult;
+import zcd.jellyfish.core.compact.ConversationCompactor;
 import zcd.jellyfish.core.prompt.PromptAssembler;
-import zcd.jellyfish.infra.config.ReactSettings;
+import zcd.jellyfish.core.prompt.PromptAssembly;
 import zcd.jellyfish.infra.config.RuntimeConfig;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.llm.LlmClient;
@@ -102,6 +103,9 @@ public class ReActLooper implements AutoCloseable {
     /** 提示词与上下文组装器。 */
     private final PromptAssembler promptAssembler;
 
+    /** 会话压缩器：上下文用满之前先压一次，免得机械裁剪把历史丢掉。 */
+    private final ConversationCompactor conversationCompactor;
+
     /** 运行时配置门面：读取 ReAct 段。 */
     private final RuntimeConfig runtimeConfig;
 
@@ -118,13 +122,15 @@ public class ReActLooper implements AutoCloseable {
      * @param events            通知发布入口
      * @param promptAssembler   提示词组装器
      * @param runtimeConfig     运行时配置门面
+     * @param conversationCompactor 会话压缩器
      */
     @Inject
     public ReActLooper(SessionManager sessionManager, ModelManager modelManager,
                        PermissionManager permissionManager, ExtensionRegistry extensions,
-                       EventPublisher events, PromptAssembler promptAssembler, RuntimeConfig runtimeConfig) {
+                       EventPublisher events, PromptAssembler promptAssembler, RuntimeConfig runtimeConfig,
+                       ConversationCompactor conversationCompactor) {
         this(sessionManager, modelManager, permissionManager, extensions, events, promptAssembler,
-                runtimeConfig, createExecutor());
+                runtimeConfig, conversationCompactor, createExecutor());
     }
 
     /**
@@ -137,11 +143,13 @@ public class ReActLooper implements AutoCloseable {
      * @param events            通知发布入口
      * @param promptAssembler   提示词组装器
      * @param runtimeConfig     运行时配置门面
+     * @param conversationCompactor 会话压缩器
      * @param executor          专用执行器
      */
     ReActLooper(SessionManager sessionManager, ModelManager modelManager, PermissionManager permissionManager,
                 ExtensionRegistry extensions, EventPublisher events, PromptAssembler promptAssembler,
-                RuntimeConfig runtimeConfig, ExecutorService executor) {
+                RuntimeConfig runtimeConfig, ConversationCompactor conversationCompactor,
+                ExecutorService executor) {
         this.sessionManager = Objects.requireNonNull(sessionManager, "sessionManager must not be null");
         this.modelManager = Objects.requireNonNull(modelManager, "modelManager must not be null");
         this.permissionManager = Objects.requireNonNull(permissionManager, "permissionManager must not be null");
@@ -149,6 +157,8 @@ public class ReActLooper implements AutoCloseable {
         this.events = Objects.requireNonNull(events, "events must not be null");
         this.promptAssembler = Objects.requireNonNull(promptAssembler, "promptAssembler must not be null");
         this.runtimeConfig = Objects.requireNonNull(runtimeConfig, "runtimeConfig must not be null");
+        this.conversationCompactor = Objects.requireNonNull(conversationCompactor,
+                "conversationCompactor must not be null");
         this.executor = Objects.requireNonNull(executor, "executor must not be null");
     }
 
@@ -212,8 +222,12 @@ public class ReActLooper implements AutoCloseable {
                 return cancel(sessionId, listener, round - 1);
             }
             ResolvedModel resolvedModel = resolveModel(session);
-            LlmRequest request = promptAssembler.buildRequest(session, resolvedModel);
-            LlmResponse response = callStreaming(turn, modelManager.getClient(resolvedModel), request, listener);
+            PromptAssembly assembly = promptAssembler.assemble(session, resolvedModel);
+            // 压缩与这一轮的模型调用并发：请求已经组装好了，它不会拖慢这一轮；
+            // 结果在下一轮组装时才生效（那时边界已经推进）
+            conversationCompactor.autoCompactIfNeeded(sessionId, assembly.getUsage());
+            LlmResponse response = callStreaming(turn, modelManager.getClient(resolvedModel),
+                    assembly.getRequest(), listener);
             if (response == null) {
                 return cancel(sessionId, listener, round - 1);
             }

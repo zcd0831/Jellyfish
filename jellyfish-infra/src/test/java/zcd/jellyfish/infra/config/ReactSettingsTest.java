@@ -17,19 +17,20 @@ class ReactSettingsTest {
     @Test
     void constructor_should_apply_defaults_when_all_missing() {
         // When
-        ReactSettings settings = new ReactSettings();
+        ReactSettings settings = new ReactSettings(null, null, null, null, null, null);
 
         // Then
         assertEquals(ReactSettings.DEFAULT_MAX_ROUNDS, settings.getMaxRounds());
         assertEquals(ReactSettings.DEFAULT_CONTEXT_RESERVE_TOKENS, settings.getContextReserveTokens());
         assertEquals(ReactSettings.DEFAULT_MAX_TOOL_OUTPUT_CHARS, settings.getMaxToolOutputChars());
+        assertEquals(ReactSettings.DEFAULT_AUTO_COMPACT_PERCENT, settings.getAutoCompactPercent());
         assertTrue(settings.isDefault());
     }
 
     @Test
     void constructor_should_fall_back_when_values_invalid() {
         // When：轮数与输出长度非正、预留为负，全部回退缺省
-        ReactSettings settings = new ReactSettings(0, -1, -5);
+        ReactSettings settings = new ReactSettings(0, -1, -5, -1, 0, null);
 
         // Then
         assertEquals(ReactSettings.DEFAULT_MAX_ROUNDS, settings.getMaxRounds());
@@ -40,7 +41,7 @@ class ReactSettingsTest {
     @Test
     void constructor_should_keep_explicit_zero_reserve() {
         // When：显式 0 预留是合法配置，不能被当成「未配置」
-        ReactSettings settings = new ReactSettings(null, 0, null);
+        ReactSettings settings = new ReactSettings(null, 0, null, null, null, null);
 
         // Then
         assertEquals(0, settings.getContextReserveTokens());
@@ -50,13 +51,66 @@ class ReactSettingsTest {
     @Test
     void constructor_should_keep_valid_values() {
         // When
-        ReactSettings settings = new ReactSettings(3, 512, 100);
+        ReactSettings settings = new ReactSettings(3, 512, 100, null, null, null);
 
         // Then
         assertEquals(3, settings.getMaxRounds());
         assertEquals(512, settings.getContextReserveTokens());
         assertEquals(100, settings.getMaxToolOutputChars());
         assertFalse(settings.isDefault());
+    }
+
+    @Test
+    void constructor_should_keep_zero_keepRecent_as_all() {
+        // When：/compact all 对应 keepRecent = 0，是合法取值而非「未配置」
+        ReactSettings settings = new ReactSettings(null, null, null, 0, null, null);
+
+        // Then
+        assertEquals(0, settings.getCompactKeepRecentMessages());
+        assertFalse(settings.isDefault());
+    }
+
+    @Test
+    void constructor_should_fall_back_when_compact_values_invalid() {
+        // When：保留条数为负、摘要上限非正，都回退缺省
+        ReactSettings settings = new ReactSettings(null, null, null, -1, 0, null);
+
+        // Then
+        assertEquals(ReactSettings.DEFAULT_COMPACT_KEEP_RECENT_MESSAGES, settings.getCompactKeepRecentMessages());
+        assertEquals(ReactSettings.DEFAULT_COMPACT_MAX_SUMMARY_CHARS, settings.getCompactMaxSummaryChars());
+    }
+
+    @Test
+    void constructor_should_keep_zero_autoCompact_as_disabled() {
+        // When：0 表示关闭自动压缩，是合法取值而非「未配置」
+        ReactSettings settings = new ReactSettings(null, null, null, null, null, 0);
+
+        // Then
+        assertEquals(0, settings.getAutoCompactPercent());
+        assertFalse(settings.isDefault());
+    }
+
+    @Test
+    void constructor_should_fall_back_and_clamp_when_autoCompactOutOfRange() {
+        // Then：负数回退缺省，超过 100 压到 100
+        assertEquals(ReactSettings.DEFAULT_AUTO_COMPACT_PERCENT,
+                new ReactSettings(null, null, null, null, null, -1).getAutoCompactPercent());
+        assertEquals(100, new ReactSettings(null, null, null, null, null, 130).getAutoCompactPercent());
+    }
+
+    @Test
+    void deserialization_should_bind_compact_section() {
+        // Given
+        String json = "{\"compactKeepRecentMessages\":8,\"compactMaxSummaryChars\":1500,"
+                + "\"autoCompactPercent\":60}";
+
+        // When
+        ReactSettings settings = ObjectMapperWrapper.readValue(json, ReactSettings.class);
+
+        // Then
+        assertEquals(8, settings.getCompactKeepRecentMessages());
+        assertEquals(1500, settings.getCompactMaxSummaryChars());
+        assertEquals(60, settings.getAutoCompactPercent());
     }
 
     @Test
@@ -71,6 +125,8 @@ class ReactSettingsTest {
         assertEquals(5, settings.getMaxRounds());
         assertEquals(ReactSettings.DEFAULT_CONTEXT_RESERVE_TOKENS, settings.getContextReserveTokens());
         assertEquals(ReactSettings.DEFAULT_MAX_TOOL_OUTPUT_CHARS, settings.getMaxToolOutputChars());
+        assertEquals(ReactSettings.DEFAULT_COMPACT_KEEP_RECENT_MESSAGES, settings.getCompactKeepRecentMessages());
+        assertEquals(ReactSettings.DEFAULT_COMPACT_MAX_SUMMARY_CHARS, settings.getCompactMaxSummaryChars());
     }
 
     @Test

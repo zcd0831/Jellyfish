@@ -33,7 +33,7 @@ public final class StartupOptions {
         /** 单次调用、不交互：进一个输入，出一次结果，进程退出。 */
         CLI("-cli"),
 
-        /** 交互式终端界面（TamboUI），尚未实现。 */
+        /** 交互式终端界面（TamboUI），交互式多轮对话、命令补全与审批浮层。 */
         TUI("-tui"),
 
         /** HTTP 服务（Undertow），对外暴露能力接口，尚未实现。 */

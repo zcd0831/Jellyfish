@@ -23,7 +23,7 @@ import java.util.Optional;
  * <p>
  * <b>两条刻意的取舍</b>：
  * <ol>
- *     <li><b>占位模式不启动内核</b>：{@code -tui} / {@code -server} 在进生命周期之前就返回
+ *     <li><b>占位模式不启动内核</b>：目前只有 {@code -server} 是占位，它在进生命周期之前就返回
  *     {@link ExitCodes#NOT_IMPLEMENTED}，避免白起事件线程、插件扫描与 HTTP 客户端池；</li>
  *     <li><b>shutdown 双保险</b>：{@code addShutdownHook} 覆盖 Ctrl+C / {@code kill}，{@code finally}
  *     覆盖正常路径与异常路径。两侧都会调 {@link AgentHarness#shutdown()}，靠内核自身的幂等保证安全。</li>

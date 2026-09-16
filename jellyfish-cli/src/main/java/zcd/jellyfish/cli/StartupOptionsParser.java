@@ -89,7 +89,7 @@ public final class StartupOptionsParser {
             + "\n"
             + "模式（三选一，必填）：\n"
             + "  -cli                  单次调用、不交互：进一个输入，出一次结果后退出\n"
-            + "  -tui                  交互式终端界面（尚未实现）\n"
+            + "  -tui                  交互式终端界面\n"
             + "  -server [端口]        以 HTTP 服务运行（尚未实现），端口缺省 "
             + StartupOptions.DEFAULT_PORT + "\n"
             + "\n"

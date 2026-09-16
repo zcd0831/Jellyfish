@@ -80,6 +80,82 @@ class TranscriptProjectorTest {
     }
 
     @Test
+    @DisplayName("助手正文按 markdown 渲染：标题带块前缀、行内标记换成样式而不是字面量")
+    void project_should_render_assistant_body_as_markdown() {
+        List<VisualLine> lines = project(
+                Collections.singletonList(SessionMessage.of(
+                        LlmMessage.assistant("## 小节\n\n结论是**加粗**的。"))),
+                completed());
+
+        assertEquals(Arrays.asList(
+                "",
+                "  \u23fa jellyfish",
+                "    \u258c 小节",
+                "",
+                "    结论是加粗的。"), texts(lines));
+        // 正文缩进仍然在：markdown 的块前缀接在消息缩进之后
+        assertEquals("    \u258c 小节", texts(lines).get(2));
+    }
+
+    @Test
+    @DisplayName("用户消息保持纯文本：用户输入的多是自然语言，渲染收益低且会吞掉原文空白")
+    void project_should_keep_user_message_asPlainText() {
+        List<VisualLine> lines = project(
+                Collections.singletonList(SessionMessage.of(LlmMessage.user("## 这不是标题"))),
+                completed());
+
+        assertEquals(Arrays.asList("", "  \u276f ## 这不是标题"), texts(lines));
+    }
+
+    @Test
+    @DisplayName("工具轨迹不受 markdown 渲染影响：它是轨迹，不是回答")
+    void project_should_keep_tool_trace_untouched() {
+        List<SessionMessage> messages = Arrays.asList(
+                SessionMessage.of(LlmMessage.assistant("**看**一下", Collections.emptyList())),
+                SessionMessage.of(LlmMessage.tool("c1", "read_file", "**内容**")));
+
+        List<VisualLine> lines = project(messages, completed());
+
+        assertEquals(Arrays.asList(
+                "",
+                "  \u23fa jellyfish",
+                "    看一下",
+                "      \u23bf read_file"), texts(lines));
+    }
+
+    @Test
+    @DisplayName("进行中回合的正文同样按 markdown 渲染")
+    void project_should_render_inflight_body_as_markdown() {
+        List<VisualLine> lines = project(Collections.<SessionMessage>emptyList(),
+                running("- 第一项", ""));
+
+        assertEquals(Arrays.asList(
+                "",
+                "  \u23fa jellyfish",
+                "    \u2022 第一项"), texts(lines));
+    }
+
+    @Test
+    @DisplayName("markdown 渲染后每行仍不超过消息区宽度：越界会让终端自行折行、滚动随之错位")
+    void project_should_neverExceed_width_when_renderingMarkdown() {
+        // Given：一段含长段落与代码块的助手消息，以及一个窄窗口
+        SessionMessage message = SessionMessage.of(LlmMessage.assistant(
+                "一段很长的中文说明文字，用来验证按列数换行。\n\n"
+                        + "```java\nint a = 1; // 这一行代码相当长，超出可用宽度\n```\n\n"
+                        + "- 列表项里也有很长的一段中文，还会带一个地址 http://example.com/a/b/c\n"));
+
+        for (int width : new int[]{20, 40, 79}) {
+            // When
+            List<VisualLine> lines = project(Collections.singletonList(message), completed(), width, 500);
+
+            // Then
+            for (VisualLine line : lines) {
+                assertTrue(line.width() <= width, "宽 " + width + " 下越界：" + line.text());
+            }
+        }
+    }
+
+    @Test
     @DisplayName("只带工具调用、没有正文的助手消息不单独占行")
     void project_should_skip_blank_assistant_body() {
         List<SessionMessage> messages = Arrays.asList(

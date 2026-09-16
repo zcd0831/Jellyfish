@@ -44,6 +44,22 @@
             <artifactId>tamboui-jline3-backend</artifactId>
         </dependency>
 
+        <!-- Markdown：只用它的 AST 解析器，渲染由我们自己的 text/MarkdownRenderer 承担。
+             版本锁在 0.21.0（Java 8 兼容的最后一版），理由见父 POM 的同名属性注释。
+             两个扩展都是「识别出来之后按自己的方式渲染」：表格降级为代码块、删除线加 crossedOut。 -->
+        <dependency>
+            <groupId>org.commonmark</groupId>
+            <artifactId>commonmark</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.commonmark</groupId>
+            <artifactId>commonmark-ext-gfm-tables</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.commonmark</groupId>
+            <artifactId>commonmark-ext-gfm-strikethrough</artifactId>
+        </dependency>
+
         <!-- 单元测试：投影 / 暂存区 / 监听器这些与 TamboUI 无耦合的纯逻辑 -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>

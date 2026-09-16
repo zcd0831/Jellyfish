@@ -268,7 +268,7 @@ jellyfish-cli/src/main/java/zcd/jellyfish/cli/
 
 jellyfish-tui/src/main/java/zcd/jellyfish/tui/
 ├── TuiApp.java                     # 唯一入口：装配 ToolkitRunner、按键路由、回合与命令分流、/ui 分派、审批浮层（最高优先级模态）与回填、插件 UI 失效触发源
-├── ChatShell.java                  # 版式：DockElement 五边停靠（全 length 约束）+ 视觉行转 TamboUI Line 的唯一转换点；模态浮层打开时面板让位
+├── ChatShell.java                  # 版式：DockElement 五边停靠（全 length 约束）+ 视觉行转 TamboUI Line 的唯一转换点；模态浮层打开时面板让位（RenderSmokeTest 借它做端到端渲染冒烟）
 ├── ChatLayout.java                 # 二维版式账本（纯函数）：先底/顶、后左右、最后消息区；侧栏 [20, W/4]、合计 ≤ W/3、W<80 隐藏、预算不足时先砍右栏再砍左栏
 ├── UiRender.java                   # 插件内容渲染：UiEmphasis → Style、UiLine → 视觉行（CJK 折行 + 行数截断）；api 与渲染引擎的唯一转换点
 ├── DockPanel.java                  # 常驻面板：{标题, 视觉行}；与 Overlay 同形但独立类型（模态浮层与常驻面板是两套账本）
@@ -277,7 +277,7 @@ jellyfish-tui/src/main/java/zcd/jellyfish/tui/
 ├── ChatState.java                  # 视图状态：滚动窗口切片、智能跟随、外壳提示缓冲（带时间戳，参与投影排序）、思考展开开关（全局，纳入重投影判据）
 ├── UiCache.java                    # 插件 UI 贡献的帧间缓存：只在失效时收集，空闲时零插件调用；版本号跨线程自增，收集期间发生的失效不会丢
 ├── InflightTurn.java               # 进行中回合的暂存区（有界）：唯一一处「尚未成为会话消息」的数据
-├── TranscriptProjector.java        # 纯函数投影：会话消息 + 外壳提示 + 暂存区 → 视觉行序列（按时间戳归并）；思考按全局开关折叠成一行（报码点数）/ 展开铺全文；home 分支投影首页字标 + 外壳提示
+├── TranscriptProjector.java        # 纯函数投影：会话消息 + 外壳提示 + 暂存区 → 视觉行序列（按时间戳归并）；思考按全局开关折叠成一行（报码点数）/ 展开铺全文；assistant 正文走 MarkdownRenderer，用户消息与工具轨迹仍是纯文本；home 分支投影首页字标 + 外壳提示
 ├── HomeSplash.java                 # 首页字标：无当前会话时消息区顶部居中的加粗 Jellyfish（按显示宽度居中、超宽裁切不折行）
 ├── ShellUsage.java                 # TUI 用法说明（键位 / 补全 / 滚动 / 思考折叠）：追加在无参 /help 输出之后，属外壳自有内容
 ├── ShellNotice.java                # 外壳提示（命令回显 + 输出 + 三态）：带时间戳，不进会话，按时间戳插进消息流
@@ -296,10 +296,11 @@ jellyfish-tui/src/main/java/zcd/jellyfish/tui/
 ├── TuiReActListener.java           # ReActListener 的 TUI 实现（react 线程 → 暂存区）
 └── text/                           # 文本布局原语（与 TamboUI 解耦，可单测）
     ├── DisplayWidth.java           # CJK 感知的显示宽度
-    ├── ControlChars.java           # 控制字符过滤：剔除 C0/C1 与双向控制符，防不可信文本改写终端（R4 的 Markdown 渲染同样依赖它）
+    ├── ControlChars.java           # 控制字符过滤：剔除 C0/C1 与双向控制符，防不可信文本改写终端（markdown 渲染同样依赖它）
     ├── StyledSegment.java          # 带样式的文本段
     ├── VisualLine.java             # 视觉行 = 若干样式段
-    └── LineWrapper.java            # 前缀 + 换行：逻辑行 → 视觉行
+    ├── LineWrapper.java            # 前缀 + 换行：逻辑行 → 视觉行
+    └── MarkdownRenderer.java       # markdown → 视觉行（assistant 正文专用）：只借 commonmark 的 AST，块级映射与换行都自己写
 
 jellyfish-script/src/main/java/zcd/jellyfish/script/
 ├── ScriptGateway.java             # 单例门面：常驻进程池、按 language + method 路由、订阅记录、生命周期
@@ -396,6 +397,9 @@ jellyfish-cli/src/main/resources/log4j2.xml           # 日志：root 默认 WAR
 - **CLI 的输出契约**：**回答与命令结果走 stdout，诊断 / 工具进度 / 日志走 stderr**，让 `jellyfish -cli -p ... > answer.txt 2> diag.txt` 拿到干净内容；**回答不逐段落盘**——`CliReActListener` 把文本按轮次缓冲、回合收敛时整体写出，中间轮次（工具调用之前）的文本作为轨迹转写 stderr，避免诊断行插进半句话、也避免同一句话在回答前后各出现一次；退出码是机器契约（`0` 成功、`2` 用法、`3` 启动、`4` 运行、`5` 模式未实现、`6` 回合未收敛）。占位模式**不启动内核**，直接退 5，避免「看起来起来了却什么都做不了」。
 - **外壳只做两件事、不自带智能**：一是把「命令还是对话」交给 `CommandManager.isCommand` 判据（CLI 与 TUI 共用），二是每轮**现读** `SessionManager.current()` 拿会话标识（`/new` `/resume` 改的是会话域，外壳不缓存）。启动期由 `SessionBootstrap` 保证「有当前会话」并把 `--agent` / `--model` / `--mode` 落上去——**唯一例外是裸 `-tui`**：它刻意不建会话，先进首页（见下一条）。
 - **TUI 的视图 = 会话投影 + 进行中回合暂存区**：屏幕上的消息区**不持有第二份会话消息列表**，它每次由 `SessionManager` 的消息**投影**得出（`TranscriptProjector` 是纯函数），因此插件写入历史、命令改写会话都会自动反映到屏幕。唯一的例外是 `InflightTurn`：会话是按**轮**落库的（`ReActLooper` 只在每轮模型响应聚合完成后才 `appendMessage`），流式进行中当前轮的增量在会话里**不存在**，必须暂存；它随回合终结即清空，且**有界**（超限保留尾部并标记截断）。工具轨迹**不**进暂存区——`onToolCallStarted` 发生在 assistant 消息落库之后，轨迹直接由会话投影得出。
+- **markdown 只在 assistant 正文上渲染，且只引入解析器这一个第三方依赖**：`tui/text/MarkdownRenderer` 只借 `commonmark` 的 AST，块级映射与换行都自己写——「屏幕上有几行」一旦交给别人的渲染器，滚动位置就与内容对不上。用户消息保持纯文本（自然语言渲染收益低、还可能吞掉原文空白），工具轨迹不变。依赖版本锁在 `0.21.0`：**0.22.0 起是 Java 11 字节码（major 55），JDK 1.8 下直接 `UnsupportedClassVersionError`**，升级前必须重新验证这条边界（根 POM 有注释）。两条硬约束写在类注释里：**永不抛异常**（输入是模型正在生成的半成品，解析失败退回纯文本）与**解析前先过滤控制字符**（否则 `ESC` 会先被当成正文进 AST）。
+- **超大文本只对尾部窗口做 markdown 解析**：实测 256 KB 全量解析 + 遍历约 41 ms，而流式期间每个脏帧都要重投影、帧预算只有 40 ms。因此超过 32 KB 时头部退回纯文本渲染、只解析尾部窗口——内容一条不藏，代价是超大回答的头部丢掉样式（回合收敛落库后会重新渲染一次）。刻意不做「渲染结果缓存」：`ChatState` 已在做投影级缓存，而流式文本每帧都变，逐帧失效的缓存没有命中率可言。
+- **端到端渲染有自动化冒烟**：`RenderSmokeTest` 用框架自带的 `Frame.forTesting(buffer)` 把一帧画进缓冲区再读回屏幕文本，断言「markdown 真的画出来了」「每行不超终端宽度」「行数账本与缓冲区一致（跟随底部时屏幕上是最新一项）」。TamboUI 的渲染线程守卫只开放了包内可见的 `markAsRenderThread()`，测试用反射如实声明本线程即渲染线程（不是绕过检查）——这是框架没留测试口径的既有事实。
 - **审批浮层是 TUI 上唯一「背后有线程在等」的界面**：`ApprovalChannel` 的那一头是阻塞在闩锁上的 `react` 线程，这一头是渲染线程每帧 `pending()` 取件、按键 `resolve()` 回填。因为那个回合真的停着，审批浮层的优先级**高于**二级选择页与补全面板（后两者只是输入辅助，晚一帧毫无代价）；审批可见时除 `↑`/`↓`/`Enter`/`Esc`/`Ctrl+C` 外的按键一律吞掉。`Esc` 是「拒绝 + 中断回合」而不是单纯拒绝——只拒绝的话模型会换个方式接着试，看起来像没停下来。详情区**必须**过滤控制字符（工具参数是模型生成的不可信输入，`ESC[2J` 能清屏、`\r` 能原地改写一行），且超长参数**折行而不是截断**：截断会把最危险的尾巴恰好藏起来，而行数到顶时明确写「已省略 N 行」。
 - **TUI 的线程契约**：`ReActListener` 的 7 个回调全部发生在 `react` 池线程，而界面状态只允许在渲染线程变更。契约是「**react 线程只往线程安全的暂存区追加字节并置 volatile 脏标记；所有界面状态变更都发生在渲染线程**」。中断（`Esc`）由渲染线程直接调 `ReActTurn.cancel()`，不依赖 react 线程投递——否则用户按下后界面没有立刻可见的反应，与卡死无法区分。
 - **TUI 的渲染载体是「单个 RichText」而不是「每条消息一个元素」**（实测结论）：布局容器的子元素在约 120～180 个处出现性能断崖（38ms/帧 → >3000ms/帧），而单个 `richText` 承载 3000 行仅约 1.96ms/帧。因此消息区把整份可见内容压成一个元素，滚动偏移是 `ChatState` 自己的字段（框架的 `ScrollableElement` 做不到「每帧内容都变 + 滚动位置保留」）。

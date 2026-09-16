@@ -3,7 +3,9 @@ package zcd.jellyfish.tui;
 import dev.tamboui.style.Style;
 import zcd.jellyfish.infra.llm.LlmMessage;
 import zcd.jellyfish.infra.session.SessionMessage;
+import zcd.jellyfish.tui.text.DisplayWidth;
 import zcd.jellyfish.tui.text.LineWrapper;
+import zcd.jellyfish.tui.text.MarkdownRenderer;
 import zcd.jellyfish.tui.text.StyledSegment;
 import zcd.jellyfish.tui.text.VisualLine;
 
@@ -28,7 +30,7 @@ import java.util.List;
  *   ❯ 用户消息
  *
  *   ⏺ jellyfish
- *     助手正文
+ *     助手正文（markdown：标题 / 列表 / 引用 / 代码块 / 行内样式）
  *       ⎿ 工具轨迹（暗色）
  *       ✻ 思考过程（暗色斜体）
  *       ⎿ 已中断（黄）/ 错误（红）
@@ -48,6 +50,9 @@ public final class TranscriptProjector {
 
     /** 助手正文缩进。 */
     static final String BODY_INDENT = "    ";
+
+    /** 助手正文缩进的列宽：markdown 渲染要按「屏幕列数 − 缩进」算可用宽度。 */
+    private static final int BODY_INDENT_WIDTH = DisplayWidth.of(BODY_INDENT);
 
     /** 工具轨迹前缀。 */
     static final String TRACE_PREFIX = "      \u23bf ";
@@ -382,8 +387,7 @@ public final class TranscriptProjector {
             appendThinking(out, thinking, expanded, false, width);
         }
         if (hasBody) {
-            out.addAll(LineWrapper.wrap(new StyledSegment(BODY_INDENT, Style.EMPTY),
-                    wrapBody(content, BODY_STYLE), width));
+            appendMarkdown(out, content, width);
         }
         return true;
     }
@@ -478,8 +482,7 @@ public final class TranscriptProjector {
                 appendThinking(out, thinking, thinkingExpanded, true, width);
             }
             if (!isBlank(text)) {
-                out.addAll(LineWrapper.wrap(new StyledSegment(BODY_INDENT, Style.EMPTY),
-                        wrapBody(text, BODY_STYLE), width));
+                appendMarkdown(out, text, width);
             }
             if (inflight.isTextTruncated()) {
                 out.add(VisualLine.of(new StyledSegment(NOTICE_PREFIX + "内容过长，仅显示末尾", FOLDED_STYLE)));
@@ -514,6 +517,43 @@ public final class TranscriptProjector {
                 // COMPLETED / RUNNING：正文已由会话消息承载，这里不补任何行
                 break;
         }
+    }
+
+    /**
+     * 把一段 markdown 正文铺成视觉行，并补上消息缩进。
+     * <p>
+     * <b>渲染与缩进为什么要分成两步</b>：{@link MarkdownRenderer} 不认识消息缩进，
+     * 它只按「可用列数」排版（列表标记、引用竖线都在这个列数之内）；
+     * 本方法负责把那个可用列数先减掉缩进，再给每条结果行补上缩进。
+     * 两者相减就是屏幕列数，因此交付给渲染引擎的宽度恒不超过屏幕宽度——
+     * 越界会让终端自行折行，而那种折行不参与视觉行计数，滚动位置立刻错位。
+     *
+     * @param out     输出列表
+     * @param content markdown 正文
+     * @param width   可用总列数
+     */
+    private static void appendMarkdown(List<VisualLine> out, String content, int width) {
+        int bodyWidth = Math.max(1, width - BODY_INDENT_WIDTH);
+        for (VisualLine line : MarkdownRenderer.render(content, bodyWidth, BODY_STYLE)) {
+            out.add(indent(line));
+        }
+    }
+
+    /**
+     * 给一条正文视觉行补上消息缩进。
+     *
+     * @param line 视觉行，不可为 {@code null}
+     * @return 补好缩进的视觉行
+     */
+    private static VisualLine indent(VisualLine line) {
+        if (line.isEmpty()) {
+            // 空行不补缩进：补了就是行尾空白，不但白占字节，滚动时看着也像脏东西
+            return VisualLine.EMPTY;
+        }
+        List<StyledSegment> segments = new ArrayList<StyledSegment>(line.getSegments().size() + 1);
+        segments.add(new StyledSegment(BODY_INDENT, Style.EMPTY));
+        segments.addAll(line.getSegments());
+        return new VisualLine(segments);
     }
 
     /**

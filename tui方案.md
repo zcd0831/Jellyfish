@@ -632,7 +632,7 @@ TUI 独占备用屏，**任何写 stderr 的日志都会直接糊在画面上**�
 | L5 | 会话持久化未落地 | 沿用 `cli方案.md` §8 L1；TUI 里同样「进程退出即丢」 |
 | L6 | 无主题/配置段 | 不做 `tui.json`；颜色硬编码在 `*View` 里 |
 | TODO-1 | 会话侧边栏 | `DockElement.left` 已预留（T8.1） |
-| TODO-2 | Markdown 渲染 | T2.2（R4）|
+| ~~TODO-2~~ | Markdown 渲染 | **已闭环**：`tui/text/MarkdownRenderer`（commonmark 0.21.0 只作 AST 解析器）+ `TranscriptProjector` 接入 + `RenderSmokeTest` 端到端冒烟 |
 | ~~TODO-3~~ | 权限 ASK 审批弹窗 | **已闭环**：`ApprovalChannel` + 复用 `CommandChoicePicker(View)` 的选择框（`Source` 见 `permission方案.md` 4.3）|
 
 ---

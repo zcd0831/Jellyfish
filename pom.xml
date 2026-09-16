@@ -34,6 +34,10 @@
         <slf4j.version>1.7.36</slf4j.version>
         <log4j2.version>2.25.4</log4j2.version>
         <commons-lang3.version>3.18.0</commons-lang3.version>
+        <!-- Markdown：0.21.0 是最后一个以 Java 7 字节码（major 51）发布的版本线，
+             0.22.0 起改为 major 55（Java 11），在 JDK 1.8 下会 UnsupportedClassVersionError。
+             实测：0.21.0 的三个 artifact 均为 major 51。升级前必须重新验证这条边界。 -->
+        <commonmark.version>0.21.0</commonmark.version>
         <maven-compiler-plugin.version>3.11.0</maven-compiler-plugin.version>
         <!-- 打包：shade 3.5.x 是仍支持 JDK 8 + Maven 3.2.5 的版本线 -->
         <maven-shade-plugin.version>3.5.1</maven-shade-plugin.version>
@@ -146,6 +150,23 @@
                 <groupId>org.apache.commons</groupId>
                 <artifactId>commons-lang3</artifactId>
                 <version>${commons-lang3.version}</version>
+            </dependency>
+
+            <!-- markdown：解析交给 commonmark，渲染由外壳自己写（见 tui/text/MarkdownRenderer） -->
+            <dependency>
+                <groupId>org.commonmark</groupId>
+                <artifactId>commonmark</artifactId>
+                <version>${commonmark.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.commonmark</groupId>
+                <artifactId>commonmark-ext-gfm-tables</artifactId>
+                <version>${commonmark.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.commonmark</groupId>
+                <artifactId>commonmark-ext-gfm-strikethrough</artifactId>
+                <version>${commonmark.version}</version>
             </dependency>
 
             <!-- 单元测试：以 BOM 统一管理 JUnit5 / Mockito 全套构件版本，子模块只声明 GA 不带版本 -->

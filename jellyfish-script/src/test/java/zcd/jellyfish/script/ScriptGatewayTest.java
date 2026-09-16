@@ -66,6 +66,10 @@ class ScriptGatewayTest {
         processes = new ArrayList<FakeProcess>();
         startCount = new AtomicInteger();
         responder = message -> {
+            if (!message.needsResponse()) {
+                // 通知没有 id，答不了：假进程必须和真进程一样对通知保持沉默
+                return null;
+            }
             if (ScriptProtocol.METHOD_INITIALIZE.equals(message.method())) {
                 return ScriptProtocol.response(message.id().longValue(),
                         ScriptJson.treeOf(initializePayload(true)));
@@ -215,6 +219,10 @@ class ScriptGatewayTest {
     void call_should_isolateWorker_when_invokeTimesOut() {
         // invoke 不回应答；kill_worker 应答「确实杀了」
         responder = message -> {
+            if (!message.needsResponse()) {
+                // 通知没有 id，答不了：假进程必须和真进程一样对通知保持沉默
+                return null;
+            }
             if (ScriptProtocol.METHOD_INITIALIZE.equals(message.method())) {
                 return initializeResponse(message, true);
             }
@@ -256,6 +264,10 @@ class ScriptGatewayTest {
         assertFalse(gateway.killWorker("jira", "测试"), "还没启动过就不该声称杀了什么");
 
         responder = message -> {
+            if (!message.needsResponse()) {
+                // 通知没有 id，答不了：假进程必须和真进程一样对通知保持沉默
+                return null;
+            }
             if (ScriptProtocol.METHOD_INITIALIZE.equals(message.method())) {
                 return initializeResponse(message, true);
             }
@@ -284,7 +296,7 @@ class ScriptGatewayTest {
     }
 
     @Test
-    @DisplayName("emit_event 应被明确拒绝，而不是假装受理")
+    @DisplayName("未接通事件桥接时应拒绝发布，而不是假装受理")
     void onIncoming_should_rejectEmitEvent_when_eventBridgeIsNotConnected() {
         gateway.call(plugin, "tool", null);
         FakeProcess process = processes.get(0);
@@ -296,6 +308,7 @@ class ScriptGatewayTest {
         assertNotNull(response);
         assertEquals(Long.valueOf(99), response.id());
         assertFalse(response.result().get(ScriptProtocol.PARAM_ACCEPTED).asBoolean(true));
+        assertEquals("事件桥接未接通", response.result().get(ScriptProtocol.PARAM_REASON).asText());
     }
 
     @Test
@@ -389,6 +402,98 @@ class ScriptGatewayTest {
                     return process;
                 })
                 .build();
+    }
+
+
+    @Test
+    @DisplayName("网关运行时推送事件应发出 event 通知帧")
+    void notifyEvent_should_sendNotification_when_gatewayRunning() {
+        gateway.call(plugin, "tool", ScriptJson.tree("{\"tool\":\"jira_issue\"}"));
+
+        gateway.notifyEvent("SessionCreatedEvent", ScriptJson.tree("{\"event\":\"SessionCreatedEvent\"}"));
+
+        ScriptProtocol.Message frame = lastOf(ScriptProtocol.METHOD_EVENT, processes.get(0));
+        assertEquals("SessionCreatedEvent", frame.paramText(ScriptProtocol.PARAM_EVENT));
+        assertEquals("SessionCreatedEvent",
+                frame.paramNode(ScriptProtocol.PARAM_PAYLOAD).get("event").asText());
+    }
+
+    @Test
+    @DisplayName("网关未启动时推送事件应报连接失败，而不是静默丢弃")
+    void notifyEvent_should_fail_when_gatewayNotStarted() {
+        // 静默丢弃会让「网关卡死」这类真问题表现为「事件莫名其妙少了」，
+        // 而调用方（推送线程）已经把失败算进丢弃计数了
+        assertThrows(ScriptConnectionException.class,
+                () -> gateway.notifyEvent("SessionCreatedEvent", ScriptJson.tree("{}")));
+    }
+
+    @Test
+    @DisplayName("脚本发布事件应交给发布受理方，并按裁决应答")
+    void onIncoming_should_delegateEmit_when_scriptPublishes() {
+        java.util.concurrent.atomic.AtomicReference<String> accepted =
+                new java.util.concurrent.atomic.AtomicReference<String>();
+        gateway.eventSink((scriptId, eventName, payload) -> {
+            accepted.set(scriptId + "|" + eventName + "|" + payload.get("message").asText());
+            return "evt-1";
+        });
+        gateway.call(plugin, "tool", ScriptJson.tree("{\"tool\":\"jira_issue\"}"));
+        FakeProcess process = processes.get(0);
+
+        process.emit(ScriptProtocol.notification(ScriptProtocol.METHOD_EMIT_EVENT,
+                ScriptJson.tree("{\"script\":\"jira\",\"event\":\"ConfigWarningEvent\","
+                        + "\"payload\":{\"message\":\"x\"}}")));
+
+        assertEquals("jira|ConfigWarningEvent|x", accepted.get());
+    }
+
+    @Test
+    @DisplayName("发布被拒绝时应回带原因，且网关自身不受影响")
+    void onIncoming_should_reportRejection_when_sinkRefuses() {
+        gateway.eventSink((scriptId, eventName, payload) -> {
+            throw new zcd.jellyfish.api.JellyfishException("不可发布");
+        });
+        gateway.call(plugin, "tool", ScriptJson.tree("{\"tool\":\"jira_issue\"}"));
+        FakeProcess process = processes.get(0);
+
+        process.emit(ScriptProtocol.request(7L, ScriptProtocol.METHOD_EMIT_EVENT,
+                ScriptJson.tree("{\"script\":\"jira\",\"event\":\"SessionCreatedEvent\"}")));
+
+        ScriptProtocol.Message response = process.sent.get(process.sent.size() - 1);
+        assertFalse(response.result().get(ScriptProtocol.PARAM_ACCEPTED).asBoolean());
+        assertEquals("不可发布", response.result().get(ScriptProtocol.PARAM_REASON).asText());
+    }
+
+    @Test
+    @DisplayName("收下发布时应把事件标识回给网关（用它掐回声）")
+    void onIncoming_should_returnEventId_when_emitAccepted() {
+        gateway.eventSink((scriptId, eventName, payload) -> "evt-9");
+        gateway.call(plugin, "tool", ScriptJson.tree("{\"tool\":\"jira_issue\"}"));
+        FakeProcess process = processes.get(0);
+
+        process.emit(ScriptProtocol.request(8L, ScriptProtocol.METHOD_EMIT_EVENT,
+                ScriptJson.tree("{\"script\":\"jira\",\"event\":\"ConfigWarningEvent\"}")));
+
+        ScriptProtocol.Message response = process.sent.get(process.sent.size() - 1);
+        assertTrue(response.result().get(ScriptProtocol.PARAM_ACCEPTED).asBoolean());
+        assertEquals("evt-9", response.result().get(ScriptProtocol.PARAM_EVENT_ID).asText());
+    }
+
+    /**
+     * 取出某方法最后一次收到的帧。
+     *
+     * @param method  方法名
+     * @param process 假进程
+     * @return 帧
+     */
+    private static ScriptProtocol.Message lastOf(String method, FakeProcess process) {
+        ScriptProtocol.Message found = null;
+        for (ScriptProtocol.Message message : process.sent) {
+            if (method.equals(message.method())) {
+                found = message;
+            }
+        }
+        assertNotNull(found, "没有收到 " + method + " 帧");
+        return found;
     }
 
     /**

@@ -149,6 +149,9 @@ public final class ScriptProtocol {
     /** 参数键：是否被受理。 */
     public static final String PARAM_ACCEPTED = "accepted";
 
+    /** 已受理事件的标识（发布事件应答里的字段）。 */
+    public static final String PARAM_EVENT_ID = "eventId";
+
     /** 参数键：worker 是否存活。 */
     public static final String PARAM_ALIVE = "alive";
 

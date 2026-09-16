@@ -3,6 +3,7 @@ package zcd.jellyfish.script;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import zcd.jellyfish.api.JellyfishException;
+import zcd.jellyfish.script.event.ScriptEventCatalog;
 import zcd.jellyfish.api.extension.CommandDescriptor;
 import zcd.jellyfish.api.extension.ToolDescriptor;
 import zcd.jellyfish.api.plugin.PluginOwnerNamespace;
@@ -372,19 +373,26 @@ public final class ScriptManifest {
     /**
      * 解析事件订阅声明。
      * <p>
-     * 这里只做语法校验（非空白、不重复）：事件名到事件类的白名单随事件桥接一起落地，
-     * 在那之前无法判定「这个名字存不存在」。届时清单校验会补上这一步，
-     * 因此现在写错的订阅不会永久静默，只是推迟到那时才报出来。
+     * 语法与白名单一起校验：**事件名必须是内核认识的**。
+     * <p>
+     * 在这里拒绝而不是等到运行期，是因为运行期那条路是静默的：订阅一个不存在的事件，
+     * 表现是「处理器从来不执行」，而脚本作者会先怀疑自己的代码、再怀疑事件没触发，
+     * 最后才怀疑名字写错了。清单是唯一一次「有人盯着看」的机会，因此放这里报，
+     * 并且把可订阅的名字一起打出来——写错的人多半只是拼错或记错了全名。
      *
      * @param node 事件数组节点，可为 {@code null}
      * @return 事件名集合，保证非 {@code null}
-     * @throws JellyfishException 存在空白项或重复项时抛出
+     * @throws JellyfishException 存在空白项、重复项或不可订阅的事件名时抛出
      */
     private static Set<String> parseEvents(JsonNode node) {
         Set<String> events = new LinkedHashSet<String>();
         for (String name : strings(node, "events")) {
             if (!events.add(name)) {
                 throw new JellyfishException("events 重复声明: " + name);
+            }
+            if (!ScriptEventCatalog.isObservable(name)) {
+                throw new JellyfishException("events 声明了不可订阅的事件: " + name
+                        + "；可订阅的有: " + ScriptEventCatalog.names());
             }
         }
         return events;

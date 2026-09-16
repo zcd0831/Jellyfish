@@ -52,6 +52,26 @@ class ScriptManifestTest {
     }
 
     @Test
+    @DisplayName("订阅不可订阅的事件名应被拒绝，且报错里带上可订阅的名字")
+    void parse_should_reject_when_eventNameUnknown() {
+        // 运行期这条路的失败是静默的（处理器永远不执行），因此必须在清单期拒绝：
+        // 报错里带上可订阅的事件名，是因为写错的人多半只是拼错或记错了全名
+        zcd.jellyfish.api.JellyfishException error = org.junit.jupiter.api.Assertions.assertThrows(
+                zcd.jellyfish.api.JellyfishException.class,
+                () -> parse("{\"entry\":\"main.py\",\"events\":[\"SessionCreateEvent\"]}"));
+
+        assertTrue(error.getMessage().contains("不可订阅"), error.getMessage());
+        assertTrue(error.getMessage().contains("SessionCreatedEvent"), error.getMessage());
+    }
+
+    @Test
+    @DisplayName("订阅重复的事件名应被拒绝")
+    void parse_should_reject_when_eventNameDuplicated() {
+        org.junit.jupiter.api.Assertions.assertThrows(zcd.jellyfish.api.JellyfishException.class,
+                () -> parse("{\"entry\":\"main.py\",\"events\":[\"SessionCreatedEvent\",\"SessionCreatedEvent\"]}"));
+    }
+
+    @Test
     @DisplayName("id 缺失时应退回目录名")
     void parse_should_fallBackToDirectoryName_when_idIsAbsent() {
         assertEquals(FALLBACK_ID, parse("{\"entry\":\"main.py\"}").id());

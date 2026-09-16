@@ -8,6 +8,8 @@ import zcd.jellyfish.script.protocol.ScriptConnectionException;
 import zcd.jellyfish.script.protocol.ScriptProtocol;
 import zcd.jellyfish.script.protocol.ScriptRpc;
 import zcd.jellyfish.script.protocol.ScriptTimeoutException;
+import zcd.jellyfish.script.event.ScriptEventSink;
+import zcd.jellyfish.script.event.ScriptEventTarget;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -50,7 +52,7 @@ import java.util.Map;
  *
  * @author zcd
  */
-public final class ScriptGateway implements ScriptCaller, AutoCloseable {
+public final class ScriptGateway implements ScriptCaller, ScriptEventTarget, AutoCloseable {
 
     /** 日志。 */
     private static final Logger LOG = LoggerFactory.getLogger(ScriptGateway.class);
@@ -108,6 +110,15 @@ public final class ScriptGateway implements ScriptCaller, AutoCloseable {
 
     /** 是否已关闭。 */
     private volatile boolean closed;
+
+    /**
+     * 事件发布受理方。
+     * <p>
+     * 用「构造后注册」而不是构造器注入：桥接要用网关推送事件，两者互相需要，
+     * 而网关必须先存在。注册发生在插件 {@code start()} 的单线程窗口内，
+     * 因此没有可见性问题（字段仍声明为 volatile，因为读取它的是 RPC 读线程）。
+     */
+    private volatile ScriptEventSink eventSink;
 
     /**
      * 构造网关。
@@ -239,6 +250,31 @@ public final class ScriptGateway implements ScriptCaller, AutoCloseable {
     public boolean isRunning() {
         ScriptProcess current = process;
         return !closed && current != null && current.isAlive();
+    }
+
+    /**
+     * 注册事件发布受理方。
+     *
+     * @param sink 受理方，可为 {@code null}（等效于「事件桥接未接通」）
+     */
+    public void eventSink(ScriptEventSink sink) {
+        this.eventSink = sink;
+    }
+
+    @Override
+    public void notifyEvent(String eventName, JsonNode payload) {
+        ScriptRpc current = rpc;
+        if (current == null) {
+            // 这里抛而不是静默丢弃：调用方（推送线程）自己决定怎么处理，
+            // 而它已经把「失败」算进丢弃计数了。静默返回会让「网关卡死」这类
+            // 真正的问题表现为「事件莫名少了」
+            throw new ScriptConnectionException(
+                    language.displayName() + " 脚本网关尚未启动，事件无法推送", null);
+        }
+        Map<String, Object> params = new LinkedHashMap<String, Object>();
+        params.put(ScriptProtocol.PARAM_EVENT, eventName);
+        params.put(ScriptProtocol.PARAM_PAYLOAD, payload);
+        current.notify(ScriptProtocol.METHOD_EVENT, ScriptJson.treeOf(params));
     }
 
     /**
@@ -466,16 +502,7 @@ public final class ScriptGateway implements ScriptCaller, AutoCloseable {
             return;
         }
         if (ScriptProtocol.METHOD_EMIT_EVENT.equals(method)) {
-            // 事件桥接（白名单校验、防循环、EventChannel 派发）属于后续阶段。
-            // 这里明确拒绝而不是假装受理：受理一个没被派发的事件，会让脚本以为通知已经到了，
-            // 而这类静默丢失在排查时表现为「事件偶尔不触发」，无从下手
-            LOG.warn("脚本 {} 请求发布事件 {}，但事件桥接尚未接通，已拒绝", 
-                    message.paramText(ScriptProtocol.PARAM_SCRIPT),
-                    message.paramText(ScriptProtocol.PARAM_EVENT));
-            Map<String, Object> rejection = new LinkedHashMap<String, Object>();
-            rejection.put(ScriptProtocol.PARAM_ACCEPTED, Boolean.FALSE);
-            rejection.put(ScriptProtocol.PARAM_REASON, "事件桥接尚未接通");
-            respond(message, ScriptJson.treeOf(rejection));
+            onEmit(message);
             return;
         }
         LOG.warn("{} 网关发来未知方法，已拒绝: {}", language.displayName(), method);
@@ -484,6 +511,45 @@ public final class ScriptGateway implements ScriptCaller, AutoCloseable {
             current.respondError(message.id().longValue(), ScriptProtocol.CODE_METHOD_NOT_FOUND,
                     "不支持的网关方法: " + method);
         }
+    }
+
+    /**
+     * 处理脚本的发布事件请求。
+     * <p>
+     * 应答里带 {@code eventId}：网关要靠它认出「这个事件是某个脚本刚发布的」，
+     * 从而不再把回声推回给同一个脚本（脚本收到自己刚发的事件会形成跨进程的环）。
+     *
+     * @param message 消息
+     */
+    private void onEmit(ScriptProtocol.Message message) {
+        String scriptId = message.paramText(ScriptProtocol.PARAM_SCRIPT);
+        String eventName = message.paramText(ScriptProtocol.PARAM_EVENT);
+        ScriptEventSink sink = eventSink;
+        String eventId = null;
+        String reason = null;
+        if (sink == null) {
+            reason = "事件桥接未接通";
+        } else {
+            try {
+                eventId = sink.accept(scriptId, eventName, message.paramNode(ScriptProtocol.PARAM_PAYLOAD));
+            } catch (JellyfishException error) {
+                reason = error.getMessage();
+            }
+        }
+        if (reason != null) {
+            // 桥接自己也会记一条（它知道原因属于哪一类）。这里再记一条是因为
+            // 网关这条带得上「是哪个脚本」——桥接只拿到脚本 id，语言侧的信息在这里
+            LOG.warn("{} 脚本 {} 发布事件 {} 被拒绝: {}", language.displayName(), scriptId, eventName, reason);
+        }
+        Map<String, Object> result = new LinkedHashMap<String, Object>();
+        result.put(ScriptProtocol.PARAM_ACCEPTED, Boolean.valueOf(eventId != null));
+        if (eventId != null) {
+            result.put(ScriptProtocol.PARAM_EVENT_ID, eventId);
+        }
+        if (reason != null) {
+            result.put(ScriptProtocol.PARAM_REASON, reason);
+        }
+        respond(message, ScriptJson.treeOf(result));
     }
 
     /**

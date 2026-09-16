@@ -211,6 +211,66 @@ class ScriptGatewayTest {
     }
 
     @Test
+    @DisplayName("调用超时应主动请网关隔离该脚本，并把「已隔离」写进错误")
+    void call_should_isolateWorker_when_invokeTimesOut() {
+        // invoke 不回应答；kill_worker 应答「确实杀了」
+        responder = message -> {
+            if (ScriptProtocol.METHOD_INITIALIZE.equals(message.method())) {
+                return initializeResponse(message, true);
+            }
+            if (ScriptProtocol.METHOD_KILL_WORKER.equals(message.method())) {
+                return ScriptProtocol.response(message.id().longValue(),
+                        ScriptJson.tree("{\"killed\":true}"));
+            }
+            return null;
+        };
+        gateway = buildGateway(GatewaySettings.builder().invokeTimeoutSeconds(1).build());
+
+        ScriptTimeoutException failure = assertThrows(ScriptTimeoutException.class,
+                () -> gateway.call(plugin, "tool", null));
+
+        // 「谁来杀」这件事不能只写在文档里：宿主要真的发出指令，否则脚本卡住时
+        // 连接看起来完全正常，而 worker 会带着它挂死的那个线程一直占着
+        assertTrue(failure.getMessage().contains("已隔离该脚本的 worker"), failure.getMessage());
+        assertEquals(1000L, failure.waitedMillis());
+        assertEquals(1, countOf(ScriptProtocol.METHOD_KILL_WORKER, processes.get(0)));
+    }
+
+    @Test
+    @DisplayName("隔离请求没人应答时应如实说没送到，而不是假装隔离成功")
+    void call_should_reportUnsentIsolation_when_killRequestIsUnanswered() {
+        responder = message -> ScriptProtocol.METHOD_INITIALIZE.equals(message.method())
+                ? initializeResponse(message, true)
+                : null;
+        gateway = buildGateway(GatewaySettings.builder().invokeTimeoutSeconds(1).build());
+
+        ScriptTimeoutException failure = assertThrows(ScriptTimeoutException.class,
+                () -> gateway.call(plugin, "tool", null));
+
+        assertTrue(failure.getMessage().contains("隔离请求未能送达"), failure.getMessage());
+    }
+
+    @Test
+    @DisplayName("隔离请求应把网关回报的结果原样带回来，且未启动时直接返回 false")
+    void killWorker_should_reportGatewayAnswer() {
+        assertFalse(gateway.killWorker("jira", "测试"), "还没启动过就不该声称杀了什么");
+
+        responder = message -> {
+            if (ScriptProtocol.METHOD_INITIALIZE.equals(message.method())) {
+                return initializeResponse(message, true);
+            }
+            if (ScriptProtocol.METHOD_KILL_WORKER.equals(message.method())) {
+                return ScriptProtocol.response(message.id().longValue(),
+                        ScriptJson.tree("{\"killed\":false}"));
+            }
+            return ScriptProtocol.response(message.id().longValue(), ScriptJson.tree("{\"output\":\"ok\"}"));
+        };
+        gateway.call(plugin, "tool", null);
+
+        assertFalse(gateway.killWorker("jira", "测试"), "网关说没有 worker 可杀时不该报 true");
+    }
+
+    @Test
     @DisplayName("worker_state 通知应被应答并记录，不影响后续调用")
     void onIncoming_should_respondToWorkerState() {
         gateway.call(plugin, "tool", null);

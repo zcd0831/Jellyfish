@@ -67,6 +67,15 @@ public final class ScriptGateway implements ScriptCaller, AutoCloseable {
     /** 关闭时强杀后等待的毫秒数。 */
     private static final long CLOSE_KILL_MILLIS = 2000L;
 
+    /**
+     * 隔离请求的等待上限。
+     * <p>
+     * 它比调用超时更短且与配置无关：网关收到请求就把信号发出去了，应答是即时的
+     * （真正的两段式升级发生在网关自己的循环里）。给它一个很长的上限，
+     * 只会让「网关已经卡住」这种情况多挂住调用方十秒。
+     */
+    private static final long KILL_REQUEST_TIMEOUT_MILLIS = 5000L;
+
     /** 语言适配。 */
     private final ScriptLanguage language;
 
@@ -138,8 +147,54 @@ public final class ScriptGateway implements ScriptCaller, AutoCloseable {
         params.put(ScriptProtocol.PARAM_SCRIPT, plugin.id());
         params.put(ScriptProtocol.PARAM_TYPE, typeName);
         params.put(ScriptProtocol.PARAM_REQUEST, request);
-        return current.call(ScriptProtocol.METHOD_INVOKE, ScriptJson.treeOf(params),
-                settings.invokeTimeoutMillis());
+        try {
+            return current.call(ScriptProtocol.METHOD_INVOKE, ScriptJson.treeOf(params),
+                    settings.invokeTimeoutMillis());
+        } catch (ScriptTimeoutException e) {
+            // 超时处置链：宿主只发指令，**杀的动作由网关做**——回收与 PID 表都在有父子关系的一侧，
+            // 宿主根本不需要知道 worker 的存在。这一步不能省：脚本卡住时连接看起来完全正常，
+            // 只有把 worker 连同它挂死的那个线程一起丢掉，下一次调用才可能成功。
+            // 网关自己也有同一个截止时间做兜底（宿主失联时仍然会清理），两条路径都指向同一个 worker，
+            // 而网关那侧的 kill 是幂等的
+            boolean killed = killWorker(plugin.id(), "调用超时（" + e.waitedMillis() + " ms）");
+            throw new ScriptTimeoutException(
+                    "脚本调用超时（已等待 " + e.waitedMillis() + " ms）"
+                            + (killed ? "，已隔离该脚本的 worker" : "，但隔离请求未能送达")
+                            + ": " + typeName, e.waitedMillis());
+        }
+    }
+
+    /**
+     * 请求网关隔离某个脚本的当前 worker。
+     * <p>
+     * <b>为什么宿主不自己杀</b>：worker 是网关的子进程，回收（{@code waitpid}）与 PID 表都在网关一侧。
+     * 宿主越过去杀，就得自己维护一张 PID 表、自己回收僵尸，而那张表与网关的表必然漂移——
+     * 漂移的表现是「某个进程谁也杀不掉」。
+     * <p>
+     * <b>幂等且只告警</b>：本方法会被超时路径调用，而网关自己也有同一个截止时间。
+     * 两边同时动手是正常情况，不是错误；因此这里把「没杀到」当成一个可接受的返回值，
+     * 而不是异常——把一个已经没救的进程变成调用方看到的另一种失败，只会让现场更模糊。
+     *
+     * @param scriptId 脚本标识，不可为空白
+     * @param reason   隔离原因，会出现在网关日志里
+     * @return 网关确认有 worker 被请求退出时返回 {@code true}
+     */
+    public boolean killWorker(String scriptId, String reason) {
+        ScriptRpc current = rpc;
+        if (current == null) {
+            return false;
+        }
+        Map<String, Object> params = new LinkedHashMap<String, Object>();
+        params.put(ScriptProtocol.PARAM_SCRIPT, scriptId);
+        params.put(ScriptProtocol.PARAM_REASON, reason);
+        try {
+            JsonNode response = current.call(ScriptProtocol.METHOD_KILL_WORKER, ScriptJson.treeOf(params),
+                    KILL_REQUEST_TIMEOUT_MILLIS);
+            return response != null && response.path(ScriptProtocol.PARAM_KILLED).asBoolean(false);
+        } catch (JellyfishException e) {
+            LOG.warn("{} 隔离脚本 {} 的请求未成功: {}", language.displayName(), scriptId, e.getMessage());
+            return false;
+        }
     }
 
     /**

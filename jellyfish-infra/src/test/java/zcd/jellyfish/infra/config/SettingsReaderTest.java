@@ -71,11 +71,11 @@ class SettingsReaderTest {
 
     @Test
     void read_should_return_content_when_classpath_resource_exists() {
-        // When
-        String content = settingsReader.read("classpath:config.json");
+        // When：读一份随构件发布的真实内置资源（它就在本模块的 classpath 上）
+        String content = settingsReader.read(BuiltinAgentLoader.DEFAULT_AGENT_PATH);
 
         // Then
-        assertTrue(content.contains("\"globalPath\""));
+        assertTrue(content.contains("\"agentId\""));
     }
 
     @Test

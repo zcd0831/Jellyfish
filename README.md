@@ -53,7 +53,8 @@ echo "/help" | java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -
 | `6` | 回合未收敛：达到最大轮次仍未给出最终回复 |
 
 单次模式里输入以 `/` 开头就走命令域（`/help` `/model` `/agent` `/new` …），否则走一次 LLM 对话；
-`/help` `/session` `/status` `/model` 这些命令不需要模型配置，可以离线验证安装是否正常（`/todo` 由待办插件提供）。
+`/help` `/session` `/status` `/model` `/compact preview` 这些命令不需要模型配置，可以离线验证安装是否正常
+（`/todo` 由待办插件提供；`/compact preview` 是纯只读的，无参 `/compact` 会真的发起一次摘要调用）。
 
 ### TUI 模式
 
@@ -89,7 +90,7 @@ java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -tui
 ╭ 输入 ──────────────────────────────╮
 │ …                                  │   ← 多行输入（1～6 行自适应）
 ╰────────────────────────────────────╯
- agent · provider/模型 · 权限模式 · token 用量
+ agent · provider/模型 · 权限模式 · token 用量（会话被压缩过时追加 `已压缩 N 条（丢弃 M 条）`）
 ```
 
 | 按键 | 行为 |
@@ -171,6 +172,47 @@ CSI-u 等所有「带修饰的 Enter」编码都无法被底层框架区分（�
 外壳**不**每帧询问插件（那样空闲时也在反复调用处理器），只在失效时收集一次：会话切换、回合开始或结束、
 命令执行后、插件加载卸载、以及插件自己发布 UI 失效事件。整体不要插件 UI 时用 `-Djellyfish.tui.pluginPanels=false`。
 
+## 压缩上下文（`/compact`）
+
+长会话的每一轮都要把整段历史重新发给模型，token 花得越来越多。压缩多花**一次**调用把更早的
+对话压成一份摘要，之后每次请求只带摘要 + 最近若干条原文：
+
+> **前提**：压缩由插件提供策略（摘要指令 + 参数）。没有启用 `jellyfish-compact`（或同类插件）时，
+> 压缩整体不可用——`/compact` 会直接告诉你，自动压缩也不生效。见「插件」一节里的
+> [会话压缩（jellyfish-compact）](#会话压缩jellyfish-compact)。
+
+```
+/compact                 按默认档位压一次（保留条数取 react.compactKeepRecentMessages，缺省 20）
+/compact preview         只回报「将压缩 X 条、保留 Y 条、丢弃 Z 条、摘要输入约 T token」，不发起压缩
+```
+
+**上下文用到 80% 时会自动压一次**（`react.autoCompactPercent`，写 `0` 关闭），不用你盯着 token 数；
+另外只要某一次请求已经触发了机械裁剪（历史正在被静默丢弃），也会立刻压一次。自动压缩跑在当前那一轮
+模型调用的旁边，不拖慢对话，结果在下一轮生效，完成提示会写明「已自动压缩」。
+
+四条口径值得记牢：
+
+- **历史一条不删**。压缩是非破坏式的：屏幕上的会话、`/resume`、落盘的那份文件都还是完整历史，
+  变的只是「发给模型的那条链路从哪里开始」。因此不会有「压完就再也看不到原文」这种事。
+- **可以反复压**。每次只压「上次边界之后新积累的那一段」，并把上一份摘要一起喂进摘要请求，
+  所以会话里始终只有一块摘要、边界只会向后移（滚动摘要）；已压过的那段不会再花一次钱。
+- **一次压完，装不下就丢最旧的**。摘要请求本身也受同一个上下文窗口约束，而「要压的东西大到发不出去」
+  正是需要压缩的原因。因此待压范围超过预算时，从**最旧侧丢弃**到装得下为止，只把最新的一段交给模型——
+  一次命令一次调用，耗时与花费都可预期。**被丢弃的那一段既不在摘要里，也不会再发给模型**：它是真正
+  消失的数据，所以完成提示会写明「另有 N 条……未纳入摘要且不再发送」，system prompt 里那块摘要也会
+  告诉模型「其中 N 条未收录」。`/compact preview` 会先把这件事算给你看。
+- **摘要是给人读的提醒，也给模型看的背景**。它**进 system prompt 而不是当成一条消息**回灌
+  （顺序：agent 提示词 → 插件贡献 → 历史摘要），否则会被后续每轮重复 append 回会话，
+  越聊越像一份不断膨胀的假历史。
+
+压缩调用的 token 计入会话用量（`/usage` 看得到）。`/status` 会显示「已压缩 N 条更早消息（丢弃 M 条）」，
+TUI 状态栏也会追加 `已压缩 N 条（丢弃 M 条）`；压缩期间状态栏显示 `压缩中…`，完成后在消息流里贴一条
+结果提示（失败也一样贴，并带上原因）。
+
+摘要指令本身是一份资源文件，随**插件**发布（`summary-prompt.md`，在插件 jar 根目录），
+不是硬编码在内核的代码里。插件只回答「这一次该怎么压」——摘要指令与两个数量参数；读消息、选范围、
+发模型调用、推进边界、记用量全部由内核负责，插件拿不到任何一条消息正文。
+
 ## 配置
 
 配置分四份用户可改的文件，每份对应一个配置类。**文件位置与插件扫描目录只在 `config.json` 里声明**，其余文件都走「全局级 + 项目级」双源，项目级优先。另有一份随构件发布的 `default-agent.json`（内置系统默认 agent），它不走双源、用户改不了。
@@ -181,7 +223,7 @@ CSI-u 等所有「带修饰的 Enter」编码都无法被底层框架区分（�
 | `models.json` | `ModelSettings` | `defaultProvider` / `defaultModel` / `providers` |
 | `agents.json` | `AgentSettings` | `agents`（用户自定义 agent） |
 | `jellyfish.json` | `JellyfishSettings` | `plugins`（名单与插件配置段）等运行期设置 |
-| `default-agent.json` | `AgentDefinition` | 内置系统默认 agent（classpath 根，不走双源） |
+| `default-agent.json` | `AgentDefinition` | 内置系统默认 agent（classpath 根，不走双源；跟着读它的加载器放在 `jellyfish-infra/src/main/resources/`） |
 
 `config.json` 放在 classpath 根（本仓库为 `jellyfish-cli/src/main/resources/config.json`）：
 
@@ -241,7 +283,7 @@ CSI-u 等所有「带修饰的 Enter」编码都无法被底层框架区分（�
 
 上例的 `coder` 还需要一份 `coder.md`（与 `agents.json` 同目录），内容就是它的系统提示词，可以是多段长文。
 
-`default-agent.json`（内置，位于 `jellyfish-cli/src/main/resources/`，与 `config.json` 同目录）：
+`default-agent.json`（内置，随 `jellyfish-infra` 发布在 classpath 根——资源跟着读它的加载器走，加载器在 infra）：
 
 ```json
 {
@@ -265,7 +307,10 @@ CSI-u 等所有「带修饰的 Enter」编码都无法被底层框架区分（�
   "react": {
     "maxRounds": 16,
     "contextReserveTokens": 1024,
-    "maxToolOutputChars": 20000
+    "maxToolOutputChars": 20000,
+    "compactKeepRecentMessages": 20,
+    "compactMaxSummaryChars": 4000,
+    "autoCompactPercent": 80
   },
   "permission": {
     "approvalTimeoutSeconds": 120
@@ -273,7 +318,7 @@ CSI-u 等所有「带修饰的 Enter」编码都无法被底层框架区分（�
 }
 ```
 
-`react` 段控制 ReAct 循环：`maxRounds` 是单回合最大轮数；`contextReserveTokens` 是上下文预算里为系统提示词 / 插件注入的上下文预留的 token；`maxToolOutputChars` 是单个工具输出回灌模型前的截断长度。缺省值即为上表；非法值（非正数）回退到缺省值。
+`react` 段控制 ReAct 循环：`maxRounds` 是单回合最大轮数；`contextReserveTokens` 是上下文预算里为系统提示词 / 插件注入的上下文预留的 token；`maxToolOutputChars` 是单个工具输出回灌模型前的截断长度；`compactKeepRecentMessages` 是压缩默认保留的最近消息条数（写 `0` 即「不保留原文」）；`compactMaxSummaryChars` 是摘要长度上限（提示模型别写太长，真超了按码点本地截断并留标记）；`autoCompactPercent` 是上下文用到多少百分比就自动压缩（写 `0` 关闭自动压缩，只留手动 `/compact`）。缺省值即为上表；非法值（非正数）回退到缺省值。
 
 `permission` 段当前只有 `approvalTimeoutSeconds`：`askTools` 里的工具在 TUI 上弹审批框后最多等这么久，超时按拒绝处理。它有缺省值（120 秒）而不允许「永不超时」——审批请求发生在 `react` 线程上并被同步等待，一个永远不来的答复就是一条永远不返回的线程。
 
@@ -306,6 +351,7 @@ CSI-u 等所有「带修饰的 Enter」编码都无法被底层框架区分（�
 | `jellyfish-plugin-session-file` | `jellyfish-session-file` | 会话持久化：一个会话一个 JSON 文件，并用 git 管理历史 |
 | `jellyfish-plugin-todo` | `jellyfish-todo` | 会话待办：模型可写的 `todo_write` 工具 + 只读 `/todo` + 注入 system prompt + 状态栏进度 + 侧栏清单面板 |
 | `jellyfish-plugin-project` | `jellyfish-project` | 项目约定：探测工作目录下的 `AGENTS.md`，在 system prompt 里给出**路径指引**（不注入全文） |
+| `jellyfish-plugin-compact` | `jellyfish-compact` | 会话压缩策略：提供摘要指令与保留条数/摘要上限（**不装它就没有压缩**，见下文） |
 
 `jellyfish-tools` 的五个工具：
 
@@ -328,6 +374,7 @@ cp jellyfish-plugins/jellyfish-plugin-tools/target/jellyfish-plugin-tools-*.jar 
 cp jellyfish-plugins/jellyfish-plugin-session-file/target/jellyfish-plugin-session-file-*.jar plugins/
 cp jellyfish-plugins/jellyfish-plugin-todo/target/jellyfish-plugin-todo-*.jar plugins/
 cp jellyfish-plugins/jellyfish-plugin-project/target/jellyfish-plugin-project-*.jar plugins/
+cp jellyfish-plugins/jellyfish-plugin-compact/target/jellyfish-plugin-compact-*.jar plugins/
 ```
 
 插件配置写在 `jellyfish.json` 的 `plugins.configurations.<pluginId>` 段：
@@ -346,6 +393,10 @@ cp jellyfish-plugins/jellyfish-plugin-project/target/jellyfish-plugin-project-*.
       "jellyfish-todo": {
         "todoDir": "~/jellyfish/todos",
         "readOnlyTools": ["todo_write"]
+      },
+      "jellyfish-compact": {
+        "keepRecentMessages": 20,
+        "maxSummaryChars": 4000
       }
     }
   }
@@ -360,6 +411,7 @@ cp jellyfish-plugins/jellyfish-plugin-project/target/jellyfish-plugin-project-*.
 - `sessionDir`（默认 `~/jellyfish/sessions`）：会话文件目录。会话是跨项目的运行态数据，因此默认放全局级目录。
 - `gitEnabled`（默认 `true`）：首次落盘时在 `sessionDir` 里 `git init`，此后**每次内容变化的落盘留一次提交**（内容没变则不写文件、也不提交）。机器上没有 git 时只告警，文件照常落盘。
 - `todoDir`（默认 `~/jellyfish/todos`）：待办文件目录，一个会话一个 JSON 文件，空表会删掉文件。
+- `keepRecentMessages` / `maxSummaryChars`（`jellyfish-compact`，**都可省略**）：本插件对压缩参数的覆盖值；省略时用内核 `react` 段的缺省值。省略是「不表态」，不是「用 0」。
 - `jellyfish-project` **没有配置项**：约定文件名固定为 `AGENTS.md`，查找基准固定为进程工作目录。
 
 ### 待办（jellyfish-todo）
@@ -395,3 +447,33 @@ cp jellyfish-plugins/jellyfish-plugin-project/target/jellyfish-plugin-project-*.
 - 因为走的是插件而不是内置提示词，**对所有 agent 生效**——用 `/agent` 换成自定义 agent 也照常。
 
 代价是模型确实会去读那个文件（这是它遵守约定的前提），读进来的内容占多少上下文在 `/status` 里看得见，必要时 `/compact`。
+
+### 会话压缩（jellyfish-compact）
+
+压缩是**插件能力**，不是内核内置功能。内核手里只有机制——读消息、选范围、发模型调用、校验摘要、
+推进边界、记用量、落盘；「这次该压成什么样」由本插件回答：一份摘要指令（本插件 jar 里的
+`summary-prompt.md`）+ 两个可选参数。
+
+**不启用它就没有压缩**：没有插件提供摘要指令，就没有可以发给模型的摘要请求。此时
+
+- 自动压缩不生效（上下文满了只会走 `ContextWindow` 的机械裁剪，历史在**请求里**变少）；
+- `/compact` 与 `/compact preview` 直接回答「压缩不可用：没有插件提供压缩策略」；
+- `/status` 的压缩一行显示「不可用（没有插件提供压缩策略）」。
+
+三种状态一眼可辨：**没装插件**（不可用）、**装了但还没压过**（未压缩）、**压过了**（已压缩 N 条）。
+插件在 `~/jellyfish/plugins/` 里但没有列进 `jellyfish.json` 的 `plugins.enabled` 时，算「没装」；
+启动日志里会有一条 `插件被禁用或版本不满足，未启动: pluginId=jellyfish-compact`。
+
+插件里能调的只有两个数字，**摘要措辞改不了**（它在插件 jar 里）：`keepRecentMessages` 与
+`maxSummaryChars`，省略即「不表态」，用 `react` 段里的缺省值。内核还会把它们钳制到合法区间——
+插件写出荒谬的值不该让压缩失控。
+
+摘要指令里用 `{maxSummaryChars}` 表示长度上限，内核替换成当次生效的值：
+
+```markdown
+… 5. 用与原文相同的语言书写，总长控制在 {maxSummaryChars} 字以内。
+```
+
+自己写一份也行：改 `jellyfish-plugin-compact/src/main/resources/summary-prompt.md` 后重新打包。占位符缺失不算错误（内核仍会按上限本地截断），但模型会少一条自我约束，因此内核记一条告警。
+
+`/compact preview` 会把这次要付的代价先算给你看——压几条、保留几条、丢弃几条、摘要输入约多少 token。

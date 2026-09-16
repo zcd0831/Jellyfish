@@ -78,7 +78,7 @@ flowchart TB
 
     subgraph "外部依赖·插件与脚本"
         direction LR
-        Plugins["PF4J 插件<br>官方: tools / session-file / todo / project<br>Java: 工具/记忆/横切<br>桥接: Python / TS 语言适配"]
+        Plugins["PF4J 插件<br>官方: tools / session-file / todo / project / compact<br>Java: 工具/记忆/横切<br>桥接: Python / TS 语言适配"]
         Scripts["脚本插件进程<br>Python 常驻网关 / TS·JS 常驻网关<br>单进程多路复用"]
     end
 
@@ -217,14 +217,15 @@ flowchart LR
 | `jellyfish-plugin-session-file` | `zcd:jellyfish-plugin-session-file` | 官方会话持久化插件：一个会话一个 JSON 文件 + git 管理历史 | `jellyfish-api`（provided） |
 | `jellyfish-plugin-todo` | `zcd:jellyfish-plugin-todo` | 官方待办插件：模型可写的 `todo_write` 工具 + 只读 `/todo` 命令 + system prompt 注入 | `jellyfish-api`（provided） |
 | `jellyfish-plugin-project` | `zcd:jellyfish-plugin-project` | 官方项目约定插件：探测工作目录下的 `AGENTS.md`，在 system prompt 里给出**路径指引**（不注入全文） | `jellyfish-api`（provided） |
+| `jellyfish-plugin-compact` | `zcd:jellyfish-plugin-compact` | 官方压缩插件：会话压缩的**摘要策略**（摘要指令 + 保留条数与摘要上限）；不启用它即压缩整体不可用 | `jellyfish-api`（provided） |
 
 包名一律全小写。
 
 ```
 jellyfish-api/src/main/java/zcd/jellyfish/api/
 ├── JellyfishException.java        # 统一运行时异常，插件抛错也能被 core 统一捕获
-├── extension/                     # 扩展点对外模型（同步派发侧）：类型即地址的请求类型（ExtensionRequest / ExtensionHandler / XxxRequest）与结果类型；工具名片 ToolDescriptor 带 readOnly（会不会产生副作用的唯一权威声明，随 handler 落表）；结果类型按能力开洞，例如权限判定用三态 PermissionDecision、插件拦截用两态 PermissionVeto、命令用三态 CommandResult（配 CommandDescriptor 名片与 CommandArguments 参数）；会话持久化额外带一套快照值类型（SessionSnapshot / SessionMessageSnapshot / SessionToolCallSnapshot / SessionUsageSnapshot / TokenUsageSnapshot）作为请求载荷，其中 SessionMessageSnapshot 带可空 thinking（思考过程随消息落盘，展开态才有的看）；提示词注入用 PromptContributionRequest → PromptContribution，状态栏片段用 StatusLineContributionRequest → StatusLineContribution，面板用 PanelContributionRequest → PanelContribution（带标题、内容行与**软建议**落位区域，真正的落位归外壳）；只有数据与接口，没有任何调用语义参数
-├── event/                         # 事件通道对外模型（异步派发侧）：事件基类、发布订阅入口与注册选项，以及 notification/ 下的具体通知（含 UiInvalidatedEvent：插件主动告诉外壳「我贡献的界面内容已过期」的唯一通道）；只有数据与接口，没有任何调用语义参数
+├── extension/                     # 扩展点对外模型（同步派发侧）：类型即地址的请求类型（ExtensionRequest / ExtensionHandler / XxxRequest）与结果类型；工具名片 ToolDescriptor 带 readOnly（会不会产生副作用的唯一权威声明，随 handler 落表）；结果类型按能力开洞，例如权限判定用三态 PermissionDecision、插件拦截用两态 PermissionVeto、命令用三态 CommandResult（配 CommandDescriptor 名片与 CommandArguments 参数）；会话压缩用 CompactionStrategyRequest → CompactionStrategy（插件只定策略，只带数字与标识、不带消息正文，触发原因见 CompactionTrigger）；会话持久化额外带一套快照值类型（SessionSnapshot / SessionMessageSnapshot / SessionToolCallSnapshot / SessionUsageSnapshot / TokenUsageSnapshot / SessionCompactionSnapshot）作为请求载荷，其中 SessionMessageSnapshot 带可空 thinking，SessionSnapshot 带可空 compaction（压缩边界 + 摘要 + 被丢弃条数，从未压缩过时为空）（思考过程随消息落盘，展开态才有的看）；提示词注入用 PromptContributionRequest → PromptContribution，状态栏片段用 StatusLineContributionRequest → StatusLineContribution，面板用 PanelContributionRequest → PanelContribution（带标题、内容行与**软建议**落位区域，真正的落位归外壳）；只有数据与接口，没有任何调用语义参数
+├── event/                         # 事件通道对外模型（异步派发侧）：事件基类、发布订阅入口与注册选项，以及 notification/ 下的具体通知（含 UiInvalidatedEvent：插件主动告诉外壳「我贡献的界面内容已过期」的唯一通道，CompactionAppliedEvent：压缩推进了边界）；只有数据与接口，没有任何调用语义参数
 ├── ui/                            # 插件界面内容的渲染无关模型：UiLine / UiSegment / UiEmphasis（语义强调档位而非颜色）/ UiRegion（软建议区域）；api 是零依赖的，因此这里不能出现渲染引擎类型（Style / Element），否则插件自带的同名类会在「子优先」类加载器下与内核那份不是同一个 Class
 └── plugin/                        # 插件 SPI：插件总入口（JellyfishPlugin）、插件上下文（PluginContext）与插件声明（PluginDeclaration），面向仓库外插件作者的唯一稳定契约
 
@@ -232,16 +233,16 @@ jellyfish-infra/src/main/java/zcd/jellyfish/infra/
 ├── registry/       # 注册表底座 TypeRegistry：按「类型 + 路由键 → 有序 handler 集合」存储，同键唯一、描述符随 handler 一起存；同步与异步两侧共用，不依赖任何第三方事件总线
 ├── extension/      # 同步派发策略 ExtensionRegistry：调用点线程内联执行、按 order 升序、取返回值、不可丢弃；查找分 handlers（只要处理器）、bindings（连 owner 一起给，供审计归因）与 descriptorBindings（连 routeKey 与 owner 一起给的描述符清单，供命令清单 / 菜单）；需要结果或必须完成的扩展点走这里
 ├── event/          # 异步派发策略 EventChannel：线程池 + 有界队列、无返回值、可丢弃；纯通知，带白名单与限流
-├── session/        # 会话运行态：会话隔离、消息列表、token 统计，以及会话内当前 agentId / 当前模型 / 权限模式（仅内存态；无配置段）；消息除 token 用量外还带 thinking（思考过程，与 usage 同属会话域元信息，刻意不进厂商无关的 LlmMessage）；SessionManager 是唯一变更入口，每次变更同步派发 SessionPersistRequest（失败上抛），删除时同步派发 SessionDeleteRequest（先删插件那一份、成功后才从表里移除），启动期用 SessionRestoreRequest 向插件要回会话；SessionSnapshots 负责会话模型 ↔ api 快照的双向映射，Session.restore 由快照还原
+├── session/        # 会话运行态：会话隔离、消息列表、token 统计、压缩摘要（SessionCompaction：边界消息 + 摘要正文 + 被丢弃条数，消息一条不删），以及会话内当前 agentId / 当前模型 / 权限模式（仅内存态；无配置段）；消息除 token 用量外还带 thinking（思考过程，与 usage 同属会话域元信息，刻意不进厂商无关的 LlmMessage）；SessionManager 是唯一变更入口，每次变更同步派发 SessionPersistRequest（失败上抛），删除时同步派发 SessionDeleteRequest（先删插件那一份、成功后才从表里移除），启动期用 SessionRestoreRequest 向插件要回会话；applyCompaction 推进压缩边界并发 CompactionAppliedEvent、recordUsage 记一次「不产生消息的调用」的用量（/compact 的摘要调用就是这种）；SessionSnapshots 负责会话模型 ↔ api 快照的双向映射，Session.restore 由快照还原
 ├── agent/          # Agent 定义注册表：AgentManager（门面，implements PermissionPolicyProvider，按 agentId 提供提示词原文与权限策略，默认 agent 恒为内置）+ AgentRegistry（定义与策略的只读索引；内置 agent 优先，同名用户条目跳过并告警）；提示词拼装归 core/prompt，新增事件 AgentsLoadedEvent
-├── command/        # 命令域服务 CommandManager：输入解析 / 别名解析 / 分发 / 结构化清单（CommandInfo）/ 帮助渲染 / 只读候选查询（options → CommandOptionRequest → CommandOptions，供「选中命令即弹选择页」且不执行命令），按类型查询注册表；只注入 ExtensionRegistry，对外壳（cli / tui / server）中立；系统命令与插件命令同源，系统命令由 core/command/SystemCommands 以 owner=core 注册（/compact 等仍待落地）
+├── command/        # 命令域服务 CommandManager：输入解析 / 别名解析 / 分发 / 结构化清单（CommandInfo）/ 帮助渲染 / 只读候选查询（options → CommandOptionRequest → CommandOptions，供「选中命令即弹选择页」且不执行命令），按类型查询注册表；只注入 ExtensionRegistry，对外壳（cli / tui / server）中立；系统命令与插件命令同源，系统命令由 core/command/SystemCommands 以 owner=core 注册
 ├── model/          # 模型注册与路由：维护 provider/model 索引，按名字解析模型并给出 LLM 客户端（不持有全局当前态）
 ├── llm/            # LLM 调用抽象：统一的同步/流式调用接口与各厂商实现
 ├── plugin/         # 插件运行时：Java 插件加载、热部署、描述符体检与上下文供给，按统一 SPI 看待桥接插件，不感知底层脚本进程；装配输入 PluginRuntimeConfig 由「config.json 的 plugins.roots（扫描目录）+ jellyfish.json 的 plugins 段（名单/配置段）」两处组装，且是「引用稳定、快照可换」的发布点
 ├── permission/     # 权限控制：核心策略（agent 授权）→ PLAN 只读白名单（工具提供方在 ToolDescriptor.readOnly 声明 ∪ plugins.configurations.<pluginId>.readOnlyTools 用户追加，取并集且现查描述符，热部署后立刻跟随）→ 插件两态拦截 → ASK 交 ApprovalChannel 问审批者，判定后发审计事件；权限检查不经扩展层下发，由调用点同步询问；策略来源由 AgentManager 实现 PermissionPolicyProvider。ApprovalChannel 是「react 线程同步等答复 ↔ 渲染线程每帧取件」的唯一交接点，审批者只能是外壳（不开扩展点），未挂审批者 / 超时 / 排队溢出 / 通道关闭 / 中断一律拒绝
 ├── ui/             # UI 贡献门面 UiContributions：外壳向插件收集界面内容、并订阅「内容可能已过期」的唯一入口（外壳不直接认识 ExtensionRegistry / EventChannel）；两类贡献的区别只在「能否共存」——状态栏片段是拼接型（多插件共存，按 owner 去重），面板是独占型（带上 owner 交给外壳与用户仲裁）；调用模型是「失效时收集」而不是「每帧收集」，因此空闲时零插件调用，代价是失效触发源必须记全；单处理器抛错只跳过它自己
 ├── metrics/        # 可观测性：指标采集、健康检查与日志上报
-├── config/         # 配置加载：全局级 + 项目级双源读取与合并，只读；四类配置类与文件一一对应：AppConfig(config.json) / ModelSettings(models.json) / AgentSettings(agents.json) / JellyfishSettings(jellyfish.json，含 plugins / react / permission 段)；AppConfig 额外承载 PluginPaths(config.json 的 plugins.roots，插件扫描目录，不是双源段)；另有不走双源的内置 agent 定义：BuiltinAgentLoader(classpath:default-agent.json) + AgentPromptLoader({agentId}.md 的路径安全校验与加载)
+├── config/         # 配置加载：全局级 + 项目级双源读取与合并，只读；四类配置类与文件一一对应：AppConfig(config.json) / ModelSettings(models.json) / AgentSettings(agents.json) / JellyfishSettings(jellyfish.json，含 plugins / react / permission 段；react 段除轮数与上下文预留外还管压缩的保留条数、摘要上限与自动压缩阈值)；AppConfig 额外承载 PluginPaths(config.json 的 plugins.roots，插件扫描目录，不是双源段)；另有不走双源的内置 agent 定义：BuiltinAgentLoader(classpath:default-agent.json) + AgentPromptLoader({agentId}.md 的路径安全校验与加载)
 └── support/        # 通用支撑：序列化封装、类型常量等底层工具
 
 jellyfish-core/src/main/java/zcd/jellyfish/core/
@@ -250,8 +251,9 @@ jellyfish-core/src/main/java/zcd/jellyfish/core/
 ├── ReActTurn.java                 # 回合句柄：cancel / await / isDone
 ├── ReActListener.java             # 流式回调：文本 / 思考 / 工具 / 完成 / 取消 / 错误
 ├── ReActResult.java               # 回合结果：completed / truncated / cancelled
-├── prompt/                        # 系统提示词与上下文组装：PromptAssembler / ToolCatalog / ContextWindow / TokenEstimator
-└── command/                       # 内核系统命令 SystemCommands（owner=core）
+├── prompt/                        # 系统提示词与上下文组装：PromptAssembler（system prompt = agent 提示词 → 插件贡献 → 历史摘要；消息先按压缩边界截断再做窗口裁剪；assemble 同时产出 ContextUsage）/ PromptAssembly / ContextUsage / ToolCatalog / ContextWindow / TokenEstimator
+├── compact/                       # 会话压缩机制：ConversationCompactor（自持守护线程池 + 每会话 IDLE/RUNNING/DONE/FAILED 状态机供外壳轮询；plan 纯本地、start 只起头、autoCompactIfNeeded 供每轮挂钩、isAvailable 只查注册表）/ CompactionPlan（预览与执行共用同一份计划）/ CompactionUnavailableException（压缩功能缺席，与「没什么可压」分开）/ 摘要指令本身不在这里——它归插件
+└── command/                       # 内核系统命令 SystemCommands（owner=core，含 /compact：无参执行 / preview 只看，都只起头不等结果）
 
 jellyfish-cli/src/main/java/zcd/jellyfish/cli/
 ├── JellyfishApplication.java       # main：解析启动参数后交给 Launcher；-h / -V 就地返回
@@ -274,6 +276,7 @@ jellyfish-tui/src/main/java/zcd/jellyfish/tui/
 ├── DockPanel.java                  # 常驻面板：{标题, 视觉行}；与 Overlay 同形但独立类型（模态浮层与常驻面板是两套账本）
 ├── UiPlacement.java                # 面板落位仲裁：候选分组、默认（建议区域 / DOCK）、用户指定优先、关闭只影响显示
 ├── UiCommand.java                  # 外壳自有命令 /ui 的解析与清单渲染（纯逻辑）：清单 / 轮换 / 指定 pluginId / off / on
+├── CompactionView.java             # 压缩在界面上的一层（纯逻辑）：状态栏标记 + 「压缩中 → 终态」的一次性提示；切换会话只对表不报
 ├── ChatState.java                  # 视图状态：滚动窗口切片、智能跟随、外壳提示缓冲（带时间戳，参与投影排序）、思考展开开关（全局，纳入重投影判据）
 ├── UiCache.java                    # 插件 UI 贡献的帧间缓存：只在失效时收集，空闲时零插件调用；版本号跨线程自增，收集期间发生的失效不会丢
 ├── InflightTurn.java               # 进行中回合的暂存区（有界）：唯一一处「尚未成为会话消息」的数据
@@ -366,19 +369,31 @@ jellyfish-plugins/                        # 官方插件聚合（packaging=pom�
             ├── TodoJson.java             # 待办 JSON 读写（自带 Jackson，显式注解不靠 -parameters）
             ├── TodoText.java             # 四种渲染（提示词块 / 只读清单 / 工具确认 / 状态栏进度）集中一处
             └── PluginConfig.java         # todoDir，含 ~ 展开（插件自己展开）
-└── jellyfish-plugin-project/
+├── jellyfish-plugin-project/
+│   ├── pom.xml                           # 只依赖 jellyfish-api（provided）+ 测试期 infra；无第三方依赖，因此不需要 shade
+│   └── src/main/
+│       ├── resources/plugin.properties
+│       └── java/zcd/jellyfish/plugin/project/
+│           ├── ProjectPlugin.java                # 一个插件只占一个扩展点：注册提示词贡献
+│           ├── ConventionFiles.java              # 固定名 AGENTS.md 的存在性探测（常规文件且非空；空文件不算）
+│           └── ProjectPromptContribution.java    # [项目约定] 路径指引块；只给路径不给正文，未命中时空贡献
+└── jellyfish-plugin-compact/
     ├── pom.xml                           # 只依赖 jellyfish-api（provided）+ 测试期 infra；无第三方依赖，因此不需要 shade
     └── src/main/
         ├── resources/plugin.properties
-        └── java/zcd/jellyfish/plugin/project/
-            ├── ProjectPlugin.java                # 一个插件只占一个扩展点：注册提示词贡献
-            ├── ConventionFiles.java              # 固定名 AGENTS.md 的存在性探测（常规文件且非空；空文件不算）
-            └── ProjectPromptContribution.java    # [项目约定] 路径指引块；只给路径不给正文，未命中时空贡献
+        ├── resources/summary-prompt.md                                # 摘要指令（占位符 {maxSummaryChars}；资源根目录，不镜像包名）
+        └── java/zcd/jellyfish/plugin/compact/
+            ├── CompactPlugin.java                   # 一个插件只占一个扩展点：注册压缩策略
+            ├── SummaryPrompt.java                   # 用自身类加载器读自带资源（插件不依赖 infra，没有 SettingsReader 可用）
+            ├── CompactionStrategyContribution.java  # 摘要指令 + 两个数量参数（不表态即 null，让内核用缺省值）
+            └── PluginConfig.java                    # keepRecentMessages / maxSummaryChars，可选且必须为正整数
 
-jellyfish-cli/src/main/resources/config.json       # 应用配置（进程名 + 各配置段的双源文件路径）
-jellyfish-cli/src/main/resources/default-agent.json  # 内置系统默认 agent（不走双源）
-jellyfish-cli/src/main/resources/jellyfish.md        # 内置系统 agent 的提示词（文件名 = agentId）
-jellyfish-cli/src/main/resources/log4j2.xml           # 日志：root 默认 WARN、只写 stderr（回答走 stdout，不能被日志污染）
+jellyfish-infra/src/main/resources/default-agent.json  # 内置系统默认 agent（不走双源）
+jellyfish-infra/src/main/resources/jellyfish.md        # 内置系统 agent 的提示词（文件名 = agentId）
+jellyfish-plugins/jellyfish-plugin-compact/src/main/resources/summary-prompt.md  # 会话压缩的摘要指令（占位符 {maxSummaryChars}）——资源跟着读者走，读者是插件
+jellyfish-cli/src/main/resources/config.json        # 应用配置（进程名 + 各配置段的双源文件路径）——部署事实，归外壳
+jellyfish-cli/src/main/resources/log4j2.xml          # 日志：root 默认 WARN、只写 stderr（回答走 stdout，不能被日志污染）
+jellyfish-cli/src/main/resources/log4j2-tui.xml      # TUI 专用日志：root 写文件（写终端会糊画面）
 ```
 
 - **分层靠模块强制**：`core` 与 `infra` 拆开，Maven 才能在编译期守住「应用层 → 基础设施层」这条依赖方向；`api` 独立，是因为它的消费者是仓库外的插件。
@@ -421,7 +436,7 @@ jellyfish-cli/src/main/resources/log4j2.xml           # 日志：root 默认 WAR
 - **依赖注入（Dagger2）**：通过 Dagger2 进行依赖注入，对各个模块进行解耦。
 - **配置加载**：`AppConfig` 直接绑定 `classpath:config.json`，应用级配置，**只有它声明各配置文件的位置与插件扫描目录**；默认约定全局级目录 `~/jellyfish/`、项目级目录 `./jellyfish/`（`~` 与 `~/` 由 `SettingsReader` 展开为用户主目录，`~other` 不展开）。`SettingsBinder` 会把 `${ENV_VAR}` 替换为环境变量（`\${VAR}` 转义），apiKey 通常这样注入。
 - **插件扫描目录写在 `config.json` 的 `plugins.roots`，不在 `jellyfish.json`**：它与「去哪个文件读配置」同属部署事实，所以和 `model` / `agent` / `jellyfish` 三段路径放在同一处；`jellyfish.json` 的 `plugins` 段只留 `enabled` / `disabled` / `configurations`。`roots` 只写一处、不参与双源合并；`RuntimeConfig.getPluginRoots()` 负责展开条目行首的 `~`（与文件路径同一套规则，共用 `HomePaths`）并丢弃空白条目，空列表由 `PluginRuntimeConfig` 回退默认目录 `plugins`。
-- **四份配置与四类配置类一一对应**：`config.json`→`AppConfig`、`models.json`→`ModelSettings`、`agents.json`→`AgentSettings`、`jellyfish.json`→`JellyfishSettings`（`plugins` / `react` / `permission` 三段）；类名与文件名一致，一个文件一个根类、一个双源段（`config.json` 里的 `plugins` 段只承载 `PluginPaths` 一份目录清单，不是双源段）。此外 `classpath:default-agent.json` 是随构件发布的**内置只读**定义，不走双源、不进 `AppConfig`。
+- **四份配置与四类配置类一一对应**：`config.json`→`AppConfig`、`models.json`→`ModelSettings`、`agents.json`→`AgentSettings`、`jellyfish.json`→`JellyfishSettings`（`plugins` / `react` / `permission` 三段，压缩的两项参数并入 `react` 段而不是新开一段——它们与轮数、预留同属「一次请求长什么样」，放在一处才看得出互相牵制）；类名与文件名一致，一个文件一个根类、一个双源段（`config.json` 里的 `plugins` 段只承载 `PluginPaths` 一份目录清单，不是双源段）。此外 `classpath:default-agent.json` 是随构件发布的**内置只读**定义，不走双源、不进 `AppConfig`。
 - **agent 的提示词改为同名 md，默认 agent 内置**：`AgentSettings` 删掉了 `defaultAgent`，用户配置改不了「进来用谁」——启动与新建会话恒绑 `classpath:default-agent.json` 里的内置 agent，想换必须 `/agent` 显式切换。每个 agent 的提示词来自与配置文件（或内置 json）同目录的 `{agentId}.md`，JSON 里写 `systemPrompt` 会被忽略（`@JsonIgnore`，因为 Jackson 默认允许对 final 字段反射赋值）。md **随源加载**（合并前按各自目录补上），所以项目级覆盖同名 agent 时提示词一起换。非法 `agentId`（含路径分隔符或 `..`）整条丢弃并告警；用户条目与内置 agent 同名时保留内置、跳过用户条目并告警；内置定义或其 md 缺失属打包错误，直接抛 `JellyfishException`。
 - **global/project 合并**：`RuntimeConfig` 合并两者，同名 provider / agent / 插件配置段以 project **整对象**覆盖 global，默认 provider/model/agent 同理，`react` / `permission` 段同样整对象覆盖；列表段（启用 / 禁用名单）项目级**已声明则整体替换**（写 `[]` 即清空该名单，不再回退全局）。
 - **「字段缺失」与「显式空数组」是两回事**：`agents.json` 的 `permissions.allowedTools` 与 `jellyfish.json` 的 `plugins.enabled`，缺失（反序列化为 `null`）表示「不限制 / 不额外限定」，显式写 `[]` 表示「一个都不放行 / 一个都不启用」。因此配置层（`AgentPermissions` / `PluginsSettings` / `PluginRuntimeConfig`）保留了「是否声明」这一位信息，`PermissionPolicy` 的允许集合也用 `null` 表示未声明；把两者归一成空集合就会让 `[]` 退化成 fail-open（全放行 / 全部插件加载）。`plugins.roots` 不适用本规则：它为空仍回退默认目录 `plugins`。
@@ -429,13 +444,28 @@ jellyfish-cli/src/main/resources/log4j2.xml           # 日志：root 默认 WAR
 - **流式调用**：`AbstractHttpLlmClient` 用 OkHttp 手写 SSE（`text/event-stream`）解析，流式请求在线程池（守护线程，名为 `llm-stream`）中执行，句柄可 `cancel()`。OpenAI 兼容协议的公共逻辑在 `AbstractOpenAiCompatibleLlmClient`。
 - **ReAct 循环**：`AgentHarness.chat(sessionId, input, listener)` 是外壳唯一的智能入口，委托 `ReActLooper` 在专用 `react` 守护线程池里异步推进；文本 / 思考增量实时回调（思考同时随 assistant 消息落库，供 TUI 折叠/展开回看），工具调用只取流结束后的聚合结果。工具失败（权限拒绝 / 未知工具 / 工具异常）一律转成 tool 结果消息回灌给模型，只有模型调用本身失败才上抛。
 - **上下文裁剪只裁本次请求**：`core/prompt` 的 `ContextWindow` 按 `Model.contextLength - maxOutputTokens - react.contextReserveTokens` 的预算，从最旧开始成组丢弃（assistant(toolCalls) 与其 tool 结果同生共死），`Session` 里存的历史一条不动；模型未配 `contextLength` 时不裁剪。
+- **`/compact` 是另一条路：多花一次调用换长期便宜**。`ContextWindow` 是「临时裁剪」，`/compact` 是「把旧历史压成摘要，之后每轮都少付这份 token」。三条口径必须一起理解：
+  1. **非破坏式**：消息一条不删——屏幕投影、持久化、`/resume` 拿到的都是完整历史，变的只有「发给模型的那条链路从哪里开始」。压缩结果只是 `Session.compaction = {boundaryMessageId, summary, droppedMessageCount}` 这一笔账，因此失败无副作用（摘要请求出错 / 摘要为空时边界一点都不动）。
+  2. **滚动摘要**：`/compact` 压的永远是「上次边界之后、再留出 `keepRecent` 条原文」的那一段，并把**上一份摘要一起喂进摘要请求**合并；边界只向后移。不把旧摘要喂回去，被压掉的信息就永久丢失；不按旧边界起压，则会重复花钱压同一段。
+  3. **摘要是 system prompt 里的一块，不是一条消息**：顺序 **agent 提示词 → 插件贡献 → 历史摘要**（摘要放最后，离当前对话最近，模型更容易当背景而不是当前指令）。作为消息回灌会被后续每轮重复 append 回会话，越聊越像一份不断膨胀的假历史——与「插件上下文只走 system prompt」是同一条理由。
+  边界消息不在会话里（手工改过文件）时**整份压缩记录失效**：不猜位置、不注入摘要，退回「从未压缩过」多发一些历史（贵一点，但不会让模型基于矛盾信息作答）。
+- **一次压完，装不下就丢最旧的（单次压缩，不做多轮）**：摘要请求本身也受同一个上下文窗口约束，而「要压的东西大到发不出去」恰恰是需要压缩的原因。因此待压范围超过预算时**从最旧侧丢弃**到装得下为止，只把最新的一段交给模型，边界照样推进到保留段之前——一次命令一次调用，耗时与花费都可预期。被丢弃的那一段既不在摘要里也不再进请求，是**真正消失的数据**，因此它的条数会如实上报并随会话落盘（`droppedMessageCount`），完成提示与 system prompt 里的摘要块都会写明「其中 M 条未收录」——不给出口的话，模型会拿一份缺了内容的摘要当作完整的过往。至少进摘要 1 条：一条都不进会得到「边界前移了、摘要却没变」这种最难排查的状态。`compactKeepRecentMessages` 写 `0` 表示一条原文都不留。
+- **触发有两条：用户敲 `/compact`（`MANUAL`），或内核在每轮组装请求时自动压（`AUTO`）**。自动那一路的判据与 `ContextWindow` 的裁剪判据**同源**（`PromptAssembler.assemble` 顺带产出 `ContextUsage`，用同一个 `TokenEstimator` 与同一个预算公式），满足任一条即触发：**用量达到 `react.autoCompactPercent`（缺省 80）**，或**本次请求已经发生了机械裁剪**——后者比前者更该压，它意味着历史正在静默丢失。两个自然推论：模型没配 `contextLength` 时比例无从判断，自动压缩不生效（只能手动）；`autoCompactPercent` 写 `0` 即关闭自动压缩。
+- **自动压缩跑在本轮模型调用旁边，不阻塞它**：挂钩在 `ReActLooper` 每轮组装完请求之后、发出之前，请求已经构造好，因此压缩只是「顺手起一个后台任务」，结果在下一轮组装时才生效。已有压缩在跑时自动那一路直接让路（不排队、不叠加）；没有可压范围时 `plan` 返回 `null`，**不发请求、零成本**——这两条合起来保证自动压缩既不会反复花钱，也不会死循环。
+- **`/compact` 只起头、不等结果**：命令派发给 `core/compact/ConversationCompactor` 后立刻返回，压缩跑在自持的 `compact` 守护线程池上（在渲染线程上同步等一次完整模型调用等于把界面冻住）；结果由外壳每帧轮询 `status(sessionId)` 呈现（`RUNNING` → 状态栏 `压缩中…`，`RUNNING → DONE/FAILED` → 消息流里贴一条提示）。**状态带触发原因**，所以提示能自报来源（「已自动压缩：…」/「自动压缩失败：…」）——用户没敲命令、花的却是他的额度，这件事必须说出来。摘要调用的 token 经 `SessionManager.recordUsage` 计入会话用量——**它不该在对话里留下一条消息**（屏幕会多出一条谁也没说过的话），但花掉的钱必须记账。`/status` 与 TUI 状态栏都显示「已压缩 N 条（丢弃 M 条）」（条数由边界在消息列表里的位置**现算**，不另存一份可能撒谎的数字），压缩不可用时 `/status` 的那一行显示「不可用（没有插件提供压缩策略）」。
+- **`/compact` 只有两个形态：无参执行、`preview` 只看不压**。刻意不做「保留 5 条 / 全压」这类用户可见档位——保留多少是「一次请求长什么样」的一部分，归 `react.compactKeepRecentMessages` 与插件策略管；把同一件事同时开成命令参数与配置项，只会让「我明明配了 20 条，怎么压成 5 条了」变成一个查不出来的疑问。也因此 `/compact` 不注册候选查询处理器（没有候选可弹）。
+- **插件拿不到的三样东西**：消息正文（载荷只有数字与标识，因此无法「只压某几条」或按内容改范围）、发起模型调用的能力（只回答「怎么压」，那次调用由内核发出并记账）、否决权（返回值里没有「这次不要压」这种表达）。**合并规则**：逐字段取 **order 最小且声明了该字段** 的那一个——不拼接、不取极值。拼接会拼出一份谁也没写过的摘要指令（只有「补充段」才谈得上叠加，整份指令谈不上）；取极值在不同字段上有不同方向，讲不清也难测。只声明数值、不写指令的插件是合法的（它只调参数），只要另有插件提供指令。内核还会把数值**钳制**到合法区间（保留条数 `[0, 消息总数]`、摘要上限 `[200, 20000]`）——这是内核对自己保命机制的把关。单个处理器抛错只记 WARN 跳过；因为它在同步派发路径上被调用，处理器必须**只读且快**，不得发布事件。
+- **压缩是插件能力，内核只提供机制**：内核手里是读消息、选范围、发模型调用、校验摘要、推进边界、记用量、落盘；「这一次该压成什么样」由插件回答——`CompactionStrategyRequest` → `CompactionStrategy` 给出**摘要指令**与两个数量参数（保留条数、摘要上限）。因此 **`Session.compaction` 这套状态仍在内核（infra），压缩策略归插件**：换措辞、调保留条数、不想用就卸掉，都不必动内核。
+- **没有插件 = 压缩整体不可用**，不是「回退到内置策略」：没有摘要指令就没有可发给模型的摘要请求，这是缺件而不是配置。三条路径的表现必须一致且都说得清：`ConversationCompactor.isAvailable()` **只查注册表不执行 handler**（它会被每轮组装与 `/status` 问到，不能变成一次插件调用）；`/compact` 与 `/compact preview` 由命令层直接回「压缩不可用：没有插件提供压缩策略」（**「功能缺席」与「没什么可压」是两回事**，前者要装插件、后者再聊几句就有了）；自动那一路**静默让路，但第一次真正用得上却用不了时记一条 WARN 并广播 `ConfigWarningEvent`**（上下文到阈值却压不了，意味着接下来每轮都在靠机械裁剪丢历史；但每轮刷一条日志会把界面和日志淹掉，因此整进程只提醒一次）。`plan`/`start` 另抛 `CompactionUnavailableException` 兜底「有处理器但指令为空」这种坏插件，异常类型是为了让调用点分流，而不是靠比对文本。
+- **摘要指令是插件自带的资源**：`summary-prompt.md`（jar 根目录，不镜像包名——它是给人改的文本，不是按包名匹配的数据），用**插件自己的类加载器**读（插件对 `jellyfish-infra` 没有依赖，没有 `SettingsReader` 可用），启动期一次性读完，处理器因此永远是纯内存操作。资源跟着读者走：读它的类在插件里，它就在插件的 jar 里，内核的 classpath 上不出现任何摘要措辞。缺文件/内容空白在**启动期**直接抛（这个插件少了它就等于没装）。占位符 `{maxSummaryChars}`（不用 `%d`：提示词里天然可能出现 `%`；常量 `CompactionStrategy.MAX_CHARS_PLACEHOLDER` 放在 api，因为它是插件与内核的契约）由内核替换；**缺占位符只告警不失败**——与内核自带资源时期不同：指令现在是别人写的，为了一句没写的占位符让整功能不可用，失败面大于收益，而超长摘要本来就有本地截断兜底。表头与角色标签（`[...]`）是**输入格式的结构标记**，仍留在内核代码里。
+- **资源跟着读者走，不跟着入口走**：读它的类在哪个模块，资源就放哪个模块的 `src/main/resources`——`default-agent.json` 与 `{agentId}.md`（内置 `jellyfish.md`）归 **infra**（`BuiltinAgentLoader` 在那里），摘要指令归**压缩插件**（`CompactPlugin` 在那里），`config.json`（部署事实：读哪几份文件、插件扫哪个目录）与 `log4j2*.xml`（日志策略）归**外壳** cli。这条规则不是洁癖：资源放错模块意味着「内核的一份必需数据由外壳提供」，将来换一个 composition root（如 `jellyfish-server`）就会以「内置默认 agent 配置缺失」的方式启动失败，而单测全绿没人发现——本仓库为此付过的代价正是 infra 里那份 `src/test/resources/config.json` 副本，以及把所有 loader 都 mock 掉、没人盯打包的测试。
 - **插件上下文注入只走 system prompt，不写回历史**：`PromptContributionRequest` → `PromptContribution` 是插件把自有状态（待办、召回的记忆……）送进模型的唯一入口：内核按 `order` 依次询问、拼接进 system prompt（`\n\n` 分隔），**不追加进 `messages`**，否则会被后续每轮重复 append 回会话，导致重复累积、回放与 token 统计失真。请求带 `sessionId`，就是插件找回自己那份状态的钥匙；没有处理器时内核不下发额外上下文。单个处理器抛错只记 WARN 跳过——贡献是锦上添花，不该让整个对话发不出去。
 - **异常**：统一抛 `JellyfishException`。
 - **序列化与反序列化**: 读写统一走 `ObjectMapperWrapper`，不要直接 new `ObjectMapper`。
 - **请求/消息模型**：`LlmRequest`、`LlmMessage`、`LlmTool` 是与厂商无关的统一模型，`LlmRequest` 用 builder 构建。
 - **配置类型**：应用内部配置类（即项目代码里的配置，不会暴露给用户）用`Config`结尾，提供用用户的配置类用`Settings`结尾。
 - **会话状态一律归 `Session`，进程内没有全局当前态**：当前 agentId / 当前 provider / 当前 model / 权限模式都是**会话字段**，由 `SessionManager` 统一读写（唯一变更入口），因此同一进程内的不同会话可以各用各的；`ModelManager` 只做解析与路由。会话是**内存运行态**：不当配置、不建索引，其配置随插件走 `jellyfish.json` 的 `plugins.configurations.<pluginId>`，因此**不设 `session` 配置段**。
-- **会话持久化是一等职责，不是旁路**：`SessionManager` 的每个变更入口（创建 / 追加消息 / 改标题 / 绑 agent / 切模型 / 切权限模式 / 关闭）都会同步派发 `SessionPersistRequest`，处理器异常**原样上抛**——那一刻起「状态已变」与「状态已落盘」必须同生共死，静默吞掉只会让下次启动悄悄少一段历史。落盘的是**整个会话快照**，因此上一次失败的变更会在下一次任何变更时被一并补上。创建与关闭因此调整了次序：先落盘再入表 / 先落盘再移除，避免「能看见但没存下」与「已关闭但没存下」。恢复（`SessionRestoreRequest`）的失败语义**相反**：单个插件读不出备份只记告警并跳过，因为落盘失败会丢新数据，而恢复失败只是回到「从零开始」。恢复必须排在 `pluginManager.bootstrap()` **之后**（插件此刻才注册好处理器），导入的会话同样广播 `SessionCreatedEvent`。**删除走另一条语义**：`SessionManager.delete` 先派发 `SessionDeleteRequest`（插件清掉自己那一份存储），成功后才从会话表移除并广播 `SessionClosedEvent`——删不掉就当没删，避免「界面说删了、文件还在、下次启动复活」；当前会话被删后当前指针清空，TUI 据此回到首页。`close()` 与 `delete()` 分工明确：前者结束运行态但保留磁盘内容（先落最后快照），后者是「不要了」。
+- **会话持久化是一等职责，不是旁路**：`SessionManager` 的每个变更入口（创建 / 追加消息 / 改标题 / 绑 agent / 切模型 / 切权限模式 / 应用压缩 / 记一次不产生消息的用量 / 关闭）都会同步派发 `SessionPersistRequest`，处理器异常**原样上抛**——那一刻起「状态已变」与「状态已落盘」必须同生共死，静默吞掉只会让下次启动悄悄少一段历史。落盘的是**整个会话快照**，因此上一次失败的变更会在下一次任何变更时被一并补上。创建与关闭因此调整了次序：先落盘再入表 / 先落盘再移除，避免「能看见但没存下」与「已关闭但没存下」。恢复（`SessionRestoreRequest`）的失败语义**相反**：单个插件读不出备份只记告警并跳过，因为落盘失败会丢新数据，而恢复失败只是回到「从零开始」。恢复必须排在 `pluginManager.bootstrap()` **之后**（插件此刻才注册好处理器），导入的会话同样广播 `SessionCreatedEvent`。**删除走另一条语义**：`SessionManager.delete` 先派发 `SessionDeleteRequest`（插件清掉自己那一份存储），成功后才从会话表移除并广播 `SessionClosedEvent`——删不掉就当没删，避免「界面说删了、文件还在、下次启动复活」；当前会话被删后当前指针清空，TUI 据此回到首页。`close()` 与 `delete()` 分工明确：前者结束运行态但保留磁盘内容（先落最后快照），后者是「不要了」。
 - **会话快照是 api 侧的投影，不是第二份真相**：`Session` / `LlmMessage` 住在 `jellyfish-infra`，插件只看得到 `jellyfish-api`，因此跨边界的载荷必须是一套 api 值类型（`SessionSnapshot` 及其嵌套）。映射归 `infra/session/SessionSnapshots`（与模型同域，模型加字段时改动落在同一个包），并用**往返测试**（`capture → restore → capture` 逐字段相等）守住「快照漏了一个字段」这种不会让任何编译失败的错。不走「不透明 JSON 字符串」是因为那会让持久化插件除「存/取」外什么都做不了（加密、迁移、搜索、同步数据库），而「类型即地址、契约显式」是本项目的底线。**这些快照类型必须恰好只有一个可见构造器**：插件侧靠 Jackson 的「隐式属性构造器」反序列化（`-parameters` + `ParameterNamesModule`），多出一个重载会让整套快照**直接读不回来**（实测 `no delegate- or property-based Creator`）——所以新增字段时不要加「兼容构造器」，兼容入口写成静态工厂（例：`SessionMessageSnapshot.of(...)`）。
 - **`-parameters` 是全局编译约定，不许去掉**：api 的扩展点载荷是「全字段构造器 + 无 setter」的不可变类型，插件侧用 Jackson 反序列化时只能靠构造器参数名把 JSON 字段对上（`ParameterNamesModule` + `-parameters`）。丢了这个编译标志，「文件写得出、重启后读不回」，而编译与大部分单测依然全绿——只有 JSON 往返测试会报错。
 - **一份注册表 + 两种派发策略**：内核与插件之间只有两个能力面——`ExtensionRegistry`（同步派发）与 `EventChannel`（异步派发），两者共用**同一份内核自有类型注册表**（`infra/registry` 内实现，不依赖任何第三方事件总线）。差异只在派发策略：同步策略在调用点线程内联调用、按 `order` 升序、取返回值、异常原样上抛；异步策略先入有界队列再由订阅者线程派发、无返回值、可丢弃。
@@ -444,11 +474,12 @@ jellyfish-cli/src/main/resources/log4j2.xml           # 日志：root 默认 WAR
 - **调用语义由入口与方法表达**：`PluginContext.handle` 同键唯一（工具、命令，描述符随 handler 一起存），`PluginContext.contribute` 类型级 0..N（收集式），两者都写进同一份类型注册表——工具与命令只是类型不同，不存在第二份注册表。同步侧只提供**有序查找**（`ExtensionRegistry.handlers` 返回按 `order` 升序的处理器列表；`handler` 是「此处恰好一个」的 fail-fast 版本，0 个 `NO_HANDLER`、多个 `AMBIGUOUS_HANDLER`）与**单处理器执行**（`invoke(handler, request)` 在调用点线程内联执行并返回其结果），注册表自身**不做任何编排**。需要审计归因的调用点改用 `bindings`：与 `handlers` 语义一致、只是连 owner 一起给，例如权限审计要记录「是哪个插件拦的」。需要**清单**（而不是执行）的调用点改用 `descriptorBindings`：连 `routeKey` 与 owner 一起给出描述符，且**描述符为空的注册也返回**，例如命令帮助与菜单必须列出「没写名片但可执行」的命令。
 - **同步派发的护栏由调用方负责**：`ExtensionRegistry` 在调用点线程内联执行 handler，没有超时、没有白名单、没有异常隔离——这是刻意的，因为调用方需要拿到确定结果。调用方若不能容忍插件阻塞或抛错，必须自己在调用点设超时 / 捕获；`EventChannel` 侧的白名单 / 限流 / 有界队列不能替代同步侧。
 - **组合规则属于调用方**：注册表只保证**有序查找**，调用几个、按什么顺序、什么时候停止、结果怎么合并都由内核在各调用点自己决定（写出显式的循环），不存在按类型硬编码的调度参数。等到需要「跳过某个处理器也不能算失败」「同一个处理器失败要换个策略」这类规则时，改动只会落在调用点。
+- **「没有可压的历史」与「压完了」是两回事**：无参 `/compact` 在待压范围为空时报 `ERROR`（用户要的动作没发生）；`/compact preview` 同样情况返回 `OK` 加一句说明（它要的只是信息）。预览与执行共用 `CompactionPlan`——预览说「将压缩 42 条」，执行就必须真的压那 42 条，各算一遍就会因为中间插入一条消息而对不上，而用户已经照着预览做了决定。因此预览那条路径**连模型都不解析**（模型解析做成「尽力而为」）：一台没配模型的机器上 `/compact preview` 该回答「没什么可压」，而不是「没有可用模型」。
 - **命令域只解析与分发，不拥有命令**：`CommandManager` 不注册处理器、不持有会话、不发事件、不缓存索引（每次现算，插件热部署后立刻可见）；命令名即路由键，别名与用法来自随 handler 落表的 `CommandDescriptor`（名片不含名字，避免「名片上的名字 ≠ 路由键」）。原文入口（输入框）与结构化入口（Web/TUI 直接给命令名 + 参数）共用同一条分发路径，且**对外壳中立**——cli / tui / server 谁调都一样；结果只有三态 + 文本，命令的副作用写回对应域服务，外壳执行后读域服务拿状态。内核系统命令（`/help` `/new` `/session` `/resume` `/model` `/agent` `/mode` `/status` `/usage` `/delete`）由 `core/command/SystemCommands` 以 owner=`core` 注册进同一份注册表；`/todo` 由 `jellyfish-plugin-todo` 注册，与其它插件命令**完全同源**，`/exit` 归外壳。**候选查询是与执行平行的一条只读路径**：需要用户挑参数的命令（`/agent` `/model` `/mode` `/resume` `/delete`）额外注册 `CommandOptionRequest` → `CommandOptions` 处理器，外壳选中命令时先查候选、有候选就弹二级选择页——不执行命令，因此不会误触 `/new` 这类副作用；`CommandResult` 的 choices 仅用于「直接发送无参命令」这条路径。
 - **权限判定的三层与 fail-open 的适用域**：`PermissionManager` 依次走「核心策略（普通 Java 代码）→ PLAN 只读白名单 → 插件拦截（两态、只收紧）」，再统一处理 ASK 与审计。**ASK 由 `ApprovalChannel` 收口**：策略要求人工审批时，判定线程阻塞等待、外壳每帧取件并回填结论，只有**明确批准**才放行——无审批者（`-cli` / `-server` 不挂）、超时、排队溢出、通道关闭、线程被中断一律拒绝（fail-closed，绝不静默放行）；超时秒数来自 `jellyfish.json` 的 `permission.approvalTimeoutSeconds`（缺省 120，每轮现读），审计 `source` 记为 `approval` 以便与「策略直接放行」区分。fail-open 只覆盖「取不到策略」（未绑定 agent、无策略）；策略一旦生效，它的否定结论就是硬结论，否则 PLAN 模式形同虚设。插件侧结果类型独立为两态 `PermissionVeto`，因此「插件只能 Deny、不能要求人工审批」是编译期约束，不靠运行期判定。**只读白名单有两个来源**：权威来源是 `ToolDescriptor.readOnly`（工具提供方自己声明，随 handler 一起落表，因此工具装上/卸下/热部署时自动跟随，不需要任何通知边），用户追加来源是 `plugins.configurations.<pluginId>.readOnlyTools`（只能追加、不能撤销提供方声明）；两者取并集，由 `ReadOnlyTools` 现算。
 - **插件模型**：Java 插件与跨语言桥接插件在 `PF4JPluginManager` 眼里完全同构，都只经 `PluginContext`（`handle` / `contribute` / `observe` / `emit`）与内核交互：前两者写同一份类型注册表，后两者读写事件通道；脚本进程只是桥接插件背后的一台「无状态计算器」。
 - **插件碰不到会话、也拿不到工作目录**：`PluginContext` 只有身份与四个注册订阅方法，`ToolCallRequest` / `CommandRequest` 只带 `sessionId` 这类标识。两个直接后果：插件读写不了会话内部结构（消息列表、权限模式）；工具的相对路径只能按**进程工作目录**解析（`ToolPaths` 把这个基准集中在一处，将来补会话级 cwd 只改那里）。这不是缺陷而是边界——**只要一份状态能按 `sessionId` 归属，插件就完全能自己持有它**：`jellyfish-plugin-todo` 就是这样把待办从内核搬走的（自持文件 + 提示词贡献），内核不用新增会话字段，也不必为它保留任何调用点。
-- **官方插件**：`jellyfish-plugin-tools` 提供文件读写/编辑、目录列举与文本搜索五个工具（`read_file` / `list_dir` / `grep_files` 在描述符里声明为只读，供 PLAN 白名单；`write_file` / `edit_file` 不是）；`jellyfish-plugin-session-file` 把会话写成「一个会话一个 JSON 文件」并用 git 管理历史，并处理 `SessionDeleteRequest`（删文件，提交复用落盘那条路径——`git add` 对已删除的路径本来就记录删除）。**该插件的失败语义是分层的**：文件落盘失败上抛（文件是真相，对应内核的「不可丢」），git 与单个坏文件只记告警（git 只是附加的版本化层，机器没装 git 不该升级成「不能说话」；一个坏文件不该拖累同目录其它会话）。目录默认 `~/jellyfish/sessions`，首次落盘时 `git init`，提交身份用 `git -c user.name/user.email` 临时指定（新机器没有全局 git 配置也能提交，且不会把用户身份写进本仓库）；只认会话目录自己的 `.git`，绝不向上寻找父仓库。`jellyfish-plugin-todo` 承载会话待办：`todo_write` 工具整表覆盖（参数非法当场抛错，由 ReAct 转成 tool 结果回灌给模型）、只读 `/todo`、经 `PromptContributionRequest` 注入 system prompt、经 `StatusLineContributionRequest` 在状态栏显示 `待办 2/5`、经 `PanelContributionRequest` 在侧栏常驻显示完整清单（已完成项整行变暗；建议右栏但可被忽略），并在写成功后广播 `UiInvalidatedEvent` 让状态栏与面板不必等回合结束就刷新；状态落在 `<todoDir>/<sessionId>.json`（默认 `~/jellyfish/todos`，空表删文件）；待办只按 `sessionId` 归属，因此它不需要任何会话内部结构；并处理 `SessionDeleteRequest` 清掉本会话待办文件，不留孤儿。`jellyfish-plugin-project` 只做一件事：探测**进程工作目录**下有没有 `AGENTS.md`（常规文件且非空），有则经 `PromptContributionRequest` 在 system prompt 里给出一段 `[项目约定]` **路径指引**（不注入全文），没有则空贡献。指引里**只有路径没有正文**是两个考虑叠加：原文可能几十上百 KB，全文注入会每轮都付这份 token 并挤占 `ContextWindow` 里历史消息的预算；而仓库内容按「工具结果」进去是数据，塞进 system prompt 就变成了「第三方仓库以最高优先级说话」。查找基准与 `ToolPaths` 同一处（进程工作目录），否则会出现「工具按 A 解析、约定按 B 解析」的错位。
+- **官方插件**：`jellyfish-plugin-tools` 提供文件读写/编辑、目录列举与文本搜索五个工具（`read_file` / `list_dir` / `grep_files` 在描述符里声明为只读，供 PLAN 白名单；`write_file` / `edit_file` 不是）；`jellyfish-plugin-session-file` 把会话写成「一个会话一个 JSON 文件」并用 git 管理历史，并处理 `SessionDeleteRequest`（删文件，提交复用落盘那条路径——`git add` 对已删除的路径本来就记录删除）。**该插件的失败语义是分层的**：文件落盘失败上抛（文件是真相，对应内核的「不可丢」），git 与单个坏文件只记告警（git 只是附加的版本化层，机器没装 git 不该升级成「不能说话」；一个坏文件不该拖累同目录其它会话）。目录默认 `~/jellyfish/sessions`，首次落盘时 `git init`，提交身份用 `git -c user.name/user.email` 临时指定（新机器没有全局 git 配置也能提交，且不会把用户身份写进本仓库）；只认会话目录自己的 `.git`，绝不向上寻找父仓库。`jellyfish-plugin-todo` 承载会话待办：`todo_write` 工具整表覆盖（参数非法当场抛错，由 ReAct 转成 tool 结果回灌给模型）、只读 `/todo`、经 `PromptContributionRequest` 注入 system prompt、经 `StatusLineContributionRequest` 在状态栏显示 `待办 2/5`、经 `PanelContributionRequest` 在侧栏常驻显示完整清单（已完成项整行变暗；建议右栏但可被忽略），并在写成功后广播 `UiInvalidatedEvent` 让状态栏与面板不必等回合结束就刷新；状态落在 `<todoDir>/<sessionId>.json`（默认 `~/jellyfish/todos`，空表删文件）；待办只按 `sessionId` 归属，因此它不需要任何会话内部结构；并处理 `SessionDeleteRequest` 清掉本会话待办文件，不留孤儿。`jellyfish-plugin-project` 只做一件事：探测**进程工作目录**下有没有 `AGENTS.md`（常规文件且非空），有则经 `PromptContributionRequest` 在 system prompt 里给出一段 `[项目约定]` **路径指引**（不注入全文），没有则空贡献。指引里**只有路径没有正文**是两个考虑叠加：原文可能几十上百 KB，全文注入会每轮都付这份 token 并挤占 `ContextWindow` 里历史消息的预算；而仓库内容按「工具结果」进去是数据，塞进 system prompt 就变成了「第三方仓库以最高优先级说话」。查找基准与 `ToolPaths` 同一处（进程工作目录），否则会出现「工具按 A 解析、约定按 B 解析」的错位。`jellyfish-plugin-compact` 承载会话压缩的策略：经 `CompactionStrategyRequest` 交出摘要指令（自带资源）与两个可选的数字参数，`plugin.properties` 的 id 即 `jellyfish-compact`；它<b>不做</b>压缩的执行——读消息、发调用、推进边界都在内核，因此压缩的机制与状态留在内核、只有「怎么压」是插件。副产品是一条清晰的开关：不启用这个插件，压缩整体不存在（见上文「压缩是插件能力」那条），而这正是「会话压缩该不该装」这个问题的答案应该有的形态。
 - **跨语言通信**：JSON-RPC 2.0 over Stdio，每行一个 JSON；每种语言最多一个常驻进程（单进程多路复用），请求统一经 `ScriptGateway` 路由，脚本不直接管理进程。
 - **跨语言事件桥接**：内核通知经 `EventBridge` 推给脚本，脚本 `emit_event` 反向回 `EventChannel`；脚本来源事件带来源标记避免回推，事件类型走白名单、负载限 1MB、队列有界。
 

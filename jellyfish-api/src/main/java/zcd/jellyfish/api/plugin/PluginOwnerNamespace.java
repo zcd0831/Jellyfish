@@ -1,5 +1,7 @@
 package zcd.jellyfish.api.plugin;
 
+import zcd.jellyfish.api.JellyfishException;
+
 /**
  * 插件 owner 命名空间：注册表里「一个插件可以用多个来源」这件事的约定。
  * <p>
@@ -38,5 +40,45 @@ public final class PluginOwnerNamespace {
      * 常量类，禁止实例化。
      */
     private PluginOwnerNamespace() {
+    }
+
+    /**
+     * 校验并返回一个子标识。
+     * <p>
+     * <b>为什么这一个校验要放在 api 而不是各写一份</b>：子标识会出现在两个地方——插件拼自己的来源
+     * （如脚本清单里的脚本标识）与框架派生命名空间（{@code PluginContext.subContext}）。
+     * 两处规则一旦不一致，就会出现「清单校验时通过、启动时却因为拼不出合法 owner 而失败」，
+     * 而报错现场离真正的原因很远。因此规则与消息只有这一份。
+     * <p>
+     * 拒绝三类取值，各自的理由不同：
+     * <ul>
+     *     <li><b>空白</b>：会造出形如 {@code pluginId:: a} 的来源，既不便于肉眼辨认，
+     *     也让日志里的字段对齐失效；</li>
+     *     <li><b>路径分隔符与空白字符</b>：子标识通常取自目录名或文件片段，带分隔符意味着
+     *     调用方把「路径」当成了「名字」，早时报错比让它变成来源里的一段怪字符好；</li>
+     *     <li><b>命名空间分隔符</b>：自带它就能在一个命名空间内再造一层，层级变得不可预测。
+     *     回收本身仍然正确（前缀匹配天然兼容），但诊断输出会变得含糊。</li>
+     * </ul>
+     * <b>不做 trim 后返回</b>：子标识里的首尾空白是调用方的 bug，静默替它抹掉只会把这个 bug
+     * 推到更难排查的地方——这里一律报错。
+     *
+     * @param childId 子标识，不可为 {@code null} 或空白
+     * @return 原样返回的子标识
+     * @throws JellyfishException 不满足上述规则时抛出
+     */
+    public static String requireChildId(String childId) {
+        if (childId == null || childId.trim().isEmpty()) {
+            throw new JellyfishException("子标识不得为空白");
+        }
+        for (int index = 0; index < childId.length(); index++) {
+            char current = childId.charAt(index);
+            if (Character.isWhitespace(current) || current == '/' || current == '\\') {
+                throw new JellyfishException("子标识不得含空白字符或路径分隔符: " + childId);
+            }
+        }
+        if (childId.contains(SEPARATOR)) {
+            throw new JellyfishException("子标识不得包含 \"" + SEPARATOR + "\": " + childId);
+        }
+        return childId;
     }
 }

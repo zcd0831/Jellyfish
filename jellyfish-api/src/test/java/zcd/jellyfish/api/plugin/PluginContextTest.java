@@ -137,6 +137,9 @@ class PluginContextTest {
      */
     private static final class RecordingContext implements PluginContext {
 
+        /** 本上下文的身份，子上下文在此基础上派生。 */
+        private String id = "test";
+
         /** 最后一次注册的请求类型。 */
         private Class<?> requestType;
 
@@ -166,12 +169,21 @@ class PluginContextTest {
 
         @Override
         public String pluginId() {
-            return "test";
+            return id;
         }
 
         @Override
         public Map<String, Object> configuration() {
             return java.util.Collections.emptyMap();
+        }
+
+        @Override
+        public PluginContext subContext(String childId) {
+            // 桩类只保留「身份怎么派生」这一点形状；真实语义（校验、能力与配置不变、
+            // 回收随父）由 PluginContextImplTest 覆盖。
+            RecordingContext nested = new RecordingContext();
+            nested.id = pluginId() + PluginOwnerNamespace.SEPARATOR + childId;
+            return nested;
         }
 
         @Override

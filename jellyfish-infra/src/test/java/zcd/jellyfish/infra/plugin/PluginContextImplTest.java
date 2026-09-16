@@ -1,6 +1,7 @@
 package zcd.jellyfish.infra.plugin;
 
 import org.junit.jupiter.api.Test;
+import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.event.JellyfishEvent;
 import zcd.jellyfish.api.event.RegisterOptions;
 import zcd.jellyfish.api.event.notification.ConfigWarningEvent;
@@ -25,6 +26,7 @@ import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -54,6 +56,62 @@ class PluginContextImplTest {
     void pluginId_should_come_from_declaration() {
         // Then
         assertEquals("plugin-a", context.pluginId());
+    }
+
+    @Test
+    void subContext_should_deriveChildIdentity_when_childIdIsValid() {
+        // When
+        PluginContextImpl child = (PluginContextImpl) context.subContext("jira");
+
+        // Then：身份是「父身份 + 分隔符 + 子标识」，子上下文不再是根插件标识
+        assertEquals("plugin-a::jira", child.pluginId());
+    }
+
+    @Test
+    void subContext_should_carryConfiguration_when_parentHasConfiguration() {
+        // Given
+        Map<String, Object> configuration = new LinkedHashMap<String, Object>();
+        configuration.put("scriptsRoot", "scripts/python");
+        PluginContextImpl configured = new PluginContextImpl(
+                PluginDeclaration.of("plugin-a", configuration), extensions, events);
+
+        // When
+        PluginContextImpl child = (PluginContextImpl) configured.subContext("jira");
+
+        // Then：子上下文与父上下文读同一份配置段，插件不必再调一次 configuration().get(...)
+        assertEquals(configuration, child.configuration());
+    }
+
+    @Test
+    void subContext_should_registerUnderChildOwner_when_handlerIsRegisteredThroughIt() {
+        // When
+        PluginContextImpl child = (PluginContextImpl) context.subContext("jira");
+        child.handle(ToolCallRequest.class, "jira_issue", new ToolDescriptor("jira_issue", "读 issue"),
+                request -> new ToolCallResult("jira_issue", "ok"));
+
+        // Then
+        assertEquals("plugin-a::jira",
+                typeRegistry.resolve(ToolCallRequest.class, "jira_issue").get(0).getOwner());
+    }
+
+    @Test
+    void subContext_should_supportFurtherNesting_when_childDerivesAgain() {
+        // When：层级回收天然支持任意深度，所以不特意禁止；这里钉住形状而不是禁止它
+        PluginContextImpl grandChild =
+                (PluginContextImpl) ((PluginContextImpl) context.subContext("a")).subContext("b");
+
+        // Then
+        assertEquals("plugin-a::a::b", grandChild.pluginId());
+    }
+
+    @Test
+    void subContext_should_rejectInvalidChildId_when_childIdBreaksOwnerNamespace() {
+        // When / Then：子标识是编程错误而不是运行时条件，应当场报错
+        assertThrows(JellyfishException.class, () -> context.subContext(null));
+        assertThrows(JellyfishException.class, () -> context.subContext("  "));
+        assertThrows(JellyfishException.class, () -> context.subContext("a b"));
+        assertThrows(JellyfishException.class, () -> context.subContext("a/b"));
+        assertThrows(JellyfishException.class, () -> context.subContext("a::b"));
     }
 
     @Test

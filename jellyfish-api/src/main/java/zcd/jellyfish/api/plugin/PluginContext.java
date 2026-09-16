@@ -44,6 +44,33 @@ public interface PluginContext {
     String pluginId();
 
     /**
+     * 派生一个子上下文：身份是本插件标识加 {@link PluginOwnerNamespace#SEPARATOR} 加子标识，
+     * 能力与配置与本上下文完全一致。
+     * <p>
+     * <b>解决什么问题</b>：一个插件常常由多个彼此独立的子单元组成（脚本插件的每个脚本、多后端插件的
+     * 每个后端……）。若它们的注册全部挂在同一个插件标识下，诊断输出里就分不出「这个工具到底是谁提供的」，
+     * 也无法按子单元治理。派生一个子上下文，注册就会落在自己的命名空间下，而框架卸载时仍按
+     * 插件标识一次性把它们全收干净——两者不是二选一，而是靠命名空间同时成立。
+     * <p>
+     * <b>为何不能越界</b>：子身份恒从<b>当前</b>身份派生，插件无法借此注册到别人的命名空间里；
+     * 也没有任何入口能让它指定一个与自己的插件标识无关的 owner。
+     * <p>
+     * <b>子标识的取值规则</b>见 {@link PluginOwnerNamespace#requireChildId(String)}；
+     * 不满足就当场报错（属于编程错误，不是运行时条件）。
+     * <p>
+     * <b>可以继续派生</b>（形状为 {@code a::b::c}）：层级回收天然支持，因此不特意禁止，
+     * 但一层通常就够——每多一层，诊断输出就多一份推导成本。
+     * <p>
+     * <b>何时调、调几次都不限</b>：它只是个轻量对象，不产生任何注册。但注册本身仍只能在
+     * {@code start()} 窗口内发生（见 {@link JellyfishPlugin}），派生得再早也不改变这一点。
+     *
+     * @param childId 子标识，不可为空白，且不得含空白字符、路径分隔符与命名空间分隔符
+     * @return 子上下文，保证非 {@code null}
+     * @throws zcd.jellyfish.api.JellyfishException 子标识不合法时抛出
+     */
+    PluginContext subContext(String childId);
+
+    /**
      * 获取本插件在 {@code jellyfish.json} 中的配置段。
      * <p>
      * 双源合并与环境变量替换已由内核完成，插件拿到的是最终值；插件不允许自行读配置文件。

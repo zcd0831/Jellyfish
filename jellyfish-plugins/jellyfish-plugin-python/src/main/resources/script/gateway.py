@@ -23,6 +23,7 @@
 
 import errno
 import json
+import collections
 import os
 import select
 import signal
@@ -64,6 +65,10 @@ SPAWN_INTERVAL_SECONDS = 1.0
 # **必须比宿主的初始化等待上限短**：否则宿主机先超时，用户只能看到「初始化没回应」，
 # 而真正有用的信息（哪个脚本、差在哪个扩展点）本来就在网关手里
 MIN_INITIALIZE_SECONDS = 10.0
+
+# 回声记忆条数：脚本刚发布出去的事件不再推回给同一个脚本（脚本收到自己发的事件就是环）。
+# 有界是必须的——它按条数而不是时间过期，因为「事件还在飞」这件事没有可观测的终点。
+ECHO_MEMORY = 256
 
 
 class Worker(object):
@@ -130,6 +135,13 @@ class Gateway(object):
         self.wakeup_w = None
         self.seq = 0
         self.fd_map = {}
+        # 事件：等待宿主裁决的发布请求（序号 → 脚本），以及「刚发布出去的事件 → 发起脚本」
+        self.pending_emit = {}
+        self.emitted = collections.OrderedDict()
+        # 事件计数：推送成功 / 因 worker 忙或没有 worker 而丢弃 / 因是自己的回声而跳过
+        self.events_pushed = 0
+        self.events_dropped = 0
+        self.events_echoed = 0
 
     # ------------------------------------------------------------ 生命周期
 
@@ -178,6 +190,9 @@ class Gateway(object):
             self._reap()
         for state in self.states.values():
             self._close_worker(state)
+        if self.events_pushed or self.events_dropped or self.events_echoed:
+            self._log("事件统计: 推送 %d，丢弃 %d（worker 忙或没有 worker），跳过回声 %d"
+                      % (self.events_pushed, self.events_dropped, self.events_echoed))
         self._log("网关退出: %s" % (self.exit_reason or "正常关闭"))
 
     # ------------------------------------------------------------ 事件循环
@@ -442,9 +457,15 @@ class Gateway(object):
     # ------------------------------------------------------------ 宿主请求
 
     def _handle_java_frame(self, frame):
-        """处理宿主发来的请求或通知。"""
+        """处理宿主发来的请求、通知或应答。"""
         if "id" not in frame:
             self._handle_java_notification(frame)
+            return
+        if frame.get("method") is None:
+            # 既没有方法又有 id：这是宿主对**网关发起的调用**的应答。
+            # 网关只发起一种调用（发布事件），因此这里只有一条分支——
+            # 若哪天多了别的，这段就该改成按 id 查表分派，而不是继续 if/else
+            self._handle_emit_response(frame)
             return
         request_id = frame["id"]
         method = frame.get("method")
@@ -464,8 +485,68 @@ class Gateway(object):
             self._reply_error(request_id, CODE_METHOD_NOT_FOUND, "不支持的方法: %s" % method)
 
     def _handle_java_notification(self, frame):
-        """处理通知。事件桥接尚未接通，因此只记一条日志。"""
-        self._log("收到通知 %s（事件桥接尚未接通，已忽略）" % frame.get("method"))
+        """处理宿主的通知。目前只有事件推送一种。"""
+        method = frame.get("method")
+        if method == "event":
+            self._push_event(frame.get("params") or {})
+            return
+        self._log("忽略未知的宿主通知: %s" % method)
+
+    def _push_event(self, params):
+        """把一条事件扇出给「声明了它、且当前空闲」的 worker。
+
+        三条取舍都在这里：
+
+        - **只推给已经在跑的 worker**：给事件补拉起一个进程，等于让「一条通知」变成一次
+          拉起解释器的重操作，而通知本身是可以丢的。代价是没调用过的脚本收不到事件。
+        - **忙的 worker 直接丢**：worker 是单线程的，卡在一次长调用里时它的 socket 缓冲区
+          迟早会被事件填满，而网关是单线程事件循环——一次阻塞写就把整个网关钉住。
+          计数而不排队，是这里唯一不会让网关停摆的选择。
+        - **跳过发起者**：脚本收到自己刚发布的事件就是环。宿主在发布应答里给了 eventId，
+          这里据此认出「这条事件是它自己发的」。
+        """
+        name = params.get("event")
+        payload = params.get("payload") or {}
+        allowed = self.settings.get("allowedEvents") or []
+        if allowed and name not in allowed:
+            self.events_dropped += 1
+            return
+        event_id = payload.get("eventId")
+        origin = self.emitted.pop(event_id, None) if event_id else None
+        for state in self.states.values():
+            if name not in (state.manifest.get("events") or []):
+                continue
+            if origin == state.script_id:
+                self.events_echoed += 1
+                continue
+            current = state.worker
+            if current is None or current.kill_at is not None or state.inflight is not None:
+                self.events_dropped += 1
+                continue
+            try:
+                current.sock.sendall(wire.encode(
+                    {"method": "event", "params": {"event": name, "payload": payload}}))
+                self.events_pushed += 1
+            except Exception as error:  # noqa: BLE001  见下：事件出错不能带走网关
+                # 捕获面刻意开得比 OSError 大：事件是**旁路**，它失败最多丢一条通知，
+                # 而从这里漏出去的异常会终止整个事件循环——等于把「少收一条通知」
+                # 升级成「所有脚本全部不可用」。这个教训是实测来的：
+                # 一个 TypeError（把 socket 当 fd 用）就这样带走过一次网关
+                self._log("[%s] 推送事件失败: %s: %s"
+                          % (state.script_id, type(error).__name__, error))
+                self.events_dropped += 1
+
+    def _handle_emit_response(self, frame):
+        """处理发布事件的应答：记住 eventId，供扇出时掐掉回声。"""
+        script_id = self.pending_emit.pop(frame.get("id"), None)
+        result = frame.get("result") or {}
+        event_id = result.get("eventId")
+        if result.get("accepted") and event_id:
+            self.emitted[event_id] = script_id
+            while len(self.emitted) > ECHO_MEMORY:
+                self.emitted.popitem(last=False)
+            return
+        self._log("脚本 %s 发布的事件被拒绝: %s" % (script_id, result.get("reason") or "未知原因"))
 
     def _initialize(self, request_id, params):
         """下发脚本清单并为每个脚本拉起 worker。"""
@@ -553,6 +634,9 @@ class Gateway(object):
         if "ready" in frame:
             self._handle_ready(state, frame)
             return
+        if frame.get("method") == "emit_event":
+            self._forward_emit(state, frame.get("params") or {})
+            return
         current = state.worker
         if current is None or state.inflight is None:
             return
@@ -574,6 +658,20 @@ class Gateway(object):
                 self._reply(pending["java_id"], payload)
         self.last_busy = time.time()
         self._pump(state)
+
+    def _forward_emit(self, state, params):
+        """把脚本的发布请求转成宿主的一次调用。
+
+        转成**带 id 的调用**（而不是直接转成通知）是为了拿到宿主的裁决里的 eventId：
+        扇出时要用它认出「这是某个脚本自己发的」，否则那个脚本会收到自己的事件。
+        脚本侧仍然什么都不等——它发完就继续跑。
+        """
+        request_id = self._next_seq()
+        self.pending_emit[request_id] = state.script_id
+        self._write_java({"jsonrpc": "2.0", "id": request_id, "method": "emit_event",
+                          "params": {"script": state.script_id,
+                                     "event": params.get("event"),
+                                     "payload": params.get("payload") or {}}})
 
     def _handle_ready(self, state, frame):
         """处理 worker 的就绪上报。"""

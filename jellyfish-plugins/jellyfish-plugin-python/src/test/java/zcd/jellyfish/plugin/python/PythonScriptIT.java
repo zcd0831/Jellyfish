@@ -27,6 +27,7 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -83,6 +84,9 @@ class PythonScriptIT {
     @BeforeEach
     void requirePython() {
         assumeTrue(interpreterAvailable(), "本机没有可用的 python3，跳过端到端测试");
+        // 事件桥接的用例要求通道真的在派发：未 start 的通道只把通知塞进启动期缓冲，
+        // 于是「脚本没收到事件」会表现为一个与代码无关的谜题
+        events.start();
     }
 
     /**
@@ -94,6 +98,8 @@ class PythonScriptIT {
             manager.close();
             manager = null;
         }
+        // 事件通道要显式关闭：它是自己的线程池，留着会让下一个用例看到上一轮的通知
+        events.close();
     }
 
     @Test
@@ -325,6 +331,73 @@ class PythonScriptIT {
         hanging.join(5000L);
     }
 
+
+    @Test
+    @DisplayName("内核事件应送达订阅它的脚本")
+    void event_should_reachScript_when_kernelPublishes() throws IOException {
+        // 这条链路跨了四个进程内/进程外的边界：EventChannel 通知线程 → 桥接队列 →
+        // 桥接推送线程 → 网关 → worker → SDK 分发。任何一段写错都表现为「处理器不执行」，
+        // 因此这里断言的是**最终落在磁盘上的那条记录**
+        writeScript("jira", EVENT_SCRIPT, EVENT_MANIFEST);
+        startRuntime();
+        invokeTool("publish", Collections.<String, Object>emptyMap());
+        writeEventLog("jira", "");
+
+        events.publish(new zcd.jellyfish.api.event.notification.ConfigWarningEvent(
+                "unit-test", "配置有问题"));
+
+        assertTrue(awaitEventLog("jira", "warning:unit-test:配置有问题"),
+                "事件未送达脚本，实际记录: " + readEventLog("jira"));
+    }
+
+    @Test
+    @DisplayName("脚本发布的事件应进入内核事件通道，且不回声给发布者自己")
+    void emit_should_publishEvent_and_notEchoBackToPublisher() throws IOException {
+        writeScript("jira", EVENT_SCRIPT, EVENT_MANIFEST);
+        startRuntime();
+        invokeTool("publish", Collections.<String, Object>emptyMap());
+        writeEventLog("jira", "");
+
+        java.util.List<zcd.jellyfish.api.event.notification.PluginNotificationEvent> received =
+                Collections.synchronizedList(
+                        new java.util.ArrayList<zcd.jellyfish.api.event.notification.PluginNotificationEvent>());
+        events.subscribe("it", zcd.jellyfish.api.event.notification.PluginNotificationEvent.class,
+                received::add);
+
+        invokeTool("publish", Collections.<String, Object>emptyMap());
+
+        long deadline = System.currentTimeMillis() + 10_000L;
+        while (received.isEmpty() && System.currentTimeMillis() < deadline) {
+            sleepQuietly(100L);
+        }
+        assertEquals(1, received.size(), "脚本发布的事件应恰好到达内核一次");
+        assertEquals("script:jira", received.get(0).getSource());
+
+        // 回声：脚本自己也订阅了这个事件，但它不该收到自己刚发的那个。
+        // 等一小会儿再断言，因为「没收到」只能通过时间来观察
+        sleepQuietly(500L);
+        assertFalse(readEventLog("jira").contains("echo:"),
+                "脚本收到了自己发布的事件（回声），实际记录: " + readEventLog("jira"));
+    }
+
+    @Test
+    @DisplayName("发布不可发布的事件应被拒绝，且不影响脚本继续服务")
+    void emit_should_beRejected_when_eventIsNotEmittable() throws IOException {
+        writeScript("jira", EVENT_SCRIPT, EVENT_MANIFEST);
+        startRuntime();
+        invokeTool("publish", Collections.<String, Object>emptyMap());
+        writeEventLog("jira", "");
+
+        ToolCallResult result = invokeTool("publish_forbidden", Collections.<String, Object>emptyMap());
+
+        // 拒绝是**正常结论**而不是故障：脚本这次调用照样成功返回，
+        // 这正是「脚本不能伪造内核语义事件」在没有抛出异常的情况下生效的样子
+        assertEquals("attempted", result.getOutput());
+        sleepQuietly(500L);
+        assertFalse(readEventLog("jira").contains("warning:"),
+                "不可发布的事件不该进入内核，实际记录: " + readEventLog("jira"));
+    }
+
     /**
      * 执行一次状态命令。
      *
@@ -333,6 +406,76 @@ class PythonScriptIT {
     private String statusCommand() {
         return extensions.invoke(extensions.handler(CommandRequest.class, "python"),
                 new CommandRequest("python", null, null)).getOutput();
+    }
+
+
+    /**
+     * 事件记录文件路径。
+     *
+     * @param scriptId 脚本目录名
+     * @return 记录文件路径
+     */
+    private Path eventLog(String scriptId) {
+        return scriptsRoot.resolve(scriptId).resolve("events.log");
+    }
+
+    /**
+     * 覆盖写入事件记录文件。
+     * <p>
+     * 每个用例开头清空一次：事件是异步的，上一个用例的残留会让断言「看起来通过了」。
+     *
+     * @param scriptId 脚本目录名
+     * @param content  初始内容
+     * @throws IOException 写入失败时抛出
+     */
+    private void writeEventLog(String scriptId, String content) throws IOException {
+        Files.write(eventLog(scriptId), content.getBytes(StandardCharsets.UTF_8));
+    }
+
+    /**
+     * 读取事件记录文件。
+     *
+     * @param scriptId 脚本目录名
+     * @return 文件内容；文件不存在时返回空串
+     */
+    private String readEventLog(String scriptId) {
+        try {
+            Path path = eventLog(scriptId);
+            return Files.exists(path) ? new String(Files.readAllBytes(path), StandardCharsets.UTF_8) : "";
+        } catch (IOException error) {
+            return "";
+        }
+    }
+
+    /**
+     * 等到事件记录里出现某段文本。
+     *
+     * @param scriptId 脚本目录名
+     * @param expected 期望片段
+     * @return 出现返回 {@code true}
+     */
+    private boolean awaitEventLog(String scriptId, String expected) {
+        long deadline = System.currentTimeMillis() + 10_000L;
+        while (System.currentTimeMillis() < deadline) {
+            if (readEventLog(scriptId).contains(expected)) {
+                return true;
+            }
+            sleepQuietly(100L);
+        }
+        return false;
+    }
+
+    /**
+     * 安静地睡一会儿（中断只恢复标志位）。
+     *
+     * @param millis 毫秒
+     */
+    private static void sleepQuietly(long millis) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     /**
@@ -472,6 +615,52 @@ class PythonScriptIT {
             + "@contributes(\"prompt\")\n"
             + "def prompt(ctx):\n"
             + "    return \"Jira：会话 %s 有 3 个未读\" % ctx.session_id\n";
+
+    /**
+     * 事件脚本：一个工具负责发布事件，一个处理器负责记录收到的事件。
+     * <p>
+     * 记录到文件而不是返回给宿主，是因为事件的送达是**异步且旁路**的：
+     * 它不会、也不该出现在任何一次调用的返回值里。文件是唯一能从外部观察它的地方。
+     */
+    private static final String EVENT_SCRIPT = ""
+            + "import os\n"
+            + "from jellyfish_sdk import tool, subscribe\n"
+            + "\n"
+            + "LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), \"events.log\")\n"
+            + "\n"
+            + "\n"
+            + "def record(line):\n"
+            + "    with open(LOG, \"a\") as handle:\n"
+            + "        handle.write(line + \"\\n\")\n"
+            + "\n"
+            + "\n"
+            + "@tool(name=\"publish\", description=\"发布一条通知\")\n"
+            + "def publish(args, ctx):\n"
+            + "    ctx.emit_event(\"PluginNotificationEvent\", {\"payload\": {\"hello\": \"world\"}})\n"
+            + "    return \"published\"\n"
+            + "\n"
+            + "\n"
+            + "@tool(name=\"publish_forbidden\", description=\"发布一条不可发布的事件\")\n"
+            + "def publish_forbidden(args, ctx):\n"
+            + "    ctx.emit_event(\"SessionCreatedEvent\", {\"agentId\": \"fake\"})\n"
+            + "    return \"attempted\"\n"
+            + "\n"
+            + "\n"
+            + "@subscribe(\"ConfigWarningEvent\")\n"
+            + "def on_warning(event, ctx):\n"
+            + "    record(\"warning:%s:%s\" % (event.get(\"source\"), event.get(\"message\")))\n"
+            + "\n"
+            + "\n"
+            + "@subscribe(\"PluginNotificationEvent\")\n"
+            + "def on_notification(event, ctx):\n"
+            + "    record(\"echo:\" + str(event.get(\"payload\")))\n";
+
+    /**
+     * 与 {@link #EVENT_SCRIPT} 逐字对应的清单。
+     */
+    private static final String EVENT_MANIFEST = "{\"entry\":\"main.py\","
+            + "\"tools\":[{\"name\":\"publish\"},{\"name\":\"publish_forbidden\"}],"
+            + "\"events\":[\"ConfigWarningEvent\",\"PluginNotificationEvent\"]}";
 
     /**
      * 与 {@link #TOOL_SCRIPT} 逐字对应的清单。

@@ -4,6 +4,7 @@ import zcd.jellyfish.script.CircuitBreakingScriptCaller;
 import zcd.jellyfish.script.ScriptGateway;
 import zcd.jellyfish.script.ScriptPlugin;
 import zcd.jellyfish.script.ScriptRegistration;
+import zcd.jellyfish.script.event.ScriptEventBridge;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -44,6 +45,9 @@ final class PythonLedger {
     /** 带熔断的调用入口；未接通时为 {@code null}。 */
     private final CircuitBreakingScriptCaller callers;
 
+    /** 事件桥接，可为 {@code null}（未接通时台账不报事件行）。 */
+    private final ScriptEventBridge events;
+
     /**
      * 构造台账。
      *
@@ -54,12 +58,13 @@ final class PythonLedger {
      * @param callers       带熔断的调用入口，可为 {@code null}
      */
     PythonLedger(List<ScriptPlugin> plugins, List<ScriptRegistration> registrations, List<String> issues,
-                 ScriptGateway gateway, CircuitBreakingScriptCaller callers) {
+                 ScriptGateway gateway, CircuitBreakingScriptCaller callers, ScriptEventBridge events) {
         this.plugins = Collections.unmodifiableList(new ArrayList<ScriptPlugin>(plugins));
         this.registrations = Collections.unmodifiableList(new ArrayList<ScriptRegistration>(registrations));
         this.issues = Collections.unmodifiableList(new ArrayList<String>(issues));
         this.gateway = gateway;
         this.callers = callers;
+        this.events = events;
     }
 
     /**
@@ -69,7 +74,7 @@ final class PythonLedger {
      */
     static PythonLedger empty() {
         return new PythonLedger(new ArrayList<ScriptPlugin>(), new ArrayList<ScriptRegistration>(),
-                new ArrayList<String>(), null, null);
+                new ArrayList<String>(), null, null, null);
     }
 
     /**
@@ -158,6 +163,11 @@ final class PythonLedger {
                     builder.append(entry.getKey()).append(' ').append(entry.getValue());
                 }
             }
+        }
+        if (events != null) {
+            // 事件行同样单独一行：它回答的是「脚本和内核之间的事件通道通不通、丢了多少」。
+            // 「推送 0」在没订阅任何事件的部署里是正常的，所以这里不解释、只报数
+            builder.append("\n").append(events.describe());
         }
         if (plugins.isEmpty()) {
             builder.append("\n（脚本目录为空，或清单都不可用）");

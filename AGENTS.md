@@ -215,7 +215,7 @@ flowchart LR
 | `jellyfish-plugin-todo` | 会话待办：`todo_write` 工具 + `/todo` + 提示词/状态栏/面板贡献 | api（provided） |
 | `jellyfish-plugin-project` | 项目约定：探测工作目录下 `AGENTS.md`，小文件内联原文、大文件只给路径 | api（provided） |
 | `jellyfish-plugin-compact` | 压缩策略：摘要指令 + 保留条数与摘要上限；不启用它压缩整体不可用 | api（provided） |
-| `jellyfish-plugin-python` | Python 桥接插件：读静态清单完成注册、自带 `/<lang>` 状态命令（含熔断态）、把每个脚本调用都经熔断装饰器转发，把 Python 脚本插件以标准 PF4J 插件的形态接入内核（控制面单进程 + 每脚本一 worker 进程）。网关资源 `script/gateway.py`（单线程 select 事件循环）、`script/worker.py`、`script/jellyfish_sdk.py`（脚本作者唯一的 API）、`script/script_wire.py`（分帧） | api（provided）、jellyfish-script（shade） |
+| `jellyfish-plugin-python` | Python 桥接插件：读静态清单完成注册、自带 `/<lang>` 状态命令（含熔断与事件计数）、把每个脚本调用都经熔断装饰器转发、把内核事件推给脚本（`ScriptEventBridge`），把 Python 脚本插件以标准 PF4J 插件的形态接入内核（控制面单进程 + 每脚本一 worker 进程）。网关资源 `script/gateway.py`（单线程 select 事件循环）、`script/worker.py`、`script/jellyfish_sdk.py`（脚本作者唯一的 API）、`script/script_wire.py`（分帧） | api（provided）、jellyfish-script（shade） |
 
 包结构（只列包与少数枢纽类；其余类直接读代码）：
 
@@ -342,7 +342,19 @@ jellyfish-script/src/main/java/zcd/jellyfish/script/
 - **worker 必须能被「立刻杀死」，两条都不能靠主线程配合**：① SIGTERM/SIGINT 处理器直接 `os._exit`（只置标志位是无效的——CPython 在处理器返回后会**恢复**被中断的系统调用，卡在用户代码里的脚本永远轮不到事件循环）；② `getppid()==1` 的孤儿检查由 `setitimer(ITIMER_REAL)` + `SIGALRM` 定时驱动，而不是放在事件循环顶部。两者都是实测出来的：以前网关被 `kill -9` 后会留下卡在 `time.sleep` 里的 worker，日志里没有任何一条指向它。
 - **`invokeTimeoutSeconds: 0` 必须显式表示「没有截止时间」**：拿 0 当截止时间会让 `now > deadline` 恒真，每次调用都在派发的下一拍被秒杀，而配置的字面意思是「不超时」。
 
-## 命令域
+### 事件桥接
+
+- **两侧共用同一份白名单，且都硬编码在 `jellyfish-script` 里**：可订阅 = `ScriptEventCatalog` 的 15 个通知事件（白名单而非黑名单，内核新增事件不会自动对脚本开放）；可发布 = `ScriptEventFactory` 的 `PluginNotificationEvent` / `ConfigWarningEvent` 两类自由载荷事件。**脚本不能伪造内核语义事件**——那类事件是内核事实的转述，指标与审计按「它是真的」消费。
+- **投影只下发标量**：不下发嵌套快照，否则内核内部结构就成了脚本的对外契约。字段缺失不写成 JSON `null`，集合排序，枚举下发枚举名；载荷必带 `event` / `eventId` / `occurredAt`，无会话上下文时**没有** `sessionId` 键。
+- **事件名的拒绝在清单期**（`ScriptManifest.parseEvents` 查目录白名单）：运行期那条路是静默的（处理器永不执行），报错里带上全部可订阅名字。
+- **推送必须有队列 + 独立线程**：事件由 `EventChannel` 通知线程投递，而写子进程 stdin 会阻塞——钉死通知线程等于让指标、界面、审计一起停摆。丢弃三种情形（网关未运行、队列满、发送失败）都计数。
+- **事件不拉起任何进程**：网关没在运行 / 该脚本 worker 没起过 / worker 正忙，一律丢弃并计数。让一条通知去 fork 解释器，等于把「事件到了」变成一次重操作，而且它在通知线程上。
+- **网关只推给「闲着的」worker**：worker 单线程，卡在一次长调用里时 socket 缓冲区会被事件填满，而网关是单线程事件循环——一次阻塞写就停摆。
+- **发布是端到端单向的**：worker 发不带 id 的 `emit_event` 通知；网关把它转成**带 id 的调用**只为拿到应答里的 `eventId`，据此记住「这条事件是哪个脚本刚发的」并在扇出时跳过它（有界 256 条，按条数过期）。**回声记忆放网关**是因为扇出点在网关，Java 侧过滤只能整条不推。
+- **拒绝发布只记 WARN，不补发告警事件**：告警本身也是可订阅事件，脚本收到告警后再发一次非法事件就是跨进程的环。跨脚本的相互触发也没有全局检测（只消了直系回声），两侧都有计数可见。
+- **推送路径的异常捕获面必须开大**：事件是旁路，一次 `TypeError` 就曾把整个网关带走——把「少收一条通知」升级成「所有脚本不可用」。
+
+### 命令域
 
 - **`CommandManager` 不注册处理器、不持有会话、不缓存索引**：命令名即路由键，别名与用法来自 `CommandDescriptor`；原文入口与结构化入口共用同一条分发路径，对外壳中立。
 - **系统命令由 `core/command/SystemCommands` 以 owner=core 注册**，`/todo` 由插件注册，`/exit` `/ui` `/thinking` 归外壳；候选查询（`CommandOptionRequest` → `CommandOptions`）是与执行平行的只读路径，不执行命令。
@@ -414,7 +426,7 @@ jellyfish-script/src/main/java/zcd/jellyfish/script/
 
 以下能力**尚未完整落地**，不要当成现存 API；已落地的部分在条目里明确标注。设计细节见对应方案文档。
 
-- **跨语言插件桥接**：Python 已端到端打通——owner 命名空间、静态清单解析与校验、按清单注册（11 个扩展点全开、与 Java 插件同权）、协议帧与 id 配对、Commons Exec 进程管理、Python 网关与 worker、SDK 与 `--dump-manifest` 清单生成器、`/<lang>` 状态命令、熔断与超时隔离链。**事件桥接尚未落地**（`emit_event` 会被明确拒绝而不是假装受理，网关也还忽略下行 `event`）；PID 文件与启动期陈旧 PID 报告尚未落地。
+- **跨语言插件桥接**：Python 已端到端打通——owner 命名空间、静态清单解析与校验、按清单注册（11 个扩展点全开、与 Java 插件同权）、协议帧与 id 配对、Commons Exec 进程管理、Python 网关与 worker、SDK 与 `--dump-manifest` 清单生成器、`/<lang>` 状态命令、熔断与超时隔离链、事件桥接（订阅与发布双向）。**PID 文件与启动期陈旧 PID 报告尚未落地**；`/snapshot` 与 `status` 协议方法仍未实现。
   架构为「控制面单实例 + 每脚本一 worker 进程」；注册来源是脚本目录下的静态 `manifest.json`（协议里**没有**注册方法），因此 `start()` 期零进程、零文件写入，Python 缺失不影响内核启动、工具清单依然完整。Python 网关是**单线程 `select` 事件循环**（因此「fork 时没有线程」恒真）。真实解释器的端到端测试在 `mvn -Pscript-it test`。`jellyfish-plugin-node` 待 Python 同构验证通过后再加。见 `跨语言插件方案.md`。
 - **`-server` 模式**：HTTP 服务外壳（Undertow），对外暴露能力接口。`ServerRunMode` 目前是占位（不启动内核，退 5），开工时抽 `jellyfish-server` 模块。设计见 `cli方案.md`。
 

@@ -60,7 +60,7 @@ class PythonLedgerTest {
 
         String rendered = new PythonLedger(new java.util.ArrayList<zcd.jellyfish.script.ScriptPlugin>(),
                 new java.util.ArrayList<zcd.jellyfish.script.ScriptRegistration>(),
-                issues, null, null).render("Python");
+                issues, null, null, null).render("Python");
 
         assertTrue(rendered.contains("问题 2 条"), rendered);
         assertTrue(rendered.contains("缺少 manifest.json"), rendered);
@@ -79,7 +79,7 @@ class PythonLedgerTest {
         assertThrows(JellyfishException.class, () -> callers.call(jira, "tool", null));
 
         String rendered = new PythonLedger(new ArrayList<ScriptPlugin>(), new ArrayList<ScriptRegistration>(),
-                new ArrayList<String>(), null, callers).render("Python");
+                new ArrayList<String>(), null, callers, null).render("Python");
 
         assertEquals(ScriptCircuitBreaker.State.OPEN, callers.stateOf("jira"));
         assertTrue(rendered.contains("熔断：jira 熔断中"), rendered);
@@ -92,7 +92,7 @@ class PythonLedgerTest {
                 (plugin, type, request) -> null, CircuitBreakerSettings.defaults(), null);
 
         String rendered = new PythonLedger(new ArrayList<ScriptPlugin>(), new ArrayList<ScriptRegistration>(),
-                new ArrayList<String>(), null, callers).render("Python");
+                new ArrayList<String>(), null, callers, null).render("Python");
 
         assertTrue(rendered.contains("熔断：尚未发生调用"), rendered);
         assertTrue(callers.states().isEmpty());

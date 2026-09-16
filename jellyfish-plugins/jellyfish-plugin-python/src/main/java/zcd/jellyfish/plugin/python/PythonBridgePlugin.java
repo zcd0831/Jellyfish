@@ -18,6 +18,7 @@ import zcd.jellyfish.script.ScriptPluginScanner;
 import zcd.jellyfish.script.ScriptRegistration;
 import zcd.jellyfish.script.ScriptRegistrar;
 import zcd.jellyfish.script.ScriptScanResult;
+import zcd.jellyfish.script.event.ScriptEventBridge;
 import zcd.jellyfish.script.codec.ExtensionCodecs;
 
 import java.util.ArrayList;
@@ -66,6 +67,9 @@ public final class PythonBridgePlugin implements JellyfishPlugin {
 
     /** 脚本台账，在 {@code start()} 现造、{@code stop()} 释放。 */
     private PythonLedger ledger = PythonLedger.empty();
+
+    /** 事件桥接：内核事件推给脚本、脚本发布的事件代为发布。 */
+    private ScriptEventBridge events;
 
     /**
      * 启动插件：解析配置、扫描清单、逐脚本注册转发处理器。
@@ -169,6 +173,11 @@ public final class PythonBridgePlugin implements JellyfishPlugin {
                 .build();
         // 转发闭包拿到的就是这个带熔断的入口：因此「拒绝派发」发生在注册好的处理器内部，
         // 而**不需要把注册摘掉**——工具仍在清单里，模型看到的是一条带剩余时间的错误
+        events = new ScriptEventBridge(context, language.displayName(), gateway,
+                config.gatewaySettings().allowedEvents());
+        // 事件桥接要用网关推送，而网关要先存在，因此这里是「构造后注册」而不是注入
+        gateway.eventSink(events);
+        events.start();
         caller = new CircuitBreakingScriptCaller(gateway, config.circuitBreakerSettings(),
                 new CircuitWarningPublisher(context));
         ScriptRegistrar registrar = new ScriptRegistrar(ExtensionCodecs.DEFAULTS, caller);
@@ -177,7 +186,7 @@ public final class PythonBridgePlugin implements JellyfishPlugin {
             ScriptRegistration registration = registrar.register(context.subContext(plugin.id()), plugin);
             registrations.add(registration);
         }
-        return new PythonLedger(scan.plugins(), registrations, issues, gateway, caller);
+        return new PythonLedger(scan.plugins(), registrations, issues, gateway, caller, events);
     }
 
     /**

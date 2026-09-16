@@ -16,6 +16,7 @@
 import json
 import inspect
 import os
+import sys
 
 # ---------------------------------------------------------------- 声明注册表
 
@@ -30,6 +31,17 @@ _SUBSCRIPTIONS = []
 
 # 声明过的贡献类型，用于检测「同一类型声明了两个函数」。
 _CONTRIBUTION_TYPES = set()
+
+# 可以发布的事件名（与 Java 侧 ScriptEventFactory 的白名单一致）。
+#
+# 只有两类，而且都是「自由载荷」：通知的 payload 任意 JSON，告警只有一句文本。
+# 所以脚本**造不出内核语义事件**（工具完成、权限判定之类）——那类事件是内核事实的转述，
+# 指标、审计与界面都按「它是真的」来消费，让脚本能造等于开了一条往审计里写假账的路。
+#
+# 这里再留一份的原因只是**报错更近**：不在这份清单里时在本地就提醒一句，
+# 免得「事件发出去但没人收到」变成一个需要翻宿主日志的问题。
+# 真正的裁决仍在宿主侧，因此这份清单哪怕过时也只会多一句提醒，不会吞掉事件。
+EMITTABLE_EVENTS = frozenset(("PluginNotificationEvent", "ConfigWarningEvent"))
 
 
 class ScriptError(Exception):
@@ -48,9 +60,10 @@ class ScriptContext:
     也不提供「回调宿主」的能力——脚本能做的事只有「处理这次请求并返回结果」。
     """
 
-    def __init__(self, script_id, payload):
+    def __init__(self, script_id, payload, emitter=None):
         self.script_id = script_id
         self._payload = payload or {}
+        self._emitter = emitter
 
     @property
     def session_id(self):
@@ -66,6 +79,27 @@ class ScriptContext:
     def payload(self):
         """原始请求载荷（只读用途，改它不会影响宿主）。"""
         return dict(self._payload)
+
+    def emit_event(self, name, payload=None):
+        """发布一条事件。
+
+        **尽力而为，没有返回值，也不要依赖它一定送达**：事件通道的契约是「可以丢」，
+        丢弃可能是宿主队列满、网关没在运行、或没有 worker 在听。真正需要可靠传递的信息
+        请用返回值。
+
+        ``name`` 见 :data:`EMITTABLE_EVENTS`；``payload`` 是任意 JSON（仅
+        ``ConfigWarningEvent`` 要求 ``message`` 非空）。宿主会校验并可能拒绝，
+        拒绝只记日志——脚本侧拿不到裁决，这也是「尽力而为」的一部分。
+
+        :param name: 事件名
+        :param payload: 事件载荷，可为 ``None``
+        """
+        if self._emitter is None:
+            raise ScriptError("当前上下文不支持发布事件")
+        if name not in EMITTABLE_EVENTS:
+            print("[%s] 事件 %s 不在可发布清单 %s 内，宿主会拒绝"
+                  % (self.script_id, name, sorted(EMITTABLE_EVENTS)), file=sys.stderr, flush=True)
+        self._emitter(name, payload or {})
 
     def __repr__(self):
         return "ScriptContext(script_id=%r, session_id=%r)" % (self.script_id, self.session_id)
@@ -179,13 +213,18 @@ def contributes(type_name):
 
 
 def subscribe(*event_names):
-    """声明想订阅的事件名。
+    """声明订阅某个事件。
 
-    只声明，不注册：真正的订阅关系在 manifest 的 ``events`` 里，宿主据此路由。
+    装饰的函数在事件到达时被调用，签名固定为 ``(event, ctx)``：``event`` 是事件字段表
+    （含 ``event`` 名字、``eventId``、``occurredAt``、``sessionId``，以及该事件的标量业务字段），
+    ``ctx`` 是 :class:`ScriptContext`。返回值被忽略——事件是通知，没有「回答」这回事。
 
-    **事件桥接尚未接通**：装饰的函数目前不会因为任何事件被调用，因此不要在它里面
-    放「必须有副作用」的逻辑。留着声明是为了让清单先稳定下来——往后接通时，
-    脚本作者不需要改代码。
+    **事件可以丢**，因此不要把它当成可靠投递：宿主队列满、网关没在运行、
+    这个脚本的 worker 正忙或还没起过，事件都会跳过。需要可靠性的逻辑请写成工具。
+
+    处理器抛出的异常只记 stderr，不影响其它事件、也不影响在途调用：
+    一个坏处理器不该把整个脚本带走。事件名必须是内核认识的（见宿主文档），
+    写错会在清单校验时被拒绝。
     """
 
     def decorate(func):
@@ -479,10 +518,26 @@ def _args_request(payload):
 _register("compaction", _args_request, _as_mapping)
 
 
+# ---- 事件 -----------------------------------------------------------------
+
+
+def _args_event(payload):
+    return {"event": payload}
+
+
+def _shape_nothing_ignored(_result):
+    # 事件处理器的返回值没有去处：事件是通知，不是请求。返回 None 让调用方
+    # 不必因为脚本「顺手 return 了一个值」而报错
+    return None
+
+
+_register("event", _args_event, _shape_nothing_ignored)
+
+
 # ---- 入口 -----------------------------------------------------------------
 
 
-def invoke(script_id, type_name, route_key, payload):
+def invoke(script_id, type_name, route_key, payload, emitter=None):
     """按类型分发一次调用。
 
     处理函数抛出的任何异常都由调用方（worker）转成协议错误：脚本失败必须走
@@ -493,6 +548,7 @@ def invoke(script_id, type_name, route_key, payload):
     :param type_name: 扩展点类型名
     :param route_key: 路由键（工具名 / 命令名）；类型级扩展点用类型名
     :param payload: 请求载荷
+    :param emitter: 事件发布回调（由 worker 注入）；``None`` 表示当前上下文不支持发布事件
     :return: 结果载荷，可为 ``None``
     """
     lookup_key = route_key if route_key is not None else type_name
@@ -500,7 +556,7 @@ def invoke(script_id, type_name, route_key, payload):
     if handler is None:
         raise ScriptError("没有处理 %s=%s 的函数" % (type_name, lookup_key))
     arguments, shaper = _DISPATCH[type_name]
-    context = ScriptContext(script_id, payload)
+    context = ScriptContext(script_id, payload, emitter)
     result = handler(**arguments(payload or {}), ctx=context)
     return shaper(result) if shaper is not None else None
 
@@ -518,6 +574,7 @@ def _first_doc_line(func):
 
 __all__ = [
     "ScriptError",
+    "EMITTABLE_EVENTS",
     "ScriptContext",
     "tool",
     "command",

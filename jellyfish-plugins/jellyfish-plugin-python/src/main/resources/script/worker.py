@@ -202,6 +202,9 @@ def _handle(sock, script_id, frame):
     """
     request_id = frame.get("id")
     method = frame.get("method")
+    if method == "event":
+        _handle_event(sock, script_id, frame)
+        return
     if method != "invoke":
         _send(sock, {"id": request_id,
                      "error": {"code": CODE_INVALID_PARAMS, "message": "不支持的方法: %s" % method}})
@@ -210,7 +213,8 @@ def _handle(sock, script_id, frame):
     payload = frame.get("request") or {}
     route_key = _route_key(type_name, payload)
     try:
-        result = sdk.invoke(script_id, type_name, route_key, payload)
+        result = sdk.invoke(script_id, type_name, route_key, payload,
+                            _emitter_for(sock, script_id, payload))
     except sdk.ScriptError as error:
         _send(sock, {"id": request_id, "error": {"code": CODE_SCRIPT_FAILURE, "message": str(error)}})
         return
@@ -222,6 +226,44 @@ def _handle(sock, script_id, frame):
                                "message": "%s: %s" % (type(error).__name__, error)}})
         return
     _send(sock, {"id": request_id, "result": result})
+
+
+def _handle_event(sock, script_id, frame):
+    """处理一条内核事件。
+
+    **不应答**：事件是通知，没有「回答」这回事，因此这里不产生任何协议帧。
+    处理器失败只打 stderr（由网关加 ``[scriptId]`` 前缀进内核日志）——事件是旁路，
+    一个坏处理器不该影响任何在途调用，更不该把整个 worker 带走。
+    """
+    params = frame.get("params") or {}
+    name = params.get("event")
+    payload = params.get("payload") or {}
+    try:
+        sdk.invoke(script_id, "event", name, payload, _emitter_for(sock, script_id, payload))
+    except Exception as error:  # noqa: BLE001  见上文：事件失败必须就地消化
+        import traceback
+        print("事件 %s 的处理器失败: %s: %s" % (name, type(error).__name__, error),
+              file=sys.stderr, flush=True)
+        traceback.print_exc(file=sys.stderr)
+
+
+def _emitter_for(sock, script_id, payload):
+    """构造本次调用的「发布事件」回调。
+
+    会话标识从**当前这次调用**的载荷里取，而不是让脚本自己填：脚本手里没有会话标识
+    （那是宿主的概念），而事件必须能归属到会话——否则界面与审计都拿不到上下文。
+    """
+    session_id = (payload or {}).get("sessionId")
+
+    def emit(name, body):
+        event_payload = dict(body or {})
+        if session_id is not None:
+            event_payload["sessionId"] = session_id
+        # 不带 id：这是通知，网关不回答。宿主侧的裁决写日志，不回到脚本
+        _send(sock, {"method": "emit_event",
+                     "params": {"script": script_id, "event": name, "payload": event_payload}})
+
+    return emit
 
 
 def _route_key(type_name, payload):

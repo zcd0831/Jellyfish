@@ -11,8 +11,11 @@ import zcd.jellyfish.api.extension.CommandRequest;
 import zcd.jellyfish.api.extension.CommandResult;
 import zcd.jellyfish.api.extension.ExtensionException;
 import zcd.jellyfish.api.extension.ExtensionHandler;
+import zcd.jellyfish.api.event.EventPublisher;
+import zcd.jellyfish.api.event.notification.CommandExecutedEvent;
 import zcd.jellyfish.infra.extension.DescriptorBinding;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
+import zcd.jellyfish.infra.extension.HandlerBinding;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
@@ -25,8 +28,9 @@ import java.util.Objects;
 /**
  * 命令域服务：输入解析 / 别名解析 / 分发 / 结构化清单 / 帮助渲染。
  * <p>
- * <b>只注入 {@link ExtensionRegistry}</b>：命令域不持有会话、不发事件、不读配置——会话标识由调用方随
- * 输入一起带进来，命令的副作用由处理器自己写回对应域服务。
+ * <b>只注入 {@link ExtensionRegistry} 与通知入口</b>：命令域不持有会话、不读配置——会话标识由调用方随
+ * 输入一起带进来，命令的副作用由处理器自己写回对应域服务。唯一外发的是分发结束后的
+ * {@link CommandExecutedEvent}（审计用，best-effort，发布失败不影响命令结果）。
  * <p>
  * <b>不注册任何处理器</b>：系统命令与插件命令都经 {@code ExtensionRegistry.handle(...)} 落同一份注册表，
  * 本类只做「按名字取出来执行」与「按类型取名字与名片」两件事。命令名即路由键，别名与用法来自随处理器
@@ -42,10 +46,9 @@ import java.util.Objects;
  * （另打 WARN 日志）。唯一的例外是 api 侧值对象的构造期校验——那是编程错误，立即抛。
  * <p>
  * <b>系统命令已落地</b>：{@code /help} {@code /new} {@code /session} {@code /resume} {@code /model}
- * {@code /agent} {@code /mode} {@code /status} {@code /usage} 由 {@code core/command/SystemCommands}
- * 以 owner = {@code "core"} 注册进同一份注册表（本类仍不注册任何处理器）；{@code /todo} 归
- * {@code jellyfish-plugin-todo}，与其它插件命令同源。
- * {@code /exit} 归外壳；{@code /compact} 等依赖摘要压缩的命令仍待落地。
+ * {@code /agent} {@code /mode} {@code /status} {@code /usage} {@code /delete} {@code /compact} 由
+ * {@code core/command/SystemCommands} 以 owner = {@code "core"} 注册进同一份注册表（本类仍不注册任何处理器）；
+ * {@code /todo} 归 {@code jellyfish-plugin-todo}，与其它插件命令同源；{@code /exit} 归外壳。
  *
  * @author zcd
  */
@@ -67,14 +70,19 @@ public class CommandManager {
     /** 同步扩展点策略：命令处理器与命令清单都从同一份注册表取。 */
     private final ExtensionRegistry extensions;
 
+    /** 通知发布入口：只用于分发结束后的审计事件。 */
+    private final EventPublisher events;
+
     /**
      * 构造命令域服务。
      *
      * @param extensions 同步扩展点策略，不可为 {@code null}
+     * @param events     通知发布入口，不可为 {@code null}
      */
     @Inject
-    public CommandManager(ExtensionRegistry extensions) {
+    public CommandManager(ExtensionRegistry extensions, EventPublisher events) {
         this.extensions = Objects.requireNonNull(extensions, "extensions must not be null");
+        this.events = Objects.requireNonNull(events, "events must not be null");
     }
 
     /**
@@ -187,7 +195,7 @@ public class CommandManager {
         if (parsed.error() != null) {
             return CommandResult.error(parsed.error());
         }
-        return dispatch(parsed.name(), parsed.arguments(), sessionId);
+        return dispatch(parsed.name(), parsed.arguments(), sessionId, input);
     }
 
     /**
@@ -205,7 +213,7 @@ public class CommandManager {
         if (commandName == null || commandName.trim().isEmpty()) {
             return CommandResult.unknown("命令名不可为空");
         }
-        return dispatch(commandName, arguments == null ? CommandArguments.EMPTY : arguments, sessionId);
+        return dispatch(commandName, arguments == null ? CommandArguments.EMPTY : arguments, sessionId, null);
     }
 
     /**
@@ -258,64 +266,94 @@ public class CommandManager {
 
     /**
      * 共享分发：名字优先、其次别名 → 取唯一处理器 → 调用点线程内联执行。
+     * <p>
+     * 所有出口都经 {@link #finish} 收口，因此审计事件在任何结果下都恰好发一次。
      *
      * @param name      命令名或别名，不可为空白
      * @param arguments 参数，不可为 {@code null}
      * @param sessionId 会话标识，可为 {@code null}
+     * @param input     用户输入原文，可为 {@code null}（结构化入口没有原文）
      * @return 执行结果，保证非 {@code null}
      */
-    private CommandResult dispatch(String name, CommandArguments arguments, String sessionId) {
+    private CommandResult dispatch(String name, CommandArguments arguments, String sessionId, String input) {
+        long startedAt = System.currentTimeMillis();
         List<CommandInfo> matched;
         try {
             matched = match(name);
         } catch (RuntimeException e) {
             // 清单读不出来时不能报「未知命令」，否则会把插件注册缺陷伪装成用户拼错
             LOG.warn("读取命令清单失败: command={}", name, e);
-            return CommandResult.error("命令清单读取失败：" + e.getMessage());
+            return finish(input, name, null, null,
+                    CommandResult.error("命令清单读取失败：" + e.getMessage()), startedAt, sessionId);
         }
         if (matched.isEmpty()) {
-            return CommandResult.unknown("未知命令：" + COMMAND_PREFIX + name + "（输入 /help 查看可用命令）");
+            return finish(input, name, null, null,
+                    CommandResult.unknown("未知命令：" + COMMAND_PREFIX + name + "（输入 /help 查看可用命令）"),
+                    startedAt, sessionId);
         }
         if (matched.size() > 1) {
             LOG.warn("命令别名有歧义: alias={} candidates={}", name, plainNames(matched));
-            return CommandResult.error("别名 " + COMMAND_PREFIX + name + " 有歧义，可能是 " + displayNames(matched));
+            return finish(input, name, null, null,
+                    CommandResult.error("别名 " + COMMAND_PREFIX + name + " 有歧义，可能是 " + displayNames(matched)),
+                    startedAt, sessionId);
         }
 
         String canonical = matched.get(0).getName();
-        ExtensionHandler<CommandRequest, CommandResult> handler;
-        try {
-            // 一条命令一个实现：多命中说明有人在用 contribute 注册类型级命令处理器，当场暴露
-            handler = extensions.handler(CommandRequest.class, canonical);
-        } catch (ExtensionException e) {
-            return resolveHandlerFailure(name, canonical, e);
+        // 用 bindings 而不是 handler：审计要记录「是哪个处理器响应的」，owner 只在绑定里
+        List<HandlerBinding<CommandRequest, CommandResult>> bindings =
+                extensions.bindings(CommandRequest.class, canonical);
+        if (bindings.isEmpty()) {
+            // 清单与注册表之间出现竞态（插件正好在卸载）：对用户而言就是这条命令没了
+            return finish(input, name, canonical, null,
+                    CommandResult.unknown("未知命令：" + COMMAND_PREFIX + name + "（输入 /help 查看可用命令）"),
+                    startedAt, sessionId);
         }
-        CommandRequest request = new CommandRequest(canonical, arguments, sessionId);
+        if (bindings.size() > 1) {
+            // 一条命令一个实现：多命中说明有人在用 contribute 注册类型级命令处理器，当场暴露
+            LOG.warn("命令处理器不唯一: command={} matched={}", canonical, bindings.size());
+            return finish(input, name, canonical, null,
+                    CommandResult.error("命令处理器不唯一：" + COMMAND_PREFIX + canonical
+                            + "（可能有插件用 contribute 注册了类型级命令处理器）"), startedAt, sessionId);
+        }
+
+        HandlerBinding<CommandRequest, CommandResult> binding = bindings.get(0);
+        CommandResult result;
         try {
-            CommandResult result = extensions.invoke(handler, request);
-            return result == null ? CommandResult.ok(null) : result;
+            CommandResult invoked = extensions.invoke(binding.getHandler(),
+                    new CommandRequest(canonical, arguments, sessionId));
+            result = invoked == null ? CommandResult.ok(null) : invoked;
         } catch (RuntimeException e) {
             // 同步侧刻意没有护栏，异常处置是调用点（这里）的责任
             LOG.warn("命令执行失败: command={} sessionId={}", canonical, sessionId, e);
-            return CommandResult.error("命令执行失败：" + e.getMessage());
+            result = CommandResult.error("命令执行失败：" + e.getMessage());
         }
+        return finish(input, name, canonical, binding.getOwner(), result, startedAt, sessionId);
     }
 
     /**
-     * 解析查找失败：区分「命令恰好被卸载」与「处理器不唯一」。
+     * 统一收口：广播审计事件后返回结果。
+     * <p>
+     * 审计发布是 best-effort：发布失败只记 WARN，绝不让「审计的故障」变成「命令的故障」——
+     * 这正是命令域只依赖 {@link EventPublisher} 这个窄接口的原因。
      *
-     * @param name      原始输入的名字（命令名或别名）
-     * @param canonical 命中的命令名
-     * @param exception 查找异常
-     * @return 失败结果，保证非 {@code null}
+     * @param input       用户输入原文，可为 {@code null}
+     * @param name        用户给出的名字
+     * @param canonical   命中的命令名，可为 {@code null}
+     * @param source      处理器来源，可为 {@code null}
+     * @param result      分发结果，不可为 {@code null}
+     * @param startedAt   分发开始时刻（毫秒）
+     * @param sessionId   会话标识，可为 {@code null}
+     * @return 原样返回 {@code result}
      */
-    private CommandResult resolveHandlerFailure(String name, String canonical, ExtensionException exception) {
-        if (exception.getCode() == ExtensionException.Code.NO_HANDLER) {
-            // 清单与注册表之间出现竞态（插件正好在卸载）：对用户而言就是这条命令没了
-            return CommandResult.unknown("未知命令：" + COMMAND_PREFIX + name + "（输入 /help 查看可用命令）");
+    private CommandResult finish(String input, String name, String canonical, String source,
+                                 CommandResult result, long startedAt, String sessionId) {
+        try {
+            events.publish(new CommandExecutedEvent(input, name, canonical, result.getKind(), source,
+                    System.currentTimeMillis() - startedAt, sessionId));
+        } catch (RuntimeException e) {
+            LOG.warn("命令审计事件发布失败: command={}", canonical, e);
         }
-        LOG.warn("命令处理器不唯一: command={}", canonical, exception);
-        return CommandResult.error("命令处理器不唯一：" + COMMAND_PREFIX + canonical
-                + "（可能有插件用 contribute 注册了类型级命令处理器）");
+        return result;
     }
 
     /**

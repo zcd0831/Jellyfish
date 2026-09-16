@@ -1,7 +1,10 @@
 package zcd.jellyfish.infra.command;
 
 import org.junit.jupiter.api.Test;
+import zcd.jellyfish.api.event.EventPublisher;
+import zcd.jellyfish.api.event.JellyfishEvent;
 import zcd.jellyfish.api.event.RegisterOptions;
+import zcd.jellyfish.api.event.notification.CommandExecutedEvent;
 import zcd.jellyfish.api.extension.CommandArguments;
 import zcd.jellyfish.api.extension.CommandChoice;
 import zcd.jellyfish.api.extension.CommandDescriptor;
@@ -13,6 +16,7 @@ import zcd.jellyfish.api.extension.ExtensionHandler;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.registry.TypeRegistry;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -40,13 +44,25 @@ class CommandManagerTest {
     /** 同步扩展点策略。 */
     private final ExtensionRegistry extensions = new ExtensionRegistry(registry);
 
+    /** 收到的审计事件。 */
+    private final List<JellyfishEvent> audit = new ArrayList<JellyfishEvent>();
+
+    /** 审计发布入口：只记录，不做事。 */
+    private final EventPublisher events = audit::add;
+
     /** 被测命令域服务。 */
-    private final CommandManager manager = new CommandManager(extensions);
+    private final CommandManager manager = new CommandManager(extensions, events);
 
     @Test
     void constructor_should_reject_null_registry() {
         // When / Then
-        assertThrows(NullPointerException.class, () -> new CommandManager(null));
+        assertThrows(NullPointerException.class, () -> new CommandManager(null, events));
+    }
+
+    @Test
+    void constructor_should_reject_null_publisher() {
+        // When / Then：审计入口是可选行为而不是可省依赖，缺了就是装配错误
+        assertThrows(NullPointerException.class, () -> new CommandManager(extensions, null));
     }
 
     @Test
@@ -418,6 +434,109 @@ class CommandManagerTest {
         // Then
         assertTrue(help.contains("/model"));
         assertTrue(help.contains("/mode"));
+    }
+
+    @Test
+    void execute_should_publish_audit_event_with_name_canonical_source_and_input() {
+        // Given
+        register("plugin-a", "agent", new CommandDescriptor("切 agent", null, Arrays.asList("a")),
+                request -> CommandResult.ok("ok"));
+
+        // When
+        manager.execute("/a coder", "session-1");
+
+        // Then
+        assertEquals(1, audit.size());
+        CommandExecutedEvent event = (CommandExecutedEvent) audit.get(0);
+        assertEquals("/a coder", event.getInput());
+        assertEquals("a", event.getName());
+        assertEquals("agent", event.getCanonicalName());
+        assertEquals(CommandResult.Kind.OK, event.getKind());
+        assertEquals("plugin-a", event.getSource());
+        assertEquals("session-1", event.getSessionId());
+    }
+
+    @Test
+    void execute_should_publish_audit_event_for_unknown_command() {
+        // When：未知命令同样是审计信息（「用户以为执行了」得查得出来）
+        manager.execute("/missing");
+
+        // Then
+        assertEquals(1, audit.size());
+        CommandExecutedEvent event = (CommandExecutedEvent) audit.get(0);
+        assertEquals(CommandResult.Kind.UNKNOWN, event.getKind());
+        assertNull(event.getCanonicalName());
+        assertNull(event.getSource());
+    }
+
+    @Test
+    void execute_should_publish_audit_event_when_handler_throws() {
+        // Given
+        register("plugin-a", "boom", null, request -> {
+            throw new IllegalStateException("炸了");
+        });
+
+        // When
+        manager.execute("/boom");
+
+        // Then
+        assertEquals(1, audit.size());
+        CommandExecutedEvent event = (CommandExecutedEvent) audit.get(0);
+        assertEquals(CommandResult.Kind.ERROR, event.getKind());
+        assertEquals("boom", event.getCanonicalName());
+        assertEquals("plugin-a", event.getSource());
+    }
+
+    @Test
+    void execute_should_not_publish_audit_event_for_non_command_input() {
+        // When
+        manager.execute("hello");
+
+        // Then：没走过分发就不算「执行了命令」
+        assertTrue(audit.isEmpty());
+    }
+
+    @Test
+    void structured_entry_should_publish_audit_event_without_input() {
+        // Given
+        register("plugin-a", "help", null, request -> CommandResult.ok("help"));
+
+        // When
+        manager.execute("help", CommandArguments.EMPTY, null);
+
+        // Then：结构化入口没有原文
+        assertEquals(1, audit.size());
+        assertNull(((CommandExecutedEvent) audit.get(0)).getInput());
+    }
+
+    @Test
+    void options_should_not_publish_audit_event() {
+        // Given
+        register("plugin-a", "agent", null, request -> CommandResult.ok("ok"));
+        registerOptions("plugin-a", "agent", request -> CommandOptions.of(Arrays.asList(
+                new CommandChoice("coder", "coder"))));
+
+        // When：候选查询是只读路径，不是执行
+        manager.options("agent", null);
+
+        // Then
+        assertTrue(audit.isEmpty());
+    }
+
+    @Test
+    void execute_should_still_return_result_when_audit_publish_fails() {
+        // Given：审计故障不该变成命令故障
+        register("plugin-a", "help", null, request -> CommandResult.ok("help"));
+        CommandManager failing = new CommandManager(extensions, event -> {
+            throw new IllegalStateException("审计通道炸了");
+        });
+
+        // When
+        CommandResult result = failing.execute("/help");
+
+        // Then
+        assertEquals(CommandResult.Kind.OK, result.getKind());
+        assertEquals("help", result.getOutput());
     }
 
     /**

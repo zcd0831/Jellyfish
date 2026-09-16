@@ -13,7 +13,7 @@
 
     <artifactId>jellyfish-plugin-project</artifactId>
     <name>Jellyfish Plugin Project</name>
-    <description>官方项目约定插件：探测工作目录下的 AGENTS.md，并在 system prompt 里给出路径指引。</description>
+    <description>官方项目约定插件：探测工作目录下的 AGENTS.md，小文件内联原文、大文件给出路径指引。</description>
 
     <dependencies>
         <!-- 内核契约：必须 provided —— PF4J 的插件类加载器是子优先，
@@ -33,7 +33,7 @@
             <scope>provided</scope>
         </dependency>
 
-        <!-- 单测：本插件只做「文件存在性判断 + 字符串拼装」，没有第三方依赖，
+        <!-- 单测：本插件只做「文件探测与读取 + 字符串拼装」，没有第三方依赖，
              因此既不需要自带 Jackson、也不需要 maven-shade-plugin。 -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>

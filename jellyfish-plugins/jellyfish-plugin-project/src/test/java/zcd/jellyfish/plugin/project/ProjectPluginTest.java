@@ -4,6 +4,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.extension.PromptContributionRequest;
 import zcd.jellyfish.api.plugin.PluginContext;
 import zcd.jellyfish.api.plugin.PluginDeclaration;
@@ -13,7 +14,10 @@ import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.plugin.PluginContextImpl;
 import zcd.jellyfish.infra.registry.TypeRegistry;
 
+import java.util.Collections;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
  * {@link ProjectPlugin} 的单元测试：只验证「注册了哪个扩展点、owner 是谁」。
@@ -62,5 +66,16 @@ class ProjectPluginTest {
         assertEquals(1, extensions.bindings(PromptContributionRequest.class, null).size());
         assertEquals(PLUGIN_ID,
                 extensions.bindings(PromptContributionRequest.class, null).get(0).getOwner());
+    }
+
+    @Test
+    @DisplayName("配置非法时应在启动期就抛：不让它变成「内联怎么不生效」这种隐式失效")
+    void start_should_throw_when_configInvalid() {
+        PluginDeclaration declaration = PluginDeclaration.of(PLUGIN_ID,
+                Collections.<String, Object>singletonMap(
+                        PluginConfig.KEY_MAX_INLINE_BYTES, "大一点"));
+        PluginContext invalid = new PluginContextImpl(declaration, extensions, events);
+
+        assertThrows(JellyfishException.class, () -> new ProjectPlugin().start(invalid));
     }
 }

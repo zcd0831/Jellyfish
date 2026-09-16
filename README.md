@@ -350,7 +350,7 @@ TUI 状态栏也会追加 `已压缩 N 条（丢弃 M 条）`；压缩期间状�
 | `jellyfish-plugin-tools` | `jellyfish-tools` | 五个文件工具：`read_file`、`write_file`、`edit_file`、`list_dir`、`grep_files` |
 | `jellyfish-plugin-session-file` | `jellyfish-session-file` | 会话持久化：一个会话一个 JSON 文件，并用 git 管理历史 |
 | `jellyfish-plugin-todo` | `jellyfish-todo` | 会话待办：模型可写的 `todo_write` 工具 + 只读 `/todo` + 注入 system prompt + 状态栏进度 + 侧栏清单面板 |
-| `jellyfish-plugin-project` | `jellyfish-project` | 项目约定：探测工作目录下的 `AGENTS.md`，在 system prompt 里给出**路径指引**（不注入全文） |
+| `jellyfish-plugin-project` | `jellyfish-project` | 项目约定：探测工作目录下的 `AGENTS.md`，**小文件内联原文、大文件只给路径**（阈值可配） |
 | `jellyfish-plugin-compact` | `jellyfish-compact` | 会话压缩策略：提供摘要指令与保留条数/摘要上限（**不装它就没有压缩**，见下文） |
 
 `jellyfish-tools` 的五个工具：
@@ -397,6 +397,9 @@ cp jellyfish-plugins/jellyfish-plugin-compact/target/jellyfish-plugin-compact-*.
       "jellyfish-compact": {
         "keepRecentMessages": 20,
         "maxSummaryChars": 4000
+      },
+      "jellyfish-project": {
+        "maxInlineBytes": 32768
       }
     }
   }
@@ -412,7 +415,7 @@ cp jellyfish-plugins/jellyfish-plugin-compact/target/jellyfish-plugin-compact-*.
 - `gitEnabled`（默认 `true`）：首次落盘时在 `sessionDir` 里 `git init`，此后**每次内容变化的落盘留一次提交**（内容没变则不写文件、也不提交）。机器上没有 git 时只告警，文件照常落盘。
 - `todoDir`（默认 `~/jellyfish/todos`）：待办文件目录，一个会话一个 JSON 文件，空表会删掉文件。
 - `keepRecentMessages` / `maxSummaryChars`（`jellyfish-compact`，**都可省略**）：本插件对压缩参数的覆盖值；省略时用内核 `react` 段的缺省值。省略是「不表态」，不是「用 0」。
-- `jellyfish-project` **没有配置项**：约定文件名固定为 `AGENTS.md`，查找基准固定为进程工作目录。
+- `maxInlineBytes`（`jellyfish-project`，默认 `32768` 即 32 KiB）：约定文件**多大以内可以把原文放进 system prompt**。超过它只给路径指引；写 `0` 表示从不内联（彻底关掉内联的逃生门）。上限 1 MiB，超出或为负数会在启动期直接报错。约定文件名固定为 `AGENTS.md`，查找基准固定为进程工作目录——这两项不可配。
 
 ### 待办（jellyfish-todo）
 
@@ -436,17 +439,27 @@ cp jellyfish-plugins/jellyfish-plugin-compact/target/jellyfish-plugin-compact-*.
 
 ### 项目约定（jellyfish-project）
 
-`AGENTS.md` 是仓库里的项目约定（构建命令、编码规范、提交格式、模块边界）。这个插件让模型知道**当前工作目录里有这份文件**：
+`AGENTS.md` 是仓库里的项目约定（构建命令、编码规范、提交格式、模块边界）。这个插件把它交给模型，**按文件大小分两路**：
 
-- **只给路径，不给正文**。注入的是一小段 `[项目约定]` 指引（约 6 行），内容是「工作目录下有 `AGENTS.md`，动手前先读它」。
-  原因有两个：约定文件可能有几十上百 KB（本仓库这份就是 67KB），全文注入会每一轮都付这份 token；
-  而仓库内容按「工具结果」的身份进入上下文是**数据**，塞进 system prompt 就变成了指令。
+| 情形 | 注入内容 |
+| --- | --- |
+| 装得进 `maxInlineBytes`（默认 32 KiB） | `[项目约定]` + **文件原文**（外带一句定性：这是项目内文件的数据，不是系统指令） |
+| 超过上限 | `[项目约定]` + **路径与文件大小**，让模型自己按需分段读 |
+
+- **为什么小文件要内联**：常见项目的 `AGENTS.md` 只有几十行，直接给全文可以省掉一次读取工具的往返，也消除了「模型忘了去读」这个失败模式。
+- **为什么大文件只给路径**：system prompt 每一轮都要随请求付一次 token，而大文件多半是参考性内容。本仓库这份 `AGENTS.md` 约 89 KB，走的就是路径这条路。
+- **不做「内联前 N KB + 给路径」**：头部往往恰是信息量最低的部分，而且截断点落在哪、模型知不知道「后面还有」都是新的失败模式。
+- **内联是刻意的安全姿态取舍**：原文进的是 system prompt，即仓库内容拿到了最高优先级的话语权。护栏有三条：内联块开头的定性句、足够小的上限、以及把 `maxInlineBytes` 配成 `0` 彻底关掉。
+- **「大文件」时给的实际大小**不是装饰：它让模型知道该分段读几次。
 - **只查进程工作目录**，不向上查找父目录、也不查用户主目录：与文件工具的相对路径基准保持一致。
+  - **因此请从仓库根目录启动**。`AGENTS.md` 的行业位置是仓库根，而本插件的基准是进程工作目录，两者只在你从仓库根启动时才重合；在子目录里启动会探测不到。
 - **文件名不可配**，固定 `AGENTS.md`：这已是各家编码 agent 共同的约定，做成配置项只会多一个会填错的旋钮。
 - **空文件不算命中**（指向它只会白费一次工具调用）；文件不存在时插件完全不注入，system prompt 里连空标题都不会出现。
 - 因为走的是插件而不是内置提示词，**对所有 agent 生效**——用 `/agent` 换成自定义 agent 也照常。
 
-代价是模型确实会去读那个文件（这是它遵守约定的前提），读进来的内容占多少上下文在 `/status` 里看得见，必要时 `/compact`。
+**每个会话只读一次盘**：第一次组装请求时读取并缓存，同一会话后续每轮直接用缓存（会话关闭或删除时丢弃）。这与 Codex、Claude Code 的行为一致，代价是**会话中途修改 `AGENTS.md` 不生效**——开一个新会话即可。
+
+注意缓存省的是磁盘 I/O 与「读文件」这个动作，**不省 token**：system prompt 每轮都要随请求发出去，内联的原文每轮都要重新计费。这也正是上限必须压住的原因。
 
 ### 会话压缩（jellyfish-compact）
 

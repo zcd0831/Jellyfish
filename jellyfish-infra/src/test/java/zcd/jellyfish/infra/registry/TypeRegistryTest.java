@@ -227,6 +227,81 @@ class TypeRegistryTest {
     }
 
     @Test
+    void removeAll_should_not_match_sub_owner_when_owner_is_exact() {
+        // Given：子来源的注册挂在命名空间下，不该被精确回收误伤或误留
+        registry.registerUnique("plugin-a", CommandRequest.class, "calc", "one", null, 0, false);
+        registry.registerUnique("plugin-a::child", CommandRequest.class, "other", "two", null, 0, false);
+
+        // When
+        int removed = registry.removeAll("plugin-a");
+
+        // Then：精确匹配只管自己，子来源留给 removeAllUnder
+        assertEquals(1, removed);
+        assertEquals(1, registry.resolve(CommandRequest.class, "other").size());
+    }
+
+    @Test
+    void removeAllUnder_should_drop_namespace_and_every_sub_owner() {
+        // Given
+        registry.registerUnique("plugin-a", CommandRequest.class, "self", "one", null, 0, false);
+        registry.registerUnique("plugin-a::child", CommandRequest.class, "one", "two", null, 0, false);
+        registry.registerUnique("plugin-a::child::grand", CommandRequest.class, "two", "three", null, 0, false);
+
+        // When
+        int removed = registry.removeAllUnder("plugin-a", "::");
+
+        // Then：命名空间自身 + 全部层级一起收干净
+        assertEquals(3, removed);
+        assertTrue(registry.resolve(CommandRequest.class, "self").isEmpty());
+        assertTrue(registry.resolve(CommandRequest.class, "one").isEmpty());
+        assertTrue(registry.resolve(CommandRequest.class, "two").isEmpty());
+    }
+
+    @Test
+    void removeAllUnder_should_not_match_owner_sharing_bare_prefix() {
+        // Given：plugin-ab 与 plugin-a2 只是名字像，不是同一个命名空间
+        registry.registerUnique("plugin-a::child", CommandRequest.class, "one", "two", null, 0, false);
+        registry.registerUnique("plugin-ab", CommandRequest.class, "other", "three", null, 0, false);
+        registry.registerUnique("plugin-a2::child", CommandRequest.class, "another", "four", null, 0, false);
+
+        // When
+        int removed = registry.removeAllUnder("plugin-a", "::");
+
+        // Then：前缀必须带分隔符才算命中
+        assertEquals(1, removed);
+        assertEquals(1, registry.resolve(CommandRequest.class, "other").size());
+        assertEquals(1, registry.resolve(CommandRequest.class, "another").size());
+    }
+
+    @Test
+    void removeAllUnder_should_return_zero_when_namespace_is_unknown() {
+        // When / Then
+        assertEquals(0, registry.removeAllUnder("never-registered", "::"));
+    }
+
+    @Test
+    void removeAllUnder_should_drop_event_subscriptions_too() {
+        // Given：事件订阅与处理器共用一份表，因此命名空间回收也要把它们一起带走
+        registry.registerShared("plugin-a::child", ContributionRequest.class, null, "listener", null, 0);
+
+        // When
+        int removed = registry.removeAllUnder("plugin-a", "::");
+
+        // Then
+        assertEquals(1, removed);
+        assertTrue(registry.resolve(ContributionRequest.class, null).isEmpty());
+    }
+
+    @Test
+    void removeAllUnder_should_reject_blank_namespace_or_empty_separator() {
+        // When / Then：命名空间为空白或分隔符为空会让回收范围变成「全部」或「无法表达」，属于编程错误
+        assertThrows(JellyfishException.class, () -> registry.removeAllUnder(null, "::"));
+        assertThrows(JellyfishException.class, () -> registry.removeAllUnder("  ", "::"));
+        assertThrows(JellyfishException.class, () -> registry.removeAllUnder("plugin-a", null));
+        assertThrows(JellyfishException.class, () -> registry.removeAllUnder("plugin-a", ""));
+    }
+
+    @Test
     void clear_should_drop_everything() {
         // Given
         registry.registerShared("owner", ContributionRequest.class, null, "a", null, 0);

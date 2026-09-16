@@ -12,6 +12,7 @@ import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Predicate;
 
 /**
  * 类型注册表底座：整个内核只有这一份「类型 + 路由键 → 有序处理器集合」的表。
@@ -195,25 +196,76 @@ public final class TypeRegistry {
 
     /**
      * 按来源批量回收登记。
+     * <p>
+     * <b>精确匹配</b>：只回收 owner 完全相等的登记。需要「连同子来源一起回收」时用
+     * {@link #removeAllUnder(String, String)}，不要放宽本方法的匹配规则——
+     * 它同时也服务于内核内部来源（如 {@code metrics}）的收尾，改宽会让回收范围悄悄越界。
      *
      * @param owner 来源标识
      * @return 回收的注册项数量
      */
     public int removeAll(String owner) {
+        return removeMatching(registration -> Objects.equals(owner, registration.getOwner()));
+    }
+
+    /**
+     * 按 owner 命名空间批量回收登记：命中「命名空间自身」与「命名空间下的一切子来源」。
+     * <p>
+     * <b>为什么需要它</b>：插件可以给同一个 {@code pluginId} 下的多个子单元各分一个 owner
+     * （形如 {@code pluginId::子标识}），以获得可归因的诊断与更细的粒度。但框架回收只拿得到
+     * {@code pluginId}，若只做精确匹配，子来源的注册就会在插件停止后残留成「插件已停、工具还能调」
+     * 的幽灵注册。本方法把那种情形一次性收干净。
+     * <p>
+     * <b>匹配规则是「命名空间 + 分隔符」前缀，而不是裸前缀</b>：回收 {@code x} 不得碰
+     * {@code xy} 这个毫不相干的插件，因此 {@code x} 只命中 {@code x} 与 {@code x<sep>*}，
+     * 层级更深（{@code x<sep>a<sep>b}）的也一并命中。
+     * <p>
+     * <b>分隔符由调用方传入</b>：命名空间是插件运行时的约定，不是注册表的约定；
+     * 写死一个分隔符会让表底座替上层做主。
+     *
+     * @param namespace 命名空间（通常是 {@code pluginId}），不可为空白
+     * @param separator 命名空间分隔符（例如 {@code ::}），不可为空
+     * @return 回收的注册项数量
+     * @throws JellyfishException 命名空间为空白或分隔符为空时抛出
+     */
+    public int removeAllUnder(String namespace, String separator) {
+        if (namespace == null || namespace.trim().isEmpty()) {
+            throw new JellyfishException("owner namespace must not be blank");
+        }
+        if (separator == null || separator.isEmpty()) {
+            throw new JellyfishException("owner namespace separator must not be empty");
+        }
+        String prefix = namespace + separator;
+        return removeMatching(registration -> {
+            String owner = registration.getOwner();
+            return namespace.equals(owner) || (owner != null && owner.startsWith(prefix));
+        });
+    }
+
+    /**
+     * 按谓词批量回收登记，供两个回收入口共用。
+     * <p>
+     * 逐槽位收集再整批移除：{@code CopyOnWriteArrayList} 的逐个移除每次都复制整个数组，
+     * 一次注册量大的插件会退化成平方开销。
+     *
+     * @param doomed 判定命中逆汰的谓词，不可为 {@code null}
+     * @return 回收的注册项数量
+     */
+    private int removeMatching(Predicate<HandlerRegistration> doomed) {
         int removed = 0;
         for (Map.Entry<RegistryKey, CopyOnWriteArrayList<HandlerRegistration>> entry : registrations.entrySet()) {
             CopyOnWriteArrayList<HandlerRegistration> slot = entry.getValue();
-            List<HandlerRegistration> doomed = new ArrayList<>();
+            List<HandlerRegistration> matched = new ArrayList<>();
             for (HandlerRegistration registration : slot) {
-                if (Objects.equals(owner, registration.getOwner())) {
-                    doomed.add(registration);
+                if (doomed.test(registration)) {
+                    matched.add(registration);
                 }
             }
-            if (doomed.isEmpty()) {
+            if (matched.isEmpty()) {
                 continue;
             }
-            slot.removeAll(doomed);
-            removed += doomed.size();
+            slot.removeAll(matched);
+            removed += matched.size();
             if (slot.isEmpty()) {
                 registrations.remove(entry.getKey(), slot);
             }

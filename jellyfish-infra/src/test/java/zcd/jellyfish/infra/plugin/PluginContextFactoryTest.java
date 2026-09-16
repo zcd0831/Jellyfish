@@ -1,6 +1,7 @@
 package zcd.jellyfish.infra.plugin;
 
 import org.junit.jupiter.api.Test;
+import zcd.jellyfish.api.event.RegisterOptions;
 import zcd.jellyfish.api.event.Subscription;
 import zcd.jellyfish.api.event.notification.ConfigWarningEvent;
 import zcd.jellyfish.api.extension.CommandRequest;
@@ -95,6 +96,46 @@ class PluginContextFactoryTest {
         // Then
         assertEquals(1, extensions.handlers(CommandRequest.class, "calc").size());
         assertThrows(ExtensionException.class, () -> extensions.handler(CommandRequest.class, "other"));
+    }
+
+    @Test
+    void release_should_reclaim_namespace_sub_owners_of_the_same_plugin() {
+        // Given：插件把子单元的注册挂在 plugin-a::child 下，而框架只拿得到 pluginId
+        PluginContext context = factory.create(PluginDeclaration.of("plugin-a"));
+        context.handle(CommandRequest.class, "calc", request -> CommandResult.ok("ok"));
+        extensions.handle("plugin-a::child", CommandRequest.class, "sub", null,
+                request -> CommandResult.ok("sub"), RegisterOptions.DEFAULT);
+        extensions.handle("plugin-a::child::grand", CommandRequest.class, "deep", null,
+                request -> CommandResult.ok("deep"), RegisterOptions.DEFAULT);
+
+        // When
+        int removed = factory.release("plugin-a");
+
+        // Then：命名空间自身与全部子来源一起清干净，不留「插件已停、工具还能调」的幽灵注册
+        assertEquals(3, removed);
+        assertTrue(extensions.handlers(CommandRequest.class, "calc").isEmpty());
+        assertTrue(extensions.handlers(CommandRequest.class, "sub").isEmpty());
+        assertTrue(extensions.handlers(CommandRequest.class, "deep").isEmpty());
+        assertTrue(registry.snapshot().isEmpty());
+    }
+
+    @Test
+    void release_should_not_reclaim_plugin_whose_id_merely_shares_prefix() {
+        // Given：plugin-ab 与 plugin-a2 只是名字像，不能因为回收 plugin-a 而被误伤
+        extensions.handle("plugin-a::child", CommandRequest.class, "sub", null,
+                request -> CommandResult.ok("sub"), RegisterOptions.DEFAULT);
+        extensions.handle("plugin-ab", CommandRequest.class, "ab", null,
+                request -> CommandResult.ok("ab"), RegisterOptions.DEFAULT);
+        extensions.handle("plugin-a2::child", CommandRequest.class, "a2", null,
+                request -> CommandResult.ok("a2"), RegisterOptions.DEFAULT);
+
+        // When
+        int removed = factory.release("plugin-a");
+
+        // Then
+        assertEquals(1, removed);
+        assertEquals(1, extensions.handlers(CommandRequest.class, "ab").size());
+        assertEquals(1, extensions.handlers(CommandRequest.class, "a2").size());
     }
 
     @Test

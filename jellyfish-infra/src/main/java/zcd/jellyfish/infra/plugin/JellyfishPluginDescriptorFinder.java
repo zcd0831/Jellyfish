@@ -4,6 +4,7 @@ import org.apache.commons.lang3.StringUtils;
 import org.pf4j.DefaultPluginDescriptor;
 import org.pf4j.PluginDescriptor;
 import org.pf4j.PropertiesPluginDescriptorFinder;
+import zcd.jellyfish.api.plugin.PluginOwnerNamespace;
 
 import java.nio.file.Path;
 import java.util.Properties;
@@ -42,6 +43,7 @@ public final class JellyfishPluginDescriptorFinder extends PropertiesPluginDescr
             descriptor.addLoadError("缺少必需的 " + PluginProperties.PLUGIN_CLASS);
         }
         descriptor.addTags(properties.getProperty(PluginProperties.JELLYFISH_TAGS));
+        rejectNamespaceSeparator(descriptor);
         normalizeVersion(descriptor, properties.getProperty(PluginProperties.PLUGIN_VERSION));
         normalizeRequires(descriptor, properties.getProperty(PluginProperties.PLUGIN_REQUIRES));
         return descriptor;
@@ -53,6 +55,29 @@ public final class JellyfishPluginDescriptorFinder extends PropertiesPluginDescr
         // classpath 护栏需要看插件内容，只有拿到路径才能做，因此挂在 find 而不是 createPluginDescriptor
         PluginClasspathGuard.check(pluginPath, (JellyfishPluginDescriptor) descriptor);
         return descriptor;
+    }
+
+    /**
+     * 拒绝带 owner 命名空间分隔符的插件标识。
+     * <p>
+     * {@code ::} 被保留给「插件内子单元」的 owner（形如 {@code pluginId::子标识}），
+     * 而回收是按「命名空间 + 分隔符」前缀做的。若允许插件自带这个分隔符，
+     * 一个叫 {@code x::y} 的插件就会把自己的注册挂在命名空间 {@code x} 下，
+     * 于是 {@code x} 停止时会把它的注册一并抺掉——一个插件停掉另一个插件的工具，
+     * 而且现场看上去一切正常。在加载期直接拦下，比事后追这样一个越界回收便宜得多。
+     *
+     * @param descriptor 描述符
+     */
+    private static void rejectNamespaceSeparator(JellyfishPluginDescriptor descriptor) {
+        String pluginId = descriptor.getPluginId();
+        if (pluginId == null || !pluginId.contains(PluginOwnerNamespace.SEPARATOR)) {
+            return;
+        }
+        descriptor.addLoadError(PluginProperties.PLUGIN_ID + " 不得包含 \""
+                + PluginOwnerNamespace.SEPARATOR
+                + "\"：该分隔符保留给插件内部子单元的 owner 命名空间（{pluginId}"
+                + PluginOwnerNamespace.SEPARATOR + "{子标识}），"
+                + "自带会让回收范围误伤其它插件的注册");
     }
 
     /**

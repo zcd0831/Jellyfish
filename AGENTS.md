@@ -82,7 +82,7 @@ flowchart TB
 
     subgraph "外部依赖·插件"
         direction LR
-        Plugins["PF4J 插件<br>tools / session-file / todo / project / compact"]
+        Plugins["PF4J 插件<br>tools / session-file / todo / project / compact<br>+ python 桥接（脚本进程由它承载）"]
     end
 
     %% ===================== 外壳入口：命令走用户输入，不走 LLM =====================
@@ -174,13 +174,16 @@ Maven 多模块；根 `jellyfish`（`zcd:jellyfish:0.0.1-SNAPSHOT`）是 `packag
 ```mermaid
 flowchart LR
     API["jellyfish-api<br>插件 SPI + 扩展点/事件模型 + 统一异常"]
-    PLUGINS["jellyfish-plugins<br>官方插件聚合：tools / session-file / todo / project / compact"]
+    PLUGINS["jellyfish-plugins<br>官方插件聚合：tools / session-file / todo / project / compact / python 桥接"]
+    SCRIPT["jellyfish-script<br>跨语言插件运行时（语言无关机制层，被桥接插件 shade）"]
     INFRA["jellyfish-infra<br>【基础设施层】"]
     CORE["jellyfish-core<br>【应用层】"]
     TUI["jellyfish-tui<br>TUI 外壳：TamboUI 界面"]
     CLI["jellyfish-cli<br>入口 + DI 装配 + 分发"]
 
     PLUGINS --> API
+    PLUGINS --> SCRIPT
+    SCRIPT --> API
     CORE --> API
     CORE --> INFRA
     INFRA --> API
@@ -193,6 +196,8 @@ flowchart LR
     CLI --> TUI
 ```
 
+跨语言桥接插件是「官方插件」里的特例：它额外依赖 `jellyfish-script`，并把该运行时连同 Jackson、Apache Commons Exec **shade 进自己的插件包**，因此 `jellyfish-infra` / `jellyfish-core` 的 classpath 上不出现任何跨语言代码。`jellyfish-script` 是**库而不是插件**，不产出到 `plugins/` 目录。
+
 官方插件与内核之间没有编译期依赖：由 `PF4JPluginManager` 运行时从 `config.json` 的 `plugins.roots`（默认 `plugins/`）加载，因此不在上面的依赖链里。
 
 | 模块 | 职责 | 依赖 |
@@ -202,12 +207,14 @@ flowchart LR
 | `jellyfish-core` | 应用层：ReAct 循环与 `AgentHarness` 门面、提示词组装、压缩机制、系统命令 | api、infra |
 | `jellyfish-tui` | TUI 外壳：TamboUI 界面、视图投影与滚动、TUI 版 `ReActListener` | api、infra、core |
 | `jellyfish-cli` | `main`、参数解析、模式分发、Dagger 装配、shade 可执行 jar | api、infra、core、tui |
+| `jellyfish-script` | 跨语言插件运行时（语言无关机制层）：JSON-RPC over Stdio、静态清单、进程生命周期、事件桥接、熔断 | api（provided） |
 | `jellyfish-plugins` | 官方插件聚合（packaging=pom），只聚合不产出构件 | 各插件子模块 |
 | `jellyfish-plugin-tools` | 五个文件工具：`read_file` / `write_file` / `edit_file` / `list_dir` / `grep_files` | api（provided） |
 | `jellyfish-plugin-session-file` | 会话持久化：一个会话一个 JSON 文件 + git 管理历史 | api（provided） |
 | `jellyfish-plugin-todo` | 会话待办：`todo_write` 工具 + `/todo` + 提示词/状态栏/面板贡献 | api（provided） |
 | `jellyfish-plugin-project` | 项目约定：探测工作目录下 `AGENTS.md`，小文件内联原文、大文件只给路径 | api（provided） |
 | `jellyfish-plugin-compact` | 压缩策略：摘要指令 + 保留条数与摘要上限；不启用它压缩整体不可用 | api（provided） |
+| `jellyfish-plugin-python` | Python 桥接插件：把 Python 脚本插件以标准 PF4J 插件的形态接入内核（单脚本一 worker 进程） | api（provided）、jellyfish-script（shade） |
 
 包结构（只列包与少数枢纽类；其余类直接读代码）：
 
@@ -258,6 +265,13 @@ jellyfish-tui/src/main/java/zcd/jellyfish/tui/
 
 jellyfish-plugins/              # 每个子模块一个插件 jar，源码结构同构：
                                 #   resources/plugin.properties + PluginConfig + JellyfishPlugin 实现 + 各扩展点 handler
+
+jellyfish-script/src/main/java/zcd/jellyfish/script/
+├── ScriptLanguage.java         # 语言适配 SPI（启动命令 / 探测命令 / 环境变量白名单）
+├── ScriptJson.java             # 统一序列化（插件看不到 infra 的 ObjectMapperWrapper，故自带一份）
+└── （P2 起）ScriptManifest / ScriptGateway / ScriptProtocol / ScriptProcess
+                                #   / ScriptRequestHandler / EventBridge / ScriptRegistry
+                                #   / ScriptCircuitBreaker / ScriptLifecycle / codec/（11 个扩展点编解码）
 ```
 
 资源位置：`default-agent.json` / `jellyfish.md` 在 infra 资源根；`summary-prompt.md` 在压缩插件资源根；`config.json` / `log4j2*.xml` 在 cli 资源根。
@@ -323,6 +337,7 @@ jellyfish-plugins/              # 每个子模块一个插件 jar，源码结构
 
 - **Java 插件与跨语言桥接插件在 `PF4JPluginManager` 眼里同构**，都只经 `PluginContext`（handle / contribute / observe / emit）与内核交互。
 - **插件碰不到会话、也拿不到工作目录**：`PluginContext` 只有身份与四个方法，工具相对路径按进程工作目录解析（`ToolPaths`）。状态只要按 `sessionId` 归属，插件就能自己持有。
+- **owner 可以是命名空间**：插件可给内部子单元分独立 owner（`pluginId` + `api.PluginOwnerNamespace.SEPARATOR` + 子标识），`PluginContextFactory.release` 按命名空间回收（`pluginId` 自身与 `pluginId::*` 一起清），因此子单元的注册不会在插件停止后残留成幽灵注册。分隔符常量在 **api**（跨边界契约：插件拼来源、内核做前缀回收，必须同一个真源）。`plugin.id` 含它的插件在描述符体检阶段被拒——否则一个叫 `x::y` 的插件会把自己的注册挂进命名空间 `x`，`x` 停止时就会越界抺掉它的注册。`EventChannel.unsubscribeAll` 仍是精确匹配（它服务于内核内部来源）。
 - **官方插件**：tools 五个文件工具（三个只读）；session-file 一会话一 JSON + git（落盘失败上抛、git/坏文件只告警）；todo `todo_write` + `/todo` + 提示词/状态栏/面板贡献 + 删除清理；project 按 `maxInlineBytes`（默认 32 KiB，0=不内联）内联 `AGENTS.md` 原文或只给路径（一会话只读一次）；compact 压缩策略。
 - **project 插件必须从仓库根目录启动**：查找基准是进程工作目录（与 `ToolPaths` 同一处），不做向上查找。
 
@@ -369,9 +384,10 @@ jellyfish-plugins/              # 每个子模块一个插件 jar，源码结构
 
 ## 路线图（尚未落地）
 
-以下能力**当前代码中不存在**，不要当成现存 API；设计细节见对应方案文档。
+以下能力**尚未完整落地**，不要当成现存 API；已落地的部分在条目里明确标注。设计细节见对应方案文档。
 
-- **跨语言插件桥接**：计划新增 `jellyfish-script`（JSON-RPC over Stdio、常驻进程池、事件桥接、生命周期护栏）与桥接插件 `jellyfish-plugin-python` / `jellyfish-plugin-node`（运行时加载，与内核无编译期依赖）。**脚本插件与 Java 插件同构，不能发起同步派发**。详见 `跨语言插件方案.md`。
+- **跨语言插件桥接**：已落地 `jellyfish-script`（仅 `ScriptLanguage` 语言适配 SPI + `ScriptJson` 序列化）与 `jellyfish-plugin-python`（可被 PF4J 加载、`start` 期建语言适配、**不拉起任何进程**）两个模块的骨架，以及 owner 命名空间契约（见「插件」一节）。**清单扫描 / 注册 / 网关 / worker / 事件桥接 / 熔断均尚未落地**。
+  架构为「控制面单实例 + 每脚本一 worker 进程」，注册来源是脚本目录下的静态 `manifest.json`（协议里**没有**注册方法），因此启动期不要求 Python 存在。11 个扩展点全部开放、与 Java 插件同权。`jellyfish-plugin-node` 待 Python 同构验证通过后再加。见 `跨语言插件方案.md`。
 - **`-server` 模式**：HTTP 服务外壳（Undertow），对外暴露能力接口。`ServerRunMode` 目前是占位（不启动内核，退 5），开工时抽 `jellyfish-server` 模块。设计见 `cli方案.md`。
 
 ## 编码约定

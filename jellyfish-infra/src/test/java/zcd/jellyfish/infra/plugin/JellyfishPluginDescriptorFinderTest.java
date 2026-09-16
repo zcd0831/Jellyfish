@@ -111,6 +111,18 @@ class JellyfishPluginDescriptorFinderTest {
         assertTrue(descriptor.getLoadErrors().get(0).contains("zcd/jellyfish/api/"));
     }
 
+    @Test
+    void find_should_report_load_error_when_plugin_id_contains_namespace_separator() throws IOException {
+        // Given：:: 保留给插件内部子单元的 owner，自带它会让回收范围越界到命名空间 plugin-a 上
+        JellyfishPluginDescriptor descriptor = find("plugin.id=plugin-a::evil\n"
+                + "plugin.class=com.acme.SamplePlugin\n");
+
+        // Then
+        assertTrue(descriptor.hasLoadErrors());
+        assertTrue(descriptor.getLoadErrors().get(0).contains("plugin.id"),
+                descriptor.getLoadErrors().toString());
+    }
+
     /**
      * 在测试目录写入描述符并解析。
      *

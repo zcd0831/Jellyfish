@@ -215,7 +215,7 @@ flowchart LR
 | `jellyfish-plugin-todo` | 会话待办：`todo_write` 工具 + `/todo` + 提示词/状态栏/面板贡献 | api（provided） |
 | `jellyfish-plugin-project` | 项目约定：探测工作目录下 `AGENTS.md`，小文件内联原文、大文件只给路径 | api（provided） |
 | `jellyfish-plugin-compact` | 压缩策略：摘要指令 + 保留条数与摘要上限；不启用它压缩整体不可用 | api（provided） |
-| `jellyfish-plugin-python` | Python 桥接插件：读静态清单完成注册、自带 `/<lang>` 状态命令（含熔断与事件计数）、把每个脚本调用都经熔断装饰器转发、把内核事件推给脚本（`ScriptEventBridge`），把 Python 脚本插件以标准 PF4J 插件的形态接入内核（控制面单进程 + 每脚本一 worker 进程）。网关资源 `script/gateway.py`（单线程 select 事件循环）、`script/worker.py`、`script/jellyfish_sdk.py`（脚本作者唯一的 API）、`script/script_wire.py`（分帧） | api（provided）、jellyfish-script（shade） |
+| `jellyfish-plugin-python` | Python 桥接插件：读静态清单完成注册、自带 `/<lang>` 状态命令（含熔断与事件计数）、把每个脚本调用都经熔断装饰器转发、把内核事件推给脚本（`ScriptEventBridge`），把 Python 脚本插件以标准 PF4J 插件的形态接入内核（控制面单进程 + 每脚本一 worker 进程）。网关资源 `script/gateway.py`（单线程 select 事件循环）、`script/worker.py`、`script/jellyfish_sdk.py`（脚本作者唯一的 API）、`script/script_wire.py`（分帧）、`script/dump_manifest.py`（清单生成器，`gateway.py --dump-manifest` 转发同一入口）。示例插件见仓库顶层 `examples/scripts/python/`（`hello` 教学最小集、`jira` 真实形态），**端到端用例直接加载它们**，因此示例不会腐烂 | api（provided）、jellyfish-script（shade） |
 
 包结构（只列包与少数枢纽类；其余类直接读代码）：
 
@@ -344,6 +344,9 @@ jellyfish-script/src/main/java/zcd/jellyfish/script/
 
 ### 进程生命周期与 PID 文件
 
+- **示例脚本在仓库顶层 `examples/scripts/python/`，且被端到端用例直接加载**：示例是从进程工作目录之外的路径被加载的（先拷进临时脚本根目录，因为 `hello` 会往自己的目录写便签），因此「示例能不能用」有 CI 守着——放在文档里的示例代码会腐烂，这份不会。改示例时 `manifest.json` 与装饰器必须一起改，`dump_manifest.py --check` 就是给这件事用的。
+- **清单生成器的打印结果必须是内核认得的清单原文**：为比较而补齐缺省值的形状是另一份数据，把那份打印出来会让用户抄回一份内核拒收的清单。
+- **「发一条事件然后立刻查状态」的用例必须让出时间**：事件异步到达且只推给**空闲** worker，而查询动作本身就把 worker 占住——两者相遇时事件被按设计丢掉，且丢掉就是永久丢掉（不排队、不重试）。这不是网关的 bug，是「不排队」的直接代价。
 - **fork 出来的 worker 必须摘下继承的信号唤醒管道**（`signal.set_wakeup_fd(-1)`，在 `_child_setup` 里）：网关的唤醒管道 fd 随即被关掉，不摘的话 worker 每收到一个信号都往已关闭的 fd 写一次，往 stderr 吐四行 `Bad file descriptor` 的 traceback——**每两秒一条**，正好把真正有用的日志淹没。
 - **四层防泄漏**：Java 三段式关闭 + `ShutdownHook`（**不装 `ExecuteWatchdog`**：它按墙上时钟强杀，而网关是设计成可空闲十分钟的长命进程）→ 网关作为父进程杀全部 worker → worker 自己两秒内发现「父进程没了」并退出（Linux 上另有 `prctl(PR_SET_PDEATHSIG)` 让内核代杀；设完必须自查一次 `getppid()`——父进程可能死在「fork 之后、prctl 之前」。**本机是 macOS，这条无法验证，且正确性不依赖它**）→ PID 文件供事后排查。
 - **PID 文件是快照，不是锁**：不参与任何互斥判断，也没有任何代码会根据它做处置。文件里那个 PID 完全可能属于另一个 JVM（上一个 JVM 被 `kill -9`、遗留网关还没自毁、新 JVM 又起来了），未经确认就杀，代价是杀掉无辜进程。
@@ -439,7 +442,7 @@ jellyfish-script/src/main/java/zcd/jellyfish/script/
 
 以下能力**尚未完整落地**，不要当成现存 API；已落地的部分在条目里明确标注。设计细节见对应方案文档。
 
-- **跨语言插件桥接**：Python 已端到端打通——owner 命名空间、静态清单解析与校验、按清单注册（11 个扩展点全开、与 Java 插件同权）、协议帧与 id 配对、Commons Exec 进程管理、Python 网关与 worker、SDK 与 `--dump-manifest` 清单生成器、`/<lang>` 状态命令、熔断与超时隔离链、事件桥接（订阅与发布双向）、PID 文件与启动期陈旧 PID 报告。**未落地**：Linux 专属的 `prctl(PR_SET_PDEATHSIG)` 已实现但本机（macOS）无法验证（正确性不依赖它）；`status` 协议方法经决策**不做**，进程侧状态改为随 `worker_state` 推送。
+- **跨语言插件桥接**：Python 已端到端打通——owner 命名空间、静态清单解析与校验、按清单注册（11 个扩展点全开、与 Java 插件同权）、协议帧与 id 配对、Commons Exec 进程管理、Python 网关与 worker、SDK 与清单生成器 `dump_manifest.py`（`--check` 守清单与实现不漂移）、`/<lang>` 状态命令、熔断与超时隔离链、事件桥接（订阅与发布双向）、PID 文件与启动期陈旧 PID 报告。仓库顶层 `examples/scripts/python/{hello,jira}` 两个示例插件（覆盖工具 / 命令 / 候选查询 / prompt·status_line·panel 贡献 / 订阅与发布事件），`-Pscript-it` 的端到端用例既加载这些示例、也用 `dump_manifest.py` 守着「示例清单没落后于实现」。**未落地**：Linux 专属的 `prctl(PR_SET_PDEATHSIG)` 已实现但本机（macOS）无法验证（正确性不依赖它）；`status` 协议方法经决策**不做**，进程侧状态改为随 `worker_state` 推送；`@command(has_options=True)` 这条入口在自然签名下必炸（已定位，修法待定，见 `跨语言插件方案.md` §15.7）。
   架构为「控制面单实例 + 每脚本一 worker 进程」；注册来源是脚本目录下的静态 `manifest.json`（协议里**没有**注册方法），因此 `start()` 期零进程、零文件写入，Python 缺失不影响内核启动、工具清单依然完整。Python 网关是**单线程 `select` 事件循环**（因此「fork 时没有线程」恒真）。真实解释器的端到端测试在 `mvn -Pscript-it test`。`jellyfish-plugin-node` 待 Python 同构验证通过后再加。见 `跨语言插件方案.md`。
 - **`-server` 模式**：HTTP 服务外壳（Undertow），对外暴露能力接口。`ServerRunMode` 目前是占位（不启动内核，退 5），开工时抽 `jellyfish-server` 模块。设计见 `cli方案.md`。
 

@@ -134,6 +134,16 @@
                             <includes>
                                 <include>**/*IT.java</include>
                             </includes>
+                            <systemPropertyVariables>
+                                <!--
+                                    仓库里的示例脚本目录。端到端用例直接加载它们，
+                                    好让「示例能不能用」被一直守着——示例一旦腐烂（改了实现忘了清单、
+                                    清单里写着不存在的工具），这里就会红。
+                                    刻意不做「向上找仓库根」的猜测：路径写错时用例应当立刻报错，
+                                    而不是悄悄跳过。
+                                -->
+                                <jellyfish.test.examples>${project.basedir}/../../examples/scripts/python</jellyfish.test.examples>
+                            </systemPropertyVariables>
                         </configuration>
                     </plugin>
                 </plugins>

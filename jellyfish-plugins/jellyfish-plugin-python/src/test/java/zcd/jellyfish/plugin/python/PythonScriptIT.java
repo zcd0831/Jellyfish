@@ -21,6 +21,7 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -469,6 +470,366 @@ class PythonScriptIT {
             Thread.sleep(200L);
         }
         return false;
+    }
+
+    @Test
+    @DisplayName("仓库里的示例脚本应能被注册、调用、命令与贡献都跑通")
+    void examples_should_beUsable_endToEnd() throws IOException {
+        // 直接用仓库里的示例（先拷进脚本根目录：示例自己会往它自己的目录写文件，
+        // 不能拿仓库当运行目录，否则一次测试就在工作区里留下痕迹）。
+        // 这样写的好处是「示例能不能用」被 CI 一直守着——放在文档里的示例代码会腐烂，
+        // 而这份不会：它一坏，这个用例就红
+        installExample("hello");
+        installExample("jira");
+        startRuntime();
+
+        // 工具：只读那个按名字打招呼，并把会话标识一起带回来
+        assertEquals("你好，jellyfish！（会话 s-1）",
+                invokeTool("hello_greet", Collections.<String, Object>singletonMap("name", "jellyfish"))
+                        .getOutput());
+        // 工具：参数里的大小写不该影响查找（示例自己做的归一化）
+        assertEquals("PROJ-1 [OPEN] 脚本插件跑不起来",
+                invokeTool("jira_read", Collections.<String, Object>singletonMap("key", "proj-1"))
+                        .getOutput());
+
+        // 命令：原名与别名都要能走通。别名不是「另一个处理器」，而是内核的命令名解析。
+        // 因此这里过一遍真实的 CommandManager，而不是直接按别名查处理器——
+        // 后者会得到 NO_HANDLER，而「/hi 能不能用」这个问题的答案在解析那一步
+        zcd.jellyfish.infra.command.CommandManager commands =
+                new zcd.jellyfish.infra.command.CommandManager(extensions, events);
+        assertEquals("你好，world！", commands.execute("/hello world", "s-1").getOutput());
+        assertEquals("你好，jellyfish！", commands.execute("/hi jellyfish", "s-1").getOutput());
+        // 命令候选查询（二级选择页）也是一条独立的只读路径
+        zcd.jellyfish.api.extension.CommandOptions options = extensions.invoke(
+                extensions.handler(zcd.jellyfish.api.extension.CommandOptionRequest.class, "jira"),
+                new zcd.jellyfish.api.extension.CommandOptionRequest("jira", "s-1"));
+        assertEquals(2, options.getChoices().size(), options.toString());
+
+        // 贡献：prompt 与 panel 都是类型级扩展点。类型级扩展点的取法是 bindings（列表），
+        // 而不是 handler（单个）——多个插件往往同时贡献同一个类型（本用例里两个示例都贡献了
+        // prompt，拿单个会得到 AMBIGUOUS_HANDLER）。内核的 PromptAssembler / UiContributions
+        // 也是按这个方式遍历的
+        assertTrue(promptText().contains("工单系统可用"), promptText());
+        assertFalse(panelLines().isEmpty(), "读过一个工单之后面板应当有内容");
+
+        // 可写工具：写一次便签，顺便验证「脚本能写自己的目录」与参数报错
+        assertTrue(String.valueOf(invokeTool("hello_remember",
+                Collections.<String, Object>singletonMap("note", "试一下")).getOutput()).contains("试一下"));
+        assertTrue(Files.exists(scriptsRoot.resolve("hello").resolve("notes.txt")),
+                "示例应当把便签写到自己的目录里");
+        assertTrue(assertThrows(JellyfishException.class, () -> invokeTool("jira_read",
+                Collections.<String, Object>singletonMap("key", "NOPE-1")))
+                .getMessage().contains("没有工单"), "业务失败要能被看见");
+    }
+
+    @Test
+    @DisplayName("脚本订阅的事件应真的能跑到：内核发一条，状态栏贡献就跟着变")
+    void exampleEventSubscription_should_changeContribution() throws IOException {
+        installExample("hello");
+        startRuntime();
+
+        assertTrue(statusText().contains("0 次"), statusText());
+
+        // 走真实的 EventChannel：订阅这一路（通道 → 桥接 → 网关 → worker → SDK）
+        // 任何一段写错都只会表现为「数字没动」
+        events.publish(new zcd.jellyfish.api.event.notification.ToolCallCompletedEvent(
+                "call-1", "hello_greet", true, 12L, null, "s-1"));
+
+        assertTrue(awaitStatusLine("1 次"), "事件未送达脚本，实际状态栏: " + statusText());
+    }
+
+    @Test
+    @DisplayName("清单生成器：生成结果必须能被内核接受，且与仓库里的清单一致")
+    void dumpManifest_should_agreeWithExamples() throws IOException {
+        // 两件事一起验，因为它们是同一个承诺的两面：
+        // ① 生成器吐出来的是内核认得的清单（能直接落盘），② 示例的清单没有落后于实现。
+        // 后者是「清单与实现必须一致」这条约束唯一能自动守住的地方
+        for (String id : new String[] {"hello", "jira"}) {
+            Path script = examplesDirectory().resolve(id);
+            String generated = runPython(resources("dump_manifest.py"), script.toString());
+            zcd.jellyfish.script.ScriptManifest fromCode = zcd.jellyfish.script.ScriptManifest.parse(
+                    generated, id, zcd.jellyfish.script.codec.ExtensionCodecs.DEFAULTS);
+            // 直接用仓库里那份清单过同一个严格解析器：清单里写了不存在的键、
+            // 或者 tool 的 readOnly 写成了字符串，都会在这里当场曝露
+            String onDisk = new String(Files.readAllBytes(script.resolve("manifest.json")),
+                    StandardCharsets.UTF_8);
+            zcd.jellyfish.script.ScriptManifest checkedIn = zcd.jellyfish.script.ScriptManifest.parse(
+                    onDisk, id, zcd.jellyfish.script.codec.ExtensionCodecs.DEFAULTS);
+            assertEquals(toolNames(checkedIn), toolNames(fromCode),
+                    id + " 的清单与实现不一致，跑 dump_manifest.py --check 看差异");
+            assertEquals(commandNames(checkedIn), commandNames(fromCode), id + " 的命令列表不一致");
+
+            // --check 是给作者用的入口，它必须在这两个示例上返回成功
+            String check = runPython(resources("dump_manifest.py"), script.toString(), "--check");
+            assertTrue(check.contains("清单与实现一致"), check);
+        }
+    }
+
+    /**
+     * 取工具名清单。
+     *
+     * @param manifest 清单
+     * @return 工具名列表
+     */
+    private static java.util.List<String> toolNames(zcd.jellyfish.script.ScriptManifest manifest) {
+        java.util.List<String> names = new java.util.ArrayList<String>();
+        for (zcd.jellyfish.script.ScriptManifest.Tool tool : manifest.tools()) {
+            names.add(tool.name());
+        }
+        return names;
+    }
+
+    /**
+     * 取命令名清单。
+     *
+     * @param manifest 清单
+     * @return 命令名列表
+     */
+    private static java.util.List<String> commandNames(
+            zcd.jellyfish.script.ScriptManifest manifest) {
+        java.util.List<String> names = new java.util.ArrayList<String>();
+        for (zcd.jellyfish.script.ScriptManifest.Command command : manifest.commands()) {
+            names.add(command.name());
+        }
+        return names;
+    }
+
+    /**
+     * 调用一条命令。
+     *
+     * @param name 命令名
+     * @param args 参数原文
+     * @return 命令结果
+     */
+    private CommandResult invokeCommand(String name, String args) {
+        // tokens 与 raw 都给：脚本常按 tokens 处理、按 raw 记录原文，
+        // 只给一个就无法覆盖「两个字段都能拿到」这个事实
+        java.util.List<String> tokens = args == null || args.trim().isEmpty()
+                ? java.util.Collections.<String>emptyList()
+                : java.util.Arrays.asList(args.trim().split("\\s+"));
+        return extensions.invoke(extensions.handler(CommandRequest.class, name),
+                new CommandRequest(name,
+                        new zcd.jellyfish.api.extension.CommandArguments(tokens, args), "s-1"));
+    }
+
+    /**
+     * 汇总全部 prompt 贡献的文本（按注册顺序拼接，与内核组装 system prompt 同法）。
+     *
+     * @return 文本
+     */
+    private String promptText() {
+        PromptContributionRequest request = new PromptContributionRequest("s-1");
+        StringBuilder builder = new StringBuilder();
+        for (zcd.jellyfish.infra.extension.HandlerBinding<PromptContributionRequest,
+                zcd.jellyfish.api.extension.PromptContribution> binding
+                : extensions.bindings(PromptContributionRequest.class, null)) {
+            zcd.jellyfish.api.extension.PromptContribution contribution =
+                    extensions.invoke(binding.getHandler(), request);
+            if (contribution != null && contribution.getText() != null) {
+                builder.append(contribution.getText()).append('\n');
+            }
+        }
+        return builder.toString();
+    }
+
+    /**
+     * 汇总全部状态栏贡献的文本。
+     *
+     * @return 文本
+     */
+    private String statusText() {
+        zcd.jellyfish.api.extension.StatusLineContributionRequest request =
+                new zcd.jellyfish.api.extension.StatusLineContributionRequest("s-1");
+        StringBuilder builder = new StringBuilder();
+        for (zcd.jellyfish.infra.extension.HandlerBinding<
+                zcd.jellyfish.api.extension.StatusLineContributionRequest,
+                zcd.jellyfish.api.extension.StatusLineContribution> binding
+                : extensions.bindings(zcd.jellyfish.api.extension.StatusLineContributionRequest.class,
+                        null)) {
+            zcd.jellyfish.api.extension.StatusLineContribution contribution =
+                    extensions.invoke(binding.getHandler(), request);
+            if (contribution != null && contribution.getText() != null) {
+                builder.append(contribution.getText()).append(' ');
+            }
+        }
+        return builder.toString();
+    }
+
+    /**
+     * 汇总全部面板贡献的行文本。
+     *
+     * @return 行文本列表
+     */
+    private java.util.List<String> panelLines() {
+        zcd.jellyfish.api.extension.PanelContributionRequest request =
+                new zcd.jellyfish.api.extension.PanelContributionRequest("s-1");
+        java.util.List<String> lines = new java.util.ArrayList<String>();
+        for (zcd.jellyfish.infra.extension.HandlerBinding<
+                zcd.jellyfish.api.extension.PanelContributionRequest,
+                zcd.jellyfish.api.extension.PanelContribution> binding
+                : extensions.bindings(zcd.jellyfish.api.extension.PanelContributionRequest.class, null)) {
+            zcd.jellyfish.api.extension.PanelContribution contribution =
+                    extensions.invoke(binding.getHandler(), request);
+            if (contribution == null) {
+                continue;
+            }
+            for (zcd.jellyfish.api.ui.UiLine line : contribution.getLines()) {
+                if (!line.isEmpty()) {
+                    lines.add(line.text());
+                }
+            }
+        }
+        return lines;
+    }
+
+    /**
+     * 等状态栏出现某段文字。
+     *
+     * @param marker 待查找的文字
+     * @return 等到了返回 {@code true}
+     */
+    private boolean awaitStatusLine(String marker) {
+        // 开头这段停顿是用例正确性的一部分，而不是「等得久一点」：
+        // 事件异步到达，且**只推给空闲 worker**（忙的按设计直接丢、不排队、不重试），
+        // 而「读状态栏」这个动作本身就把 worker 占住了。发布之后立刻轮询，
+        // 那一支推送很可能正撞在进行中的调用上而被丢掉——事件丢掉就是永久丢掉，
+        // 轮询再久也看不到。这正是本用例最初三次里失败两次的全部原因：
+        // 观察者挡住了被观察的事。先让出时间让推送落地，再去读它
+        try {
+            Thread.sleep(500L);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+        long deadline = System.currentTimeMillis() + 15_000L;
+        while (System.currentTimeMillis() < deadline) {
+            if (statusText().contains(marker)) {
+                return true;
+            }
+            try {
+                Thread.sleep(200L);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 把仓库里的示例拷进脚本根目录。
+     *
+     * @param id 示例标识
+     * @throws IOException 拷贝失败时抛出
+     */
+    private void installExample(String id) throws IOException {
+        Path source = examplesDirectory().resolve(id);
+        assertTrue(Files.isDirectory(source), "示例目录不存在: " + source);
+        Path target = scriptsRoot.resolve(id);
+        Files.createDirectories(target);
+        // 递归拷贝：示例以后可能拆成多个文件，测试不该因此失效
+        try (java.util.stream.Stream<Path> stream = Files.walk(source)) {
+            for (Path path : stream.filter(Files::isRegularFile).toArray(Path[]::new)) {
+                Files.copy(path, target.resolve(source.relativize(path).toString()));
+            }
+        }
+    }
+
+    /**
+     * 取示例脚本目录。
+     *
+     * @return 目录
+     */
+    private static Path examplesDirectory() {
+        String property = System.getProperty("jellyfish.test.examples");
+        assumeTrue(property != null && !property.trim().isEmpty(),
+                "未设置 jellyfish.test.examples（用 -Pscript-it 跑本用例）");
+        Path directory = Paths.get(property).toAbsolutePath().normalize();
+        assertTrue(Files.isDirectory(directory), "示例目录不存在: " + directory);
+        return directory;
+    }
+
+    /**
+     * 取抽取出来的网关资源里的某个文件。
+     *
+     * @param name 资源文件名
+     * @return 文件路径
+     */
+    private Path resources(String name) {
+        Path directory = new zcd.jellyfish.script.GatewayResources(gatewayRoot)
+                .materialize(new PythonLanguage(interpreter()), PythonLanguage.GATEWAY_RESOURCES);
+        // 抽取后的布局与类路径同形（资源名带 script/ 前缀），入口也是按这个相对路径启动的
+        return directory.resolve("script").resolve(name);
+    }
+
+    @Test
+    @DisplayName("清单生成器：清单落后于实现时必须报出来（否则「守着漂移」这句话是空的）")
+    void dumpManifest_should_reportDrift() throws IOException {
+        // 一个永远回答「一致」的检查器比没有检查器更糟：它会把「清单已同步」变成一种错觉。
+        // 因此这里反向验一次——往清单里塞一个代码里没有的工具，它必须失败并点名
+        installExample("hello");
+        Path manifest = scriptsRoot.resolve("hello").resolve("manifest.json");
+        String broken = new String(Files.readAllBytes(manifest), StandardCharsets.UTF_8)
+                .replace("\"tools\": [", "\"tools\": [{\"name\": \"hello_nonexistent\"}, ");
+        Files.write(manifest, broken.getBytes(StandardCharsets.UTF_8));
+
+        String output = runPythonExpectingFailure(
+                resources("dump_manifest.py"), scriptsRoot.resolve("hello").toString(), "--check");
+
+        assertTrue(output.contains("hello_nonexistent"), output);
+        assertTrue(output.contains("清单里多出了这一项"), output);
+    }
+
+    /**
+     * 跑一个 Python 脚本并取标准输出。
+     *
+     * @param script 脚本路径
+     * @param args   参数
+     * @return 标准输出与标准错误合并后的文本
+     * @throws IOException 启动失败时抛出
+     */
+    private static String runPython(Path script, String... args) throws IOException {
+        java.util.List<String> command = new java.util.ArrayList<String>();
+        command.add(interpreter());
+        command.add(script.toString());
+        command.addAll(java.util.Arrays.asList(args));
+        Process process = new ProcessBuilder(command).redirectErrorStream(true).start();
+        String output = new String(readAll(process.getInputStream()), StandardCharsets.UTF_8);
+        try {
+            boolean finished = process.waitFor(30L, TimeUnit.SECONDS);
+            assertTrue(finished, "清单生成器没有在 30 秒内结束");
+            assertEquals(0, process.exitValue(), "清单生成器退出了非零码，输出: " + output);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError(interrupted);
+        }
+        return output;
+    }
+
+    /**
+     * 跑一个 Python 脚本，要求它**失败**，并取输出。
+     *
+     * @param script 脚本路径
+     * @param args   参数
+     * @return 标准输出与标准错误合并后的文本
+     * @throws IOException 启动失败时抛出
+     */
+    private static String runPythonExpectingFailure(Path script, String... args) throws IOException {
+        java.util.List<String> command = new java.util.ArrayList<String>();
+        command.add(interpreter());
+        command.add(script.toString());
+        command.addAll(java.util.Arrays.asList(args));
+        Process process = new ProcessBuilder(command).redirectErrorStream(true).start();
+        String output = new String(readAll(process.getInputStream()), StandardCharsets.UTF_8);
+        try {
+            boolean finished = process.waitFor(30L, TimeUnit.SECONDS);
+            assertTrue(finished, "清单生成器没有在 30 秒内结束");
+            assertFalse(process.exitValue() == 0, "清单与实现不一致时应当退出非零码，输出: " + output);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError(interrupted);
+        }
+        return output;
     }
 
     @Test

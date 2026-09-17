@@ -411,6 +411,67 @@ class PythonScriptIT {
     }
 
     @Test
+    @DisplayName("台账应报出 worker 的 PID 与就绪状态")
+    void statusCommand_should_showWorkerPid_afterInvoke() throws IOException {
+        writeScript("jira", TOOL_SCRIPT, FULL_MANIFEST);
+        startRuntime();
+
+        invokeTool("jira_issue", Collections.<String, Object>singletonMap("key", "K"));
+
+        String status = statusCommand();
+        assertTrue(status.contains("worker "), status);
+        assertTrue(status.contains("ready"), status);
+        // PID 是排查时唯一需要手动输入的东西，而它只有进程侧知道
+        assertTrue(status.contains("pid="), status);
+    }
+
+    @Test
+    @DisplayName("脚本卡住时台账应报出「在途」——这是「为什么这个工具很慢」的直接答案")
+    void statusCommand_should_showInflight_whileScriptIsBusy()
+            throws IOException, InterruptedException {
+        writeScript("jira", TOOL_SCRIPT, FULL_MANIFEST);
+        startRuntime(2);
+
+        Thread hanging = new Thread(() -> {
+            try {
+                invokeTool("jira_hang", Collections.<String, Object>emptyMap());
+            } catch (JellyfishException expected) {
+                // 这个调用注定超时，这里只关心超时之前台账能看到什么
+            }
+        });
+        hanging.setDaemon(true);
+        hanging.start();
+        Thread.sleep(700L);
+
+        String status = statusCommand();
+        assertTrue(status.contains("在途=1"), status);
+
+        // 超时之后 worker 被隔离，台账必须跟着变成「已退出」而不是继续报就绪：
+        // 这两个数字都是网关推过来的快照，推不出去就是永久陈旧
+        hanging.join(15_000L);
+        assertTrue(awaitStatus("exited", 10_000L), statusCommand());
+    }
+
+    /**
+     * 等到台账里出现某个字样。
+     *
+     * @param marker    待查找的字样
+     * @param timeoutMs 等待上限
+     * @return 等到了返回 {@code true}
+     * @throws InterruptedException 等待被中断时抛出
+     */
+    private boolean awaitStatus(String marker, long timeoutMs) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + timeoutMs;
+        while (System.currentTimeMillis() < deadline) {
+            if (statusCommand().contains(marker)) {
+                return true;
+            }
+            Thread.sleep(200L);
+        }
+        return false;
+    }
+
+    @Test
     @DisplayName("内核事件应送达订阅它的脚本")
     void event_should_reachScript_when_kernelPublishes() throws IOException {
         // 这条链路跨了四个进程内/进程外的边界：EventChannel 通知线程 → 桥接队列 →

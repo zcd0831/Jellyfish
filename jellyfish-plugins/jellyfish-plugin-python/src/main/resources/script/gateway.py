@@ -109,6 +109,10 @@ class ScriptState(object):
         self.queue = []
         self.inflight = None
         self.last_spawn = 0.0
+        # 最近一次上报给宿主的（生命周期状态, 存活, PID）与（排队数, 是否在途）。
+        # 后者靠循环里的对账推变化（见 _check_worker_busy），因此必须记住上次报了什么
+        self.reported_state = None
+        self.reported_busy = None
 
     @property
     def script_id(self):
@@ -154,6 +158,7 @@ class Gateway(object):
             self._expire()
             self._pump_all()
             self._reap()
+            self._check_worker_busy()
             self._check_idle()
             self._wait()
         self._shutdown()
@@ -814,7 +819,7 @@ class Gateway(object):
         if state.script_id in self.pending_ready:
             self.pending_ready.discard(state.script_id)
             state.refusal = state.refusal or reason
-        self._notify_worker_state(state, "exited", False)
+        self._notify_worker_state(state, "exited", False, current.pid)
         self._pump(state)
 
     # ------------------------------------------------------------ worker 管理
@@ -865,6 +870,16 @@ class Gateway(object):
         os.dup2(log_w, 1)
         os.dup2(log_w, 2)
         _close_except(set([sock_fd]))
+        # 摘下继承来的「信号唤醒管道」：它是 CPython 在 C 层记着一个 fd 号，
+        # 而上面那一步刚刚把那个 fd 关了。不摘的话，worker 每收到一个信号
+        # （孤儿看门狗的 SIGALRM、网关发的 SIGTERM、SIGCHLD）都会往一个已经关掉的
+        # fd 上写一次信号号，然后往 stderr 吐一段四行的 “Exception ignored when trying to
+        # write to the signal wakeup fd: OSError: [Errno 9] Bad file descriptor” —— **每两秒一次**，
+        # 恰好把真正有用的那几行淹没掉。worker 侧没有任何人在读这个管道
+        try:
+            signal.set_wakeup_fd(-1)
+        except (ValueError, OSError):
+            pass
 
     def _kill_worker(self, state, reason):
         """请求 worker 退出，返回是否发出了信号。"""
@@ -969,15 +984,48 @@ class Gateway(object):
             self.exit_reason = "写宿主 stdout 失败: %s" % error
         self.last_busy = time.time()
 
-    def _notify_worker_state(self, state, name, alive):
-        """上报 worker 状态变化（通知，不需要宿主应答）。
+    def _notify_worker_state(self, state, name, alive, pid=None):
+        """上报 worker 状态快照（通知，不需要宿主应答）。
 
-        宿主拿到它只用于诊断与日志：它不改变任何判断，因此丢掉也无所谓——
-        这正是「事件可丢」的一个正当用例。
+        它是**快照更新**而不是事件日志：同一个生命周期状态可以在「在途/排队」变了之后
+        再报一次，宿主拿到的是「这个脚本现在是什么样」而不是「刚才发生了什么」。
+        生命周期名字（``ready`` / ``refused`` / ``exited``）不变，变的是随行的计数。
+
+        :param state: 脚本状态
+        :param name: 生命周期状态名
+        :param alive: worker 是否可用
+        :param pid: worker 的 PID；为 ``None`` 时取当前 worker（已退场的那一代由调用方传）
         """
-        self._write_java({"jsonrpc": "2.0", "method": "worker_state",
-                          "params": {"script": state.script_id, "state": name,
-                                     "alive": alive, "started": state.worker is not None}})
+        current = state.worker
+        if pid is None and current is not None:
+            pid = current.pid
+        busy = (len(state.queue), state.inflight is not None)
+        state.reported_state = (name, alive, pid)
+        state.reported_busy = busy
+        params = {"script": state.script_id, "state": name, "alive": alive,
+                  "started": current is not None,
+                  "queued": busy[0], "inflight": busy[1]}
+        if pid is not None:
+            # 进程已经不在时也不是不报：宿主拿它去 ``ps -p`` 一下，比「刚才那个进程没了」
+            # 更能回答「它到底死透没有」
+            params["pid"] = pid
+        self._write_java({"jsonrpc": "2.0", "method": "worker_state", "params": params})
+
+    def _check_worker_busy(self):
+        """把「在途/排队」的变化推给宿主。
+
+        **在循环里对账，而不是在每个改动队列的地方各推一次**：后者要求每个改动点都记得推，
+        而漏掉一个的表现是台账上的数字永久停在旧值——那比根本没有这个数字更糟。
+        队列在这里只有一两项，比较一次的成本可以忽略，而循环本来就会被每一帧唤醒。
+        """
+        for state in self.states.values():
+            if state.worker is None or state.reported_busy is None:
+                continue
+            busy = (len(state.queue), state.inflight is not None)
+            if busy == state.reported_busy:
+                continue
+            name, alive, pid = state.reported_state
+            self._notify_worker_state(state, name, alive, pid)
 
     def _log(self, text):
         """写网关自己的诊断日志：走 stderr，不碰协议流。"""

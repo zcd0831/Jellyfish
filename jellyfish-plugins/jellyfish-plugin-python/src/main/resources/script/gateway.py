@@ -131,6 +131,8 @@ class Gateway(object):
         self.pending_init = None
         self.last_busy = time.time()
         self.settings = {}
+        # PID 文件信息：路径、自己的 PID、启动时发现的上一份内容（只报告不处置）
+        self.pid_info = None
         self.wakeup_r = None
         self.wakeup_w = None
         self.seq = 0
@@ -190,6 +192,7 @@ class Gateway(object):
             self._reap()
         for state in self.states.values():
             self._close_worker(state)
+        self._remove_pid_file()
         if self.events_pushed or self.events_dropped or self.events_echoed:
             self._log("事件统计: 推送 %d，丢弃 %d（worker 忙或没有 worker），跳过回声 %d"
                       % (self.events_pushed, self.events_dropped, self.events_echoed))
@@ -384,7 +387,7 @@ class Gateway(object):
                             "error": state.refusal})
         self.pending_ready = set()
         self.pending_init = None
-        self._reply(request_id, {"scripts": results})
+        self._reply(request_id, self._initialize_result(results))
         self.last_busy = time.time()
 
     def _expire_waiting(self, state, now):
@@ -555,6 +558,7 @@ class Gateway(object):
         self.settings.setdefault("workerIdleSeconds", 300)
         self.settings.setdefault("gatewayIdleSeconds", 600)
         self.settings.setdefault("manifestStrict", True)
+        self._record_pid_file()
         specs = params.get("scripts") or []
         for spec in specs:
             state = ScriptState(spec)
@@ -566,7 +570,7 @@ class Gateway(object):
         for spec in specs:
             self._spawn(self.states[spec["id"]])
         if not specs:
-            self._reply(request_id, {"scripts": []})
+            self._reply(request_id, self._initialize_result([]))
             return
         timeout = self.settings["invokeTimeoutSeconds"]
         if timeout:
@@ -626,6 +630,99 @@ class Gateway(object):
         """取下一个 worker 请求序号（每个 worker 同时只有一个在途，因此单调即可）。"""
         self.seq += 1
         return self.seq
+
+    def _initialize_result(self, scripts):
+        """组装初始化应答：逐脚本结果，外加 PID 文件信息。"""
+        result = {"scripts": scripts}
+        if self.pid_info is not None:
+            result["pidFile"] = self.pid_info
+        return result
+
+    # ------------------------------------------------------------ PID 文件
+
+    def _record_pid_file(self):
+        """写自己的 PID；写之前先把上一份读出来**只报告、不处置**。
+
+        这个文件的全部价值在「JVM 被 ``kill -9``、网关也一起失联」之后：
+        那时它是唯一还活着的线索。因此它是**快照**而不是锁——两个网关同跑是可能的
+        （上一个 JVM 被强杀、它留下的网关还没自毁，新 JVM 又起来了），
+        谁也不该根据它去做任何处置。
+        """
+        path = self.settings.get("pidFile")
+        if not path:
+            return
+        info = {}
+        stale = self._read_stale_pid(path)
+        if stale is not None:
+            info["stale"] = stale
+            self._log("发现遗留的 PID 文件 %s：%s（只报告，未处理）" % (path, stale))
+        try:
+            directory = os.path.dirname(path)
+            if directory:
+                os.makedirs(directory, exist_ok=True)
+            # 先写临时文件再改名：人正是靠这个文件判断「刚才那个进程是谁」，
+            # 而读到一半的 PID（例如只写了一个数字的前缀）比没有文件更糟——它会被当成真的
+            temporary = "%s.%d.tmp" % (path, os.getpid())
+            try:
+                with open(temporary, "w") as handle:
+                    handle.write("%d\n" % os.getpid())
+                os.replace(temporary, path)
+            finally:
+                # 改名成功时它已经不存在；失败时留下一份半成品只会让下一个看目录的人多一个疑问
+                try:
+                    os.remove(temporary)
+                except OSError:
+                    pass
+            info["pid"] = os.getpid()
+        except OSError as error:
+            info["notice"] = "写入 PID 文件失败: %s" % error
+            self._log(info["notice"])
+        self.pid_info = info
+
+    def _read_stale_pid(self, path):
+        """读上一份 PID 文件并判定它是否还在，返回可读描述；没有文件时返回 ``None``。
+
+        存活判定用 ``os.kill(pid, 0)``：不发送任何信号，只做一次权限与存在性检查。
+        僵尸进程也会被判成存活，这是刻意的——排查时「它可能还在」比「它不在了」更保守。
+        """
+        try:
+            with open(path, "r") as handle:
+                text = handle.read().strip()
+        except FileNotFoundError:
+            return None
+        except OSError as error:
+            return "无法读取上一份 PID 文件: %s" % error
+        if not text:
+            return "空文件"
+        try:
+            pid = int(text)
+        except ValueError:
+            return "内容不是 PID: %s" % text[:40]
+        if pid <= 0:
+            return "内容不是有效 PID: %d" % pid
+        return "PID %d（%s）" % (pid, "仍存活" if _pid_alive(pid) else "已不存在")
+
+    def _remove_pid_file(self):
+        """退出时删掉自己的 PID 文件——**仅当它仍然记着我们自己的 PID 时**。
+
+        后来者可能已经覆盖了这个文件（旧网关还没死、新 JVM 又起来了）；
+        这时把文件删掉，删掉的就是「后来者还活着」这份唯一证据。
+        """
+        info = self.pid_info
+        if not info or "pid" not in info:
+            return
+        path = self.settings.get("pidFile")
+        if not path:
+            return
+        try:
+            with open(path, "r") as handle:
+                text = handle.read().strip()
+            if text != str(os.getpid()):
+                self._log("PID 文件已被其它网关接管，不再删除: %s" % path)
+                return
+            os.remove(path)
+        except OSError as error:
+            self._log("清理 PID 文件失败: %s" % error)
 
     # ------------------------------------------------------------ worker 请求
 
@@ -889,6 +986,16 @@ class Gateway(object):
             sys.stderr.flush()
         except (OSError, ValueError):
             pass
+
+
+def _pid_alive(pid):
+    """判断进程是否还在（不发送任何信号）。"""
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError as error:
+        # EPERM：进程存在但不属于当前用户。排查场景下「它在」是更有用的结论
+        return error.errno == errno.EPERM
 
 
 def _write_all(fd, data):

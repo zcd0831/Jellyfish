@@ -52,6 +52,9 @@ final class PythonConfig {
     /** 网关资源抽取根目录配置键。 */
     static final String KEY_GATEWAY_ROOT = "gatewayRoot";
 
+    /** 网关 PID 文件目录配置键。 */
+    static final String KEY_PID_DIRECTORY = "pidDirectory";
+
     /** 事件收窄配置键。 */
     static final String KEY_EVENTS = "events";
 
@@ -97,6 +100,9 @@ final class PythonConfig {
     /** 网关资源抽取根目录。 */
     private final Path gatewayRoot;
 
+    /** 网关 PID 文件目录。 */
+    private final Path pidDirectory;
+
     /** 额外收窄的事件白名单。 */
     private final java.util.List<String> allowedEvents;
 
@@ -113,12 +119,13 @@ final class PythonConfig {
      * @param gatewayIdleSeconds   网关空闲自毁秒数
      * @param manifestStrict       是否启用严格校验
      * @param gatewayRoot          网关资源抽取根目录
+     * @param pidDirectory         网关 PID 文件目录
      * @param allowedEvents        额外收窄的事件白名单
      * @param circuitBreaker       熔断参数
      */
     private PythonConfig(Path scriptsRoot, String pythonPath, int invokeTimeoutSeconds,
                          int workerIdleSeconds, int gatewayIdleSeconds, boolean manifestStrict,
-                         Path gatewayRoot, java.util.List<String> allowedEvents,
+                         Path gatewayRoot, Path pidDirectory, java.util.List<String> allowedEvents,
                          zcd.jellyfish.script.CircuitBreakerSettings circuitBreaker) {
         this.scriptsRoot = scriptsRoot;
         this.pythonPath = pythonPath;
@@ -127,6 +134,7 @@ final class PythonConfig {
         this.gatewayIdleSeconds = gatewayIdleSeconds;
         this.manifestStrict = manifestStrict;
         this.gatewayRoot = gatewayRoot;
+        this.pidDirectory = pidDirectory;
         this.allowedEvents = allowedEvents;
         this.circuitBreaker = circuitBreaker;
     }
@@ -153,6 +161,7 @@ final class PythonConfig {
                 bool(values.get(KEY_MANIFEST_STRICT), KEY_MANIFEST_STRICT,
                         zcd.jellyfish.script.GatewaySettings.DEFAULT_MANIFEST_STRICT),
                 resolveGatewayRoot(values.get(KEY_GATEWAY_ROOT)),
+                resolvePidDirectory(values.get(KEY_PID_DIRECTORY)),
                 allowedEvents(values.get(KEY_EVENTS)),
                 circuitBreaker(values.get(KEY_CIRCUIT_BREAKER)));
     }
@@ -215,20 +224,31 @@ final class PythonConfig {
     }
 
     /**
+     * 获取网关 PID 文件目录。
+     *
+     * @return 目录
+     */
+    Path pidDirectory() {
+        return pidDirectory;
+    }
+
+    /**
      * 组装下发给网关的设置。
      * <p>
      * 熔断参数不在这里：它只在 Java 侧使用，网关不需要知道——把它一起下发，
      * 就得让每种语言的网关各实现一遍同样的状态机，而三份实现里必然有两份会漂移。
      *
+     * @param languageId 语言标识，用于推导 PID 文件名
      * @return 网关设置
      */
-    zcd.jellyfish.script.GatewaySettings gatewaySettings() {
+    zcd.jellyfish.script.GatewaySettings gatewaySettings(String languageId) {
         return zcd.jellyfish.script.GatewaySettings.builder()
                 .invokeTimeoutSeconds(invokeTimeoutSeconds)
                 .workerIdleSeconds(workerIdleSeconds)
                 .gatewayIdleSeconds(gatewayIdleSeconds)
                 .manifestStrict(manifestStrict)
                 .allowedEvents(allowedEvents)
+                .pidFile(zcd.jellyfish.script.ScriptPidFiles.pathFor(pidDirectory, languageId).toString())
                 .build();
     }
 
@@ -246,7 +266,8 @@ final class PythonConfig {
         return "PythonConfig{scriptsRoot=" + scriptsRoot + ", pythonPath=" + pythonPath
                 + ", invokeTimeout=" + invokeTimeoutSeconds + "s, workerIdle=" + workerIdleSeconds
                 + "s, gatewayIdle=" + gatewayIdleSeconds + "s, manifestStrict=" + manifestStrict
-                + ", gatewayRoot=" + gatewayRoot + ", " + circuitBreaker + '}';
+                + ", gatewayRoot=" + gatewayRoot + ", pidDirectory=" + pidDirectory
+                + ", " + circuitBreaker + '}';
     }
 
     /**
@@ -373,6 +394,23 @@ final class PythonConfig {
             return zcd.jellyfish.script.GatewayResources.defaultBaseDirectory();
         }
         return normalizePath(requireText(raw, KEY_GATEWAY_ROOT, ""));
+    }
+
+    /**
+     * 解析网关 PID 文件目录。
+     * <p>
+     * 默认与网关资源目录<b>同级</b>的 {@code pids}，而不是它的子目录：资源目录名带内容摘要，
+     * 改一个字节就换目录，而 PID 文件的全部价值就在「被下一次启动看见」。
+     *
+     * @param raw 配置原值，可为 {@code null}
+     * @return 规范化绝对路径
+     * @throws JellyfishException 值非法时抛出
+     */
+    private static Path resolvePidDirectory(Object raw) {
+        if (raw == null) {
+            return zcd.jellyfish.script.ScriptPidFiles.defaultDirectory();
+        }
+        return normalizePath(requireText(raw, KEY_PID_DIRECTORY, ""));
     }
 
     /**

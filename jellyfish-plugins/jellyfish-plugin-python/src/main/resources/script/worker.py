@@ -13,7 +13,7 @@
 * 网关发信号让它退出（空闲自毁、超时隔离、关闭）——这是正常路径；
 * 它自己发现父进程已经没了（``os.getppid() == 1``）——这是兜底路径，
   用于网关被 ``kill -9`` 这种谁都收不到通知的场景。macOS 没有 ``PR_SET_PDEATHSIG``，
-  因此这条兜底是必需的，不是可选的。
+  因此这条兜底是必需的，不是可选的；Linux 上还额外请内核代发一次 SIGKILL。
 """
 
 import importlib.util
@@ -47,6 +47,9 @@ MAX_CHECK_INTERVAL = 5.0
 # 孤儿看门狗的检查周期（秒）。它必须由**定时器**驱动而不是放在事件循环里，见 _install_orphan_watchdog。
 ORPHAN_CHECK_SECONDS = 2.0
 
+# Linux 的 prctl 选项号：父进程死亡时给本进程发一个信号（值来自 linux/prctl.h）。
+PR_SET_PDEATHSIG = 1
+
 
 class _Stopping(object):
     """退出标志。
@@ -78,6 +81,34 @@ def _die_now(script_id, which):
     """
     print("[%s] 收到 %s，立即退出" % (script_id, which), file=sys.stderr, flush=True)
     os._exit(0)
+
+
+def _install_parent_death_signal(script_id):
+    """请内核在父进程死亡时直接杀掉自己（仅 Linux）。
+
+    这是「父死子亡」在 Linux 上更彻底的一半：信号由内核在父进程消失的瞬间发出，
+    既不依赖 worker 自己醒来检查，也不怕 worker 卡在任何系统调用里。
+    定时器看门狗仍然保留——macOS 没有这个设施，而两者并存没有害处：谁先到谁生效，
+    重复退出由 ``os._exit`` 幂等。
+
+    **失败只记一行就放过**：非 Linux 平台本来就没有这个设施，那是正常情况而不是错误；
+    为一个「锦上添花的内核特性」拒绝服务，会把局部加固变成全局不可用。
+    """
+    if not sys.platform.startswith("linux"):
+        return
+    try:
+        import ctypes
+        libc = ctypes.CDLL(None, use_errno=True)
+        if libc.prctl(PR_SET_PDEATHSIG, signal.SIGKILL, 0, 0, 0) != 0:
+            raise OSError(ctypes.get_errno(), "prctl 返回非零")
+    except (ImportError, AttributeError, OSError) as error:
+        print("[%s] 未能启用父死子亡信号: %s" % (script_id, error), file=sys.stderr, flush=True)
+        return
+    # 父进程可能在「fork 之后、prctl 之前」就没了：那种情况下信号永远不会来，
+    # 必须自己查一次（内核发出的 PDEATHSIG 只覆盖「设置之后」的父进程死亡）
+    if os.getppid() == 1:
+        print("[%s] 父进程已退出（设置信号前），自行退出" % script_id, file=sys.stderr, flush=True)
+        os._exit(0)
 
 
 def _install_orphan_watchdog(script_id):
@@ -115,6 +146,7 @@ def serve(sock, script_id, script_dir, entry_name, manifest, strict, idle_second
     stopping = _Stopping()
     signal.signal(signal.SIGTERM, lambda *_: _die_now(script_id, "SIGTERM"))
     signal.signal(signal.SIGINT, lambda *_: _die_now(script_id, "SIGINT"))
+    _install_parent_death_signal(script_id)
     _install_orphan_watchdog(script_id)
 
     if script_dir not in sys.path:

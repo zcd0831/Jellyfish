@@ -9,6 +9,7 @@ import zcd.jellyfish.api.event.notification.ConfigWarningEvent;
 import zcd.jellyfish.api.plugin.JellyfishPlugin;
 import zcd.jellyfish.api.plugin.PluginContext;
 import zcd.jellyfish.script.CircuitBreakingScriptCaller;
+import zcd.jellyfish.script.GatewaySettings;
 import zcd.jellyfish.script.GatewayResources;
 import zcd.jellyfish.script.ScriptCircuitBreaker;
 import zcd.jellyfish.script.ScriptGateway;
@@ -165,16 +166,16 @@ public final class PythonBridgePlugin implements JellyfishPlugin {
         }
         // 运行时在这里创建、但不启动任何进程：抽取网关资源、fork worker 都留到第一次真正调用，
         // 因此「解释器没装」或「主目录不可写」都不会影响插件加载，也不会影响工具清单的完整性
+        GatewaySettings settings = config.gatewaySettings(language.id());
         gateway = ScriptGateway.builder(language)
                 .gatewayResources(PythonLanguage.GATEWAY_RESOURCES)
                 .resources(new GatewayResources(config.gatewayRoot()))
-                .settings(config.gatewaySettings())
+                .settings(settings)
                 .scripts(scan.plugins())
                 .build();
         // 转发闭包拿到的就是这个带熔断的入口：因此「拒绝派发」发生在注册好的处理器内部，
         // 而**不需要把注册摘掉**——工具仍在清单里，模型看到的是一条带剩余时间的错误
-        events = new ScriptEventBridge(context, language.displayName(), gateway,
-                config.gatewaySettings().allowedEvents());
+        events = new ScriptEventBridge(context, language.displayName(), gateway, settings.allowedEvents());
         // 事件桥接要用网关推送，而网关要先存在，因此这里是「构造后注册」而不是注入
         gateway.eventSink(events);
         events.start();

@@ -133,13 +133,49 @@ class PythonConfigTest {
         values.put(PythonConfig.KEY_EVENTS, events);
 
         PythonConfig config = PythonConfig.from(values);
-        zcd.jellyfish.script.GatewaySettings settings = config.gatewaySettings();
+        zcd.jellyfish.script.GatewaySettings settings = config.gatewaySettings("python");
 
         assertEquals(7000L, settings.invokeTimeoutMillis());
         assertEquals(11, settings.workerIdleSeconds());
         assertEquals(13, settings.gatewayIdleSeconds());
         assertFalse(settings.manifestStrict());
         assertEquals(java.util.Arrays.asList("SessionCreatedEvent"), settings.allowedEvents());
+    }
+
+    @Test
+    @DisplayName("PID 文件目录应默认与网关资源目录同级，而不是它的子目录")
+    void pidDirectory_should_defaultToSiblingOfGatewayRoot() {
+        PythonConfig config = PythonConfig.from(null);
+
+        assertEquals(zcd.jellyfish.script.ScriptPidFiles.defaultDirectory(), config.pidDirectory());
+        assertEquals(Paths.get(System.getProperty("user.home"), "jellyfish", "pids")
+                .toAbsolutePath().normalize(), config.pidDirectory());
+        // 与网关资源目录同级：后者按内容摘要分目录，改一个字节就换目录，
+        // 而 PID 文件必须“下一次启动还看得见”才有价值
+        assertEquals(config.gatewayRoot().getParent(), config.pidDirectory().getParent());
+    }
+
+    @Test
+    @DisplayName("PID 文件路径应按语言拼在配置的目录下，并随设置下发")
+    void gatewaySettings_should_carryPidFile_when_pidDirectoryConfigured() {
+        Map<String, Object> values = new LinkedHashMap<String, Object>();
+        values.put(PythonConfig.KEY_PID_DIRECTORY, "/tmp/jf-pids");
+
+        PythonConfig config = PythonConfig.from(values);
+        zcd.jellyfish.script.GatewaySettings settings = config.gatewaySettings("python");
+
+        assertEquals(Paths.get("/tmp/jf-pids").toAbsolutePath().normalize(), config.pidDirectory());
+        assertEquals(config.pidDirectory().resolve("script-python.pid").toString(), settings.pidFile());
+        assertTrue(settings.toJson().has("pidFile"), settings.toJson().toString());
+    }
+
+    @Test
+    @DisplayName("PID 文件目录类型不对时应报错，而不是静默退回默认值")
+    void from_should_throwJellyfishException_when_pidDirectoryIsNotText() {
+        Map<String, Object> values = new LinkedHashMap<String, Object>();
+        values.put(PythonConfig.KEY_PID_DIRECTORY, 42);
+
+        assertThrows(JellyfishException.class, () -> PythonConfig.from(values));
     }
 
     @Test

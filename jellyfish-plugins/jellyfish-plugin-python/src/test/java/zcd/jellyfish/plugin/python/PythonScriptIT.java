@@ -62,6 +62,10 @@ class PythonScriptIT {
     @TempDir
     Path gatewayRoot;
 
+    /** PID 文件目录；固定到临时目录，避免测试往用户主目录写东西。 */
+    @TempDir
+    Path pidRoot;
+
     /** 插件管理器。 */
     private PF4JPluginManager manager;
 
@@ -333,6 +337,80 @@ class PythonScriptIT {
 
 
     @Test
+    @DisplayName("PID 文件应记下网关自己的 PID，并在正常退出时删掉")
+    void pidFile_should_recordGatewayPid_andRemoveIt_whenGatewayExits() throws IOException {
+        writeScript("jira", TOOL_SCRIPT, FULL_MANIFEST);
+        startRuntime();
+
+        invokeTool("jira_issue", Collections.<String, Object>singletonMap("key", "K"));
+
+        int pid = readPid(pidFile());
+        assertTrue(pid > 0, "PID 文件里应是一个正整数，实际为 " + pid);
+        assertTrue(statusCommand().contains("网关 PID " + pid), statusCommand());
+
+        // 正常退出（宿主关闭网关）时必须删掉：留着它会让下一次启动把一个还活着的 PID 报成遗留
+        manager.close();
+        manager = null;
+        assertFalse(Files.exists(pidFile()), "正常退出后 PID 文件不应残留");
+    }
+
+    @Test
+    @DisplayName("启动时发现的遗留 PID 只报告不处置：文件里那个进程必须活着")
+    void stalePidFile_should_beReportedWithoutKilling_theRecordedProcess()
+            throws IOException, InterruptedException {
+        writeScript("jira", TOOL_SCRIPT, FULL_MANIFEST);
+        // 造一个「上一任网关」：用 sh 写下自己的 PID 再 exec 成 sleep，
+        // 这样一个真实存活的进程就占了那个 PID，且它不属于本 JVM（不会被任何回收路径带走）
+        Files.createDirectories(pidRoot);
+        Path marker = pidRoot.resolve("sleeper.pid");
+        Process sleeper = new ProcessBuilder("sh", "-c", "echo $$ > " + marker + "; exec sleep 120")
+                .start();
+        try {
+            int stalePid = awaitPid(marker, 5000L);
+            assertTrue(sleeper.isAlive(), "造出来的「上一任网关」应先真的活着");
+            Files.write(pidFile(), (stalePid + "\n").getBytes(StandardCharsets.UTF_8));
+
+            startRuntime();
+            invokeTool("jira_issue", Collections.<String, Object>singletonMap("key", "K"));
+
+            // 「只报告」：报告必须能被人看见（台账输出），而不是只进日志
+            String status = statusCommand();
+            assertTrue(status.contains("PID " + stalePid + "（仍存活）"), status);
+            // 「不处置」：那个进程必须原封不动地活着，且文件已被本代网关接管
+            assertTrue(sleeper.isAlive(), "遗留 PID 文件里的进程被误杀了");
+            assertTrue(readPid(pidFile()) != stalePid, "PID 文件应被本代网关接管");
+        } finally {
+            sleeper.destroyForcibly();
+            if (!sleeper.waitFor(10, TimeUnit.SECONDS) && Files.exists(marker)) {
+                // 兜底：正常情况下 destroyForcibly 就够；这里用记录下来的 PID 再杀一次，
+                // 免得一个卡住的 sleep 留到下一次全量测试里变成“背景噪声”
+                new ProcessBuilder("kill", "-9", String.valueOf(readPid(marker)))
+                        .start().waitFor(5, TimeUnit.SECONDS);
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("网关被强杀后 PID 文件应留下来，充当事后排查的线索")
+    void pidFile_should_survive_whenGatewayIsKilledFiercely() throws IOException, InterruptedException {
+        writeScript("jira", TOOL_SCRIPT, FULL_MANIFEST);
+        java.nio.file.Path gatewayDirectory = new zcd.jellyfish.script.GatewayResources(gatewayRoot)
+                .materialize(new PythonLanguage(interpreter()), PythonLanguage.GATEWAY_RESOURCES);
+        startRuntime(30);
+        invokeTool("jira_issue", Collections.<String, Object>singletonMap("key", "K"));
+        int killedPid = readPid(pidFile());
+
+        Process kill = new ProcessBuilder("pkill", "-9", "-f", gatewayDirectory.toString()).start();
+        assertEquals(0, kill.waitFor(), "强杀网关的命令应成功");
+
+        // 强杀后没有人会去删它，而且这正是它的全部价值：下一次启动能从里面读到那个死掉的 PID
+        assertEquals(killedPid, readPid(pidFile()), "强杀后 PID 文件应保留原内容");
+        invokeUntilSucceeds("jira_issue", Collections.<String, Object>singletonMap("key", "K"), 15_000L);
+        String status = statusCommand();
+        assertTrue(status.contains("PID " + killedPid + "（已不存在）"), status);
+    }
+
+    @Test
     @DisplayName("内核事件应送达订阅它的脚本")
     void event_should_reachScript_when_kernelPublishes() throws IOException {
         // 这条链路跨了四个进程内/进程外的边界：EventChannel 通知线程 → 桥接队列 →
@@ -406,6 +484,46 @@ class PythonScriptIT {
     private String statusCommand() {
         return extensions.invoke(extensions.handler(CommandRequest.class, "python"),
                 new CommandRequest("python", null, null)).getOutput();
+    }
+
+    /**
+     * 本用例组使用的 PID 文件路径。
+     *
+     * @return 路径
+     */
+    private Path pidFile() {
+        return pidRoot.resolve("script-python.pid");
+    }
+
+    /**
+     * 读一个 PID 文件。
+     *
+     * @param file 文件路径
+     * @return PID
+     * @throws IOException 读取失败时抛出
+     */
+    private static int readPid(Path file) throws IOException {
+        return Integer.parseInt(new String(Files.readAllBytes(file), StandardCharsets.UTF_8).trim());
+    }
+
+    /**
+     * 等到 PID 标记文件出现并读出内容。
+     *
+     * @param marker   标记文件
+     * @param timeoutMs 等待上限
+     * @return PID
+     * @throws IOException          读取失败时抛出
+     * @throws InterruptedException 等待被中断时抛出
+     */
+    private static int awaitPid(Path marker, long timeoutMs) throws IOException, InterruptedException {
+        long deadline = System.currentTimeMillis() + timeoutMs;
+        while (System.currentTimeMillis() < deadline) {
+            if (Files.exists(marker) && Files.size(marker) > 0) {
+                return readPid(marker);
+            }
+            Thread.sleep(50L);
+        }
+        throw new AssertionError("没有等到 PID 标记文件: " + marker);
     }
 
 
@@ -503,6 +621,7 @@ class PythonScriptIT {
         python.put(PythonConfig.KEY_GATEWAY_ROOT, gatewayRoot.toString());
         python.put(PythonConfig.KEY_INVOKE_TIMEOUT, Integer.valueOf(invokeTimeoutSeconds));
         python.put(PythonConfig.KEY_PYTHON_PATH, interpreter());
+        python.put(PythonConfig.KEY_PID_DIRECTORY, pidRoot.toString());
         python.put(PythonConfig.KEY_CIRCUIT_BREAKER, breaker);
         Map<String, Map<String, Object>> configurations = new LinkedHashMap<String, Map<String, Object>>();
         configurations.put("jellyfish-plugin-python", python);
@@ -524,6 +643,7 @@ class PythonScriptIT {
         python.put(PythonConfig.KEY_SCRIPTS_ROOT, scriptsRoot.toString());
         python.put(PythonConfig.KEY_GATEWAY_ROOT, gatewayRoot.toString());
         python.put(PythonConfig.KEY_PYTHON_PATH, interpreter());
+        python.put(PythonConfig.KEY_PID_DIRECTORY, pidRoot.toString());
         python.put(PythonConfig.KEY_WORKER_IDLE, Integer.valueOf(idleSeconds));
         Map<String, Map<String, Object>> configurations = new LinkedHashMap<String, Map<String, Object>>();
         configurations.put("jellyfish-plugin-python", python);
@@ -703,6 +823,7 @@ class PythonScriptIT {
         python.put(PythonConfig.KEY_GATEWAY_ROOT, gatewayRoot.toString());
         python.put(PythonConfig.KEY_INVOKE_TIMEOUT, Integer.valueOf(invokeTimeoutSeconds));
         python.put(PythonConfig.KEY_PYTHON_PATH, interpreter());
+        python.put(PythonConfig.KEY_PID_DIRECTORY, pidRoot.toString());
         Map<String, Map<String, Object>> configurations = new LinkedHashMap<String, Map<String, Object>>();
         configurations.put("jellyfish-plugin-python", python);
         manager = new PF4JPluginManager(new PluginContextFactory(extensions, events, registry),

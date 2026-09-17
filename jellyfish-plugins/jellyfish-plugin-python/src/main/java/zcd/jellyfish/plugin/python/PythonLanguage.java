@@ -63,7 +63,8 @@ final class PythonLanguage implements ScriptLanguage {
      * 起点，脚本则靠它 import 到 SDK。
      */
     static final List<String> GATEWAY_RESOURCES = Collections.unmodifiableList(Arrays.asList(
-            GATEWAY_ENTRY, "script/worker.py", "script/script_wire.py", "script/jellyfish_sdk.py"));
+            GATEWAY_ENTRY, "script/worker.py", "script/script_wire.py", "script/jellyfish_sdk.py",
+            "script/dump_manifest.py"));
 
     /** 解释器可执行文件。 */
     private final String pythonPath;

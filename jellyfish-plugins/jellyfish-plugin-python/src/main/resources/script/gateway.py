@@ -1078,8 +1078,15 @@ def _close_except(keep):
     os.closerange(start, max_fd)
 
 
-def main(_argv):
-    """命令行入口：网关不需要任何参数，配置由宿主的 ``initialize`` 下发。"""
+def main(argv):
+    """命令行入口：网关不需要任何参数，配置由宿主的 ``initialize`` 下发。
+
+    ``--dump-manifest`` 是**开发期**动作（离线生成脚本清单），转给同目录的清单生成器；
+    它只在命令行分支里被导入，正常运行时网关从不碰它——网关不导入任何业务脚本。
+    """
+    if argv and argv[0] == "--dump-manifest":
+        import dump_manifest
+        return dump_manifest.main(argv[1:])
     return Gateway().run()
 
 

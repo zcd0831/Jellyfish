@@ -1,0 +1,49 @@
+{
+  "entry": "main.py",
+  "tools": [
+    {
+      "name": "jira_read",
+      "description": "读取一个工单的摘要与状态",
+      "parameters": {
+        "key": {
+          "type": "string",
+          "description": "工单号，例如 PROJ-1"
+        }
+      },
+      "required": ["key"],
+      "readOnly": true
+    },
+    {
+      "name": "jira_create",
+      "description": "新建一个工单，并发布一条内核通知事件",
+      "parameters": {
+        "summary": {
+          "type": "string",
+          "description": "工单标题"
+        },
+        "project": {
+          "type": "string",
+          "description": "项目前缀，缺省 PROJ"
+        }
+      },
+      "required": ["summary"]
+    }
+  ],
+  "commands": [
+    {
+      "name": "jira",
+      "descriptor": {
+        "summary": "查看或切换当前工单",
+        "usage": "/jira [工单号] [状态]",
+        "aliases": ["j"]
+      }
+    }
+  ],
+  "commandOptions": [
+    {
+      "name": "jira"
+    }
+  ],
+  "contributions": ["prompt", "panel"],
+  "events": ["CommandExecutedEvent", "SessionCreatedEvent"]
+}

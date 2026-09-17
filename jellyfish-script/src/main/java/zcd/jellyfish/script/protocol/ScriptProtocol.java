@@ -176,6 +176,12 @@ public final class ScriptProtocol {
     /** 参数键：与 PID 文件相关的失败说明。 */
     public static final String PARAM_NOTICE = "notice";
 
+    /** 参数键：排队中的请求数。 */
+    public static final String PARAM_QUEUED = "queued";
+
+    /** 参数键：是否有请求正在执行。 */
+    public static final String PARAM_INFLIGHT = "inflight";
+
     /**
      * 工具类，禁止实例化。
      */

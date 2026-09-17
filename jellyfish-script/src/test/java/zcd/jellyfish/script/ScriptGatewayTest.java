@@ -283,6 +283,80 @@ class ScriptGatewayTest {
     }
 
     @Test
+    @DisplayName("worker 快照应进自述文本：PID、在途、排队都能看见")
+    void describe_should_reportWorkerSnapshot_whenGatewayPushesIt() {
+        gateway.call(plugin, "tool", null);
+        FakeProcess process = processes.get(0);
+
+        process.emit("{\"jsonrpc\":\"2.0\",\"method\":\"worker_state\",\"params\":"
+                + "{\"script\":\"jira\",\"state\":\"ready\",\"alive\":true,\"started\":true,"
+                + "\"pid\":4321,\"queued\":2,\"inflight\":true}}");
+
+        assertTrue(gateway.describe().contains("jira(pid=4321, ready, 在途=1, 排队=2)"),
+                gateway.describe());
+    }
+
+    @Test
+    @DisplayName("重复上报同一生命周期时应刷新数字，而不是停在旧值")
+    void describe_should_refreshCounters_whenGatewayReportsSameStateAgain() {
+        // 网关把 worker_state 当作「现在是什么样」的快照更新：
+        // 「在途/排队」一变就会再报一次同一个状态名，台账必须跟着更新
+        gateway.call(plugin, "tool", null);
+        FakeProcess process = processes.get(0);
+
+        process.emit("{\"jsonrpc\":\"2.0\",\"method\":\"worker_state\",\"params\":"
+                + "{\"script\":\"jira\",\"state\":\"ready\",\"alive\":true,\"started\":true,"
+                + "\"pid\":4321,\"queued\":0,\"inflight\":false}}");
+        process.emit("{\"jsonrpc\":\"2.0\",\"method\":\"worker_state\",\"params\":"
+                + "{\"script\":\"jira\",\"state\":\"ready\",\"alive\":true,\"started\":true,"
+                + "\"pid\":4321,\"queued\":7,\"inflight\":true}}");
+
+        assertTrue(gateway.describe().contains("排队=7"), gateway.describe());
+        assertFalse(gateway.describe().contains("排队=0"), gateway.describe());
+    }
+
+    @Test
+    @DisplayName("worker 退出时应保留刚退出的 PID，便于人工确认它真的不在了")
+    void describe_should_keepPid_whenWorkerExited() {
+        gateway.call(plugin, "tool", null);
+        FakeProcess process = processes.get(0);
+
+        process.emit("{\"jsonrpc\":\"2.0\",\"method\":\"worker_state\",\"params\":"
+                + "{\"script\":\"jira\",\"state\":\"exited\",\"alive\":false,\"started\":false,"
+                + "\"pid\":4321}}");
+
+        assertTrue(gateway.describe().contains("jira(pid=4321, exited)"), gateway.describe());
+    }
+
+    @Test
+    @DisplayName("缺少 pid 字段时应照常渲染，而不是报错或显示 null")
+    void describe_should_renderWithoutPid_whenGatewayOmitsIt() {
+        gateway.call(plugin, "tool", null);
+        FakeProcess process = processes.get(0);
+
+        process.emit("{\"jsonrpc\":\"2.0\",\"method\":\"worker_state\",\"params\":"
+                + "{\"script\":\"jira\",\"state\":\"refused\",\"alive\":false,\"started\":false}}");
+
+        assertTrue(gateway.describe().contains("jira(refused)"), gateway.describe());
+        assertFalse(gateway.describe().contains("null"), gateway.describe());
+    }
+
+    @Test
+    @DisplayName("重开一代网关应清掉上一代的 worker 快照")
+    void describe_should_dropWorkerSnapshot_whenGatewayRestarts() {
+        gateway.call(plugin, "tool", null);
+        processes.get(0).emit("{\"jsonrpc\":\"2.0\",\"method\":\"worker_state\",\"params\":"
+                + "{\"script\":\"jira\",\"state\":\"ready\",\"alive\":true,\"started\":true,"
+                + "\"pid\":4321,\"queued\":0,\"inflight\":false}}");
+        assertTrue(gateway.describe().contains("jira(pid=4321"), gateway.describe());
+
+        processes.get(0).exit(1);
+        gateway.call(plugin, "tool", null);
+
+        assertFalse(gateway.describe().contains("pid=4321"), gateway.describe());
+    }
+
+    @Test
     @DisplayName("worker_state 通知应被应答并记录，不影响后续调用")
     void onIncoming_should_respondToWorkerState() {
         gateway.call(plugin, "tool", null);

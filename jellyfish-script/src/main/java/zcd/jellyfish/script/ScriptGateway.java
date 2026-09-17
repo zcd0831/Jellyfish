@@ -17,6 +17,8 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 脚本运行时：懒启动网关进程、把扩展点调用送进去、失败时给出可归因的异常。
@@ -130,6 +132,17 @@ public final class ScriptGateway implements ScriptCaller, ScriptEventTarget, Aut
      * 因此没有可见性问题（字段仍声明为 volatile，因为读取它的是 RPC 读线程）。
      */
     private volatile ScriptEventSink eventSink;
+
+    /**
+     * 每个脚本最近一次上报的 worker 快照。
+     * <p>
+     * <b>为什么要存</b>：worker 的 PID、队列深度、是不是正在执行，这些只有进程侧才知道，
+     * 而查看它们的入口（{@code /<lang>} 命令）不能去问网关：网关是单线程的，
+     * 发一个阻塞 RPC 就把一条展示命令变成了可能挂住的渲染路径；而且网关是懒启动的，
+     * 「看一眼状态」不该成为启动一个进程的理由。因此改成<b>推送</b>：
+     * 网关在生命周期状态或忙碌形状变化时主动告知，这里只做记录。
+     */
+    private final Map<String, WorkerStatus> workers = new ConcurrentHashMap<String, WorkerStatus>();
 
     /**
      * 构造网关。
@@ -316,6 +329,12 @@ public final class ScriptGateway implements ScriptCaller, ScriptEventTarget, Aut
             // 与上面「进程现在怎么样」不同，这一条说的是「上一次启动看到了什么」
             builder.append("，").append(notice);
         }
+        String workersText = workerSummary();
+        if (!workersText.isEmpty()) {
+            // worker 的 PID、在途与排队只有进程侧知道，因此这一行是网关推过来的快照。
+            // 它回答的是「这个脚本现在到底在忙什么」
+            builder.append("，worker ").append(workersText);
+        }
         return builder.toString();
     }
 
@@ -355,6 +374,9 @@ public final class ScriptGateway implements ScriptCaller, ScriptEventTarget, Aut
         try {
             started = processFactory.start(this::onLine, code -> onExited(created, code.intValue()));
             this.process = started;
+            // 新的一代不清楚任何一个 worker：上一代的快照必须清掉，
+            // 否则台账会把「上一代退出时的样子」当成现在的样子展示
+            workers.clear();
             Map<String, Object> params = new LinkedHashMap<String, Object>();
             params.put(ScriptProtocol.PARAM_SCRIPTS, scriptPayloads());
             params.put(ScriptProtocol.PARAM_SETTINGS, settings.toJson());
@@ -575,11 +597,7 @@ public final class ScriptGateway implements ScriptCaller, ScriptEventTarget, Aut
     private void onIncoming(ScriptProtocol.Message message) {
         String method = message.method();
         if (ScriptProtocol.METHOD_WORKER_STATE.equals(method)) {
-            LOG.info("{} 脚本 {} 的 worker 状态: {}（alive={}, started={}）", language.displayName(),
-                    message.paramText(ScriptProtocol.PARAM_SCRIPT),
-                    message.paramText(ScriptProtocol.PARAM_STATE),
-                    message.paramNode(ScriptProtocol.PARAM_ALIVE),
-                    message.paramNode(ScriptProtocol.PARAM_STARTED));
+            onWorkerState(message);
             respond(message, null);
             return;
         }
@@ -593,6 +611,75 @@ public final class ScriptGateway implements ScriptCaller, ScriptEventTarget, Aut
             current.respondError(message.id().longValue(), ScriptProtocol.CODE_METHOD_NOT_FOUND,
                     "不支持的网关方法: " + method);
         }
+    }
+
+    /**
+     * 记录网关上报的 worker 快照。
+     * <p>
+     * <b>同一个生命周期状态会被重复上报</b>：网关把它当作「这个脚本现在是什么样」的快照更新，
+     * 而不是事件日志，因此「在途/排队」一变就会再报一次 {@code ready}。
+     * 这里因此把日志分级：生命周期真的变了才 INFO，其余降为 DEBUG——
+     * 否则一次批量调用就能把「worker 开始忙了」刷满日志，而真正需要看见的
+     * 「worker 崩了」会淹没在其中。
+     *
+     * @param message 消息
+     */
+    private void onWorkerState(ScriptProtocol.Message message) {
+        String scriptId = message.paramText(ScriptProtocol.PARAM_SCRIPT);
+        if (scriptId == null || scriptId.trim().isEmpty()) {
+            LOG.warn("{} 网关上报了不带脚本身份的 worker 状态: {}", language.displayName(), message);
+            return;
+        }
+        WorkerStatus status = new WorkerStatus(message.paramText(ScriptProtocol.PARAM_STATE),
+                boolOf(message.paramNode(ScriptProtocol.PARAM_ALIVE)),
+                boolOf(message.paramNode(ScriptProtocol.PARAM_STARTED)),
+                intOf(message.paramNode(ScriptProtocol.PARAM_PID)),
+                intOf(message.paramNode(ScriptProtocol.PARAM_QUEUED)),
+                boolOf(message.paramNode(ScriptProtocol.PARAM_INFLIGHT)));
+        WorkerStatus previous = workers.put(scriptId, status);
+        if (previous == null || !previous.sameLifecycle(status)) {
+            LOG.info("{} 脚本 {} 的 worker: {}", language.displayName(), scriptId, status.describe());
+        } else {
+            LOG.debug("{} 脚本 {} 的 worker: {}", language.displayName(), scriptId, status.describe());
+        }
+    }
+
+    /**
+     * 读取布尔节点。
+     *
+     * @param node 节点，可为 {@code null}
+     * @return 布尔值；节点缺失时返回 {@code false}
+     */
+    private static boolean boolOf(JsonNode node) {
+        return node != null && node.asBoolean(false);
+    }
+
+    /**
+     * 读取整数节点。
+     *
+     * @param node 节点，可为 {@code null}
+     * @return 整数；节点缺失或不是整数时返回 {@code null}
+     */
+    private static Integer intOf(JsonNode node) {
+        return node != null && node.canConvertToInt() ? Integer.valueOf(node.asInt()) : null;
+    }
+
+    /**
+     * 汇总各脚本的 worker 快照，供台账渲染。
+     *
+     * @return 文本；没有任何快照时返回空串
+     */
+    private String workerSummary() {
+        // 排序后渲染：ConcurrentHashMap 的迭代顺序在调用者看来是随机的，
+        // 而同一份台账每次渲染出不同顺序，会让人以为「有什么东西变了」
+        StringBuilder builder = new StringBuilder();
+        for (Map.Entry<String, WorkerStatus> entry : new TreeMap<String, WorkerStatus>(workers).entrySet()) {
+            if (builder.length() > 0) {
+                builder.append('；');
+            }
+            builder.append(entry.getKey()).append('(').append(entry.getValue().describe()).append(')');
+        }
+        return builder.toString();
     }
 
     /**
@@ -695,6 +782,87 @@ public final class ScriptGateway implements ScriptCaller, ScriptEventTarget, Aut
         Path directory = resources.materialize(language, gatewayResources);
         gatewayDirectory = directory;
         return directory;
+    }
+
+    /**
+     * 一个脚本的 worker 快照。
+     * <p>
+     * 不可变：写入方是 RPC 读线程、读取方是渲染线程，快照比可变对象少一层可见性问题。
+     *
+     * @author zcd
+     */
+    private static final class WorkerStatus {
+
+        /** 生命周期状态名；未知时为 {@code null}。 */
+        private final String state;
+
+        /** worker 是否可用。 */
+        private final boolean alive;
+
+        /** 是否已拉起过 worker。 */
+        private final boolean started;
+
+        /** worker 的 PID；未知时为 {@code null}。 */
+        private final Integer pid;
+
+        /** 排队中的请求数；未知时为 {@code null}。 */
+        private final Integer queued;
+
+        /** 是否有请求正在执行。 */
+        private final boolean inflight;
+
+        /**
+         * 构造快照。
+         *
+         * @param state    生命周期状态名，可为 {@code null}
+         * @param alive    worker 是否可用
+         * @param started  是否已拉起过 worker
+         * @param pid      worker 的 PID，可为 {@code null}
+         * @param queued   排队中的请求数，可为 {@code null}
+         * @param inflight 是否有请求正在执行
+         */
+        private WorkerStatus(String state, boolean alive, boolean started, Integer pid,
+                             Integer queued, boolean inflight) {
+            this.state = state;
+            this.alive = alive;
+            this.started = started;
+            this.pid = pid;
+            this.queued = queued;
+            this.inflight = inflight;
+        }
+
+        /**
+         * 判断两个快照是否属于同一段生命周期。
+         * <p>
+         * 只看状态名、存活与 PID：队列深度与在途的变化发生在同一段生命周期内，
+         * 它们不值得一条 INFO 日志（一次批量调用就会刷满）。
+         *
+         * @param other 另一个快照
+         * @return 同一段生命周期返回 {@code true}
+         */
+        private boolean sameLifecycle(WorkerStatus other) {
+            return alive == other.alive && started == other.started
+                    && (state == null ? other.state == null : state.equals(other.state))
+                    && (pid == null ? other.pid == null : pid.equals(other.pid));
+        }
+
+        /**
+         * 渲染成一行可读文本。
+         *
+         * @return 文本
+         */
+        private String describe() {
+            StringBuilder builder = new StringBuilder();
+            if (pid != null) {
+                builder.append("pid=").append(pid).append(", ");
+            }
+            builder.append(state == null ? "未知" : state);
+            if (queued != null || inflight) {
+                builder.append(", 在途=").append(inflight ? 1 : 0)
+                        .append(", 排队=").append(queued == null ? 0 : queued);
+            }
+            return builder.toString();
+        }
     }
 
     /**

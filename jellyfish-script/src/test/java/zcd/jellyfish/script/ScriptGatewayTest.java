@@ -369,6 +369,66 @@ class ScriptGatewayTest {
     }
 
     @Test
+    @DisplayName("网关回报的 PID 应进自述文本，便于排查时不用翻日志")
+    void describe_should_carryGatewayPid_whenGatewayReportsIt() {
+        responder = message -> ScriptProtocol.METHOD_INITIALIZE.equals(message.method())
+                ? ScriptProtocol.response(message.id().longValue(), ScriptJson.treeOf(
+                        pidInitializePayload("{\"pid\":4321}")))
+                : ScriptProtocol.response(message.id().longValue(), ScriptJson.tree("{\"output\":\"ok\"}"));
+
+        gateway.call(plugin, "tool", null);
+
+        assertTrue(gateway.describe().contains("网关 PID 4321"), gateway.describe());
+    }
+
+    @Test
+    @DisplayName("遗留的 PID 文件只报告不处置：写进自述文本，但不影响调用")
+    void describe_should_reportStalePid_whenGatewayFoundOne() {
+        responder = message -> ScriptProtocol.METHOD_INITIALIZE.equals(message.method())
+                ? ScriptProtocol.response(message.id().longValue(), ScriptJson.treeOf(
+                        pidInitializePayload("{\"pid\":4321,\"stale\":\"PID 999（仍存活）\"}")))
+                : ScriptProtocol.response(message.id().longValue(), ScriptJson.tree("{\"output\":\"ok\"}"));
+        gateway = buildGateway(GatewaySettings.builder().pidFile("/tmp/jf/script-stub.pid").build());
+
+        assertEquals("ok", gateway.call(plugin, "tool", null).get("output").asText());
+        assertTrue(gateway.isRunning(), "发现遗留 PID 不应让网关不可用");
+        assertTrue(gateway.describe().contains("PID 999（仍存活）"), gateway.describe());
+        assertTrue(gateway.describe().contains("/tmp/jf/script-stub.pid"), gateway.describe());
+    }
+
+    @Test
+    @DisplayName("PID 文件写不成时应把原因记进自述文本，但不影响调用")
+    void describe_should_reportPidFileFailure_whenWriteFails() {
+        responder = message -> ScriptProtocol.METHOD_INITIALIZE.equals(message.method())
+                ? ScriptProtocol.response(message.id().longValue(), ScriptJson.treeOf(
+                        pidInitializePayload("{\"notice\":\"写入 PID 文件失败: 只读文件系统\"}")))
+                : ScriptProtocol.response(message.id().longValue(), ScriptJson.tree("{\"output\":\"ok\"}"));
+
+        assertEquals("ok", gateway.call(plugin, "tool", null).get("output").asText());
+        assertTrue(gateway.describe().contains("只读文件系统"), gateway.describe());
+    }
+
+    @Test
+    @DisplayName("配置的 PID 文件路径应随 initialize 下发给网关")
+    void call_should_sendPidFile_whenConfigured() {
+        gateway = buildGateway(GatewaySettings.builder().pidFile("/tmp/jf/script-stub.pid").build());
+
+        gateway.call(plugin, "tool", null);
+
+        JsonNode settings = processes.get(0).sent.get(0).paramNode(ScriptProtocol.PARAM_SETTINGS);
+        assertEquals("/tmp/jf/script-stub.pid", settings.get("pidFile").asText());
+    }
+
+    @Test
+    @DisplayName("未配置 PID 文件时不下发该键")
+    void call_should_omitPidFile_whenNotConfigured() {
+        gateway.call(plugin, "tool", null);
+
+        JsonNode settings = processes.get(0).sent.get(0).paramNode(ScriptProtocol.PARAM_SETTINGS);
+        assertFalse(settings.has("pidFile"), settings.toString());
+    }
+
+    @Test
     @DisplayName("进程启动失败应原样抛出，且不留下半启动状态")
     void call_should_propagateStartFailure_andLeaveNoState() {
         ScriptGateway failing = ScriptGateway.builder(new StubLanguage())
@@ -542,6 +602,18 @@ class ScriptGatewayTest {
         }
         Map<String, Object> payload = new LinkedHashMap<String, Object>();
         payload.put(ScriptProtocol.PARAM_SCRIPTS, scripts);
+        return payload;
+    }
+
+    /**
+     * 构造带 PID 文件信息的初始化应答载荷。
+     *
+     * @param pidFileJson PID 文件信息的 JSON 文本
+     * @return 载荷
+     */
+    private static Map<String, Object> pidInitializePayload(String pidFileJson) {
+        Map<String, Object> payload = initializePayload(true);
+        payload.put(ScriptProtocol.PARAM_PID_FILE, ScriptJson.tree(pidFileJson));
         return payload;
     }
 

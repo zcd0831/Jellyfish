@@ -19,6 +19,7 @@ import java.util.Map;
  * <p>
  * <b>哪些不在这里</b>：熔断参数（{@code failuresToOpen} 等）只在 Java 侧使用，网关不需要知道；
  * 事件白名单则相反，必须下发——防循环、类型校验都在 Java 侧做，但「推给谁」要由网关按脚本声明路由。
+ * PID 文件路径则必须下发：它是文件系统上的一个位置，由 Java 侧统一算好（见 {@link ScriptPidFiles}）。
  * <p>
  * <b>超时是双重意义的</b>：网关用它判断 worker 是否卡死（自己动手杀），
  * Java 侧用它判断网关是否失联（{@code ScriptGateway} 的等待上限）。
@@ -58,6 +59,9 @@ public final class GatewaySettings {
     /** 额外收窄的事件白名单（为空表示不额外收窄）。 */
     private final List<String> allowedEvents;
 
+    /** 网关 PID 文件路径；{@code null} 表示不写 PID 文件。 */
+    private final String pidFile;
+
     /**
      * 构造设置。
      *
@@ -66,14 +70,16 @@ public final class GatewaySettings {
      * @param gatewayIdleSeconds   网关空闲自毁秒数
      * @param manifestStrict       是否启用严格校验
      * @param allowedEvents        额外收窄的事件白名单
+     * @param pidFile              网关 PID 文件路径，可为 {@code null}
      */
     private GatewaySettings(int invokeTimeoutSeconds, int workerIdleSeconds, int gatewayIdleSeconds,
-                            boolean manifestStrict, List<String> allowedEvents) {
+                            boolean manifestStrict, List<String> allowedEvents, String pidFile) {
         this.invokeTimeoutSeconds = invokeTimeoutSeconds;
         this.workerIdleSeconds = workerIdleSeconds;
         this.gatewayIdleSeconds = gatewayIdleSeconds;
         this.manifestStrict = manifestStrict;
         this.allowedEvents = allowedEvents;
+        this.pidFile = pidFile;
     }
 
     /**
@@ -149,6 +155,15 @@ public final class GatewaySettings {
     }
 
     /**
+     * 获取网关 PID 文件路径。
+     *
+     * @return 路径；{@code null} 表示不写 PID 文件
+     */
+    public String pidFile() {
+        return pidFile;
+    }
+
+    /**
      * 编码成 {@code initialize} 的 {@code settings} 载荷。
      *
      * @return JSON 对象节点
@@ -160,6 +175,10 @@ public final class GatewaySettings {
         values.put("gatewayIdleSeconds", Integer.valueOf(gatewayIdleSeconds));
         values.put("manifestStrict", Boolean.valueOf(manifestStrict));
         values.put("allowedEvents", allowedEvents);
+        if (pidFile != null) {
+            // 不写 null：网关用「键不存在」判断「不写 PID 文件」，与其它载荷的约定一致
+            values.put("pidFile", pidFile);
+        }
         return ScriptJson.treeOf(values);
     }
 
@@ -167,7 +186,8 @@ public final class GatewaySettings {
     public String toString() {
         return "GatewaySettings{invokeTimeout=" + invokeTimeoutSeconds
                 + "s, workerIdle=" + workerIdleSeconds + "s, gatewayIdle=" + gatewayIdleSeconds
-                + "s, manifestStrict=" + manifestStrict + ", allowedEvents=" + allowedEvents + '}';
+                + "s, manifestStrict=" + manifestStrict + ", allowedEvents=" + allowedEvents
+                + ", pidFile=" + pidFile + '}';
     }
 
     /**
@@ -196,6 +216,9 @@ public final class GatewaySettings {
 
         /** 额外收窄的事件白名单。 */
         private final List<String> allowedEvents = new ArrayList<String>();
+
+        /** 网关 PID 文件路径。 */
+        private String pidFile;
 
         /**
          * 常量类风格的私有构造器，仅允许 {@link GatewaySettings#builder()} 调用。
@@ -264,13 +287,37 @@ public final class GatewaySettings {
         }
 
         /**
+         * 设置网关 PID 文件路径。
+         * <p>
+         * 传 {@code null} 表示不写 PID 文件（测试与「不需要排查线索」的嵌入场景）；
+         * 传空白串<b>报错</b>而不是当成「不写」：那是一个写坏了的路径，静默关掉这个能力
+         * 会让人以为它启用了，直到真的需要线索时才发现什么都没有。
+         *
+         * @param path 绝对路径，可为 {@code null}
+         * @return 本构建器
+         * @throws JellyfishException 路径为空白时抛出
+         */
+        public Builder pidFile(String path) {
+            if (path == null) {
+                this.pidFile = null;
+                return this;
+            }
+            if (path.trim().isEmpty()) {
+                throw new JellyfishException("网关设置 pidFile 不得为空白（不写 PID 文件请显式传 null）");
+            }
+            this.pidFile = path.trim();
+            return this;
+        }
+
+        /**
          * 构造设置。
          *
          * @return 设置
          */
         public GatewaySettings build() {
             return new GatewaySettings(invokeTimeoutSeconds, workerIdleSeconds, gatewayIdleSeconds,
-                    manifestStrict, Collections.unmodifiableList(new ArrayList<String>(allowedEvents)));
+                    manifestStrict, Collections.unmodifiableList(new ArrayList<String>(allowedEvents)),
+                    pidFile);
         }
 
         /**

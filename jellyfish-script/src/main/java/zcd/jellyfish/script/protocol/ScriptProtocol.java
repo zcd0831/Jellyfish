@@ -164,6 +164,18 @@ public final class ScriptProtocol {
     /** 参数键：是否被杀掉。 */
     public static final String PARAM_KILLED = "killed";
 
+    /** 参数键：PID 文件信息（{@code initialize} 应答里的字段）。 */
+    public static final String PARAM_PID_FILE = "pidFile";
+
+    /** 参数键：网关自己的 PID。 */
+    public static final String PARAM_PID = "pid";
+
+    /** 参数键：上一份 PID 文件里的内容描述（只报告不处置）。 */
+    public static final String PARAM_STALE = "stale";
+
+    /** 参数键：与 PID 文件相关的失败说明。 */
+    public static final String PARAM_NOTICE = "notice";
+
     /**
      * 工具类，禁止实例化。
      */

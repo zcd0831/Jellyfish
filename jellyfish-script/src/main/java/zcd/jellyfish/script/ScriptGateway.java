@@ -111,6 +111,17 @@ public final class ScriptGateway implements ScriptCaller, ScriptEventTarget, Aut
     /** 是否已关闭。 */
     private volatile boolean closed;
 
+    /** 当前一代网关的 PID；未上报时为 {@code null}。 */
+    private volatile Integer gatewayPid;
+
+    /**
+     * PID 文件相关的提示（遗留文件内容或写入失败）。
+     * <p>
+     * 它记的是「最近一次启动时的发现」，因为「上一代留下的 PID 文件」只在启动那一刻看得见——
+     * 那时它还在，下一瞬间就被本代覆盖了。因此它是一个快照，而不是可重算的视图。
+     */
+    private volatile String pidNotice;
+
     /**
      * 事件发布受理方。
      * <p>
@@ -287,12 +298,23 @@ public final class ScriptGateway implements ScriptCaller, ScriptEventTarget, Aut
         ScriptRpc currentRpc = rpc;
         StringBuilder builder = new StringBuilder();
         builder.append(closed ? "已关闭" : (isRunning() ? "运行中" : "未启动（懒加载）"));
+        Integer pid = gatewayPid;
+        if (pid != null && !closed) {
+            // PID 是排查时唯一需要手动输入的东西（`ps -p`、`kill -9`），因此它值得占一个位置：
+            // 这份台账的全部意义就是「需要的时候不用去翻日志」
+            builder.append("，网关 PID ").append(pid);
+        }
         if (currentRpc != null) {
             // 迟到响应数说明「脚本比超时慢」——它比单纯一句「超时了」更有诊断价值
             builder.append("，丢弃的迟到响应 ").append(currentRpc.lateResponseCount());
         }
         if (current != null && !current.isAlive() && !closed) {
             builder.append("，上一代进程已退出");
+        }
+        String notice = pidNotice;
+        if (notice != null) {
+            // 与上面「进程现在怎么样」不同，这一条说的是「上一次启动看到了什么」
+            builder.append("，").append(notice);
         }
         return builder.toString();
     }
@@ -369,6 +391,7 @@ public final class ScriptGateway implements ScriptCaller, ScriptEventTarget, Aut
      * @throws JellyfishException 全部脚本都初始化失败时抛出
      */
     private void reportInitialization(JsonNode response) {
+        reportPidFile(response == null ? null : response.get(ScriptProtocol.PARAM_PID_FILE));
         JsonNode results = response == null ? null : response.get(ScriptProtocol.PARAM_SCRIPTS);
         if (results == null || !results.isArray()) {
             return;
@@ -392,6 +415,65 @@ public final class ScriptGateway implements ScriptCaller, ScriptEventTarget, Aut
             throw new JellyfishException("全部脚本初始化失败（" + failed + " 个）:"
                     + reasons + "\n清单与实现不一致是最常见的原因，检查各脚本的 manifest.json");
         }
+    }
+
+    /**
+     * 处理网关回报的 PID 文件情况。
+     * <p>
+     * <b>网关照做、宿主只管说</b>：写文件与读旧文件都在有进程事实的那一侧，宿主拿到的是一个
+     * 已经判定过的描述（「PID 1234（仍存活）」），自己不再做存活判定——Java 8 没有
+     * {@code ProcessHandle}，重算一遍就得去读 {@code /proc} 或再起一个 {@code kill -0}，
+     * 而两种做法的答案都可能与网关那一刻看到的不同。
+     * <p>
+     * <b>只报告、不处置</b>：这里不做任何清理动作，也不因为发现了遗留 PID 而失败。
+     * 那是一个可能已经属于另一个 JVM 的进程，未经确认就杀，代价是杀掉无辜进程；
+     * 而 PID 文件本身只是排查线索，它写不成不该影响脚本能不能用。
+     *
+     * @param pidFile PID 文件信息节点，可为 {@code null}
+     */
+    private void reportPidFile(JsonNode pidFile) {
+        this.gatewayPid = null;
+        if (pidFile == null || pidFile.isNull()) {
+            return;
+        }
+        JsonNode pid = pidFile.get(ScriptProtocol.PARAM_PID);
+        if (pid != null && pid.canConvertToInt()) {
+            this.gatewayPid = Integer.valueOf(pid.asInt());
+        }
+        StringBuilder notice = new StringBuilder();
+        String stale = textOf(pidFile.get(ScriptProtocol.PARAM_STALE));
+        if (stale != null) {
+            LOG.warn("{} 网关启动时发现上一份 PID 文件的内容（只报告，不处置）: {}",
+                    language.displayName(), stale);
+            notice.append("上次启动发现遗留的 PID 文件 ");
+            if (settings.pidFile() != null) {
+                notice.append(settings.pidFile());
+            }
+            notice.append('：').append(stale);
+        }
+        String failure = textOf(pidFile.get(ScriptProtocol.PARAM_NOTICE));
+        if (failure != null) {
+            LOG.warn("{} 网关的 PID 文件未能落地: {}", language.displayName(), failure);
+            if (notice.length() > 0) {
+                notice.append('；');
+            }
+            notice.append("上次启动：").append(failure);
+        }
+        this.pidNotice = notice.length() == 0 ? null : notice.toString();
+    }
+
+    /**
+     * 读取节点里的非空文本。
+     *
+     * @param node 节点，可为 {@code null}
+     * @return 文本；节点为空、不是文本或为空白时返回 {@code null}
+     */
+    private static String textOf(JsonNode node) {
+        if (node == null || !node.isTextual()) {
+            return null;
+        }
+        String text = node.asText();
+        return text.trim().isEmpty() ? null : text;
     }
 
     /**

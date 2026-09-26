@@ -23,6 +23,7 @@
 | 引入 SDK | `from jellyfish_sdk import tool, command` | `const { tool, command } = require('jellyfish_sdk')` |
 | 声明能力 | 装饰器 `@tool(...)` / `@command(...)` | 声明函数 `tool({...}, fn)` / `command({...}, fn)` |
 | 处理器签名 | `def f(args, ctx)`（命令是 `tokens, raw, ctx`） | `(params, ctx)`，工具读 `params.args`、命令读 `params.tokens` / `params.raw` |
+| 候选查询（二级选择页） | `has_options=True` 或 `@command_options("x")` | `hasOptions: true` 或 `commandOptions('x', fn)` |
 | 缺省描述 | 取函数文档字符串第一行 | 必须显式写 `description`（JS 拿不到注释） |
 | 缺省解释器 | `python3`（配置键 `pythonPath`） | `node`（配置键 `nodePath`） |
 | 清单生成器 | `dump_manifest.py` | `dump_manifest.js` |
@@ -116,5 +117,11 @@ node ~/jellyfish/gateway/node/<digest>/script/dump_manifest.js ./jira --check
   另外注意「观察者效应」——你在事件之后紧接着发起的调用，本身就会让推送撞上忙碌窗口。
 - **脚本不需要考虑并发**：worker 是单线程的（收请求、跑处理器、收事件都在同一个循环里），
   同一个脚本的并发调用会被网关排队。
+- **候选查询与执行是两条路，而且它只该读不该写**：用户按下补全键时被调用的那一次，
+  拿到的是 `tokens = None`（Node 里是 `null`）——**这就是「这次是候选查询」的标记**。
+  执行那次一定给真实的 `tokens`（`[]` 表示用户没输入参数，与 `None` 不是一回事）。
+  两个入口各走一个示例：`hello` 用 `has_options=True` 让同一个函数按 `tokens is None` 分支，
+  `jira` 把候选查询写在单独的函数里（真实脚本更常用这个，因为候选查询必须只读且快）。
+  写成 `has_options=True` 却看不出两条路的函数会在**启动时**被拒绝，报错里带着可照抄的写法。
 - **卡死的脚本会被强杀**，两边都由网关执行：Python 侧先 SIGTERM（信号处理器直接 `os._exit`），
   Node 侧 SIGTERM 往往无效（事件循环被同步代码占着），因此靠的是到点后的 SIGKILL。

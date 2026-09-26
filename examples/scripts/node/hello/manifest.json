@@ -40,14 +40,10 @@
           "hi"
         ]
       },
-      "hasOptions": false
+      "hasOptions": true
     }
   ],
-  "commandOptions": [
-    {
-      "name": "hello"
-    }
-  ],
+  "commandOptions": [],
   "contributions": [
     "prompt",
     "status_line"

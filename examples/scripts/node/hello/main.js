@@ -100,42 +100,42 @@ tool({
 // ---------------------------------------------------------------- 命令
 
 /**
- * `/hello <名字>`，别名 `/hi`。
+ * `/hello <名字>`，别名 `/hi`；同时回答候选查询（二级选择页）。
  *
  * `params.tokens` 是已经切好的词，`params.raw` 是命令名之后的原文（没被切过）；
  * 两者都给，是因为「按词处理」和「原样记录」都是常见需求。
  *
+ * 这里是候选查询的**两个入口之一**：`hasOptions: true` 让同一个函数回答两条路，
+ * 而两条路给的 `params` 不同——执行给真实的 `tokens`，候选查询给 `tokens === null`
+ * （空数组是「用户没输入参数的执行」，与它**不是**一回事）。另一个入口是把候选查询
+ * 写在单独的函数里（见 `jira` 示例）：候选查询必须只读、必须快，通常也就不是执行那段
+ * 代码，因此真实脚本里更常用那一个。
+ *
  * @param {object} params 请求参数
- * @returns {object} 命令结果
+ * @returns {object} 候选或命令结果
  */
 function hello(params) {
+    if (params.tokens === null) {
+        return {
+            choices: [
+                { value: 'world', label: 'world', description: '经典开场' },
+                { value: 'jellyfish', label: 'jellyfish', description: '本项目' },
+            ],
+        };
+    }
     if (params.tokens.length === 0) {
         return { kind: 'OK', output: `用法：/hello <名字>（共记了 ${noteCount()} 条便签）` };
     }
     return `你好，${params.tokens[0]}！`;
 }
 
-command({ name: 'hello', summary: '和示例脚本打个招呼', usage: '/hello <名字>', aliases: ['hi'] }, hello);
-
-/**
- * 给 `/hello` 提供候选（二级选择页）。
- *
- * 候选查询与执行是**两条独立的路**：宿主只会在用户按下补全键时调它，
- * 因此它必须只读、必须快，通常也就不是执行那段代码。返回数组或
- * `{choices: [...]}` 都行；条目的形状与内核的 `CommandChoice` 对齐。
- *
- * @returns {object} 候选
- */
-function helloOptions() {
-    return {
-        choices: [
-            { value: 'world', label: 'world', description: '经典开场' },
-            { value: 'jellyfish', label: 'jellyfish', description: '本项目' },
-        ],
-    };
-}
-
-commandOptions('hello', helloOptions);
+command({
+    name: 'hello',
+    summary: '和示例脚本打个招呼',
+    usage: '/hello <名字>',
+    aliases: ['hi'],
+    hasOptions: true,
+}, hello);
 
 // ---------------------------------------------------------------- 类型级贡献
 

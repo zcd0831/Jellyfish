@@ -212,6 +212,24 @@ function tool(spec, handler) {
  * 同一件事的两个入口，二者只能选一个：同时声明会被清单校验判为冲突——
  * 那必然是作者写错了，而写错的后果是「命令能执行、选择页永远空、且没有任何报错」。
  *
+ * 走这个入口意味着**同一个函数**要回答两条路，而两条路给的 `params` 不同：执行给真实的
+ * `tokens` / `raw`，候选查询给 `tokens === null` / `raw === null`。因此函数要按
+ * `params.tokens === null` 分支（`tokens` 为空数组则是「用户没输入参数的执行」，两者不是一回事）：
+ *
+ * ```js
+ * command({ name: 'x', hasOptions: true }, (params, ctx) => {
+ *     if (params.tokens === null) {
+ *         return { choices: [...] };   // 候选查询（按下补全键时）
+ *     }
+ *     return '执行结果';                // 执行
+ * });
+ * ```
+ *
+ * 候选查询必须**只读且快**（它跑在用户按键的那一拍上），因此更常见的是用 `commandOptions()`
+ * 把它放在单独的函数里。与 Python 版的唯一差别：JS 拿不到参数名，因此这里无法像 Python 那样
+ * 在声明期就把写错的签名挡掉，但漏掉分支的后果同样是响的——
+ * `params.tokens` 是 `null`，`null.map(...)` 会立刻抛错。
+ *
  * @param {object} spec 声明：`name` / `summary` / `usage` / `aliases` / `hasOptions`
  * @param {Function} handler 处理函数，签名 `(params, ctx)`；命令用 `params.tokens` 与 `params.raw`
  * @returns {Function} 同一个处理函数
@@ -243,6 +261,9 @@ function command(spec, handler) {
  *
  * 它与 `command({name, hasOptions: true})` 等价，用于把候选查询放在单独的函数里
  * （候选查询必须只读且快，常常与执行逻辑不是同一段代码）。
+ *
+ * 单独一个函数时通常不需要 `params.tokens`；要用也行，它在候选查询这条路上恒为 `null`
+ * （与 `hasOptions: true` 那条入口同一套约定）。
  *
  * @param {string} commandName 命令名
  * @param {Function} handler 处理函数，签名 `(params, ctx)`，返回候选列表
@@ -506,7 +527,10 @@ register('command', (payload) => {
 
 // ---- 命令候选查询 ---------------------------------------------------------
 
-register('command_options', () => ({}), (result) => {
+// 与执行那条路**同一套形状**，只是两个实参为 null：约定「tokens === null ⇒ 这次是候选查询」。
+// 早先这里给的是空对象，于是「同一个函数回答两条路」（hasOptions: true）在用户按下补全键时
+// 才会炸，而报出来的是与候选查询看不出关系的 undefined 相关错误
+register('command_options', () => ({ tokens: null, raw: null }), (result) => {
     if (result === undefined || result === null) {
         return { choices: [] };
     }
@@ -517,11 +541,13 @@ register('command_options', () => ({}), (result) => {
     if (mapping === null) {
         throw new ScriptError('候选查询返回值必须是列表或 {choices: [...]}');
     }
-    const shaped = Object.assign({}, mapping);
-    if (shaped.choices === undefined) {
-        shaped.choices = [];
+    if (mapping.choices === undefined) {
+        // 缺 choices 是最难查的一种写法：hasOptions 的函数忘了按 tokens === null 分支时，
+        // 返回的正是执行结果（常常是 {kind, output}），而补齐缺省会让它安静地变成
+        // 「没有候选」——选择页空着，没有任何报错
+        throw new ScriptError('候选查询返回值里必须有 choices 键：返回候选列表，或 {choices: [...]}');
     }
-    return shaped;
+    return Object.assign({}, mapping);
 });
 
 // ---- 只返回一段文本的贡献 -------------------------------------------------

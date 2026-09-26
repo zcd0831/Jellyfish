@@ -264,6 +264,12 @@ class NodeScriptIT {
 
         assertEquals("你好，世界！（会话 s-1）", result.getOutput());
         assertTrue(invokeCommand("hello", null).getOutput().contains("用法：/hello"));
+        // 候选查询（二级选择页）是一条独立的只读路径。hello 用 hasOptions 让同一个函数回答
+        // 两条路，两条路的区别只在 params.tokens 是不是 null：执行给真实值，候选查询给 null
+        zcd.jellyfish.api.extension.CommandOptions helloOptions = extensions.invoke(
+                extensions.handler(zcd.jellyfish.api.extension.CommandOptionRequest.class, "hello"),
+                new zcd.jellyfish.api.extension.CommandOptionRequest("hello", "s-1"));
+        assertEquals(2, helloOptions.getChoices().size(), helloOptions.toString());
     }
 
     @Test

@@ -10,7 +10,9 @@
           "description": "要打招呼的人"
         }
       },
-      "required": ["name"],
+      "required": [
+        "name"
+      ],
       "readOnly": true
     },
     {
@@ -22,7 +24,10 @@
           "description": "要记下的一句话"
         }
       },
-      "required": ["note"]
+      "required": [
+        "note"
+      ],
+      "readOnly": false
     }
   ],
   "commands": [
@@ -31,15 +36,19 @@
       "descriptor": {
         "summary": "和示例脚本打个招呼",
         "usage": "/hello <名字>",
-        "aliases": ["hi"]
-      }
+        "aliases": [
+          "hi"
+        ]
+      },
+      "hasOptions": true
     }
   ],
-  "commandOptions": [
-    {
-      "name": "hello"
-    }
+  "commandOptions": [],
+  "contributions": [
+    "prompt",
+    "status_line"
   ],
-  "contributions": ["prompt", "status_line"],
-  "events": ["ToolCallCompletedEvent"]
+  "events": [
+    "ToolCallCompletedEvent"
+  ]
 }

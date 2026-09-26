@@ -23,6 +23,11 @@ import sys
 # 扩展点类型名 → 处理函数。类型名与 Java 侧 codec 的 typeName() 必须逐字一致。
 _HANDLERS = {}
 
+#: 候选查询调用时固定填 ``None`` 的两个实参：约定「``tokens is None`` ⇒ 这次是候选查询」。
+#: 放在 SDK 而不是某个装饰器里，是为了让 ``has_options=True`` 与 ``@command_options``
+#: 两个入口共用同一份约定——两处各写一遍的话，它们迟早会不一致
+_OPTION_SLOTS = ("tokens", "raw")
+
 # 工具/命令声明，顺序即声明顺序，生成的清单与它保持同序（便于人读 diff）。
 _TOOLS = []
 _COMMANDS = []
@@ -141,8 +146,25 @@ def command(name, summary=None, usage=None, aliases=None, has_options=False):
     """声明一条命令。
 
     ``has_options=True`` 表示本命令也回答候选查询（二级选择页）。它与 ``@command_options``
-    是同一件事的两个入口，二者只能选一个：同时声明会被清单校验判为冲突——
+    是同一件事的两个入口，二者只能选一：同时声明会被清单校验判为冲突——
     那必然是作者写错了，而写错的后果是「命令能执行、选择页永远空、且没有任何报错」。
+
+    走这个入口意味着**同一个函数**要回答两条路，而两条路给的实参不同：执行给真实的
+    ``tokens`` / ``raw``，候选查询给 ``tokens=None`` / ``raw=None``。因此函数要按
+    ``tokens is None`` 分支（而 ``tokens == []`` 是「用户没输入参数的执行」，两者不是一回事）。
+    分支写不出来的函数（只声明了 ``ctx``）会被**当场拒绝**——
+    原先那种写法要等用户按下补全键才炸，报出来的还是一个关于参数个数的 ``TypeError``。
+
+    最小可用写法::
+
+        @command(name="x", has_options=True)
+        def x(tokens, raw, ctx):
+            if tokens is None:
+                return {"choices": [...]}   # 候选查询（按下补全键时）
+            return "执行结果"                # 执行
+
+    候选查询必须**只读且快**（它跑在用户按键的那一拍上），因此更常见的是用
+    ``@command_options`` 把它放在单独的函数里。
     """
 
     def decorate(func):
@@ -160,7 +182,7 @@ def command(name, summary=None, usage=None, aliases=None, has_options=False):
         })
         _HANDLERS[("command", name)] = func
         if has_options:
-            _HANDLERS[("command_options", name)] = func
+            _HANDLERS[("command_options", name)] = _options_handler(func, name, True)
             _COMMAND_OPTIONS.append({"name": name, "handler": func, "implied": True})
         return func
 
@@ -172,6 +194,9 @@ def command_options(command_name):
 
     它与 ``@command(name, has_options=True)`` 等价，用于把候选查询放在单独的函数里
     （候选查询必须只读且快，常常与执行逻辑不是同一段代码）。
+
+    单独一个函数时通常只需要 ``ctx``；声明了 ``tokens`` / ``raw`` 的也能用，
+    它们在候选查询这条路上恒为 ``None``（与 ``has_options=True`` 那条入口同一套约定）。
     """
 
     def decorate(func):
@@ -180,10 +205,78 @@ def command_options(command_name):
         if any(item["name"] == command_name for item in _COMMAND_OPTIONS):
             raise ScriptError("命令 %s 重复声明候选查询" % command_name)
         _COMMAND_OPTIONS.append({"name": command_name, "handler": func, "implied": False})
-        _HANDLERS[("command_options", command_name)] = func
+        _HANDLERS[("command_options", command_name)] = _options_handler(func, command_name, False)
         return func
 
     return decorate
+
+
+def _options_handler(func, command_name, implied):
+    """把「回答候选查询」包成固定形状，并在声明期就把签名问题挡掉。
+
+    ``command_options`` 这条路的实参是空的（``_args_none``），而执行那条路给
+    ``tokens`` / ``raw``。同一个函数被挂到两条路上时，这个差别就是崩溃的来源，
+    因此这里统一成：
+
+    * 函数声明了 ``tokens`` / ``raw`` 就填 ``None``（约定 ``tokens is None`` ⇒ 这次是候选查询）；
+    * 什么都没声明（也不带 ``**kwargs``）就只给 ``ctx``；
+    * 声明了别的**必填**参数，或 ``has_options=True`` 却看不出这一次是候选查询，
+      一律在**声明期**抛 ``ScriptError``。
+
+    :param func: 处理函数
+    :param command_name: 命令名，用于报错
+    :param implied: 是否来自 ``has_options=True``（同一函数回答两条路）
+    :return: 只接受 ``ctx`` 的包装函数
+    """
+    parameters = inspect.signature(func).parameters
+    takes_kwargs = any(item.kind == inspect.Parameter.VAR_KEYWORD for item in parameters.values())
+    slots = {}
+    for name, item in parameters.items():
+        if item.kind == inspect.Parameter.VAR_KEYWORD or name == "ctx":
+            continue
+        if name in _OPTION_SLOTS:
+            slots[name] = None
+            continue
+        if item.kind == inspect.Parameter.VAR_POSITIONAL or item.default is not inspect.Parameter.empty:
+            continue
+        raise ScriptError(
+            "命令 %s 的候选查询处理器有一个没有默认值的参数 %s：候选查询只会填 %s（均为 None）与 ctx。"
+            "给它一个默认值，或者把它去掉：\n\n%s"
+            % (command_name, name, " / ".join(_OPTION_SLOTS),
+               _options_example(command_name, func.__name__)))
+    if takes_kwargs:
+        slots.update({name: None for name in _OPTION_SLOTS})
+    if implied and "tokens" not in slots:
+        raise ScriptError(
+            "命令 %s 声明了 has_options，但它的函数看不出这一次是候选查询还是执行："
+            "候选查询给的是 tokens=None，而函数没有声明 tokens。\n\n%s\n\n"
+            "只想回答候选查询的话，用单独的函数：\n\n"
+            "    @command_options(\"%s\")\n    def %s_options(ctx):\n"
+            "        return {\"choices\": [...]}"
+            % (command_name, _options_example(command_name, func.__name__), command_name, command_name))
+
+    def answer(ctx):
+        return func(**slots, ctx=ctx)
+
+    return answer
+
+
+def _options_example(command_name, func_name):
+    """给「同一个函数回答两条路」的最小可用写法，用于报错信息。
+
+    报错里带可照抄的代码，是因为这类错误的现场（用户按键补全）离写法很远：
+    只说「参数个数不对」帮不上任何忙。
+
+    :param command_name: 命令名
+    :param func_name: 函数名
+    :return: 可直接粘贴的示例代码
+    """
+    return ("    @command(name=\"%s\", has_options=True)\n"
+            "    def %s(tokens, raw, ctx):\n"
+            "        if tokens is None:\n"
+            "            return {\"choices\": [...]}   # 候选查询\n"
+            "        return \"执行结果\"                # 执行（tokens == [] 表示没带参数）"
+            % (command_name, func_name))
 
 
 def contributes(type_name):
@@ -405,9 +498,12 @@ def _shape_choices(result):
     mapping = _as_mapping(result)
     if mapping is None:
         raise ScriptError("候选查询返回值必须是列表或 {choices: [...]}")
-    shaped = dict(mapping)
-    shaped.setdefault("choices", [])
-    return shaped
+    if "choices" not in mapping:
+        # 缺 choices 是最难查的一种写法：``has_options=True`` 的函数忘了按 ``tokens is None``
+        # 分支时，返回的正是执行结果（常常是 ``{"kind": "OK", "output": ...}``），
+        # 而补齐缺省会让它安静地变成「没有候选」——选择页空着，没有任何报错
+        raise ScriptError("候选查询返回值里必须有 choices 键：返回候选列表，或 {choices: [...]}")
+    return dict(mapping)
 
 
 _register("command_options", _args_none, _shape_choices)

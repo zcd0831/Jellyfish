@@ -205,6 +205,22 @@ class PythonScriptIT {
     }
 
     @Test
+    @DisplayName("has_options 的签名看不出两条路时应在启动期拒绝，并给出最小可用写法")
+    void script_should_refuseService_when_optionsSignatureIsAmbiguous() throws IOException {
+        writeScript("badopt", AMBIGUOUS_OPTIONS_SCRIPT, AMBIGUOUS_OPTIONS_MANIFEST);
+        startRuntime();
+
+        JellyfishException failure = org.junit.jupiter.api.Assertions.assertThrows(JellyfishException.class,
+                () -> invokeTool("badopt_ping", Collections.<String, Object>emptyMap()));
+
+        // 关键在「什么时候报」：这条路径原先只在用户按下补全键的那一刻才炸，报出来的是一个
+        // 关于参数个数的 TypeError，与「候选查询」这件事看不出关系。现在它在脚本启动时就拒绝，
+        // 而消息里带着可照抄的写法——这类错误的现场离写法太远了
+        assertTrue(failure.getMessage().contains("has_options"), failure.getMessage());
+        assertTrue(failure.getMessage().contains("@command_options"), failure.getMessage());
+    }
+
+    @Test
     @DisplayName("状态命令应列出脚本与已登记能力")
     void statusCommand_should_listScripts() throws IOException {
         writeScript("jira", TOOL_SCRIPT, FULL_MANIFEST);
@@ -500,11 +516,16 @@ class PythonScriptIT {
                 new zcd.jellyfish.infra.command.CommandManager(extensions, events);
         assertEquals("你好，world！", commands.execute("/hello world", "s-1").getOutput());
         assertEquals("你好，jellyfish！", commands.execute("/hi jellyfish", "s-1").getOutput());
-        // 命令候选查询（二级选择页）也是一条独立的只读路径
+        // 命令候选查询（二级选择页）也是一条独立的只读路径。两个示例刻意各走一个入口：
+        // jira 把候选查询写在单独的函数里，hello 用 has_options 让同一个函数回答两条路
         zcd.jellyfish.api.extension.CommandOptions options = extensions.invoke(
                 extensions.handler(zcd.jellyfish.api.extension.CommandOptionRequest.class, "jira"),
                 new zcd.jellyfish.api.extension.CommandOptionRequest("jira", "s-1"));
         assertEquals(2, options.getChoices().size(), options.toString());
+        zcd.jellyfish.api.extension.CommandOptions helloOptions = extensions.invoke(
+                extensions.handler(zcd.jellyfish.api.extension.CommandOptionRequest.class, "hello"),
+                new zcd.jellyfish.api.extension.CommandOptionRequest("hello", "s-1"));
+        assertEquals(2, helloOptions.getChoices().size(), helloOptions.toString());
 
         // 贡献：prompt 与 panel 都是类型级扩展点。类型级扩展点的取法是 bindings（列表），
         // 而不是 handler（单个）——多个插件往往同时贡献同一个类型（本用例里两个示例都贡献了
@@ -1204,6 +1225,31 @@ class PythonScriptIT {
     private static final String EVENT_MANIFEST = "{\"entry\":\"main.py\","
             + "\"tools\":[{\"name\":\"publish\"},{\"name\":\"publish_forbidden\"}],"
             + "\"events\":[\"ConfigWarningEvent\",\"PluginNotificationEvent\"]}";
+
+    /**
+     * 夹具脚本：声明了 ``has_options=True``，但函数只收 ``ctx``——
+     * 于是它既回答不了候选查询，也看不出这一次到底是哪条路。
+     */
+    private static final String AMBIGUOUS_OPTIONS_SCRIPT = ""
+            + "from jellyfish_sdk import command, tool\n"
+            + "\n"
+            + "@tool(name='badopt_ping', description='只为了让这个脚本有个可调用的入口')\n"
+            + "def ping(args, ctx):\n"
+            + "    return 'pong'\n"
+            + "\n"
+            + "@command(name='badopt', has_options=True)\n"
+            + "def badopt(ctx):\n"
+            + "    return {'choices': []}\n";
+
+    /**
+     * 与 {@link #AMBIGUOUS_OPTIONS_SCRIPT} 逐字对应的清单。
+     * <p>
+     * 刻意让它与声明一致：这样脚本拒绝服务的原因只可能是签名，而不是「清单对不上」。
+     */
+    private static final String AMBIGUOUS_OPTIONS_MANIFEST = "{\"entry\":\"main.py\","
+            + "\"tools\":[{\"name\":\"badopt_ping\"}],"
+            + "\"commands\":[{\"name\":\"badopt\",\"hasOptions\":true}],"
+            + "\"commandOptions\":[]}";
 
     /**
      * 与 {@link #TOOL_SCRIPT} 逐字对应的清单。

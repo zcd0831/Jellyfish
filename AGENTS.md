@@ -416,6 +416,7 @@ jellyfish-script/src/main/java/zcd/jellyfish/script/
 ### 可观测性
 
 - **可观测性是纯订阅者，自己绝不发事件**：否则形成「事件 → 指标 → 事件」自激；事件通道统计直接作仪表读取，只订阅异步侧。
+- **通道是并发派发（核心 2、上限 8）且允许乱序，因此断言计数时「依赖的每一个计数器都要各自等一遍」**：等一个总数到位只说明最后那条通知开始了处理，另一个分类项可能还在别的线程手里。这条真的炸过（`MetricsSubscriberTest` 在机器被压满时读到 `PERMISSION_ALLOWED = 0`），**修法不是等更久，而是不要假设顺序**；`EventChannelConcurrencyTest` 把「慢订阅者不拖住其它通知」「乱序是允许的」这两条性质钉住，后来的人才知道那些断言为什么必须各自等。
 - **启动顺序**：`eventChannel.start()` 之后、`runtimeConfig.refresh()` 之前启动 `MetricsSubscriber`；`shutdown()` 先打健康检查，末尾退订并打指标汇总。
 - **诊断输出必须比被诊断对象更稳**：坏仪表跳过、检查项抛错降级为 DOWN、关闭路径日志失败只记 WARN；健康检查三档 UP/WARN/DOWN，检查项可插拔由装配根跨层拼装。刻意不加 `/metrics`。
 

@@ -32,10 +32,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <p>
  * 用<b>真实事件通道</b>而不是 mock：这里要验的核心恰恰是「订阅了哪些事件、按什么口径计数」，
  * 把通道 mock 掉就只剩「调过某个方法」。
-
  * <p>
- * 异步通道意味着计数有延迟，因此断言处用有界轮询等待；等待上限远大于线程池调度耗时，
- * 正常机器上不会触及，失败时也只退化为「超时后断言失败」而不是永久挂起。
+ * <b>断言依赖的每一个计数器都要各自等一遍，不能「等一个总数到位再读分类」</b>。通道默认 2 个核心线程
+ * （上限 8）且类注释里明写「允许丢弃、允许乱序」——总数到位只说明最后那条通知<b>开始了</b>处理，
+ * 另一个分类项可能还在别的线程手里。这条曾经真的炸过：`PERMISSION_DENIED` 到 2 时读
+ * `PERMISSION_ALLOWED` 读到 0（先发的那条 ALLOW 排在另一条线程上），而它平时看不出来——
+ * 只有当机器被别的用例压满时才轮到它。<b>修法不是「等更久」，而是不要假设顺序。</b>
+ * <p>
+ * 因此断言处用有界轮询等待；等待上限远大于线程池调度耗时，正常机器上不会触及，
+ * 失败时也只退化为「超时后断言失败」而不是永久挂起。
  *
  * @author zcd
  */
@@ -78,8 +83,8 @@ class MetricsSubscriberTest {
 
         // Then
         awaitCounter(MetricNames.COMMAND_EXECUTED, 3L);
-        assertEquals(1L, counter(MetricNames.COMMAND_UNKNOWN));
-        assertEquals(1L, counter(MetricNames.COMMAND_ERROR));
+        awaitCounter(MetricNames.COMMAND_UNKNOWN, 1L);
+        awaitCounter(MetricNames.COMMAND_ERROR, 1L);
     }
 
     @Test
@@ -97,7 +102,7 @@ class MetricsSubscriberTest {
         // Then
         awaitCounter(MetricNames.TOOL_STARTED, 2L);
         awaitCounter(MetricNames.TOOL_FAILED, 1L);
-        assertEquals(1L, counter(MetricNames.TOOL_COMPLETED));
+        awaitCounter(MetricNames.TOOL_COMPLETED, 1L);
     }
 
     @Test
@@ -114,7 +119,8 @@ class MetricsSubscriberTest {
 
         // Then
         awaitCounter(MetricNames.PERMISSION_DENIED, 2L);
-        assertEquals(1L, counter(MetricNames.PERMISSION_ALLOWED));
+        // 这两条断言要各自等：上面那个「2」属于 DENY/ASK，与这条 ALLOW 落在不同的派发任务上
+        awaitCounter(MetricNames.PERMISSION_ALLOWED, 1L);
     }
 
     @Test
@@ -145,7 +151,7 @@ class MetricsSubscriberTest {
         // Then
         awaitCounter(MetricNames.COMPACTION_APPLIED, 2L);
         awaitCounter(MetricNames.COMPACTION_DROPPED_MESSAGES, 3L);
-        assertEquals(20L, counter(MetricNames.COMPACTION_COMPRESSED_MESSAGES));
+        awaitCounter(MetricNames.COMPACTION_COMPRESSED_MESSAGES, 20L);
     }
 
     @Test
@@ -166,9 +172,9 @@ class MetricsSubscriberTest {
         awaitCounter(MetricNames.CONFIG_RELOADS, 1L);
         awaitCounter(MetricNames.CONFIG_RELOAD_RESTARTED_PLUGINS, 2L);
         awaitCounter(MetricNames.PLUGIN_STATE_CHANGES, 3L);
-        assertEquals(1L, counter(MetricNames.PLUGIN_STARTED));
-        assertEquals(1L, counter(MetricNames.PLUGIN_STOPPED));
-        assertEquals(1L, counter(MetricNames.PLUGIN_FAILED));
+        awaitCounter(MetricNames.PLUGIN_STARTED, 1L);
+        awaitCounter(MetricNames.PLUGIN_STOPPED, 1L);
+        awaitCounter(MetricNames.PLUGIN_FAILED, 1L);
     }
 
     @Test
@@ -197,9 +203,9 @@ class MetricsSubscriberTest {
         // When
         channel.publish(command(CommandResult.Kind.OK));
 
-        // Then
+        // Then：这里等的值就是终值，而 awaitCounter 断言的是「恰好等于」——
+        // 重复订阅会让它涨到 2，因此这一条就足以证明幂等，不必再补一次断言
         awaitCounter(MetricNames.COMMAND_EXECUTED, 1L);
-        assertEquals(1L, counter(MetricNames.COMMAND_EXECUTED));
     }
 
     @Test
@@ -249,7 +255,10 @@ class MetricsSubscriberTest {
     }
 
     /**
-     * 等待计数器达到期望值。
+     * 等待计数器达到期望值，并断言它恰好等于期望值。
+     * <p>
+     * 「恰好」也是断言的一部分：期望值就是终值，因此等到的值只可能等于它或者更小，
+     * 两次读之间的增长说明口径算重了（{@code start_should_be_idempotent} 靠的正是这一点）。
      *
      * @param name     指标名
      * @param expected 期望值

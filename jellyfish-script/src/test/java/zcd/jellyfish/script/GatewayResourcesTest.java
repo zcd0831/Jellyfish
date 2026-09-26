@@ -220,6 +220,12 @@ class GatewayResourcesTest {
         }
 
         @Override
+        public List<String> gatewayResources() {
+            // 假进程工厂不落盘任何东西，因此空清单就够——真实语言在这里给出自己的网关文件
+            return Collections.emptyList();
+        }
+
+        @Override
         public List<String> startCommand(Path gatewayDirectory) {
             return Collections.singletonList("true");
         }

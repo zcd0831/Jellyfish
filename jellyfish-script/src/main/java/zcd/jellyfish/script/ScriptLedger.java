@@ -1,9 +1,5 @@
-package zcd.jellyfish.plugin.python;
+package zcd.jellyfish.script;
 
-import zcd.jellyfish.script.CircuitBreakingScriptCaller;
-import zcd.jellyfish.script.ScriptGateway;
-import zcd.jellyfish.script.ScriptPlugin;
-import zcd.jellyfish.script.ScriptRegistration;
 import zcd.jellyfish.script.event.ScriptEventBridge;
 
 import java.util.ArrayList;
@@ -24,11 +20,14 @@ import java.util.Map;
  * 区分方式是：报告「注册了什么」用快照，报告「现在怎么样」用视图——
  * 把后者也快照下来，会得到一份「已经过时的真相」，而它比没有更具误导性。
  * <p>
+ * <b>它与语言无关</b>：语言名只是渲染时传进来的一个字符串，
+ * 因此同一份台账同时服务所有桥接插件。
+ * <p>
  * 不可变，可安全跨线程传递。
  *
  * @author zcd
  */
-final class PythonLedger {
+public final class ScriptLedger {
 
     /** 脚本清单。 */
     private final List<ScriptPlugin> plugins;
@@ -56,9 +55,11 @@ final class PythonLedger {
      * @param issues        启动期问题，不可为 {@code null}
      * @param gateway       脚本运行时，可为 {@code null}
      * @param callers       带熔断的调用入口，可为 {@code null}
+     * @param events        事件桥接，可为 {@code null}
      */
-    PythonLedger(List<ScriptPlugin> plugins, List<ScriptRegistration> registrations, List<String> issues,
-                 ScriptGateway gateway, CircuitBreakingScriptCaller callers, ScriptEventBridge events) {
+    public ScriptLedger(List<ScriptPlugin> plugins, List<ScriptRegistration> registrations,
+                        List<String> issues, ScriptGateway gateway,
+                        CircuitBreakingScriptCaller callers, ScriptEventBridge events) {
         this.plugins = Collections.unmodifiableList(new ArrayList<ScriptPlugin>(plugins));
         this.registrations = Collections.unmodifiableList(new ArrayList<ScriptRegistration>(registrations));
         this.issues = Collections.unmodifiableList(new ArrayList<String>(issues));
@@ -72,8 +73,8 @@ final class PythonLedger {
      *
      * @return 空台账
      */
-    static PythonLedger empty() {
-        return new PythonLedger(new ArrayList<ScriptPlugin>(), new ArrayList<ScriptRegistration>(),
+    public static ScriptLedger empty() {
+        return new ScriptLedger(new ArrayList<ScriptPlugin>(), new ArrayList<ScriptRegistration>(),
                 new ArrayList<String>(), null, null, null);
     }
 
@@ -82,7 +83,7 @@ final class PythonLedger {
      *
      * @return 不可变列表
      */
-    List<ScriptPlugin> plugins() {
+    public List<ScriptPlugin> plugins() {
         return plugins;
     }
 
@@ -91,7 +92,7 @@ final class PythonLedger {
      *
      * @return 脚本数量
      */
-    int scriptCount() {
+    public int scriptCount() {
         return plugins.size();
     }
 
@@ -100,7 +101,7 @@ final class PythonLedger {
      *
      * @return 能力总数
      */
-    int capabilityCount() {
+    public int capabilityCount() {
         int total = 0;
         for (ScriptRegistration registration : registrations) {
             total += registration.registeredCount();
@@ -113,7 +114,7 @@ final class PythonLedger {
      *
      * @return 不可变问题清单
      */
-    List<String> issues() {
+    public List<String> issues() {
         return issues;
     }
 
@@ -122,7 +123,7 @@ final class PythonLedger {
      *
      * @return 汇总文本，保证非 {@code null}
      */
-    String summary() {
+    public String summary() {
         return "scripts=" + plugins.size() + " capabilities=" + capabilityCount()
                 + " issues=" + issues.size();
     }
@@ -136,7 +137,7 @@ final class PythonLedger {
      * @param language 语言名，用于开头一行
      * @return 文本，保证非 {@code null}
      */
-    String render(String language) {
+    public String render(String language) {
         StringBuilder builder = new StringBuilder();
         builder.append(language).append("：脚本 ").append(plugins.size())
                 .append(" 个，已登记能力 ").append(capabilityCount()).append(" 项");

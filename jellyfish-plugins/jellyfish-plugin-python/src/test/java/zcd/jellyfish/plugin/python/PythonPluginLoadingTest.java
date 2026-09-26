@@ -18,12 +18,14 @@ import zcd.jellyfish.infra.plugin.PF4JPluginManager;
 import zcd.jellyfish.infra.plugin.PluginContextFactory;
 import zcd.jellyfish.infra.plugin.PluginRuntimeConfig;
 import zcd.jellyfish.infra.registry.TypeRegistry;
+import zcd.jellyfish.script.ScriptBridgeConfig;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -112,7 +114,11 @@ class PythonPluginLoadingTest {
         manager.bootstrap();
 
         assertEquals(PluginState.STARTED, manager.stateOf(PLUGIN_ID));
-        assertTrue(Files.notExists(PythonConfig.from(null).scriptsRoot()),
+        // 前提检查：默认脚本根目录（相对进程 cwd）确实不存在，本用例才真的在测「目录缺失也能启动」。
+        // 这里用插件自己声明的那个默认值去算，而不是抄一份字面量——抄的那份会在默认值改动后
+        // 继续通过，于是用例悄悄退化成「测了一个不存在的场景」
+        assertTrue(Files.notExists(
+                        Paths.get(PythonBridgePlugin.DEFAULT_SCRIPTS_ROOT).toAbsolutePath().normalize()),
                 "测试前提不成立：默认脚本根目录意外存在");
     }
 
@@ -278,9 +284,9 @@ class PythonPluginLoadingTest {
         Map<String, Object> python = new LinkedHashMap<String, Object>();
         // 抽取根目录指到临时目录：断言「启动期没抽取过」需要一个自己盯着的目录，
         // 否则用例会去看用户主目录（那既依赖环境也污染环境）
-        python.put(PythonConfig.KEY_GATEWAY_ROOT, gatewayRoot.toString());
+        python.put(ScriptBridgeConfig.KEY_GATEWAY_ROOT, gatewayRoot.toString());
         if (scriptsRootConfig != null) {
-            python.put(PythonConfig.KEY_SCRIPTS_ROOT, scriptsRootConfig);
+            python.put(ScriptBridgeConfig.KEY_SCRIPTS_ROOT, scriptsRootConfig);
         }
         configurations.put(PLUGIN_ID, python);
         PluginContextFactory contexts = new PluginContextFactory(extensions, eventChannel, registry);

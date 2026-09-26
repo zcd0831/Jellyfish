@@ -98,6 +98,11 @@ final class PythonLanguage implements ScriptLanguage {
     }
 
     @Override
+    public List<String> gatewayResources() {
+        return GATEWAY_RESOURCES;
+    }
+
+    @Override
     public List<String> probeCommand() {
         return Collections.unmodifiableList(Arrays.asList(pythonPath, VERSION_FLAG));
     }

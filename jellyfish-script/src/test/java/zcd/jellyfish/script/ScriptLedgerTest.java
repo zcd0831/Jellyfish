@@ -1,14 +1,8 @@
-package zcd.jellyfish.plugin.python;
+package zcd.jellyfish.script;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import zcd.jellyfish.api.JellyfishException;
-import zcd.jellyfish.script.CircuitBreakerSettings;
-import zcd.jellyfish.script.CircuitBreakingScriptCaller;
-import zcd.jellyfish.script.ScriptCircuitBreaker;
-import zcd.jellyfish.script.ScriptManifest;
-import zcd.jellyfish.script.ScriptPlugin;
-import zcd.jellyfish.script.ScriptRegistration;
 import zcd.jellyfish.script.codec.ExtensionCodecs;
 
 import java.nio.file.Paths;
@@ -27,13 +21,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *
  * @author zcd
  */
-@DisplayName("Python 脚本台账")
-class PythonLedgerTest {
+@DisplayName("脚本台账")
+class ScriptLedgerTest {
 
     @Test
     @DisplayName("空台账应说明原因，而不是只给一对零")
     void render_should_explainEmptiness_when_noScriptsAreLoaded() {
-        String rendered = PythonLedger.empty().render("Python");
+        String rendered = ScriptLedger.empty().render("Python");
 
         assertTrue(rendered.contains("脚本 0 个"), rendered);
         assertTrue(rendered.contains("脚本目录为空"), rendered);
@@ -42,7 +36,7 @@ class PythonLedgerTest {
     @Test
     @DisplayName("汇总行应带脚本数、能力数与问题数")
     void summary_should_countScriptsCapabilitiesAndIssues() {
-        PythonLedger empty = PythonLedger.empty();
+        ScriptLedger empty = ScriptLedger.empty();
 
         assertEquals("scripts=0 capabilities=0 issues=0", empty.summary());
         assertEquals(0, empty.scriptCount());
@@ -58,8 +52,8 @@ class PythonLedgerTest {
         issues.add("清单: jira: 缺少 manifest.json");
         issues.add("注册: jira: 工具注册失败 x: 已注册");
 
-        String rendered = new PythonLedger(new java.util.ArrayList<zcd.jellyfish.script.ScriptPlugin>(),
-                new java.util.ArrayList<zcd.jellyfish.script.ScriptRegistration>(),
+        String rendered = new ScriptLedger(new java.util.ArrayList<ScriptPlugin>(),
+                new java.util.ArrayList<ScriptRegistration>(),
                 issues, null, null, null).render("Python");
 
         assertTrue(rendered.contains("问题 2 条"), rendered);
@@ -78,7 +72,7 @@ class PythonLedgerTest {
         ScriptPlugin jira = scriptOf("jira");
         assertThrows(JellyfishException.class, () -> callers.call(jira, "tool", null));
 
-        String rendered = new PythonLedger(new ArrayList<ScriptPlugin>(), new ArrayList<ScriptRegistration>(),
+        String rendered = new ScriptLedger(new ArrayList<ScriptPlugin>(), new ArrayList<ScriptRegistration>(),
                 new ArrayList<String>(), null, callers, null).render("Python");
 
         assertEquals(ScriptCircuitBreaker.State.OPEN, callers.stateOf("jira"));
@@ -91,7 +85,7 @@ class PythonLedgerTest {
         CircuitBreakingScriptCaller callers = new CircuitBreakingScriptCaller(
                 (plugin, type, request) -> null, CircuitBreakerSettings.defaults(), null);
 
-        String rendered = new PythonLedger(new ArrayList<ScriptPlugin>(), new ArrayList<ScriptRegistration>(),
+        String rendered = new ScriptLedger(new ArrayList<ScriptPlugin>(), new ArrayList<ScriptRegistration>(),
                 new ArrayList<String>(), null, callers, null).render("Python");
 
         assertTrue(rendered.contains("熔断：尚未发生调用"), rendered);

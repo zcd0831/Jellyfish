@@ -1,4 +1,4 @@
-package zcd.jellyfish.plugin.python;
+package zcd.jellyfish.script;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -6,18 +6,26 @@ import zcd.jellyfish.api.JellyfishException;
 
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 
 /**
- * Python 桥接插件的配置解析：把 {@code jellyfish.json} 里的
- * {@code plugins.configurations.jellyfish-plugin-python} 段解析成值对象。
+ * 桥接插件的配置解析：把 {@code jellyfish.json} 里
+ * {@code plugins.configurations.<插件标识>} 段解析成值对象。
+ * <p>
+ * <b>为什么它是一份而不是每种语言一份</b>：这一段里几乎每个键都与语言无关
+ * （超时、空闲回收、抽取目录、事件收窄、熔断阈值），与语言有关的只有两件事——
+ * 解释器写在哪一个键上、以及两个默认值（解释器与脚本根目录）。
+ * 于是它们由子类在 {@link #from(Map, String, String, String)} 里传进来，
+ * 而「键名要直白」这件事仍然成立：Python 用户看到的依旧是 {@code pythonPath}。
  * <p>
  * 项目级覆盖全局级、字符串值里的 {@code ${ENV}} 替换都由内核完成，这里拿到的就是最终值；
  * 但 {@code ~} <b>没有</b>被展开（内核只在配置文件的路径段上做这件事），因此这里自己展开一次。
  * <p>
  * <b>只解析已经落地的键</b>：声明了一堆没人读的键，只会让人误以为配置已经生效。
- * 因此这里与 {@link #gatewaySettings()} / {@link #circuitBreakerSettings()} 的消费者严格同步。
+ * 因此这里与 {@link #gatewaySettings(String)} / {@link #circuitBreakerSettings()} 的消费者严格同步。
  * <p>
  * <b>类型不对就报错，不退回默认值</b>：写错的配置静默走默认值，是「配置不生效」这类
  * 最难排查问题的标准成因——用户改了三处配置，只有一处没生效，而他没有任何线索。
@@ -26,64 +34,55 @@ import java.util.Map;
  *
  * @author zcd
  */
-final class PythonConfig {
+public final class ScriptBridgeConfig {
 
     /** 日志。 */
-    private static final Logger LOG = LoggerFactory.getLogger(PythonConfig.class);
+    private static final Logger LOG = LoggerFactory.getLogger(ScriptBridgeConfig.class);
 
     /** 脚本根目录配置键。 */
-    static final String KEY_SCRIPTS_ROOT = "scriptsRoot";
-
-    /** 解释器配置键。 */
-    static final String KEY_PYTHON_PATH = "pythonPath";
+    public static final String KEY_SCRIPTS_ROOT = "scriptsRoot";
 
     /** 单次调用超时配置键。 */
-    static final String KEY_INVOKE_TIMEOUT = "invokeTimeoutSeconds";
+    public static final String KEY_INVOKE_TIMEOUT = "invokeTimeoutSeconds";
 
     /** worker 空闲自毁配置键。 */
-    static final String KEY_WORKER_IDLE = "workerIdleSeconds";
+    public static final String KEY_WORKER_IDLE = "workerIdleSeconds";
 
     /** 网关空闲自毁配置键。 */
-    static final String KEY_GATEWAY_IDLE = "gatewayIdleSeconds";
+    public static final String KEY_GATEWAY_IDLE = "gatewayIdleSeconds";
 
     /** 严格校验配置键。 */
-    static final String KEY_MANIFEST_STRICT = "manifestStrict";
+    public static final String KEY_MANIFEST_STRICT = "manifestStrict";
 
     /** 网关资源抽取根目录配置键。 */
-    static final String KEY_GATEWAY_ROOT = "gatewayRoot";
+    public static final String KEY_GATEWAY_ROOT = "gatewayRoot";
 
     /** 网关 PID 文件目录配置键。 */
-    static final String KEY_PID_DIRECTORY = "pidDirectory";
+    public static final String KEY_PID_DIRECTORY = "pidDirectory";
 
     /** 事件收窄配置键。 */
-    static final String KEY_EVENTS = "events";
+    public static final String KEY_EVENTS = "events";
 
     /** 事件收窄里的白名单字段名。 */
-    static final String KEY_EVENTS_ALLOW = "allow";
+    public static final String KEY_EVENTS_ALLOW = "allow";
 
     /** 熔断参数配置键。 */
-    static final String KEY_CIRCUIT_BREAKER = "circuitBreaker";
+    public static final String KEY_CIRCUIT_BREAKER = "circuitBreaker";
 
     /** 熔断参数里的连续失败次数上限字段名。 */
-    static final String KEY_FAILURES_TO_OPEN = "failuresToOpen";
+    public static final String KEY_FAILURES_TO_OPEN = "failuresToOpen";
 
     /** 熔断参数里的冷却秒数字段名。 */
-    static final String KEY_COOLDOWN_SECONDS = "cooldownSeconds";
+    public static final String KEY_COOLDOWN_SECONDS = "cooldownSeconds";
 
     /** 熔断参数里的转永久轮数字段名。 */
-    static final String KEY_ROUNDS_TO_PERMANENT = "roundsToPermanent";
-
-    /** 默认脚本根目录：相对进程工作目录，与内核「插件相对路径按进程 cwd 解析」同口径。 */
-    static final String DEFAULT_SCRIPTS_ROOT = "scripts/python";
-
-    /** 默认解释器：交给 PATH 解析，不写死绝对路径（虚拟环境场景由用户用 pythonPath 指定）。 */
-    static final String DEFAULT_PYTHON_PATH = "python3";
+    public static final String KEY_ROUNDS_TO_PERMANENT = "roundsToPermanent";
 
     /** 脚本根目录。 */
     private final Path scriptsRoot;
 
     /** 解释器可执行文件。 */
-    private final String pythonPath;
+    private final String interpreterPath;
 
     /** 单次调用超时秒数。 */
     private final int invokeTimeoutSeconds;
@@ -104,16 +103,16 @@ final class PythonConfig {
     private final Path pidDirectory;
 
     /** 额外收窄的事件白名单。 */
-    private final java.util.List<String> allowedEvents;
+    private final List<String> allowedEvents;
 
     /** 熔断参数。 */
-    private final zcd.jellyfish.script.CircuitBreakerSettings circuitBreaker;
+    private final CircuitBreakerSettings circuitBreaker;
 
     /**
      * 构造配置。
      *
      * @param scriptsRoot          脚本根目录
-     * @param pythonPath           解释器可执行文件
+     * @param interpreterPath      解释器可执行文件
      * @param invokeTimeoutSeconds 单次调用超时秒数
      * @param workerIdleSeconds    worker 空闲自毁秒数
      * @param gatewayIdleSeconds   网关空闲自毁秒数
@@ -123,12 +122,12 @@ final class PythonConfig {
      * @param allowedEvents        额外收窄的事件白名单
      * @param circuitBreaker       熔断参数
      */
-    private PythonConfig(Path scriptsRoot, String pythonPath, int invokeTimeoutSeconds,
-                         int workerIdleSeconds, int gatewayIdleSeconds, boolean manifestStrict,
-                         Path gatewayRoot, Path pidDirectory, java.util.List<String> allowedEvents,
-                         zcd.jellyfish.script.CircuitBreakerSettings circuitBreaker) {
+    private ScriptBridgeConfig(Path scriptsRoot, String interpreterPath, int invokeTimeoutSeconds,
+                               int workerIdleSeconds, int gatewayIdleSeconds, boolean manifestStrict,
+                               Path gatewayRoot, Path pidDirectory, List<String> allowedEvents,
+                               CircuitBreakerSettings circuitBreaker) {
         this.scriptsRoot = scriptsRoot;
-        this.pythonPath = pythonPath;
+        this.interpreterPath = interpreterPath;
         this.invokeTimeoutSeconds = invokeTimeoutSeconds;
         this.workerIdleSeconds = workerIdleSeconds;
         this.gatewayIdleSeconds = gatewayIdleSeconds;
@@ -141,25 +140,34 @@ final class PythonConfig {
 
     /**
      * 从插件配置段解析配置。
+     * <p>
+     * <b>三个语言相关的参数由子类传进来</b>：解释器写在哪一个键上、它的默认值、
+     * 以及脚本根目录的默认值。除这三件事之外，本方法对语言一无所知。
      *
-     * @param configuration 插件配置段，可为 {@code null}
+     * @param configuration       插件配置段，可为 {@code null}
+     * @param interpreterKey      解释器配置键，不可为 {@code null}
+     * @param defaultInterpreter  解释器缺省值（如 {@code python3}），不可为 {@code null}
+     * @param defaultScriptsRoot  脚本根目录缺省值（相对进程工作目录），不可为 {@code null}
      * @return 配置值对象
      * @throws JellyfishException 配置值类型不对时抛出
      */
-    static PythonConfig from(Map<String, Object> configuration) {
+    public static ScriptBridgeConfig from(Map<String, Object> configuration, String interpreterKey,
+                                          String defaultInterpreter, String defaultScriptsRoot) {
         Map<String, Object> values = configuration == null
                 ? Collections.<String, Object>emptyMap()
                 : configuration;
-        return new PythonConfig(resolveScriptsRoot(values.get(KEY_SCRIPTS_ROOT)),
-                resolvePythonPath(values.get(KEY_PYTHON_PATH)),
+        return new ScriptBridgeConfig(
+                normalizePath(requireText(values.get(KEY_SCRIPTS_ROOT), KEY_SCRIPTS_ROOT,
+                        defaultScriptsRoot)),
+                requireText(values.get(interpreterKey), interpreterKey, defaultInterpreter),
                 seconds(values.get(KEY_INVOKE_TIMEOUT), KEY_INVOKE_TIMEOUT,
-                        zcd.jellyfish.script.GatewaySettings.DEFAULT_INVOKE_TIMEOUT_SECONDS),
+                        GatewaySettings.DEFAULT_INVOKE_TIMEOUT_SECONDS),
                 seconds(values.get(KEY_WORKER_IDLE), KEY_WORKER_IDLE,
-                        zcd.jellyfish.script.GatewaySettings.DEFAULT_WORKER_IDLE_SECONDS),
+                        GatewaySettings.DEFAULT_WORKER_IDLE_SECONDS),
                 seconds(values.get(KEY_GATEWAY_IDLE), KEY_GATEWAY_IDLE,
-                        zcd.jellyfish.script.GatewaySettings.DEFAULT_GATEWAY_IDLE_SECONDS),
+                        GatewaySettings.DEFAULT_GATEWAY_IDLE_SECONDS),
                 bool(values.get(KEY_MANIFEST_STRICT), KEY_MANIFEST_STRICT,
-                        zcd.jellyfish.script.GatewaySettings.DEFAULT_MANIFEST_STRICT),
+                        GatewaySettings.DEFAULT_MANIFEST_STRICT),
                 resolveGatewayRoot(values.get(KEY_GATEWAY_ROOT)),
                 resolvePidDirectory(values.get(KEY_PID_DIRECTORY)),
                 allowedEvents(values.get(KEY_EVENTS)),
@@ -174,7 +182,7 @@ final class PythonConfig {
      *
      * @return 规范化绝对路径
      */
-    Path scriptsRoot() {
+    public Path scriptsRoot() {
         return scriptsRoot;
     }
 
@@ -183,8 +191,8 @@ final class PythonConfig {
      *
      * @return 解释器路径或命令名
      */
-    String pythonPath() {
-        return pythonPath;
+    public String interpreterPath() {
+        return interpreterPath;
     }
 
     /**
@@ -192,7 +200,7 @@ final class PythonConfig {
      *
      * @return 超时秒数；{@code 0} 表示不超时
      */
-    int invokeTimeoutSeconds() {
+    public int invokeTimeoutSeconds() {
         return invokeTimeoutSeconds;
     }
 
@@ -201,7 +209,7 @@ final class PythonConfig {
      *
      * @return 秒数；{@code 0} 表示不回收
      */
-    int workerIdleSeconds() {
+    public int workerIdleSeconds() {
         return workerIdleSeconds;
     }
 
@@ -210,7 +218,7 @@ final class PythonConfig {
      *
      * @return 秒数；{@code 0} 表示不回收
      */
-    int gatewayIdleSeconds() {
+    public int gatewayIdleSeconds() {
         return gatewayIdleSeconds;
     }
 
@@ -219,7 +227,7 @@ final class PythonConfig {
      *
      * @return 抽取根目录
      */
-    Path gatewayRoot() {
+    public Path gatewayRoot() {
         return gatewayRoot;
     }
 
@@ -228,7 +236,7 @@ final class PythonConfig {
      *
      * @return 目录
      */
-    Path pidDirectory() {
+    public Path pidDirectory() {
         return pidDirectory;
     }
 
@@ -241,14 +249,14 @@ final class PythonConfig {
      * @param languageId 语言标识，用于推导 PID 文件名
      * @return 网关设置
      */
-    zcd.jellyfish.script.GatewaySettings gatewaySettings(String languageId) {
-        return zcd.jellyfish.script.GatewaySettings.builder()
+    public GatewaySettings gatewaySettings(String languageId) {
+        return GatewaySettings.builder()
                 .invokeTimeoutSeconds(invokeTimeoutSeconds)
                 .workerIdleSeconds(workerIdleSeconds)
                 .gatewayIdleSeconds(gatewayIdleSeconds)
                 .manifestStrict(manifestStrict)
                 .allowedEvents(allowedEvents)
-                .pidFile(zcd.jellyfish.script.ScriptPidFiles.pathFor(pidDirectory, languageId).toString())
+                .pidFile(ScriptPidFiles.pathFor(pidDirectory, languageId).toString())
                 .build();
     }
 
@@ -257,39 +265,17 @@ final class PythonConfig {
      *
      * @return 熔断参数
      */
-    zcd.jellyfish.script.CircuitBreakerSettings circuitBreakerSettings() {
+    public CircuitBreakerSettings circuitBreakerSettings() {
         return circuitBreaker;
     }
 
     @Override
     public String toString() {
-        return "PythonConfig{scriptsRoot=" + scriptsRoot + ", pythonPath=" + pythonPath
+        return "ScriptBridgeConfig{scriptsRoot=" + scriptsRoot + ", interpreter=" + interpreterPath
                 + ", invokeTimeout=" + invokeTimeoutSeconds + "s, workerIdle=" + workerIdleSeconds
                 + "s, gatewayIdle=" + gatewayIdleSeconds + "s, manifestStrict=" + manifestStrict
                 + ", gatewayRoot=" + gatewayRoot + ", pidDirectory=" + pidDirectory
                 + ", " + circuitBreaker + '}';
-    }
-
-    /**
-     * 解析脚本根目录：缺省用默认值，{@code ~} 展开为用户主目录。
-     *
-     * @param raw 配置原值，可为 {@code null}
-     * @return 规范化的绝对路径
-     * @throws JellyfishException 值不是非空字符串时抛出
-     */
-    private static Path resolveScriptsRoot(Object raw) {
-        return normalizePath(requireText(raw, KEY_SCRIPTS_ROOT, DEFAULT_SCRIPTS_ROOT));
-    }
-
-    /**
-     * 解析解释器路径：缺省用默认值。
-     *
-     * @param raw 配置原值，可为 {@code null}
-     * @return 解释器路径或命令名
-     * @throws JellyfishException 值不是非空字符串时抛出
-     */
-    private static String resolvePythonPath(Object raw) {
-        return requireText(raw, KEY_PYTHON_PATH, DEFAULT_PYTHON_PATH);
     }
 
     /**
@@ -340,7 +326,7 @@ final class PythonConfig {
     /**
      * 解析次数类配置：缺省用默认值，负数当场报错。
      * <p>
-     * 与 {@link #seconds} 分开是因为报错文案：把一个「失败几次」的字段报成
+     * 与 {@link #seconds(Object, String, int)} 分开是因为报错文案：把一个「失败几次」的字段报成
      * 「必须是整数秒数」，会让写错的人按秒数去理解自己的配置。
      *
      * @param raw          配置原值，可为 {@code null}
@@ -391,7 +377,7 @@ final class PythonConfig {
      */
     private static Path resolveGatewayRoot(Object raw) {
         if (raw == null) {
-            return zcd.jellyfish.script.GatewayResources.defaultBaseDirectory();
+            return GatewayResources.defaultBaseDirectory();
         }
         return normalizePath(requireText(raw, KEY_GATEWAY_ROOT, ""));
     }
@@ -408,7 +394,7 @@ final class PythonConfig {
      */
     private static Path resolvePidDirectory(Object raw) {
         if (raw == null) {
-            return zcd.jellyfish.script.ScriptPidFiles.defaultDirectory();
+            return ScriptPidFiles.defaultDirectory();
         }
         return normalizePath(requireText(raw, KEY_PID_DIRECTORY, ""));
     }
@@ -424,7 +410,7 @@ final class PythonConfig {
      * @throws JellyfishException 结构或取值非法时抛出
      */
     @SuppressWarnings("unchecked")
-    private static java.util.List<String> allowedEvents(Object raw) {
+    private static List<String> allowedEvents(Object raw) {
         if (raw == null) {
             return Collections.emptyList();
         }
@@ -435,24 +421,24 @@ final class PythonConfig {
         if (allow == null) {
             return Collections.emptyList();
         }
-        if (!(allow instanceof java.util.List)) {
+        if (!(allow instanceof List)) {
             throw new JellyfishException(KEY_EVENTS + "." + KEY_EVENTS_ALLOW + " 必须是数组");
         }
-        java.util.List<String> names = new java.util.ArrayList<String>();
-        for (Object item : (java.util.List<Object>) allow) {
+        List<String> names = new ArrayList<String>();
+        for (Object item : (List<Object>) allow) {
             if (!(item instanceof String) || ((String) item).trim().isEmpty()) {
                 throw new JellyfishException(KEY_EVENTS + "." + KEY_EVENTS_ALLOW
                         + " 只能包含非空字符串");
             }
             names.add(((String) item).trim());
         }
-        return java.util.Collections.unmodifiableList(names);
+        return Collections.unmodifiableList(names);
     }
 
     /**
      * 解析熔断参数。
      * <p>
-     * <b>它不在 {@link #gatewaySettings()} 里</b>：熔断是宿主侧的事，网关不需要知道；
+     * <b>它不在 {@link #gatewaySettings(String)} 里</b>：熔断是宿主侧的事，网关不需要知道；
      * 下发给网关就得让每种语言的网关各实现一遍同样的状态机。
      * <p>
      * 整个段缺失、段内单个字段缺失都走默认值；类型不对则当场报错——
@@ -463,9 +449,8 @@ final class PythonConfig {
      * @throws JellyfishException 结构或取值非法时抛出
      */
     @SuppressWarnings("unchecked")
-    private static zcd.jellyfish.script.CircuitBreakerSettings circuitBreaker(Object raw) {
-        zcd.jellyfish.script.CircuitBreakerSettings.Builder builder =
-                zcd.jellyfish.script.CircuitBreakerSettings.builder();
+    private static CircuitBreakerSettings circuitBreaker(Object raw) {
+        CircuitBreakerSettings.Builder builder = CircuitBreakerSettings.builder();
         if (raw == null) {
             return builder.build();
         }
@@ -475,12 +460,12 @@ final class PythonConfig {
         Map<String, Object> values = (Map<String, Object>) raw;
         return builder
                 .failuresToOpen(count(values.get(KEY_FAILURES_TO_OPEN), key(KEY_FAILURES_TO_OPEN),
-                        zcd.jellyfish.script.CircuitBreakerSettings.DEFAULT_FAILURES_TO_OPEN))
+                        CircuitBreakerSettings.DEFAULT_FAILURES_TO_OPEN))
                 .cooldownSeconds(seconds(values.get(KEY_COOLDOWN_SECONDS), key(KEY_COOLDOWN_SECONDS),
-                        zcd.jellyfish.script.CircuitBreakerSettings.DEFAULT_COOLDOWN_SECONDS))
+                        CircuitBreakerSettings.DEFAULT_COOLDOWN_SECONDS))
                 .roundsToPermanent(count(values.get(KEY_ROUNDS_TO_PERMANENT),
                         key(KEY_ROUNDS_TO_PERMANENT),
-                        zcd.jellyfish.script.CircuitBreakerSettings.DEFAULT_ROUNDS_TO_PERMANENT))
+                        CircuitBreakerSettings.DEFAULT_ROUNDS_TO_PERMANENT))
                 .build();
     }
 
@@ -511,7 +496,7 @@ final class PythonConfig {
             text = home + text.substring(1);
         }
         Path path = Paths.get(text).toAbsolutePath().normalize();
-        LOG.debug("Python 脚本根目录解析为: {}", path);
+        LOG.debug("脚本根目录解析为: {}", path);
         return path;
     }
 }

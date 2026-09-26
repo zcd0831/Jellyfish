@@ -8,27 +8,31 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.plugin.PluginContext;
 
+import java.nio.file.Paths;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.when;
 
 /**
- * Python 桥接插件生命周期的单元测试。
+ * Python 桥接插件的单元测试。
  * <p>
- * 钉住的核心性质是<b>能力上下文每次 start 现造、stop 现释放</b>：PF4J 会长期缓存插件实例
- * （{@code stop} 不丢弃它），因此语言适配与将来的网关必须在 {@code start()} 重建，
- * 否则「停止再启动」这个唯一的插件重启语义会继续拿着旧配置。
+ * 生命周期本身（start 现造、stop 现释放、运行时经熔断、注册按命名空间回收）由
+ * {@code jellyfish-script} 的 {@code ScriptBridgePluginTest} 用假语言覆盖，这里<b>只钉 Python 那一部分</b>：
+ * 解释器写在哪个键上、默认值是什么、脚本根目录默认落在哪。
+ * <p>
+ * 这几条看着琐碎，但它们正是「上收」之后唯一可能悄悄出错的地方——公共实现不再知道
+ * {@code pythonPath} 这个词，因此必须有人替它记住。
  *
  * @author zcd
  */
 @ExtendWith(MockitoExtension.class)
-@DisplayName("Python 桥接插件生命周期")
+@DisplayName("Python 桥接插件")
 class PythonBridgePluginTest {
 
     /** 插件标识，与 plugin.properties 保持一致。 */
@@ -39,10 +43,10 @@ class PythonBridgePluginTest {
     private PluginContext context;
 
     @Test
-    @DisplayName("start 应按配置建立语言适配")
-    void start_should_buildLanguage_when_configurationIsGiven() {
+    @DisplayName("解释器应取 pythonPath 键")
+    void start_should_buildLanguage_when_pythonPathIsConfigured() {
         Map<String, Object> configuration = new LinkedHashMap<String, Object>();
-        configuration.put(PythonConfig.KEY_PYTHON_PATH, "/opt/venv/bin/python3");
+        configuration.put(PythonBridgePlugin.KEY_INTERPRETER, "/opt/venv/bin/python3");
         when(context.configuration()).thenReturn(configuration);
         when(context.pluginId()).thenReturn(PLUGIN_ID);
         PythonBridgePlugin plugin = new PythonBridgePlugin();
@@ -50,27 +54,29 @@ class PythonBridgePluginTest {
         plugin.start(context);
 
         assertNotNull(plugin.language());
-        assertEquals("/opt/venv/bin/python3",
-                plugin.language().probeCommand().get(0));
+        assertEquals("/opt/venv/bin/python3", plugin.language().probeCommand().get(0));
     }
 
     @Test
-    @DisplayName("start 不应要求脚本目录存在，环境缺失不能阻塞内核启动")
-    void start_should_notRequireScriptsRoot_when_directoryDoesNotExist() {
+    @DisplayName("缺省解释器应是交给 PATH 解析的 python3，脚本根目录默认 scripts/python")
+    void start_should_usePythonDefaults_when_noConfigurationIsGiven() {
         when(context.configuration()).thenReturn(null);
         when(context.pluginId()).thenReturn(PLUGIN_ID);
         PythonBridgePlugin plugin = new PythonBridgePlugin();
 
         plugin.start(context);
 
-        assertNotNull(plugin.language());
+        assertEquals(PythonBridgePlugin.DEFAULT_INTERPRETER, plugin.config().interpreterPath());
+        assertEquals(Paths.get(PythonBridgePlugin.DEFAULT_SCRIPTS_ROOT).toAbsolutePath().normalize(),
+                plugin.config().scriptsRoot());
+        assertEquals(PythonLanguage.ID, plugin.language().id());
     }
 
     @Test
-    @DisplayName("start 遇到非法配置应上抛，交由框架转成插件 FAILED")
-    void start_should_propagateJellyfishException_when_configurationIsInvalid() {
+    @DisplayName("解释器写成空白应报错，而不是静默退回 python3")
+    void start_should_rejectBlankInterpreter_when_pythonPathIsBlank() {
         Map<String, Object> configuration = new LinkedHashMap<String, Object>();
-        configuration.put(PythonConfig.KEY_SCRIPTS_ROOT, 7);
+        configuration.put(PythonBridgePlugin.KEY_INTERPRETER, "   ");
         when(context.configuration()).thenReturn(configuration);
         PythonBridgePlugin plugin = new PythonBridgePlugin();
 
@@ -78,8 +84,31 @@ class PythonBridgePluginTest {
     }
 
     @Test
-    @DisplayName("stop 应释放语言适配，使下一次 start 重建")
-    void stop_should_releaseLanguage_when_calledAfterStart() {
+    @DisplayName("语法错误以外的键（别的语言的解释器键）不该影响 Python 的解析")
+    void start_should_ignoreForeignInterpreterKey_when_nodePathIsPresent() {
+        Map<String, Object> configuration = new LinkedHashMap<String, Object>();
+        configuration.put("nodePath", "/usr/local/bin/node");
+        when(context.configuration()).thenReturn(configuration);
+        when(context.pluginId()).thenReturn(PLUGIN_ID);
+        PythonBridgePlugin plugin = new PythonBridgePlugin();
+
+        plugin.start(context);
+
+        assertEquals(PythonBridgePlugin.DEFAULT_INTERPRETER, plugin.config().interpreterPath());
+    }
+
+    @Test
+    @DisplayName("未启动时语言适配与配置都应为空")
+    void accessors_should_beNull_when_pluginWasNeverStarted() {
+        PythonBridgePlugin plugin = new PythonBridgePlugin();
+
+        assertNull(plugin.language());
+        assertNull(plugin.config());
+    }
+
+    @Test
+    @DisplayName("stop 应释放适配与配置，使下一次 start 重建")
+    void stop_should_releaseLanguageAndConfig_when_calledAfterStart() {
         when(context.configuration()).thenReturn(null);
         when(context.pluginId()).thenReturn(PLUGIN_ID);
         PythonBridgePlugin plugin = new PythonBridgePlugin();
@@ -88,18 +117,7 @@ class PythonBridgePluginTest {
         plugin.stop();
 
         assertNull(plugin.language());
-    }
-
-    @Test
-    @DisplayName("stop 应释放台账，使下一次 start 重新扫描")
-    void stop_should_releaseLedger_when_calledAfterStart() {
-        when(context.configuration()).thenReturn(null);
-        when(context.pluginId()).thenReturn(PLUGIN_ID);
-        PythonBridgePlugin plugin = new PythonBridgePlugin();
-        plugin.start(context);
-
-        plugin.stop();
-
+        assertNull(plugin.config());
         assertEquals(0, plugin.ledger().scriptCount());
         assertTrue(plugin.ledger().issues().isEmpty());
     }
@@ -115,21 +133,6 @@ class PythonBridgePluginTest {
     }
 
     @Test
-    @DisplayName("start 应幂等地重建适配，重复调用不报错")
-    void start_should_rebuildLanguage_when_calledTwice() {
-        when(context.configuration()).thenReturn(null);
-        when(context.pluginId()).thenReturn(PLUGIN_ID);
-        PythonBridgePlugin plugin = new PythonBridgePlugin();
-
-        plugin.start(context);
-        PythonLanguage first = plugin.language();
-        plugin.start(context);
-
-        assertNotNull(plugin.language());
-        assertNotNull(first);
-    }
-
-    @Test
     @DisplayName("start 应建立经熔断的调用入口，stop 应释放它")
     void caller_should_beCreatedOnStart_andReleasedOnStop() {
         when(context.configuration()).thenReturn(null);
@@ -139,7 +142,6 @@ class PythonBridgePluginTest {
         plugin.start(context);
         assertNotNull(plugin.caller(), "转发闭包必须经过熔断：注册时用的是它，而不是网关本身");
         assertNotNull(plugin.gateway());
-        // 还没有任何调用发生过，因此不该凭空冒出熔断记录
         assertTrue(plugin.caller().states().isEmpty());
 
         plugin.stop();

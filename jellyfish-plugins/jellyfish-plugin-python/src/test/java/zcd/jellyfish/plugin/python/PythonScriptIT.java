@@ -15,6 +15,7 @@ import zcd.jellyfish.api.extension.ToolCallResult;
 import zcd.jellyfish.infra.plugin.PF4JPluginManager;
 import zcd.jellyfish.infra.plugin.PluginContextFactory;
 import zcd.jellyfish.infra.plugin.PluginRuntimeConfig;
+import zcd.jellyfish.script.ScriptBridgeConfig;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -1035,16 +1036,16 @@ class PythonScriptIT {
                                          int cooldownSeconds, int roundsToPermanent) throws IOException {
         installPlugin();
         Map<String, Object> breaker = new LinkedHashMap<String, Object>();
-        breaker.put(PythonConfig.KEY_FAILURES_TO_OPEN, Integer.valueOf(failuresToOpen));
-        breaker.put(PythonConfig.KEY_COOLDOWN_SECONDS, Integer.valueOf(cooldownSeconds));
-        breaker.put(PythonConfig.KEY_ROUNDS_TO_PERMANENT, Integer.valueOf(roundsToPermanent));
+        breaker.put(ScriptBridgeConfig.KEY_FAILURES_TO_OPEN, Integer.valueOf(failuresToOpen));
+        breaker.put(ScriptBridgeConfig.KEY_COOLDOWN_SECONDS, Integer.valueOf(cooldownSeconds));
+        breaker.put(ScriptBridgeConfig.KEY_ROUNDS_TO_PERMANENT, Integer.valueOf(roundsToPermanent));
         Map<String, Object> python = new LinkedHashMap<String, Object>();
-        python.put(PythonConfig.KEY_SCRIPTS_ROOT, scriptsRoot.toString());
-        python.put(PythonConfig.KEY_GATEWAY_ROOT, gatewayRoot.toString());
-        python.put(PythonConfig.KEY_INVOKE_TIMEOUT, Integer.valueOf(invokeTimeoutSeconds));
-        python.put(PythonConfig.KEY_PYTHON_PATH, interpreter());
-        python.put(PythonConfig.KEY_PID_DIRECTORY, pidRoot.toString());
-        python.put(PythonConfig.KEY_CIRCUIT_BREAKER, breaker);
+        python.put(ScriptBridgeConfig.KEY_SCRIPTS_ROOT, scriptsRoot.toString());
+        python.put(ScriptBridgeConfig.KEY_GATEWAY_ROOT, gatewayRoot.toString());
+        python.put(ScriptBridgeConfig.KEY_INVOKE_TIMEOUT, Integer.valueOf(invokeTimeoutSeconds));
+        python.put(PythonBridgePlugin.KEY_INTERPRETER, interpreter());
+        python.put(ScriptBridgeConfig.KEY_PID_DIRECTORY, pidRoot.toString());
+        python.put(ScriptBridgeConfig.KEY_CIRCUIT_BREAKER, breaker);
         Map<String, Map<String, Object>> configurations = new LinkedHashMap<String, Map<String, Object>>();
         configurations.put("jellyfish-plugin-python", python);
         manager = new PF4JPluginManager(new PluginContextFactory(extensions, events, registry),
@@ -1062,11 +1063,11 @@ class PythonScriptIT {
     private void startRuntimeWithIdle(int idleSeconds) throws IOException {
         installPlugin();
         Map<String, Object> python = new LinkedHashMap<String, Object>();
-        python.put(PythonConfig.KEY_SCRIPTS_ROOT, scriptsRoot.toString());
-        python.put(PythonConfig.KEY_GATEWAY_ROOT, gatewayRoot.toString());
-        python.put(PythonConfig.KEY_PYTHON_PATH, interpreter());
-        python.put(PythonConfig.KEY_PID_DIRECTORY, pidRoot.toString());
-        python.put(PythonConfig.KEY_WORKER_IDLE, Integer.valueOf(idleSeconds));
+        python.put(ScriptBridgeConfig.KEY_SCRIPTS_ROOT, scriptsRoot.toString());
+        python.put(ScriptBridgeConfig.KEY_GATEWAY_ROOT, gatewayRoot.toString());
+        python.put(PythonBridgePlugin.KEY_INTERPRETER, interpreter());
+        python.put(ScriptBridgeConfig.KEY_PID_DIRECTORY, pidRoot.toString());
+        python.put(ScriptBridgeConfig.KEY_WORKER_IDLE, Integer.valueOf(idleSeconds));
         Map<String, Map<String, Object>> configurations = new LinkedHashMap<String, Map<String, Object>>();
         configurations.put("jellyfish-plugin-python", python);
         manager = new PF4JPluginManager(new PluginContextFactory(extensions, events, registry),
@@ -1241,11 +1242,11 @@ class PythonScriptIT {
     private void startRuntime(int invokeTimeoutSeconds) throws IOException {
         installPlugin();
         Map<String, Object> python = new LinkedHashMap<String, Object>();
-        python.put(PythonConfig.KEY_SCRIPTS_ROOT, scriptsRoot.toString());
-        python.put(PythonConfig.KEY_GATEWAY_ROOT, gatewayRoot.toString());
-        python.put(PythonConfig.KEY_INVOKE_TIMEOUT, Integer.valueOf(invokeTimeoutSeconds));
-        python.put(PythonConfig.KEY_PYTHON_PATH, interpreter());
-        python.put(PythonConfig.KEY_PID_DIRECTORY, pidRoot.toString());
+        python.put(ScriptBridgeConfig.KEY_SCRIPTS_ROOT, scriptsRoot.toString());
+        python.put(ScriptBridgeConfig.KEY_GATEWAY_ROOT, gatewayRoot.toString());
+        python.put(ScriptBridgeConfig.KEY_INVOKE_TIMEOUT, Integer.valueOf(invokeTimeoutSeconds));
+        python.put(PythonBridgePlugin.KEY_INTERPRETER, interpreter());
+        python.put(ScriptBridgeConfig.KEY_PID_DIRECTORY, pidRoot.toString());
         Map<String, Map<String, Object>> configurations = new LinkedHashMap<String, Map<String, Object>>();
         configurations.put("jellyfish-plugin-python", python);
         manager = new PF4JPluginManager(new PluginContextFactory(extensions, events, registry),
@@ -1361,7 +1362,7 @@ class PythonScriptIT {
      * @return 解释器路径或命令名
      */
     private static String interpreter() {
-        return System.getProperty("jellyfish.test.python", PythonConfig.DEFAULT_PYTHON_PATH);
+        return System.getProperty("jellyfish.test.python", PythonBridgePlugin.DEFAULT_INTERPRETER);
     }
 
 }

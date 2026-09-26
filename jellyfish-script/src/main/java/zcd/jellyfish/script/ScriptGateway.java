@@ -95,9 +95,6 @@ public final class ScriptGateway implements ScriptCaller, ScriptEventTarget, Aut
     /** 需要下发给网关的脚本清单。 */
     private final List<ScriptPlugin> scripts;
 
-    /** 需要落盘的网关资源名。 */
-    private final List<String> gatewayResources;
-
     /** 保护启动、关闭与运行态字段的锁。 */
     private final Object lock = new Object();
 
@@ -161,8 +158,6 @@ public final class ScriptGateway implements ScriptCaller, ScriptEventTarget, Aut
         this.resources = builder.resources;
         this.settings = builder.settings;
         this.scripts = Collections.unmodifiableList(new ArrayList<ScriptPlugin>(builder.scripts));
-        this.gatewayResources = Collections.unmodifiableList(
-                new ArrayList<String>(builder.gatewayResources));
     }
 
     /**
@@ -779,7 +774,9 @@ public final class ScriptGateway implements ScriptCaller, ScriptEventTarget, Aut
         if (cached != null) {
             return cached;
         }
-        Path directory = resources.materialize(language, gatewayResources);
+        // 资源清单归语言适配：它描述「这门语言的网关由哪几个文件组成」，
+        // 与解释器路径、启动命令同属「这门语言长什么样」，没有理由由调用方各填一份
+        Path directory = resources.materialize(language, language.gatewayResources());
         gatewayDirectory = directory;
         return directory;
     }
@@ -893,9 +890,6 @@ public final class ScriptGateway implements ScriptCaller, ScriptEventTarget, Aut
         /** 脚本清单。 */
         private final List<ScriptPlugin> scripts = new ArrayList<ScriptPlugin>();
 
-        /** 需要落盘的网关资源名。 */
-        private final List<String> gatewayResources = new ArrayList<String>();
-
         /**
          * 构造构建器。
          *
@@ -930,22 +924,6 @@ public final class ScriptGateway implements ScriptCaller, ScriptEventTarget, Aut
         public Builder scripts(List<ScriptPlugin> value) {
             if (value != null) {
                 scripts.addAll(value);
-            }
-            return this;
-        }
-
-        /**
-         * 设置需要落盘的网关资源名。
-         * <p>
-         * 缺省为空：假进程工厂（测试）不需要落盘任何东西，因此空清单是合法的，
-         * 只有走真实进程时才必须给出。
-         *
-         * @param value 资源名清单，可为 {@code null}
-         * @return 本构建器
-         */
-        public Builder gatewayResources(List<String> value) {
-            if (value != null) {
-                gatewayResources.addAll(value);
             }
             return this;
         }

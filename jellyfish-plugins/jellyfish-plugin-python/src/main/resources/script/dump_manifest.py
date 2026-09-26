@@ -54,19 +54,27 @@ def _load_entry(script_dir, entry):
 def _entry_name(script_dir):
     """读脚本目录里已有清单声明的入口名；没有清单时按 ``main.py``。
 
+    **空文件按「没有清单」处理**，这不是宽容而是必需：
+    ``python3 dump_manifest.py dir > dir/manifest.json`` 这个很自然的写法会让 shell
+    在脚本运行之前就把目标文件截断成 0 字节，于是「读现有清单」读到的正是自己即将覆盖的
+    空文件。按合法性硬失败的话，用户会拿到一句「不是合法 JSON」，而原因与他的操作看起来
+    毫无关系。``--write`` 能绕开这个陷阱，但没理由让不用它的人踩坑。
+
     :param script_dir: 脚本目录
     :return: 入口文件名
     """
     manifest_path = os.path.join(script_dir, "manifest.json")
     if not os.path.isfile(manifest_path):
         return "main.py"
+    with open(manifest_path, "r", encoding="utf-8") as handle:
+        text = handle.read().strip()
+    if not text:
+        return "main.py"
     try:
-        with open(manifest_path, "r", encoding="utf-8") as handle:
-            declared = json.load(handle)
+        declared = json.loads(text)
     except ValueError as error:
         raise SystemExit("现有的 manifest.json 不是合法 JSON: %s" % error)
-    entry = declared.get("entry") or "main.py"
-    return entry
+    return declared.get("entry") or "main.py"
 
 
 def _normalize_tool(tool):
@@ -223,6 +231,8 @@ def main(argv=None):
     parser.add_argument("--check", action="store_true",
                         help="与目录里现有的 manifest.json 比对，不一致时退 1")
     parser.add_argument("--entry", dest="entry", default=None, help="入口文件名，缺省读清单或 main.py")
+    parser.add_argument("--write", action="store_true",
+                        help="直接写入目录里的 manifest.json（推荐，绕开 shell 重定向先把文件截空）")
     options = parser.parse_args(argv)
 
     script_dir = os.path.abspath(options.script_dir)
@@ -236,11 +246,16 @@ def main(argv=None):
     # 内核不认的清单（例如 commandOptions 变成了字符串数组）
     text = json.dumps(generated, ensure_ascii=False, indent=2)
 
+    manifest_path = os.path.join(script_dir, "manifest.json")
+    if options.write and not options.check:
+        with open(manifest_path, "w", encoding="utf-8") as handle:
+            handle.write(text + "\n")
+        print("已写入清单: %s" % manifest_path)
+        return 0
     if not options.check:
         print(text)
         return 0
 
-    manifest_path = os.path.join(script_dir, "manifest.json")
     if not os.path.isfile(manifest_path):
         print("清单不存在: %s\n生成结果如下，可直接落盘：\n%s" % (manifest_path, text),
               file=sys.stderr)

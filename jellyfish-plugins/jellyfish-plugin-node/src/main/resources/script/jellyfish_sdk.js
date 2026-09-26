@@ -21,6 +21,42 @@
  * 因此 JS 作者要显式写 description——它正是模型看到的那句。
  */
 
+
+/** 本模块所在目录：网关资源抽取目录，也就是 SDK 与 worker 所在的地方。 */
+const HERE = __dirname;
+
+/**
+ * 让脚本里的 `require('jellyfish_sdk')` 在任何工作目录下都能解析出来。
+ *
+ * 脚本用**包名**而不是相对路径引入 SDK（与 Python 版的 `import jellyfish_sdk` 对称），
+ * 而 Node 的非相对引入只查 `node_modules` 链与 `NODE_PATH`，不会像 Python 那样
+ * 「先看脚本自己的目录」——脚本目录里没有 SDK，SDK 在网关资源目录里。
+ * 因此谁加载脚本，谁就有责任先把这条路铺好：
+ *
+ * - 网关走的是**公开手段**：给 worker 的子进程环境设 `NODE_PATH`（见 gateway.js 的 spawn）；
+ * - 离线生成器与手工调试没有那条链路，因此在进程内补一次（本方法）。
+ *
+ * 进程内补这一下用到了 `Module._initPaths`，它是 Node 的内部函数（`NODE_PATH` 只在进程
+ * 启动时读一次，改完必须请 Node 重算搜索路径）。它从 Node 0.10 起就存在，且是循环里
+ * 唯一的私有点，因此这里显式判一下：拿不到时返回 `false`，由调用方给出可操作的提示，
+ * 而不是让脚本以「找不到模块」的形态失败。
+ *
+ * @returns {boolean} 铺好了返回 `true`
+ */
+function ensureResolvable() {
+    // eslint-disable-next-line global-require
+    const Module = require('module');
+    const current = process.env.NODE_PATH ? process.env.NODE_PATH.split(require('path').delimiter) : [];
+    if (current.indexOf(HERE) < 0) {
+        process.env.NODE_PATH = [HERE].concat(current).join(require('path').delimiter);
+    }
+    if (typeof Module._initPaths !== 'function') {
+        return false;
+    }
+    Module._initPaths();
+    return true;
+}
+
 /** 扩展点类型名 → 处理函数。类型名与 Java 侧 codec 的 typeName() 必须逐字一致。 */
 const handlers = new Map();
 
@@ -655,6 +691,7 @@ function listOf(value) {
 module.exports = {
     EMITTABLE_EVENTS,
     ScriptError,
+    ensureResolvable,
     ScriptContext,
     tool,
     command,

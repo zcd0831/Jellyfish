@@ -2,7 +2,7 @@
 
 本文件用于指导 AI 编码代理在本仓库中工作。修改代码前请先阅读。
 
-> **只写已落地事实**：正文只描述当前代码中存在的模块与类，未落地能力见「路线图」。**推导与实测数据在对应类的注释里，这里只留规则**。
+> **只写已落地事实**：正文只描述当前代码中存在的模块与类，未落地与明确不做的部分见「已知边界与后续项」。**推导与实测数据在对应类的注释里，这里只留规则**。
 
 ## 项目概述
 
@@ -308,13 +308,15 @@ jellyfish-script/src/main/java/zcd/jellyfish/script/
 
 ### 新增一门语言（桥接插件）
 
+- **注册来源是脚本目录下的静态 `manifest.json`，协议里没有任何注册方法**：因此 `start()` 期**零进程、零文件写入**，解释器缺失或损坏不影响内核启动、工具清单依然完整（PF4J 看到的永远是标准插件）。运行架构是「控制面单实例（每语言一个常驻 gateway，不跑业务）+ 数据面按脚本隔离（每脚本一 worker，懒启动、空闲自毁）」，真实解释器的端到端测试在 `mvn -Pscript-it test`。
 - **一门语言 = 一个 `ScriptLanguage` 实现 + 一个薄插件 + 一份该语言的网关资源**，机制层不动。语言适配只回答四件事：怎么启动（`startCommand`）、启动前怎么探测（`probeCommand`）、进程带什么环境（`environment`，白名单而非清空）、网关由哪几个文件组成（`gatewayResources`）。
-- **桥接插件的骨架全在 `jellyfish-script/ScriptBridgePlugin`**：探测解释器 → 扫描清单 → 逐脚本按 `pluginId::scriptId` 注册 → 接通事件桥接与熔断 → 注册 `/<语言>` 命令 → 按序关闭。子类只提供 `resolveConfig`（解释器写在哪一个键上、两个默认值）与 `createLanguage`。**要往子类里加第二件事之前，先问它是不是语言无关的**：是就该往上收（判断依据见 `ScriptLanguage` 的 javadoc 与方案 §15.9）。
+- **桥接插件的骨架全在 `jellyfish-script/ScriptBridgePlugin`**：探测解释器 → 扫描清单 → 逐脚本按 `pluginId::scriptId` 注册 → 接通事件桥接与熔断 → 注册 `/<语言>` 命令 → 按序关闭。子类只提供 `resolveConfig`（解释器写在哪一个键上、两个默认值）与 `createLanguage`。**要往子类里加第二件事之前，先问它是不是语言无关的**：是就该往上收（判断依据见 `ScriptLanguage` 的 javadoc）。
 - **配置解析、台账渲染与语言无关**：`ScriptBridgeConfig` / `ScriptLedger` 一份服务所有语言；解释器键名保留各语言自己的名字（`pythonPath` / `nodePath`），由薄插件传进去——用户翻配置时找的是他那门语言的词。
 - **`gatewayResources()` 归语言适配**：它是「这门语言的网关由哪几个文件组成」，与解释器路径同类；留给调用方就等于同一份知识在多处各写一遍，而不一致的表现是「网关少了一个文件」——只在第一次调用时才看得见。
 - **两门语言的脚本 API 逐条对应**（`tool` / `command` / `contributes` / `subscribe` / `dumpManifest` / `compareWith`），差异只在语言本身：Python 用装饰器、Node 用「声明 + 就地注册」；Python 从文档字符串取缺省描述，Node 必须显式写 `description`（JS 拿不到注释）。
 - **候选查询的约定两侧必须一致：`tokens is None`（`tokens === null`）表示「这次是候选查询」**，执行给真实的 `tokens`（`[]` 表示用户没输入参数，与 `None` 不是一回事）。`has_options=True` 让**同一个函数**回答两条路，因此只有这条标记能区分它们；Python 侧还会在**声明期**拒绝看不出两条路的签名并附最小写法，Node 侧拿不到参数名、只能靠 `null` 解引用报错——**约定共享、校验不必对称**。返回一个映射却没有 `choices` 键一律报错，不再补齐成空候选：那正是「忘了分支」的安静版本。
 - **卡死的 worker 怎么收，两门语言的答案不同**：Python 的信号处理器直接 `os._exit`（CPython 在信号处理器返回后才恢复被中断的调用），因此 SIGTERM 一般够用、强杀只在关闭路径上兜底；**Node 的信号处理器排在事件循环上，卡在同步 JS 里的 worker 收不到 SIGTERM**，因此两段式关闭的第二步必须在网关的循环里做。
+- **Node 侧的差异都由语言本身带来**：用 `spawn` + 一条 `init` 帧把脚本目录 / 入口 / 清单送进 worker（Node 没有 `fork`；走 argv 会让清单在进程列表里可见、还会撞参数长度上限）；收尾后必须显式 `process.exit(code)`（`resume` 过的 stdin 是活句柄，会让事件循环一直转）；`require('jellyfish_sdk')` 靠网关给 worker 设 `NODE_PATH`（非相对引入只查 `node_modules` 链与 `NODE_PATH`）。Node 运行时零第三方依赖（`script/{gateway,worker,jellyfish_sdk,script_wire,dump_manifest}.js`），示例见 `examples/scripts/node/`。
 - **协议通道必须同步写**：Python 靠 `PYTHONUNBUFFERED` + 流锁，Node 靠把 `process.stdout.write` 换成同步写。异步缓冲的后果是「一个大结果帧被脚本自己的一行日志半路插入」，而现场是「偶尔收到一帧解析不了」。
 - **离线生成器与运行期入口分开**：清单生成是开发期动作（进程里只该有一个脚本被加载），网关是运行期进程（同时管多个脚本）。`dump_manifest` 与 `gateway --dump-manifest` 共用同一个入口，但网关那侧是延迟加载的，正常路径上连读都不读它。
 - **清单生成器改完实现必须跑一遍**：`--check` 按名字报差异、`--write` 直接落盘（推荐；shell 重定向会先把目标文件截空，而生成器要读它确认入口名）。
@@ -486,15 +488,13 @@ jellyfish-script/src/main/java/zcd/jellyfish/script/
 - **请求/消息模型**：`LlmRequest` / `LlmMessage` / `LlmTool` 是与厂商无关的统一模型，`LlmRequest` 用 builder 构建。
 - **配置类型命名**：项目内部配置类用 `Config` 结尾，暴露给用户的配置类用 `Settings` 结尾。
 
-## 路线图（尚未落地）
+## 已知边界与后续项
 
-以下能力**尚未完整落地**，不要当成现存 API；已落地的部分在条目里明确标注。设计细节见对应方案文档。
+三种外壳（`-cli` / `-tui` / `-server`）与跨语言桥接（Python / Node）均已端到端落地；以下是**尚未做**或**明确不做**的部分，不要当成待办之外的现存 API。
 
-- **跨语言插件桥接**：Python 与 Node 都已端到端打通——owner 命名空间、静态清单解析与校验、按清单注册（11 个扩展点全开、与 Java 插件同权）、协议帧与 id 配对、Commons Exec 进程管理、Python 网关与 worker、SDK 与清单生成器 `dump_manifest.py`（`--check` 守清单与实现不漂移）、`/<lang>` 状态命令、熔断与超时隔离链、事件桥接（订阅与发布双向）、PID 文件与启动期陈旧 PID 报告。仓库顶层 `examples/scripts/python/{hello,jira}` 两个示例插件（覆盖工具 / 命令 / 候选查询 / prompt·status_line·panel 贡献 / 订阅与发布事件），`-Pscript-it` 的端到端用例既加载这些示例、也用 `dump_manifest.py` 守着「示例清单没落后于实现」。**未落地**：Linux 专属的 `prctl(PR_SET_PDEATHSIG)` 已实现但本机（macOS）无法验证（正确性不依赖它）；`status` 协议方法经决策**不做**，进程侧状态改为随 `worker_state` 推送；`@command(has_options=True)` 这条入口在自然签名下必炸（已定位，修法待定，见 `跨语言插件方案.md` §15.7）。
-  架构为「控制面单实例 + 每脚本一 worker 进程」；注册来源是脚本目录下的静态 `manifest.json`（协议里**没有**注册方法），因此 `start()` 期零进程、零文件写入，解释器缺失不影响内核启动、工具清单依然完整。Python 网关是**单线程 `select` 事件循环**（因此「fork 时没有线程」恒真），Node 侧天然单线程。真实解释器的端到端测试在 `mvn -Pscript-it test`。
-
-  **Node 桥接（P9）**：同一套协议与进程模型，机制层零改动——`jellyfish-plugin-node` 只多一个 `NodeLanguage`（约 150 行）与一个约 40 行的薄插件，其余全在 `jellyfish-script`（`ScriptBridgePlugin` / `ScriptBridgeConfig` / `ScriptLedger`，见「新增一门语言」一节）。Node 运行时零第三方依赖（`script/{gateway,worker,jellyfish_sdk,script_wire,dump_manifest}.js`），示例见 `examples/scripts/node/`。语言侧差异只有四处，都在方案 §15.9：`spawn` + `init` 帧取代 `fork` 的内存继承；卡在同步 JS 里的 worker 收不到 SIGTERM，**两段式关闭的第二步必须放在网关循环里**；`resume` 过的 stdin 让事件循环一直活着，收尾后要显式 `process.exit`；stdout 是协议通道，必须同步写（否则大帧会被 `console.log` 半路插入）。**未落地**：`has_options` 入口的缺陷是 Python SDK 特有的（JS 的处理器签名统一），修 Python 那一条时不必动 Node；`prctl(PR_SET_PDEATHSIG)` 仍只在 Linux 生效且本机无法验证。见 `跨语言插件方案.md` §15.9/§15.10。
-- **`-server` 模式**：**已落地**（`jellyfish-server`，Undertow 2.2.39.Final，见 `server方案.md`）。REST + SSE 接口面、会话按 id 寻址、一会话一在途回合、HTTP 化人工审批、`GET /health`。**未落地**：鉴权（API key / token）、自带 Web 前端、TLS、审批的多槽位（全局单槽位是既有内核语义）。
+- **跨语言**：`prctl(PR_SET_PDEATHSIG)` 已实现，但只在 Linux 生效、本机（macOS）无法验证——**正确性不依赖它**（孤儿检测靠定时器）。`status` 协议方法经决策**不做**，进程侧状态改随 `worker_state` 推送。真实解释器的端到端测试在 `mvn -Pscript-it test`，不进 `mvn test`。
+- **`-server`**：**已落地**（`jellyfish-server`，Undertow 2.2.39.Final）——REST + SSE 接口面、会话按 id 寻址、一会话一在途回合、HTTP 化人工审批、`GET /health` 都在。**后续项**：鉴权（API key / token）。**明确不做**：自带 Web 前端、TLS、审批的多槽位（全局单槽位是既有内核语义，只如实暴露）。
+- **压缩**：只有插件提供策略才可用；不启用 `jellyfish-compact` 时压缩整体不可用且**不回退内置**（刻意如此，见「ReAct、上下文与压缩」）。
 
 ## 编码约定
 

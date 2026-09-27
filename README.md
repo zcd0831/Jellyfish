@@ -418,6 +418,8 @@ TUI 状态栏也会追加 `已压缩 N 条（丢弃 M 条）`；压缩期间状�
 | `jellyfish-plugin-todo` | `jellyfish-todo` | 会话待办：模型可写的 `todo_write` 工具 + 只读 `/todo` + 注入 system prompt + 状态栏进度 + 侧栏清单面板 |
 | `jellyfish-plugin-project` | `jellyfish-project` | 项目约定：探测工作目录下的 `AGENTS.md`，**小文件内联原文、大文件只给路径**（阈值可配） |
 | `jellyfish-plugin-compact` | `jellyfish-compact` | 会话压缩策略：提供摘要指令与保留条数/摘要上限（**不装它就没有压缩**，见下文） |
+| `jellyfish-plugin-python` | `jellyfish-plugin-python` | Python 脚本插件运行时：把 `scripts/python/<id>/` 下的脚本目录变成标准插件（控制面网关 + 每脚本一 worker 进程） |
+| `jellyfish-plugin-node` | `jellyfish-plugin-node` | Node 脚本插件运行时：与 Python 同构（同一套协议与进程模型），零第三方依赖 |
 
 `jellyfish-tools` 的五个工具：
 
@@ -441,6 +443,8 @@ cp jellyfish-plugins/jellyfish-plugin-session-file/target/jellyfish-plugin-sessi
 cp jellyfish-plugins/jellyfish-plugin-todo/target/jellyfish-plugin-todo-*.jar plugins/
 cp jellyfish-plugins/jellyfish-plugin-project/target/jellyfish-plugin-project-*.jar plugins/
 cp jellyfish-plugins/jellyfish-plugin-compact/target/jellyfish-plugin-compact-*.jar plugins/
+cp jellyfish-plugins/jellyfish-plugin-python/target/jellyfish-plugin-python-*.jar plugins/
+cp jellyfish-plugins/jellyfish-plugin-node/target/jellyfish-plugin-node-*.jar plugins/
 ```
 
 插件配置写在 `jellyfish.json` 的 `plugins.configurations.<pluginId>` 段：
@@ -556,3 +560,51 @@ cp jellyfish-plugins/jellyfish-plugin-compact/target/jellyfish-plugin-compact-*.
 自己写一份也行：改 `jellyfish-plugin-compact/src/main/resources/summary-prompt.md` 后重新打包。占位符缺失不算错误（内核仍会按上限本地截断），但模型会少一条自我约束，因此内核记一条告警。
 
 `/compact preview` 会把这次要付的代价先算给你看——压几条、保留几条、丢弃几条、摘要输入约多少 token。
+
+### 脚本插件（Python / Node 桥接）
+
+除了用 Java 写插件，还可以用 **Python 或 Node** 写。桥接插件把一个脚本目录变成内核眼里的标准
+PF4J 插件，脚本与 Java 插件**同权**（11 个扩展点全开），能力边界由进程隔离 + 静态清单 + 熔断三层承担：
+
+| 模块 | 脚本根目录（默认） | 解释器（配置键） |
+| --- | --- | --- |
+| `jellyfish-plugin-python` | `scripts/python/<脚本标识>/` | `python3`（`pythonPath`） |
+| `jellyfish-plugin-node` | `scripts/node/<脚本标识>/` | `node`（`nodePath`） |
+
+每个脚本目录只需一份静态 `manifest.json`（声明工具 / 命令 / 贡献 / 订阅的事件）与一个入口文件。
+因此 **启动期零进程、零文件写入**：没装解释器也不影响内核启动，工具清单依然完整；首次真正调用某个脚本
+时才拉起它的进程，空闲后自毁。脚本调用失败只影响它自己（每脚本一 worker 进程），连续失败按熔断冷却、
+冷却后自动半开恢复。
+
+脚本插件的 API、`manifest.json` 字段与两门语言的逐条对照见
+[`examples/scripts/README.md`](examples/scripts/README.md)，仓库顶层 `examples/scripts/{python,node}/{hello,jira}`
+是可直接拷贝运行的示例（`hello` 教学最小集、`jira` 真实形态，且被端到端用例直接加载）。
+
+配置段写在 `jellyfish.json` 的 `plugins.configurations."jellyfish-plugin-python"`（或 `-node`）：
+
+```json
+{
+  "plugins": {
+    "configurations": {
+      "jellyfish-plugin-python": {
+        "scriptsRoot": "scripts/python",
+        "pythonPath": "python3",
+        "invokeTimeoutSeconds": 30,
+        "workerIdleSeconds": 300,
+        "gatewayIdleSeconds": 600
+      },
+      "jellyfish-plugin-node": {
+        "scriptsRoot": "scripts/node",
+        "nodePath": "node"
+      }
+    }
+  }
+}
+```
+
+- `scriptsRoot` 相对**进程工作目录**解析，其下每个含 `manifest.json` 的子目录是一个脚本插件；目录不存在等于「还没建脚本」（正常的冷启动状态）。
+- `invokeTimeoutSeconds` 是单次调用超时，写 `0` 表示**没有截止时间**（不是「立刻超时」）；超时会隔离该脚本的 worker，并把这次失败计入熔断。
+- `workerIdleSeconds` / `gatewayIdleSeconds` 分别为 worker 与网关的空闲自毁秒数（写 `0` 关闭），空闲回零是「懒启动」的配套。
+- `manifestStrict`（默认 `true`）在脚本首次拉起时逐项比对清单与实现，任何漂移都报错并熔断该脚本；`dump_manifest.py` / `dump_manifest.js` 的 `--check`（比对）与 `--write`（直接落盘）用来让两者不漂移。
+- `events.allow` **只收窄、不扩展**：可订阅事件清单硬编码在运行时里，这里写不存在的事件名不会扩大任何能力。
+- 桥接插件 jar 本身与 Java 插件一样放在 `plugins/` 扫描目录（见上方打包命令），`jellyfish-script` 是库、不产出到 `plugins/`。

@@ -63,6 +63,9 @@ public class PromptAssembler {
     /** 同步扩展点策略，提示词贡献的唯一来源。 */
     private final ExtensionRegistry extensions;
 
+    /** 工具结果老化器：较早的大结果在发往模型前换成 stub。 */
+    private final ToolResultAger toolResultAger;
+
     /**
      * 构造提示词组装器。
      *
@@ -70,14 +73,16 @@ public class PromptAssembler {
      * @param toolCatalog   工具目录
      * @param runtimeConfig 运行时配置门面（读取 ReAct 段的预留 token）
      * @param extensions    同步扩展点策略（取本轮提示词贡献）
+     * @param toolResultAger 工具结果老化器（较早的大结果换成 stub）
      */
     @Inject
     public PromptAssembler(AgentManager agentManager, ToolCatalog toolCatalog, RuntimeConfig runtimeConfig,
-                           ExtensionRegistry extensions) {
+                           ExtensionRegistry extensions, ToolResultAger toolResultAger) {
         this.agentManager = Objects.requireNonNull(agentManager, "agentManager must not be null");
         this.toolCatalog = Objects.requireNonNull(toolCatalog, "toolCatalog must not be null");
         this.runtimeConfig = Objects.requireNonNull(runtimeConfig, "runtimeConfig must not be null");
         this.extensions = Objects.requireNonNull(extensions, "extensions must not be null");
+        this.toolResultAger = Objects.requireNonNull(toolResultAger, "toolResultAger must not be null");
     }
 
     /**
@@ -109,7 +114,9 @@ public class PromptAssembler {
         Objects.requireNonNull(resolvedModel, "resolvedModel must not be null");
         int boundary = effectiveBoundary(session);
         String systemPrompt = systemPromptOf(session, boundary);
-        List<LlmMessage> history = toLlmMessages(session, boundary + 1);
+        // 老化排在裁剪之前：先把较早的大结果换成 stub，再让裁剪看到它真实的体积；
+        // 反过来则会先把整组丢掉，连「内容在哪」都一起没了
+        List<LlmMessage> history = toolResultAger.age(toLlmMessages(session, boundary + 1));
         CropResult cropResult = crop(resolvedModel, systemPrompt, history);
         LlmRequest.Builder builder = LlmRequest.builder(resolvedModel.getModel().getId())
                 .systemPrompt(systemPrompt)

@@ -168,6 +168,42 @@ class GrepFilesToolTest {
         assertEquals("缺少必需参数: pattern", failure.getMessage());
     }
 
+    @Test
+    @DisplayName("超长匹配行应按 max_line_chars 截尾")
+    void handle_should_truncateLongLine_when_maxLineCharsGiven() throws Exception {
+        StringBuilder line = new StringBuilder("hit-");
+        for (int i = 0; i < 200; i++) {
+            line.append('x');
+        }
+        write("a.txt", line.toString());
+
+        String output = invoke(tool, args("pattern", "hit", "path", tempDir.toString(), "max_line_chars", 8));
+
+        assertTrue(output.contains("…"), output);
+        assertFalse(output.contains("xxxxxxxxxxxxxx"), output);
+    }
+
+    @Test
+    @DisplayName("达到 max_bytes 时应截断并至少保留第一处匹配")
+    void handle_should_truncate_when_maxBytesReached() throws Exception {
+        write("a.txt", "hit\nhit\nhit");
+
+        String output = invoke(tool, args("pattern", "hit", "path", tempDir.toString(), "max_bytes", 1));
+
+        assertTrue(output.contains(":1:hit"), output);
+        assertTrue(output.contains("已截断"), output);
+        assertFalse(output.contains(":3:hit"), output);
+    }
+
+    @Test
+    @DisplayName("max_line_chars 小于 1 属于调用错误")
+    void handle_should_fail_when_maxLineCharsBelowOne() {
+        JellyfishException failure = expectFailure(
+                () -> invoke(tool, args("pattern", "x", "path", tempDir.toString(), "max_line_chars", 0)));
+
+        assertTrue(failure.getMessage().contains("max_line_chars 必须大于 0"), failure.getMessage());
+    }
+
     /**
      * 在临时目录写入文件，自动创建父目录。
      *

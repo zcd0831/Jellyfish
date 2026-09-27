@@ -1,0 +1,134 @@
+package zcd.jellyfish.infra.config;
+
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonProperty;
+
+/**
+ * {@code jellyfish.json} 的 {@code react.toolOutput} 段：工具结果的落盘与上下文治理参数。
+ * <p>
+ * <b>为什么单独成段而不是平铺进 {@code react}</b>：这几项只服务「一次工具结果太长时怎么办」
+ * 这一件事，和轮次、预算、压缩策略不是同一类旋钮；平铺进去会让 {@code ReactSettings} 的构造器
+ * 长到难以阅读，也难以看出它们互相牵制（保留文件越多、越占磁盘；保留最近消息越少、上下文越省）。
+ * <p>
+ * 四项的含义：
+ * <ul>
+ *     <li>{@code dir}：被截断工具结果的落盘根目录，缺省 {@code ~/jellyfish/tool-outputs}。
+ *     放在用户主目录而不是项目目录，是因为它是运行产物、不是项目内容，写进项目会污染工作区；</li>
+ *     <li>{@code keepFiles}：每个会话在该目录下最多保留多少个结果文件，写 {@code 0} 关闭清理；</li>
+ *     <li>{@code maxBytes}：每个会话在该目录下最多占用多少字节，写 {@code 0} 关闭清理；</li>
+ *     <li>{@code keepRecentMessages}：组装请求时，最近多少条消息里的工具结果保留完整内容，
+ *     更早的、已落盘的旧结果替换成一行 stub，写 {@code 0} 关闭该项（全部保留）。</li>
+ * </ul>
+ * 非法值（空白目录、负数）回退到缺省值：配置问题不阻断启动是本仓库的既有口径，真正的限额在运行期兜底。
+ * <p>
+ * 不可变：所有字段在构造时确定，不存在 setter。
+ *
+ * @author zcd
+ */
+public class ToolOutputSettings {
+
+    /** 落盘根目录缺省值。 */
+    public static final String DEFAULT_DIR = "~/jellyfish/tool-outputs";
+
+    /** 每会话最多保留的结果文件数缺省值。 */
+    public static final int DEFAULT_KEEP_FILES = 200;
+
+    /** 每会话最多占用的字节数缺省值（50 MiB）。 */
+    public static final long DEFAULT_MAX_BYTES = 50L * 1024L * 1024L;
+
+    /** 上下文中保留完整工具结果的最近消息条数缺省值。 */
+    public static final int DEFAULT_KEEP_RECENT_MESSAGES = 20;
+
+    /** 落盘根目录。 */
+    private final String dir;
+
+    /** 每会话最多保留的文件数，{@code 0} 表示不清理。 */
+    private final int keepFiles;
+
+    /** 每会话最多占用的字节数，{@code 0} 表示不清理。 */
+    private final long maxBytes;
+
+    /** 上下文中保留完整工具结果的最近消息条数，{@code 0} 表示不裁剪。 */
+    private final int keepRecentMessages;
+
+    /**
+     * 构造缺省工具结果设置。
+     */
+    public ToolOutputSettings() {
+        this(null, null, null, null);
+    }
+
+    /**
+     * 反序列化与合并共用的构造器。
+     *
+     * @param dir                落盘根目录，空白或缺省按缺省值处理
+     * @param keepFiles          每会话最多保留的文件数，负数或缺省按缺省值处理；
+     *                           {@code 0} 合法（表示不清理）
+     * @param maxBytes           每会话最多占用的字节数，负数或缺省按缺省值处理；
+     *                           {@code 0} 合法（表示不清理）
+     * @param keepRecentMessages 保留完整工具结果的最近消息条数，负数或缺省按缺省值处理；
+     *                           {@code 0} 合法（表示不裁剪）
+     */
+    @JsonCreator
+    public ToolOutputSettings(@JsonProperty("dir") String dir,
+                              @JsonProperty("keepFiles") Integer keepFiles,
+                              @JsonProperty("maxBytes") Long maxBytes,
+                              @JsonProperty("keepRecentMessages") Integer keepRecentMessages) {
+        this.dir = dir == null || dir.trim().isEmpty() ? DEFAULT_DIR : dir.trim();
+        this.keepFiles = keepFiles != null && keepFiles >= 0 ? keepFiles : DEFAULT_KEEP_FILES;
+        this.maxBytes = maxBytes != null && maxBytes >= 0 ? maxBytes : DEFAULT_MAX_BYTES;
+        this.keepRecentMessages = keepRecentMessages != null && keepRecentMessages >= 0
+                ? keepRecentMessages : DEFAULT_KEEP_RECENT_MESSAGES;
+    }
+
+    /**
+     * 获取落盘根目录。
+     *
+     * @return 落盘根目录，保证非空白
+     */
+    public String getDir() {
+        return dir;
+    }
+
+    /**
+     * 获取每会话最多保留的文件数。
+     *
+     * @return 文件数上限，保证非负；{@code 0} 表示不清理
+     */
+    public int getKeepFiles() {
+        return keepFiles;
+    }
+
+    /**
+     * 获取每会话最多占用的字节数。
+     *
+     * @return 字节上限，保证非负；{@code 0} 表示不清理
+     */
+    public long getMaxBytes() {
+        return maxBytes;
+    }
+
+    /**
+     * 获取保留完整工具结果的最近消息条数。
+     *
+     * @return 消息条数，保证非负；{@code 0} 表示不裁剪
+     */
+    public int getKeepRecentMessages() {
+        return keepRecentMessages;
+    }
+
+    /**
+     * 判断是否与缺省值完全一致。
+     * <p>
+     * 供 {@link ReactSettings#isDefault()} 判断「整段是否什么都没配」，因此只比较是否等于缺省，
+     * 不比较字段来源。
+     *
+     * @return 四项都等于缺省值返回 {@code true}
+     */
+    public boolean isDefault() {
+        return DEFAULT_DIR.equals(dir)
+                && keepFiles == DEFAULT_KEEP_FILES
+                && maxBytes == DEFAULT_MAX_BYTES
+                && keepRecentMessages == DEFAULT_KEEP_RECENT_MESSAGES;
+    }
+}

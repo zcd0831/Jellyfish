@@ -3,6 +3,7 @@ package zcd.jellyfish.core.prompt;
 import org.junit.jupiter.api.Test;
 import zcd.jellyfish.infra.llm.LlmMessage;
 import zcd.jellyfish.infra.llm.LlmToolCall;
+import zcd.jellyfish.infra.tooloutput.ToolOutputEnvelope;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -109,5 +110,50 @@ class ContextWindowTest {
         assertEquals(2, result.getMessages().size());
         assertTrue(result.getMessages().get(0).hasToolCalls());
         assertEquals(LlmMessage.ROLE_TOOL, result.getMessages().get(1).getRole());
+    }
+
+    @Test
+    void crop_should_replaceOversizedToolResultWithStub_notCutJson() {
+        // Given：最新一组里的工具结果是一条超长的截断信封
+        StringBuilder longPreview = new StringBuilder();
+        for (int i = 0; i < 100; i++) {
+            longPreview.append('a');
+        }
+        String envelope = ToolOutputEnvelope.text("read", 999, 1, "/tmp/spill.txt", "hint",
+                longPreview.toString()).render();
+        List<LlmMessage> messages = new ArrayList<LlmMessage>();
+        messages.add(LlmMessage.assistant(null,
+                Collections.singletonList(new LlmToolCall(0, "call_1", "read", "{}"))));
+        messages.add(LlmMessage.tool("call_1", "read", envelope));
+
+        // When
+        ContextWindow.Result result = ContextWindow.crop(messages, 3);
+
+        // Then：整条换成 stub（带落盘路径），而不是把 JSON 从中间切断
+        assertEquals(2, result.getMessages().size());
+        String content = result.getMessages().get(1).getContent();
+        assertTrue(content.contains("/tmp/spill.txt"), content);
+        assertTrue(content.contains("省略"), content);
+    }
+
+    @Test
+    void crop_should_replacePlainOversizedToolResultWithStub() {
+        // Given：最新一组里是一条超长的普通（非信封）工具结果
+        StringBuilder longText = new StringBuilder();
+        for (int i = 0; i < 100; i++) {
+            longText.append('a');
+        }
+        List<LlmMessage> messages = new ArrayList<LlmMessage>();
+        messages.add(LlmMessage.assistant(null,
+                Collections.singletonList(new LlmToolCall(0, "call_1", "read", "{}"))));
+        messages.add(LlmMessage.tool("call_1", "read", longText.toString()));
+
+        // When
+        ContextWindow.Result result = ContextWindow.crop(messages, 3);
+
+        // Then
+        String content = result.getMessages().get(1).getContent();
+        assertTrue(content.contains("省略"), content);
+        assertTrue(content.length() < longText.length(), content);
     }
 }

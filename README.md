@@ -321,7 +321,13 @@ TUI 状态栏也会追加 `已压缩 N 条（丢弃 M 条）`；压缩期间状�
     "maxToolOutputChars": 20000,
     "compactKeepRecentMessages": 20,
     "compactMaxSummaryChars": 4000,
-    "autoCompactPercent": 80
+    "autoCompactPercent": 80,
+    "toolOutput": {
+      "dir": "~/jellyfish/tool-outputs",
+      "keepFiles": 200,
+      "maxBytes": 52428800,
+      "keepRecentMessages": 20
+    }
   },
   "permission": {
     "approvalTimeoutSeconds": 120
@@ -329,7 +335,11 @@ TUI 状态栏也会追加 `已压缩 N 条（丢弃 M 条）`；压缩期间状�
 }
 ```
 
-`react` 段控制 ReAct 循环：`maxRounds` 是单回合最大轮数；`contextReserveTokens` 是上下文预算里为系统提示词 / 插件注入的上下文预留的 token；`maxToolOutputChars` 是单个工具输出回灌模型前的截断长度；`compactKeepRecentMessages` 是压缩默认保留的最近消息条数（写 `0` 即「不保留原文」）；`compactMaxSummaryChars` 是摘要长度上限（提示模型别写太长，真超了按码点本地截断并留标记）；`autoCompactPercent` 是上下文用到多少百分比就自动压缩（写 `0` 关闭自动压缩，只留手动 `/compact`）。缺省值即为上表；非法值（非正数）回退到缺省值。
+`react` 段控制 ReAct 循环：`maxRounds` 是单回合最大轮数；`contextReserveTokens` 是上下文预算里为系统提示词 / 插件注入的上下文预留的 token；`maxToolOutputChars` 是单个工具输出回灌模型前的截断长度，也是**硬上限**（工具失控时由它保命）；`compactKeepRecentMessages` 是压缩默认保留的最近消息条数（写 `0` 即「不保留原文」）；`compactMaxSummaryChars` 是摘要长度上限（提示模型别写太长，真超了按码点本地截断并留标记）；`autoCompactPercent` 是上下文用到多少百分比就自动压缩（写 `0` 关闭自动压缩，只留手动 `/compact`）。缺省值即为上表；非法值（非正数）回退到缺省值。
+
+`react.toolOutput` 段只管工具结果太长时怎么办：`dir` 是完整内容的落盘根目录（缺省 `~/jellyfish/tool-outputs`，运行产物写在这里而不是项目目录）；`keepFiles` / `maxBytes` 是每个会话在该目录下的文件数与字节数上限（缺省 200 个 / 50 MiB，写 `0` 关闭清理），超了从最旧的开始删；`keepRecentMessages` 是组装请求时最近多少条消息里的工具结果保留完整内容（缺省 20，写 `0` 关闭该裁剪）。
+
+**工具结果超过 `maxToolOutputChars` 时不会被从中间切断**：完整内容先落盘，回灌给模型的是一段合法 JSON 信封，内含 `_truncated`、原始大小、`_path` 与 `preview`（结构化结果是截断后的子树，纯文本是截断后的字符串）。模型据此知道发生了什么、去哪回查。工具自身也默认限流（`read_file` 的 `max_bytes`、`list_dir` 的 `limit`/`offset`、`grep_files` 的 `max_line_chars`/`max_bytes`），让绝大多数调用根本用不到内核这层兜底。
 
 `permission` 段当前只有 `approvalTimeoutSeconds`：`askTools` 里的工具在 TUI 上弹审批框后最多等这么久，超时按拒绝处理。它有缺省值（120 秒）而不允许「永不超时」——审批请求发生在 `react` 线程上并被同步等待，一个永远不来的答复就是一条永远不返回的线程。
 
@@ -368,11 +378,11 @@ TUI 状态栏也会追加 `已压缩 N 条（丢弃 M 条）`；压缩期间状�
 
 | 工具 | 参数 | 说明 |
 | --- | --- | --- |
-| `read_file` | `path`、`offset`、`limit` | 按行分片读取，命中 `limit` 会提示续读；相对路径按**进程工作目录**解析 |
+| `read_file` | `path`、`offset`、`limit`、`max_bytes` | 按行分片读取，命中 `limit` 或 `max_bytes` 会提示续读；相对路径按**进程工作目录**解析 |
 | `write_file` | `path`、`content` | 整文件覆盖写（UTF-8），输出区分「新建」与「覆盖」，父目录自动创建 |
 | `edit_file` | `path`、`old_text`、`new_text`、`replace_all` | 字面量精确替换；匹配到多处且未声明 `replace_all` 时**报错而不改文件** |
-| `list_dir` | `path` | 只列一层，目录优先 + `/` 后缀，不过滤 `target` 之类 |
-| `grep_files` | `pattern`、`path`、`max_results` | 逐行正则，返回 `文件:行号:内容`；跳过 `.git`/`target`/`node_modules` 与二进制文件 |
+| `list_dir` | `path`、`offset`、`limit` | 只列一层，目录优先 + `/` 后缀，不过滤 `target` 之类；大目录分页 |
+| `grep_files` | `pattern`、`path`、`max_results`、`max_line_chars`、`max_bytes` | 逐行正则，返回 `文件:行号:内容`；跳过 `.git`/`target`/`node_modules` 与二进制文件 |
 
 其中 `read_file`、`list_dir`、`grep_files` 在描述符里声明为**只读**，PLAN 模式下开箱可用；`write_file` 与 `edit_file` 会改动工作目录，PLAN 模式下会被拒绝。
 

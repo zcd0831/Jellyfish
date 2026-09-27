@@ -36,6 +36,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
 
 /**
@@ -75,7 +76,10 @@ class PromptAssemblerTest {
     @BeforeEach
     void setUp() {
         extensions = new ExtensionRegistry(new TypeRegistry());
-        assembler = new PromptAssembler(agentManager, toolCatalog, runtimeConfig, extensions);
+        // 工具结果老化器在有些用例里不会被走到，用 lenient 预置缺省 React 段，避免严格桩误报
+        lenient().when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        assembler = new PromptAssembler(agentManager, toolCatalog, runtimeConfig, extensions,
+                new ToolResultAger(runtimeConfig));
     }
 
     @Test

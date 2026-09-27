@@ -101,6 +101,46 @@ class ListDirToolTest {
         assertTrue(failure.getMessage().contains("目录不存在"), failure.getMessage());
     }
 
+    @Test
+    @DisplayName("超过 limit 时应分页并提示下一段 offset")
+    void handle_should_paginate_when_limitReached() throws Exception {
+        write("a.txt", "x");
+        write("b.txt", "x");
+        write("c.txt", "x");
+
+        String output = invoke(tool, args("path", tempDir.toString(), "limit", 2));
+
+        assertTrue(output.contains("共 3 项"), output);
+        assertTrue(output.contains("已截断"), output);
+        assertTrue(output.contains("offset=3"), output);
+    }
+
+    @Test
+    @DisplayName("offset 应跳到指定条目，且只显示 limit 条")
+    void handle_should_skipToOffset_when_offsetGiven() throws Exception {
+        write("a.txt", "x");
+        write("b.txt", "x");
+        write("c.txt", "x");
+
+        String output = invoke(tool, args("path", tempDir.toString(), "offset", 2, "limit", 1));
+
+        assertTrue(output.contains("b.txt"), output);
+        assertFalse(output.contains("a.txt"), output);
+        assertFalse(output.contains("c.txt"), output);
+    }
+
+    @Test
+    @DisplayName("offset 超出目录项数应报错并给出总数")
+    void handle_should_fail_when_offsetBeyondEntries() throws Exception {
+        write("a.txt", "x");
+
+        JellyfishException failure = expectFailure(
+                () -> invoke(tool, args("path", tempDir.toString(), "offset", 9)));
+
+        assertTrue(failure.getMessage().contains("offset 超出目录项数"), failure.getMessage());
+        assertTrue(failure.getMessage().contains("共 1 项"), failure.getMessage());
+    }
+
     /**
      * 在临时目录写入文件。
      *

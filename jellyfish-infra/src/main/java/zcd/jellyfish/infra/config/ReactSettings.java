@@ -7,11 +7,13 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * {@code jellyfish.json} 的 {@code react} 段：ReAct 循环的运行期参数。
  * <p>
  * 这是<b>用户可见</b>的配置结构（以 {@code Settings} 结尾），只承载单份文件的内容。
- * 六项参数分别约束「一个回合最多几轮」「上下文预算给系统提示词留多少」「单个工具输出截多长」
+ * 六项直接参数分别约束「一个回合最多几轮」「上下文预算给系统提示词留多少」「单个工具输出截多长」
  * 「上下文用到多少就自动压缩」与压缩的两项（保留多少条原文、摘要最多多长）——后面几项归这里
  * 而不是新开一段，是因为它们与前三项同属「ReAct 运行期的一次请求长什么样」，放在一处才看得出
  * 它们互相牵制（预留越多、可压的越少；阈值越低、自动压缩越频繁）。
  * 它们都属于「用户可能想调、但内核必须有安全缺省」的量，因此缺省值写在类里而不是配置里。
+ * 工具结果的落盘与上下文治理另成一段（{@code toolOutput}），因为它只服务「一次工具结果太长时怎么办」
+ * 这一件事，与上面几项的用途不同。
  * <p>
  * 非法值（轮数与输出长度为非正数、预留为负数）一律回退到缺省值而不是报错：配置问题不阻断启动
  * 是本仓库的既有口径，真正的轮次约束与裁剪在运行期由 {@code ReActLooper} 与 {@code ContextWindow}
@@ -76,11 +78,34 @@ public class ReactSettings {
     /** 上下文用到多少百分比就自动压缩（{@code 0} 表示关闭）。 */
     private final int autoCompactPercent;
 
+    /** 工具结果落盘与上下文治理参数。 */
+    private final ToolOutputSettings toolOutput;
+
     /**
      * 构造缺省运行期参数。
      */
     public ReactSettings() {
-        this(null, null, null, null, null, null);
+        this(null, null, null, null, null, null, null);
+    }
+
+    /**
+     * 兼容旧调用点的便捷构造器：工具结果段按缺省值处理。
+     * <p>
+     * 保留它是因为绝大多数调用点（测试与运行期）只关心前六项；让它们被迫多写一个 {@code null}
+     * 只会把 {@code ReactSettings} 的构造噪音扩散到整个仓库。
+     *
+     * @param maxRounds                 最大循环轮数
+     * @param contextReserveTokens      上下文预留 token 数
+     * @param maxToolOutputChars        单个工具输出最大字符数
+     * @param compactKeepRecentMessages {@code /compact} 保留的最近消息条数
+     * @param compactMaxSummaryChars    摘要长度上限
+     * @param autoCompactPercent        自动压缩的触发百分比
+     */
+    public ReactSettings(Integer maxRounds, Integer contextReserveTokens, Integer maxToolOutputChars,
+                         Integer compactKeepRecentMessages, Integer compactMaxSummaryChars,
+                         Integer autoCompactPercent) {
+        this(maxRounds, contextReserveTokens, maxToolOutputChars, compactKeepRecentMessages,
+                compactMaxSummaryChars, autoCompactPercent, null);
     }
 
     /**
@@ -94,6 +119,7 @@ public class ReactSettings {
      * @param compactMaxSummaryChars    摘要长度上限，非正数或缺省按缺省值处理
      * @param autoCompactPercent        自动压缩的触发百分比，负数或缺省按缺省值处理；
      *                                  {@code 0} 合法（关闭自动压缩），超过 100 按 100 处理
+     * @param toolOutput                工具结果落盘与上下文治理段，{@code null} 按缺省值处理
      */
     @JsonCreator
     public ReactSettings(@JsonProperty("maxRounds") Integer maxRounds,
@@ -101,7 +127,8 @@ public class ReactSettings {
                          @JsonProperty("maxToolOutputChars") Integer maxToolOutputChars,
                          @JsonProperty("compactKeepRecentMessages") Integer compactKeepRecentMessages,
                          @JsonProperty("compactMaxSummaryChars") Integer compactMaxSummaryChars,
-                         @JsonProperty("autoCompactPercent") Integer autoCompactPercent) {
+                         @JsonProperty("autoCompactPercent") Integer autoCompactPercent,
+                         @JsonProperty("toolOutput") ToolOutputSettings toolOutput) {
         this.maxRounds = maxRounds != null && maxRounds > 0 ? maxRounds : DEFAULT_MAX_ROUNDS;
         this.contextReserveTokens = contextReserveTokens != null && contextReserveTokens >= 0
                 ? contextReserveTokens : DEFAULT_CONTEXT_RESERVE_TOKENS;
@@ -113,6 +140,7 @@ public class ReactSettings {
                 ? compactMaxSummaryChars : DEFAULT_COMPACT_MAX_SUMMARY_CHARS;
         this.autoCompactPercent = autoCompactPercent != null && autoCompactPercent >= 0
                 ? Math.min(autoCompactPercent, 100) : DEFAULT_AUTO_COMPACT_PERCENT;
+        this.toolOutput = toolOutput == null ? new ToolOutputSettings() : toolOutput;
     }
 
     /**
@@ -170,12 +198,21 @@ public class ReactSettings {
     }
 
     /**
+     * 获取工具结果落盘与上下文治理段。
+     *
+     * @return 工具结果设置，保证非 {@code null}
+     */
+    public ToolOutputSettings getToolOutput() {
+        return toolOutput;
+    }
+
+    /**
      * 判断是否与缺省值完全一致。
      * <p>
      * 供 {@link JellyfishSettings#isEmpty()} 判断「整份运行期设置是否什么都没配」，
      * 因此只比较是否等于缺省，不比较字段来源。
      *
-     * @return 六项都等于缺省值返回 {@code true}
+     * @return 全部字段（含工具结果段）都等于缺省值返回 {@code true}
      */
     public boolean isDefault() {
         return maxRounds == DEFAULT_MAX_ROUNDS
@@ -183,6 +220,7 @@ public class ReactSettings {
                 && maxToolOutputChars == DEFAULT_MAX_TOOL_OUTPUT_CHARS
                 && compactKeepRecentMessages == DEFAULT_COMPACT_KEEP_RECENT_MESSAGES
                 && compactMaxSummaryChars == DEFAULT_COMPACT_MAX_SUMMARY_CHARS
-                && autoCompactPercent == DEFAULT_AUTO_COMPACT_PERCENT;
+                && autoCompactPercent == DEFAULT_AUTO_COMPACT_PERCENT
+                && toolOutput.isDefault();
     }
 }

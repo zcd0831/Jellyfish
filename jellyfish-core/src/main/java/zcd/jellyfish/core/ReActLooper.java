@@ -32,6 +32,7 @@ import zcd.jellyfish.infra.permission.PermissionManager;
 import zcd.jellyfish.infra.session.Session;
 import zcd.jellyfish.infra.session.SessionManager;
 import zcd.jellyfish.infra.support.ObjectMapperWrapper;
+import zcd.jellyfish.infra.tooloutput.ToolOutputLimiter;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
@@ -82,9 +83,6 @@ public class ReActLooper implements AutoCloseable {
     /** 达到最大轮次时回灌给调用方的提示。 */
     private static final String MAX_ROUNDS_MESSAGE = "已达到最大轮次仍未收敛，如需继续请调大 react.maxRounds 或换一个更明确的指令。";
 
-    /** 工具输出被截断时追加的标记。 */
-    private static final String OUTPUT_TRUNCATION_MARKER = "\n…（工具输出已截断）";
-
     /** 会话域服务：读取会话状态、追加消息。 */
     private final SessionManager sessionManager;
 
@@ -109,6 +107,9 @@ public class ReActLooper implements AutoCloseable {
     /** 运行时配置门面：读取 ReAct 段。 */
     private final RuntimeConfig runtimeConfig;
 
+    /** 工具输出中间件：回灌前的唯一硬截断点。 */
+    private final ToolOutputLimiter outputLimiter;
+
     /** 专用执行器。 */
     private final ExecutorService executor;
 
@@ -123,14 +124,15 @@ public class ReActLooper implements AutoCloseable {
      * @param promptAssembler   提示词组装器
      * @param runtimeConfig     运行时配置门面
      * @param conversationCompactor 会话压缩器
+     * @param outputLimiter     工具输出中间件
      */
     @Inject
     public ReActLooper(SessionManager sessionManager, ModelManager modelManager,
                        PermissionManager permissionManager, ExtensionRegistry extensions,
                        EventPublisher events, PromptAssembler promptAssembler, RuntimeConfig runtimeConfig,
-                       ConversationCompactor conversationCompactor) {
+                       ConversationCompactor conversationCompactor, ToolOutputLimiter outputLimiter) {
         this(sessionManager, modelManager, permissionManager, extensions, events, promptAssembler,
-                runtimeConfig, conversationCompactor, createExecutor());
+                runtimeConfig, conversationCompactor, outputLimiter, createExecutor());
     }
 
     /**
@@ -144,12 +146,13 @@ public class ReActLooper implements AutoCloseable {
      * @param promptAssembler   提示词组装器
      * @param runtimeConfig     运行时配置门面
      * @param conversationCompactor 会话压缩器
+     * @param outputLimiter     工具输出中间件
      * @param executor          专用执行器
      */
     ReActLooper(SessionManager sessionManager, ModelManager modelManager, PermissionManager permissionManager,
                 ExtensionRegistry extensions, EventPublisher events, PromptAssembler promptAssembler,
                 RuntimeConfig runtimeConfig, ConversationCompactor conversationCompactor,
-                ExecutorService executor) {
+                ToolOutputLimiter outputLimiter, ExecutorService executor) {
         this.sessionManager = Objects.requireNonNull(sessionManager, "sessionManager must not be null");
         this.modelManager = Objects.requireNonNull(modelManager, "modelManager must not be null");
         this.permissionManager = Objects.requireNonNull(permissionManager, "permissionManager must not be null");
@@ -159,6 +162,7 @@ public class ReActLooper implements AutoCloseable {
         this.runtimeConfig = Objects.requireNonNull(runtimeConfig, "runtimeConfig must not be null");
         this.conversationCompactor = Objects.requireNonNull(conversationCompactor,
                 "conversationCompactor must not be null");
+        this.outputLimiter = Objects.requireNonNull(outputLimiter, "outputLimiter must not be null");
         this.executor = Objects.requireNonNull(executor, "executor must not be null");
     }
 
@@ -366,31 +370,37 @@ public class ReActLooper implements AutoCloseable {
         events.publish(new ToolCallStartedEvent(toolCallId, toolName, session.getSessionId()));
         listener.onToolCallStarted(toolCallId, toolName);
         long start = System.currentTimeMillis();
-        String output;
+        Object raw;
         boolean success = true;
         try {
-            output = invokeTool(session, toolCall);
+            raw = invokeTool(session, toolCall);
         } catch (RuntimeException e) {
             // 同步侧没有护栏，异常处置是调用点（这里）的责任：记失败、回灌、继续循环
             LOG.warn("工具执行失败: sessionId={} tool={}", session.getSessionId(), toolName, e);
-            output = "工具执行失败：" + messageOf(e);
+            raw = "工具执行失败：" + messageOf(e);
             success = false;
         }
+        // 截断与落盘只在这里做一次：回灌给模型、写入会话、通知外壳看到的必须是同一份文本，
+        // 否则会出现「界面显示全文、模型收到信封」这种无法排查的不一致
+        String output = outputLimiter.limit(session.getSessionId(), toolCallId, toolName, raw);
         long duration = System.currentTimeMillis() - start;
         events.publish(new ToolCallCompletedEvent(toolCallId, toolName, success, duration,
                 success ? null : output, session.getSessionId()));
         listener.onToolCallCompleted(toolCallId, toolName, success, output);
-        return truncateOutput(output);
+        return output;
     }
 
     /**
-     * 权限判定 + 路由 + 调用，返回工具输出文本。
+     * 权限判定 + 路由 + 调用，返回工具输出对象。
+     * <p>
+     * <b>不在这里序列化</b>：截断必须知道「这是字符串还是结构化对象」才能选对算法，
+     * 一旦在这里转成文本，那份信息就丢失了。
      *
      * @param session  会话运行态
      * @param toolCall 工具调用
-     * @return 工具输出文本，保证非 {@code null}
+     * @return 工具输出对象，可为 {@code null}
      */
-    private String invokeTool(Session session, LlmToolCall toolCall) {
+    private Object invokeTool(Session session, LlmToolCall toolCall) {
         String toolName = toolCall.getName();
         Map<String, Object> arguments = parseArguments(toolCall.getArguments());
         PermissionDecision decision = permissionManager.decide(new PermissionCheckRequest(session.getAgentId(),
@@ -409,7 +419,7 @@ public class ReActLooper implements AutoCloseable {
         }
         ToolCallResult result = extensions.invoke(handler,
                 new ToolCallRequest(toolName, arguments, session.getSessionId()));
-        return serializeOutput(result);
+        return result == null ? null : result.getOutput();
     }
 
     /**
@@ -431,23 +441,6 @@ public class ReActLooper implements AutoCloseable {
             throw new JellyfishException("工具参数解析失败: " + json, e);
         }
         return arguments == null ? Collections.<String, Object>emptyMap() : arguments;
-    }
-
-    /**
-     * 把工具结果序列化成回灌文本。
-     *
-     * @param result 工具结果，可为 {@code null}
-     * @return 文本，保证非 {@code null}
-     */
-    private static String serializeOutput(ToolCallResult result) {
-        if (result == null || result.getOutput() == null) {
-            return "";
-        }
-        Object output = result.getOutput();
-        if (output instanceof String) {
-            return (String) output;
-        }
-        return ObjectMapperWrapper.writeValueAsString(output);
     }
 
     /**
@@ -497,23 +490,6 @@ public class ReActLooper implements AutoCloseable {
     private static ReActResult cancel(String sessionId, ReActListener listener, int rounds) {
         listener.onCancelled();
         return ReActResult.cancelled(sessionId, rounds);
-    }
-
-    /**
-     * 按配置截断过长的工具输出。
-     *
-     * @param output 工具输出
-     * @return 截断后的文本，保证非 {@code null}
-     */
-    private String truncateOutput(String output) {
-        if (output == null) {
-            return "";
-        }
-        int maxChars = runtimeConfig.getReactSettings().getMaxToolOutputChars();
-        if (output.length() <= maxChars) {
-            return output;
-        }
-        return output.substring(0, maxChars) + OUTPUT_TRUNCATION_MARKER;
     }
 
     /**

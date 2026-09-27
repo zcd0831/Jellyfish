@@ -137,4 +137,35 @@ class ReactSettingsTest {
         // Then
         assertTrue(settings.isDefault());
     }
+
+    @Test
+    void constructor_should_apply_toolOutput_defaults_when_section_missing() {
+        // When
+        ReactSettings settings = new ReactSettings(null, null, null, null, null, null);
+
+        // Then
+        assertEquals(ToolOutputSettings.DEFAULT_DIR, settings.getToolOutput().getDir());
+        assertEquals(ToolOutputSettings.DEFAULT_KEEP_FILES, settings.getToolOutput().getKeepFiles());
+        assertEquals(ToolOutputSettings.DEFAULT_MAX_BYTES, settings.getToolOutput().getMaxBytes());
+        assertEquals(ToolOutputSettings.DEFAULT_KEEP_RECENT_MESSAGES,
+                settings.getToolOutput().getKeepRecentMessages());
+        assertTrue(settings.getToolOutput().isDefault());
+    }
+
+    @Test
+    void deserialization_should_bind_toolOutput_section() {
+        // Given
+        String json = "{\"toolOutput\":{\"dir\":\"/tmp/spill\",\"keepFiles\":5,\"maxBytes\":1024,"
+                + "\"keepRecentMessages\":2}}";
+
+        // When
+        ReactSettings settings = ObjectMapperWrapper.readValue(json, ReactSettings.class);
+
+        // Then
+        assertEquals("/tmp/spill", settings.getToolOutput().getDir());
+        assertEquals(5, settings.getToolOutput().getKeepFiles());
+        assertEquals(1024L, settings.getToolOutput().getMaxBytes());
+        assertEquals(2, settings.getToolOutput().getKeepRecentMessages());
+        assertFalse(settings.isDefault());
+    }
 }

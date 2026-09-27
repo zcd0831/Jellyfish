@@ -2,6 +2,7 @@ package zcd.jellyfish.core.prompt;
 
 import zcd.jellyfish.infra.llm.LlmMessage;
 import zcd.jellyfish.infra.llm.LlmToolCall;
+import zcd.jellyfish.infra.tooloutput.ToolOutputEnvelope;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -19,6 +20,8 @@ import java.util.List;
  * <p>
  * <b>最新一组永远保留</b>：它是本轮新产生的上下文，丢了循环就没法继续；若它单独就超预算，
  * 则按预算等比截断组内消息的正文（保守按 1 字符 1 token 折算），工具调用参数不截断以免破坏 JSON。
+ * <b>工具结果不做逐字符截断</b>：它可能是结构化结果序列化出的 JSON，切一半就成了非法报文，
+ * 因此超预算时整条换成带落盘路径的 stub（见 {@link #toolStub(String)}）。
  * <p>
  * 无状态工具类，不允许实例化。
  *
@@ -126,12 +129,34 @@ public final class ContextWindow {
         if (TokenEstimator.estimateMessage(message) <= maxTokens) {
             return message;
         }
+        if (LlmMessage.ROLE_TOOL.equals(message.getRole())) {
+            return new LlmMessage(message.getRole(), toolStub(message.getContent()),
+                    message.getToolCallId(), message.getName(), null);
+        }
         String content = message.getContent();
         if (content != null && content.length() > maxTokens) {
             content = content.substring(0, maxTokens) + TRUNCATION_MARKER;
         }
         List<LlmToolCall> toolCalls = message.getToolCalls().isEmpty() ? null : message.getToolCalls();
         return new LlmMessage(message.getRole(), content, message.getToolCallId(), message.getName(), toolCalls);
+    }
+
+    /**
+     * 生成工具结果的短占位：能解析成截断信封则保留落盘路径，否则只说「已省略」。
+     * <p>
+     * <b>为什么不保留一段正文</b>：工具结果可能是 JSON，保头部就等于交出半截 JSON。宁可模型
+     * 看到一句「已省略」，也不要它拿到一段看着完整、实际缺了一半的数据。
+     *
+     * @param content 工具结果正文，可为 {@code null}
+     * @return 一行 stub 文本
+     */
+    private static String toolStub(String content) {
+        ToolOutputEnvelope envelope = ToolOutputEnvelope.parse(content);
+        if (envelope != null) {
+            return envelope.stub();
+        }
+        int chars = content == null ? 0 : content.length();
+        return "…（工具结果过长，已省略 " + chars + " 字符）";
     }
 
     /**

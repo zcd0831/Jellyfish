@@ -242,13 +242,14 @@ jellyfish-infra/src/main/java/zcd/jellyfish/infra/
 ├── ui/                         # UI 贡献门面 UiContributions
 ├── metrics/                    # 指标与健康检查 MetricsRegistry / MetricsSubscriber / HealthCheck
 ├── config/                     # 配置加载与热更新 RuntimeConfig / ConfigReloader
+├── tooloutput/                 # 工具结果治理：ToolOutputEnvelope / ToolOutputStore / ToolOutputLimiter
 └── support/                    # 序列化封装、类型常量
 
 jellyfish-core/src/main/java/zcd/jellyfish/core/
 ├── AgentHarness.java           # 组装门面（chat 是唯一智能入口）
 ├── ReActLooper.java            # 思考 → 行动 → 观察
 ├── ReActTurn / ReActListener / ReActResult
-├── prompt/                     # PromptAssembler / ContextWindow / ToolCatalog / TokenEstimator
+├── prompt/                     # PromptAssembler / ContextWindow / ToolCatalog / TokenEstimator / ToolResultAger
 ├── compact/                    # ConversationCompactor / CompactionPlan / CompactionHealthIndicator
 └── command/                    # SystemCommands（owner=core）
 
@@ -346,6 +347,16 @@ jellyfish-script/src/main/java/zcd/jellyfish/script/
 - **插件拿不到消息正文、发起模型调用的能力、否决权**；策略合并取「order 最小且声明了该字段」的那一个，数值由内核钳制（保留 `[0, 消息总数]`、摘要上限 `[200, 20000]`）；处理器必须只读且快，不得发布事件。
 - **摘要指令是插件自带资源** `summary-prompt.md`，用插件自己的类加载器启动期读完；占位符 `{maxSummaryChars}` 由内核替换，缺占位符只告警不失败。
 - **插件上下文只走 system prompt**：`PromptContributionRequest` 按 order 用 `\n\n` 拼接，**不追加进 messages**；单个处理器抛错只记 WARN 跳过。
+
+### 工具结果截断与卸载
+
+- **工具输出只有一个硬截断点**：`ReActLooper.executeTool` 经 `ToolOutputLimiter.limit` 把「工具原始输出对象」变成回灌文本，回灌给模型、写入会话、通知外壳用的是同一份文本。
+- **区分文本与结构化，绝不按字符切**：字符串按行截断；脚本工具返回的 `Map`/`List` 先序列化再按 JSON 子树截断（数组取前缀、对象取前缀字段），回灌的一定是一段合法 JSON 信封。**不要在任何地方对可能是 JSON 的输出做 `substring`**。
+- **信封是唯一格式**：`react.toolOutput` 定义落盘与上下文治理；超限时完整内容落盘，回灌 `{_truncated, _tool, _total_chars, _total_lines, _path, _hint, preview}`。渲染与解析共用 `ToolOutputEnvelope` 的字段常量，禁止两处各写一遍键名。
+- **落盘失败不是回合失败**：`ToolOutputStore.store` 失败只返回 `null` 并 WARN，信封记 `_path: null` 并说明不可恢复；磁盘不可写不该把「一次工具调用」升级成故障。
+- **清理只报告不阻断**：每会话按文件数 / 总字节上限从最旧删起，且永不删刚落盘的那个；写临时文件再原子改名（与 PID 文件同口径）。
+- **上下文老化排在机械裁剪之前**：`ToolResultAger` 把「保留窗口之外」的信封换成带路径的 stub，只改本次请求、Session 一条不动；`keepRecentMessages` 写 `0` 表示关闭。`ContextWindow` 对 `tool` 消息不做逐字符截断，直接替成 stub。
+- **工具层先自我限流**：`read_file` 有 `max_bytes`、`list_dir` 有 `limit`/`offset`、`grep_files` 有 `max_line_chars`/`max_bytes`；工具层限不住时再由中间件兜底，两层都不能省。
 
 ### 故障模型与熔断
 

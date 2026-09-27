@@ -13,6 +13,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static zcd.jellyfish.plugin.tools.ToolTestSupport.args;
 import static zcd.jellyfish.plugin.tools.ToolTestSupport.expectFailure;
@@ -147,6 +148,41 @@ class ReadFileToolTest {
         JellyfishException failure = expectFailure(() -> invoke(tool, args("path", 42)));
 
         assertTrue(failure.getMessage().contains("必须是字符串"), failure.getMessage());
+    }
+
+    @Test
+    @DisplayName("单行超过 max_bytes 时应切短并说明是单行被截断")
+    void handle_should_cutLine_when_singleLineExceedsMaxBytes() throws Exception {
+        Path file = write("a.txt", "abcdefghij");
+
+        String output = invoke(tool, args("path", file.toString(), "max_bytes", 4));
+
+        assertTrue(output.startsWith("abcd"), output);
+        assertFalse(output.contains("efghij"), output);
+        assertTrue(output.contains("单行超过 max_bytes"), output);
+    }
+
+    @Test
+    @DisplayName("跨行累加到 max_bytes 时应停止并给出续读 offset")
+    void handle_should_stopAtByteLimit_acrossLines() throws Exception {
+        Path file = write("a.txt", "aaaa\nbbbb\ncccc");
+
+        String output = invoke(tool, args("path", file.toString(), "max_bytes", 10));
+
+        assertTrue(output.startsWith("aaaa\nbbbb"), output);
+        assertFalse(output.contains("cccc"), output);
+        assertTrue(output.contains("offset=3"), output);
+    }
+
+    @Test
+    @DisplayName("max_bytes 小于 1 属于调用错误")
+    void handle_should_fail_when_maxBytesBelowOne() {
+        Path file = write("a.txt", "x");
+
+        JellyfishException failure = expectFailure(
+                () -> invoke(tool, args("path", file.toString(), "max_bytes", 0)));
+
+        assertTrue(failure.getMessage().contains("max_bytes 必须大于 0"), failure.getMessage());
     }
 
     /**

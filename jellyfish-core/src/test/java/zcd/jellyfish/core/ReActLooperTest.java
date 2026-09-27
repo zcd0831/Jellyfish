@@ -22,6 +22,7 @@ import zcd.jellyfish.core.compact.ConversationCompactor;
 import zcd.jellyfish.core.prompt.ContextUsage;
 import zcd.jellyfish.core.prompt.PromptAssembler;
 import zcd.jellyfish.core.prompt.ToolCatalog;
+import zcd.jellyfish.core.prompt.ToolResultAger;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.config.Model;
 import zcd.jellyfish.infra.config.Provider;
@@ -41,6 +42,8 @@ import zcd.jellyfish.infra.permission.PermissionManager;
 import zcd.jellyfish.infra.registry.TypeRegistry;
 import zcd.jellyfish.infra.session.Session;
 import zcd.jellyfish.infra.session.SessionManager;
+import zcd.jellyfish.infra.tooloutput.ToolOutputLimiter;
+import zcd.jellyfish.infra.tooloutput.ToolOutputStore;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -114,12 +117,17 @@ class ReActLooperTest {
     @Mock
     private ConversationCompactor conversationCompactor;
 
+    /** 工具输出中间件：用真实实现，用例里的输出都很小，不会真的落盘。 */
+    private ToolOutputLimiter outputLimiter;
+
     @BeforeEach
     void setUp() {
         executor = Executors.newSingleThreadExecutor();
         extensions = new ExtensionRegistry(new TypeRegistry());
         sessionManager = new SessionManager(agentManager, events, extensions);
-        promptAssembler = new PromptAssembler(agentManager, new ToolCatalog(extensions), runtimeConfig, extensions);
+        promptAssembler = new PromptAssembler(agentManager, new ToolCatalog(extensions), runtimeConfig, extensions,
+                new ToolResultAger(runtimeConfig));
+        outputLimiter = new ToolOutputLimiter(runtimeConfig, new ToolOutputStore(runtimeConfig));
         // 这两个桩是共享前置条件：个别用例（会话不存在 / 提前取消）走不到这两步，用 lenient 避免误报
         lenient().when(modelManager.resolveDefault()).thenReturn(resolvedModel());
         lenient().when(modelManager.getClient(any(ResolvedModel.class))).thenReturn(client);
@@ -367,7 +375,7 @@ class ReActLooperTest {
      */
     private ReActLooper newLooper() {
         return new ReActLooper(sessionManager, modelManager, permissionManager, extensions, events,
-                promptAssembler, runtimeConfig, conversationCompactor, executor);
+                promptAssembler, runtimeConfig, conversationCompactor, outputLimiter, executor);
     }
 
     /**

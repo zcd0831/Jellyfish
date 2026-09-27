@@ -36,6 +36,12 @@
             <artifactId>jellyfish-tui</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <!-- HTTP 服务外壳：ServerRunMode 只做接线，实现全在 jellyfish-server -->
+        <dependency>
+            <groupId>zcd</groupId>
+            <artifactId>jellyfish-server</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         <dependency>
             <groupId>com.google.dagger</groupId>
             <artifactId>dagger</artifactId>
@@ -116,4 +122,31 @@
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <profile>
+            <!--
+                Server 模式的端到端测试：本机回环上起一台真 Undertow + 真内核（Dagger 装配）。
+
+                放在 cli 模块：只有这里拿得到 composition root。它要占端口、会读写用户配置目录，
+                因此不进 `mvn test`（AGENTS.md 规定单测不访问外部资源）。
+                启用方式：mvn -q -Pserver-it test
+            -->
+            <id>server-it</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <configuration>
+                            <!-- 覆盖默认包含规则：本 profile 只跑 *IT -->
+                            <includes>
+                                <include>**/*IT.java</include>
+                            </includes>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>

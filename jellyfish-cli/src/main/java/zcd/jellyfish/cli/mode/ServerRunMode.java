@@ -1,42 +1,120 @@
 package zcd.jellyfish.cli.mode;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import zcd.jellyfish.api.JellyfishException;
+import zcd.jellyfish.cli.ExitCodes;
 import zcd.jellyfish.cli.StartupOptions;
 import zcd.jellyfish.cli.console.ConsoleIO;
+import zcd.jellyfish.core.AgentHarness;
+import zcd.jellyfish.infra.agent.AgentManager;
+import zcd.jellyfish.infra.command.CommandManager;
+import zcd.jellyfish.infra.metrics.HealthCheck;
+import zcd.jellyfish.infra.model.ModelManager;
+import zcd.jellyfish.infra.permission.ApprovalChannel;
+import zcd.jellyfish.infra.session.SessionManager;
+import zcd.jellyfish.server.JellyfishServer;
+import zcd.jellyfish.server.ServerConfig;
+
+import java.util.Objects;
 
 /**
- * Server 模式：以 HTTP 服务运行，基于 Undertow，对外暴露能力接口给第三方 Web（尚未实现）。
+ * Server 模式：以 HTTP 服务运行，基于 Undertow，对外暴露能力接口。
  * <p>
- * <b>落地时的形态</b>：REST + SSE。{@code ReActListener} 本就是流式回调，SSE 天然映射；
- * 接口面为 {@code POST /sessions}（建会话）、{@code GET /sessions}（列表）、{@code GET /sessions/{id}}（概要）、
- * {@code POST /sessions/{id}/chat}（SSE 流式对话）、{@code POST /sessions/{id}/commands}（命令）、
- * {@code GET /commands}（结构化清单，供前端做菜单）、{@code DELETE /sessions/{id}}。
+ * <b>本类只做接线</b>：把内核门面与启动参数装进 {@link JellyfishServer}，把它的生命周期收成退出码。
+ * 路由、SSE、审批桥全在 {@code jellyfish-server} 里——{@code Launcher} 与启动参数解析一行不用改，
+ * 与 {@code CliRunMode} / {@code TuiRunMode} 保持对称。
  * <p>
- * <b>安全口径</b>：默认只绑 {@code 127.0.0.1}，对外开放必须显式 {@code --host 0.0.0.0}；
- * 本轮口径为「无鉴权 + 只绑回环」，API key / token 另开一轮。鉴权落地前不要把这个端口暴露到公网。
+ * <b>为什么不把本类放进 {@code jellyfish-server}</b>：{@code RunMode}、{@code StartupOptions} 与
+ * {@code ExitCodes} 都定义在 {@code jellyfish-cli}，放进去会形成 {@code cli → server → cli} 循环依赖。
  * <p>
- * <b>依赖坑（已查证，落地时必须处理）</b>：parent {@code pom.xml} 里声明的
- * {@code undertow.version = 2.4.3.Final} <b>不可用</b>——Undertow 自 2.3.0 起最低要求 Java 11，
- * 并已完成 {@code javax} → {@code jakarta} 迁移。本项目是 JDK 1.8 + {@code javax.*}，
- * 必须改用 2.2.x 线（最后一个版本 {@code 2.2.39.Final}）。
+ * <b>启动参数在 Server 下的含义</b>：{@code --port} / {@code --host} 决定绑定；{@code --agent} /
+ * {@code --model} / {@code --mode} 是<b>新建会话的默认值</b>（落进 {@link ServerConfig}），
+ * 不在启动期落到任何会话上；{@code --session} 已在参数解析阶段判为用法错误。
  * <p>
- * <b>模块归属</b>：开工时抽 {@code jellyfish-server} 模块，{@code jellyfish-cli} 只增加依赖，
- * {@code Launcher} 与参数解析不需要改动。
+ * <b>为什么绑定失败退 3 而不是 4</b>：端口被占用是「启动条件不具备」，与配置写错同类，脚本应当直接放弃；
+ * 报成运行期失败会让调用方以为是服务跑到一半挂了。
  *
  * @author zcd
  */
-public final class ServerRunMode extends PlaceholderRunMode {
+public final class ServerRunMode implements RunMode {
+
+    /** 日志。 */
+    private static final Logger LOG = LoggerFactory.getLogger(ServerRunMode.class);
+
+    /** 智能入口。 */
+    private final AgentHarness harness;
+
+    /** 命令域服务。 */
+    private final CommandManager commands;
+
+    /** 会话域服务。 */
+    private final SessionManager sessions;
+
+    /** 模型门面。 */
+    private final ModelManager models;
+
+    /** agent 门面。 */
+    private final AgentManager agents;
+
+    /** 人工审批通道。 */
+    private final ApprovalChannel approvals;
+
+    /** 健康检查汇总。 */
+    private final HealthCheck healthCheck;
+
+    /** 输出面板。 */
+    private final ConsoleIO console;
 
     /**
-     * 构造 Server 占位模式。
+     * 构造 Server 模式。
      *
-     * @param console 输出面板，不可为 {@code null}
+     * @param harness     智能入口，不可为 {@code null}
+     * @param commands    命令域服务，不可为 {@code null}
+     * @param sessions    会话域服务，不可为 {@code null}
+     * @param models      模型门面，不可为 {@code null}
+     * @param agents      agent 门面，不可为 {@code null}
+     * @param approvals   人工审批通道，不可为 {@code null}
+     * @param healthCheck 健康检查汇总，不可为 {@code null}
+     * @param console     输出面板，不可为 {@code null}
      */
-    public ServerRunMode(ConsoleIO console) {
-        super(console);
+    public ServerRunMode(AgentHarness harness, CommandManager commands, SessionManager sessions,
+                         ModelManager models, AgentManager agents, ApprovalChannel approvals,
+                         HealthCheck healthCheck, ConsoleIO console) {
+        this.harness = Objects.requireNonNull(harness, "harness must not be null");
+        this.commands = Objects.requireNonNull(commands, "commands must not be null");
+        this.sessions = Objects.requireNonNull(sessions, "sessions must not be null");
+        this.models = Objects.requireNonNull(models, "models must not be null");
+        this.agents = Objects.requireNonNull(agents, "agents must not be null");
+        this.approvals = Objects.requireNonNull(approvals, "approvals must not be null");
+        this.healthCheck = Objects.requireNonNull(healthCheck, "healthCheck must not be null");
+        this.console = Objects.requireNonNull(console, "console must not be null");
     }
 
     @Override
-    StartupOptions.Mode mode() {
-        return StartupOptions.Mode.SERVER;
+    public int run(StartupOptions options) {
+        ServerConfig config = ServerConfig.builder(options.getHost(), options.getPort())
+                .sessionDefaults(options.getAgentId(), options.getProvider(), options.getModel(),
+                        options.getPermissionMode())
+                .build();
+        JellyfishServer server = new JellyfishServer(config, harness, sessions, commands, agents, models,
+                approvals, healthCheck);
+        try {
+            server.start();
+        } catch (JellyfishException e) {
+            // 绑定失败是启动条件不具备（退 3），不是跑挂了（退 4）
+            LOG.error("Server 启动失败：{}", e.getMessage(), e);
+            console.writeErrLine("启动失败：" + e.getMessage());
+            return ExitCodes.STARTUP_ERROR;
+        }
+        try {
+            server.awaitShutdown();
+            return ExitCodes.OK;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return ExitCodes.RUNTIME_ERROR;
+        } finally {
+            server.stop();
+        }
     }
 }

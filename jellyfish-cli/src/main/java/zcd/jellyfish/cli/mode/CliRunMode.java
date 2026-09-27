@@ -68,11 +68,6 @@ public final class CliRunMode implements RunMode {
     }
 
     @Override
-    public boolean isImplemented() {
-        return true;
-    }
-
-    @Override
     public int run(StartupOptions options) {
         String input = options.getPrompt() == null ? console.readAll() : options.getPrompt();
         if (isBlank(input)) {

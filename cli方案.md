@@ -7,7 +7,8 @@
 > 顺序（已裁决）：**CLI → TUI → Server**。
 >
 > ⚠️ **状态更新（后续轮）**
-> · `-tui` 已落地（`jellyfish-tui`：TamboUI 界面、命令补全、审批浮层、插件面板）；目前只剩 `-server` 仍是占位（`ServerRunMode`）。本文档中「`-tui` / `-server` 只落占位」的陈述是**本轮当时的事实**，现状见 §8 的 L2。
+> · `-tui` 已落地（`jellyfish-tui`：TamboUI 界面、命令补全、审批浮层、插件面板）；`-server` 也已落地（`jellyfish-server`：Undertow REST + SSE、HTTP 化审批）。本文档中「`-tui` / `-server` 只落占位」的陈述是**本轮当时的事实**，现状见 §8 的 L2。
+> · **`-server` 的实现方案与详细接口面见 `server方案.md`**；本文档 §0.3 / §10.4（S1～S6）是它的口径底稿。
 > · 会话持久化（L1）、人工审批（L8）、命令审计（L6）均已闭环，见 §8。
 > · **本文档现作为 `-server` 模式的设计底稿保留**；`react方案.md` / `command方案.md` / `permission方案.md` / `tui方案.md` 等其它已落地方案文档已删除，
 >   文中的交叉引用只作历史记录，指向的文件不再存在。
@@ -480,7 +481,7 @@ public final class SessionBootstrap {
 | # | 限制 | 影响 | 后续 |
 | --- | --- | --- | --- |
 | L1 | 无会话持久化 | `-cli` 每次进程都是新会话；`--session` 实际不可用 | **已闭环**：`jellyfish-plugin-session-file` 经同步扩展点（`SessionPersistRequest` / `SessionRestoreRequest` / `SessionDeleteRequest`）把会话写成一份份 JSON 文件并用 git 管理历史；启动期由 `SessionBootstrap` 校验 `--session` / `--agent` / `--model` 的存在性，`/resume` `/delete` 因此可用 |
-| L2 | 无 TUI / Server | 交互与服务化能力缺失 | **TUI 已闭环**：`jellyfish-tui`（TamboUI 界面、多行输入、命令补全与选择页、审批浮层、插件状态栏 / 面板、markdown 渲染、思考折叠）；**Server 仍待落地**（`ServerRunMode` 是占位，不启动内核直接退 5） |
+| L2 | 无 TUI / Server | 交互与服务化能力缺失 | **均已闭环**：TUI 见 `jellyfish-tui`（TamboUI 界面、多行输入、命令补全与选择页、审批浮层、插件状态栏 / 面板、markdown 渲染、思考折叠）；Server 见 `jellyfish-server`（Undertow REST + SSE、会话按 id 寻址、一会话一在途回合、HTTP 化审批、`GET /health`），设计见 `server方案.md` |
 | L3 | Ctrl+C 只能整体退出，不能「只取消当前回合」 | 流式回答中途 Ctrl+C 会连进程一起结束 | 若真需要，用 JLine 的信号能力在 TUI 轮一并解决（避免 `sun.misc.Signal` 内部 API） |
 | L4 | 无补全 / 历史 / Markdown 渲染 | 终端体验朴素 | `-tui` 轮 |
 | L5 | 单次模式每次都要重新加载配置与插件 | 冷启动有开销（PF4J 扫描 + HTTP 客户端建池） | 需要脚本批量调用时再考虑常驻模式 |
@@ -488,7 +489,7 @@ public final class SessionBootstrap {
 | L7 | 未用 `AppConfig.processName` | 用法文本里的程序名是常量 | 若将来要多入口共用进程名再接线 |
 | L8 | 人工审批通道仍未落地 | CLI 单次模式无交互，天然无法承载审批；`ASK` 继续降级为 `DENY` | **已闭环**：`ApprovalChannel` + TUI 审批浮层落地（`-tui` 挂审批者）；`-cli` / `-server` 无审批者时仍 fail-closed 拒绝。见 `permission方案.md` §9 L5 |
 
-代码内 TODO 落点（现状）：`ServerRunMode` 的类注释（实现要点与前置条件）、`JellyfishApplication` 关于 `-tui` 的参数解析注释。`TuiRunMode` 已实现，其类注释已不再是「占位」描述。
+代码内 TODO 落点（现状）：无。`TuiRunMode` 与 `ServerRunMode` 均已实现，其类注释都不再是「占位」描述。
 
 ---
 
@@ -498,7 +499,7 @@ public final class SessionBootstrap {
 | --- | --- | --- |
 | R1 | shade 合并后 `Log4j2Plugins.dat` 丢失 → 日志配置失效（静默无日志） | 用官方 plugin cache transformer；P5 冒烟**必须**验证「`--verbose` 能看见 DEBUG 日志」「默认看不见 INFO」，而不是只看编译通过 |
 | R2 | TamboUI 只有 snapshot 且标注 experimental；示例是 Java 17+ 风格 | 口径：TUI 轮**第一件事**是在 JDK 1.8 下冒烟 `tamboui-tui` + `tamboui-jline3-backend`；不通过则换 Lanterna 或 JLine 3 手写。本轮不受影响（占位） |
-| R3 | `undertow.version = 2.4.3.Final` 与 JDK 1.8 / `javax` 不兼容 | 已查证：2.3.0 起要求 Java 11 且迁到 `jakarta.*`；Server 轮改用 `2.2.39.Final`。本轮不受影响（占位） |
+| R3 | `undertow.version = 2.4.3.Final` 与 JDK 1.8 / `javax` 不兼容 | 已查证并解决：2.3.0 起要求 Java 11 且迁到 `jakarta.*`；Server 轮已改用 `2.2.39.Final`（class 主版本 52，实测可用，且只用 `undertow-core` 的 `HttpHandler`，不涉 servlet/jakarta） |
 | R4 | stdout 与 stderr 都指向同一终端时，流式回答与诊断行视觉交错 | **已修复**：`CliReActListener` 缓冲回答、回合收敛时整体写 stdout（诊断行不再插进半句话）；中间轮次文本归 stderr。剩余风险仅是「无渐进显示」 |
 | R5 | `System.setProperty("jellyfish.log.level")` 必须在首次日志之前设置，否则不生效 | 放在 `main` 解析参数后、任何 `LOG` 调用前；`Launcher` 内不做静态初始化日志；P5 冒烟覆盖 |
 | R6 | 参数面过早固化，TUI / Server 轮要改 | 参数表按三种模式统一设计（`--session` / `--model` / `--agent` / `--mode` 都是模式无关的），`--port` / `--host` 已为 Server 预留；解析器无状态，扩展只加字段 |

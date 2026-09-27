@@ -9,6 +9,7 @@ import zcd.jellyfish.infra.config.RuntimeConfig;
 import zcd.jellyfish.infra.event.EventChannel;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.llm.LlmClientFactory;
+import zcd.jellyfish.infra.metrics.HealthCheck;
 import zcd.jellyfish.infra.model.ModelManager;
 import zcd.jellyfish.infra.permission.ApprovalChannel;
 import zcd.jellyfish.infra.permission.PermissionManager;
@@ -132,4 +133,14 @@ public interface JellyfishComponent {
      * @return EventChannel
      */
     EventChannel eventChannel();
+
+    /**
+     * 获取健康检查汇总。
+     * <p>
+     * 调用点是外壳装配：{@code -server} 用它实现 {@code GET /health}——服务化之后
+     * 「这个进程还健康吗」需要一个不依赖模型的查询面。CLI / TUI 不使用（它们各自用日志汇报）。
+     *
+     * @return HealthCheck
+     */
+    HealthCheck healthCheck();
 }

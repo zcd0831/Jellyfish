@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>zcd</groupId>
+        <artifactId>jellyfish</artifactId>
+        <version>0.0.1-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>jellyfish-server</artifactId>
+    <name>Jellyfish Server</name>
+    <description>HTTP 服务外壳：Undertow 上的 REST + SSE 接口面、会话寻址、HTTP 化人工审批。</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>zcd</groupId>
+            <artifactId>jellyfish-api</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>zcd</groupId>
+            <artifactId>jellyfish-infra</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>zcd</groupId>
+            <artifactId>jellyfish-core</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <!-- 嵌入式 HTTP 服务器：只用 undertow-core 自带的 HttpHandler，不引 undertow-servlet，
+             因此「2.3.0 起迁到 jakarta.*」这条坑与本模块无关。版本必须是 2.2.x 线：2.3.0 起要求 Java 11，
+             而本项目是 JDK 1.8（版本属性在父 POM，并附了实测结论）。 -->
+        <dependency>
+            <groupId>io.undertow</groupId>
+            <artifactId>undertow-core</artifactId>
+        </dependency>
+
+        <!-- 单元测试：HTTP 基础设施、DTO、会话并发控制与审批桥接这些不碰 socket 的纯逻辑 -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- inline mock maker：允许 mock final 类 io.undertow.server.HttpServerExchange，
+             否则 Router / Responses 的分支无法在不真起服务的前提下测。 -->
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-inline</artifactId>
+            <version>${mockito.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <!-- 默认为空：`mvn test` 跑 *Test（纯单测，不碰 socket）；真 Undertow 的端到端用例命名为 *IT，
+                 在 jellyfish-cli 的 server-it profile 下运行（那里拿得到 Dagger 装配）。 -->
+        </plugins>
+    </build>
+</project>

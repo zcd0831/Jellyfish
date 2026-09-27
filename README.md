@@ -15,7 +15,7 @@ java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -cli -p "今天�
 | --- | --- | --- | --- |
 | `-cli` | 单次调用、不交互：进一个输入，出一次结果后退出 | `jellyfish -cli -p "今天天气怎么样？"` | 已落地 |
 | `-tui` | 交互式终端界面（TamboUI）：消息区 + 输入框 + 状态栏 | `jellyfish -tui` | 已落地 |
-| `-server` | HTTP 服务（Undertow），对外暴露能力接口 | `jellyfish -server 9096` | 尚未实现 |
+| `-server` | HTTP 服务（Undertow），对外暴露能力接口 | `jellyfish -server 9096` | 已落地 |
 
 ### 参数
 
@@ -48,7 +48,6 @@ echo "/help" | java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -
 | `2` | 用法错误：参数缺失 / 未知 / 冲突，`--session` `--agent` `--model` 指向不存在的东西，或没有输入 |
 | `3` | 启动失败：配置、插件或装配出错 |
 | `4` | 运行失败：回合抛异常，或命令执行失败 |
-| `5` | 模式尚未实现（当前的 `-server`） |
 | `3`（TUI） | TUI 需要可交互终端而当前没有（stdin 或 stdout 被重定向也算） |
 | `6` | 回合未收敛：达到最大轮次仍未给出最终回复 |
 
@@ -180,6 +179,51 @@ CSI-u 等所有「带修饰的 Enter」编码都无法被底层框架区分（�
 外壳**不**每帧询问插件（那样空闲时也在反复调用处理器），只在失效时收集一次：会话切换、回合开始或结束、
 命令执行后、插件加载卸载、以及插件自己发布 UI 失效事件。整体不要插件 UI 时用 `-Djellyfish.tui.pluginPanels=false`。
 
+### Server 模式
+
+HTTP 服务（Undertow），对外暴露 REST + SSE 接口，供第三方 Web 前端使用。
+
+```bash
+java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -server 9096
+```
+
+**默认只绑 `127.0.0.1`**，对外开放必须显式 `--host 0.0.0.0`。
+
+> ⚠️ **当前无鉴权**：任何能访问该端口的人都能建会话、跑命令（含文件工具）、读全部会话正文。
+> 鉴权（API key / token）尚未落地，**不要把端口暴露到公网或他人可达网段**。命令域与对话域同权，
+> `POST /sessions/{id}/commands` 能执行 `/reload` 等系统命令。
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `POST` | `/sessions` | 建会话（body 可选 `agentId`/`provider`/`model`/`permissionMode`，缺省取 `--agent`/`--model`/`--mode`） |
+| `GET` | `/sessions` | 会话摘要列表（不含消息正文），按最后变更时间倒序 |
+| `GET` | `/sessions/{id}` | 完整会话快照（含消息与用量） |
+| `DELETE` | `/sessions/{id}` | 删除会话（含插件持久化） |
+| `POST` | `/sessions/{id}/chat` | 对话，**恒为 SSE**（`text/event-stream`） |
+| `POST` | `/sessions/{id}/cancel` | 取消该会话在途回合 |
+| `POST` | `/sessions/{id}/commands` | 执行命令（`input` 原文 或 `name`+`args` 结构化，二选一） |
+| `GET` | `/commands` | 结构化命令清单（前端菜单用） |
+| `GET` | `/commands/{name}/options?sessionId=` | 命令候选值 |
+| `GET` | `/approvals` | 当前待审批项（无则 204） |
+| `POST` | `/approvals/{requestId}` | 裁决审批（`{"approved":true|false}`） |
+| `GET` | `/health` | 健康报告（UP / WARN / DOWN） |
+
+**SSE 事件**：`turn_start` / `text` / `thinking` / `tool_start` / `tool_done` / `approval_required` /
+`approval_resolved` / `done` / `cancelled` / `error`；空闲超时写 `: keepalive` 注释帧。
+`done` / `cancelled` / `error` 是终态，写出后流结束。
+
+几条与内核语义相关的约定：
+
+- **会话一律按路径里的 id 寻址**；`-server` 不支持 `--session`（写了判用法错误退 `2`），
+  `--agent` / `--model` / `--mode` 降级为「新建会话的默认值」。启动期不预建任何会话。
+- **同会话同时只允许一个回合**：第二个请求返回 `409`（避免两个回合把消息历史交错写坏）；
+  要打断就用 `POST /sessions/{id}/cancel`，或直接断开 SSE 连接（服务端据此取消回合）。
+- **人工审批走 HTTP**：`askTools` 里的工具会在流里推 `approval_required`，客户端拿 `requestId` 调
+  `POST /approvals/{requestId}`。`ApprovalChannel` 是**全局单槽位**，因此任一时刻最多只有一条待审批项，
+  多会话并发时后面的会排队。
+- **错误体**统一为 `{"error":"CODE","message":"…"}`；命令执行的三态在 `kind` 字段里
+  （`UNKNOWN` 同时回 404）。
+
 ## 压缩上下文（`/compact`）
 
 长会话的每一轮都要把整段历史重新发给模型，token 花得越来越多。压缩多花**一次**调用把更早的
@@ -289,7 +333,8 @@ TUI 状态栏也会追加 `已压缩 N 条（丢弃 M 条）`；压缩期间状�
 优先级是「`deniedTools` > `askTools` > `allowedTools`」。`askTools` 里的工具每次调用都要人工审批：
 
 - `-tui` 会弹出审批选择框（`↑`/`↓` 选，`Enter` 确认，`Esc` 拒绝并中断回合），批准才执行；
-- `-cli` / `-server` 没有审批界面（也没有审批者），因此**一律按拒绝处理**——绝不静默放行；
+- `-server` 把待审批项推进 SSE 流（`approval_required`），由 `POST /approvals/{requestId}` 裁决（见「Server 模式」）；
+- `-cli` 没有审批界面（也没有审批者），因此**一律按拒绝处理**——绝不静默放行；
 - 审批框等不到答复（缺省 120 秒，见 `permission.approvalTimeoutSeconds`）同样按拒绝处理。
 
 上例的 `coder` 还需要一份 `coder.md`（与 `agents.json` 同目录），内容就是它的系统提示词，可以是多段长文。

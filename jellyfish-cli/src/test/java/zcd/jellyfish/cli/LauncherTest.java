@@ -69,8 +69,12 @@ class LauncherTest {
     /** 真实事件通道，仅为满足 TUI 装配。 */
     private final EventChannel eventChannel = new EventChannel(EventChannelOptions.defaults(), typeRegistry);
 
-    /** 真实审批通道，仅为满足 TUI 装配（未挂审批者，因此不会真的等答复）。 */
+    /** 真实审批通道，仅为满足 TUI / Server 装配（未挂审批者，因此不会真的等答复）。 */
     private final ApprovalChannel approvalChannel = new ApprovalChannel();
+
+    /** 真实健康检查汇总，仅为满足 Server 装配。 */
+    private final zcd.jellyfish.infra.metrics.HealthCheck healthCheck =
+            new zcd.jellyfish.infra.metrics.HealthCheck(java.util.Collections.emptyList());
 
     /**
      * 真实会话压缩器，仅为满足 TUI 装配。
@@ -127,7 +131,6 @@ conversationCompactor = new ConversationCompactor(sessions, models, runtimeConfi
         RunMode mode = launcher.modeFor(StartupOptions.builder(StartupOptions.Mode.CLI).build());
 
         assertTrue(mode instanceof CliRunMode);
-        assertTrue(mode.isImplemented());
     }
 
     @Test
@@ -137,18 +140,17 @@ conversationCompactor = new ConversationCompactor(sessions, models, runtimeConfi
         RunMode mode = launcher.modeFor(StartupOptions.builder(StartupOptions.Mode.TUI).build());
 
         assertTrue(mode instanceof TuiRunMode);
-        assertTrue(mode.isImplemented());
     }
 
     @Test
-    void modeFor_should_return_server_placeholder_when_server_given() {
-        // 占位模式不接任何内核门面，因此刻意不桩任何协作者
-        RunMode mode = launcher.modeFor(StartupOptions.builder(StartupOptions.Mode.SERVER).build());
+    void modeFor_should_return_server_mode_when_server_given() {
+        givenServerCollaborators();
+
+        RunMode mode = launcher.modeFor(
+                StartupOptions.builder(StartupOptions.Mode.SERVER).port(9096).build());
 
         assertTrue(mode instanceof ServerRunMode);
-        assertFalse(mode.isImplemented());
     }
-
 
     @Test
     void launch_should_return_startup_error_and_skip_kernel_when_tui_has_no_terminal() {
@@ -162,24 +164,6 @@ conversationCompactor = new ConversationCompactor(sessions, models, runtimeConfi
         assertEquals(ExitCodes.STARTUP_ERROR, code);
         assertTrue(console.err().contains("-cli"));
         verify(harness, never()).bootstrap();
-    }
-
-    @Test
-    void launch_should_skip_environment_check_when_server_placeholder_given() {
-        // 占位模式的自检发生在 isImplemented 之后，占位分支应先返回 5；
-        // 这条用例锁住判定顺序，防止将来把自检提到 isImplemented 之前。
-        int code = launcher.launch(StartupOptions.builder(StartupOptions.Mode.SERVER).port(9096).build());
-
-        assertEquals(ExitCodes.NOT_IMPLEMENTED, code);
-    }
-
-    @Test
-    void launch_should_return_not_implemented_and_skip_kernel_when_server_given() {
-        int code = launcher.launch(StartupOptions.builder(StartupOptions.Mode.SERVER).port(9096).build());
-
-        assertEquals(ExitCodes.NOT_IMPLEMENTED, code);
-        assertTrue(console.err().contains("-server"));
-        verify(component, never()).agentHarness();
     }
 
     @Test
@@ -289,6 +273,17 @@ conversationCompactor = new ConversationCompactor(sessions, models, runtimeConfi
         when(component.eventChannel()).thenReturn(eventChannel);
         when(component.approvalChannel()).thenReturn(approvalChannel);
         when(component.conversationCompactor()).thenReturn(conversationCompactor);
+    }
+
+    /**
+     * 桩：构造 Server 模式所需的门面。
+     */
+    private void givenServerCollaborators() {
+        givenRunModeCollaborators();
+        when(component.modelManager()).thenReturn(models);
+        when(component.agentManager()).thenReturn(agents);
+        when(component.approvalChannel()).thenReturn(approvalChannel);
+        when(component.healthCheck()).thenReturn(healthCheck);
     }
 
     /**

@@ -19,6 +19,7 @@ mvn -q -Pscript-it test             # 真实 python3 的端到端（不进 mvn t
 mvn -q compile
 mvn -q package -DskipTests
 mvn -q test                        # 全量单测（JUnit5 + Mockito + JaCoCo）
+mvn -q -Pserver-it test            # Server 模式端到端（真 Undertow + 真内核，走本机回环）
 mvn -q -Dtest=ChatStateTest test   # 单类单测，把类名换成目标测试类
 ```
 
@@ -66,7 +67,7 @@ flowchart TB
 
     subgraph "外壳入口·jellyfish-cli / jellyfish-tui"
         direction LR
-        CLI["jellyfish-cli / jellyfish-tui<br>main · Launcher · RunMode · Dagger 装配<br>-cli / -tui 已落地，-server 占位"]
+        CLI["jellyfish-cli / jellyfish-tui / jellyfish-server<br>main · Launcher · RunMode · Dagger 装配<br>-cli / -tui / -server 已落地"]
     end
 
     subgraph "外部依赖·配置"
@@ -180,6 +181,7 @@ flowchart LR
     INFRA["jellyfish-infra<br>【基础设施层】"]
     CORE["jellyfish-core<br>【应用层】"]
     TUI["jellyfish-tui<br>TUI 外壳：TamboUI 界面"]
+    SERVER["jellyfish-server<br>HTTP 外壳：Undertow REST + SSE"]
     CLI["jellyfish-cli<br>入口 + DI 装配 + 分发"]
 
     PLUGINS --> API
@@ -191,10 +193,14 @@ flowchart LR
     TUI --> CORE
     TUI --> INFRA
     TUI --> API
+    SERVER --> CORE
+    SERVER --> INFRA
+    SERVER --> API
     CLI --> CORE
     CLI --> INFRA
     CLI --> API
     CLI --> TUI
+    CLI --> SERVER
 ```
 
 跨语言桥接插件是「官方插件」里的特例：它额外依赖 `jellyfish-script`，并把该运行时连同 Jackson（**含 `jackson-module-parameter-names`**，api 快照类型靠构造器参数名反序列化）、Apache Commons Exec **shade 进自己的插件包**，因此 `jellyfish-infra` / `jellyfish-core` 的 classpath 上不出现任何跨语言代码。`jellyfish-script` 是**库而不是插件**，不产出到 `plugins/` 目录。
@@ -207,7 +213,8 @@ flowchart LR
 | `jellyfish-infra` | 基础设施层全部实现（会话 / agent / 模型 / 权限 / 插件运行时 / 命令域 / UI / 指标 / 配置） | api |
 | `jellyfish-core` | 应用层：ReAct 循环与 `AgentHarness` 门面、提示词组装、压缩机制、系统命令 | api、infra |
 | `jellyfish-tui` | TUI 外壳：TamboUI 界面、视图投影与滚动、TUI 版 `ReActListener` | api、infra、core |
-| `jellyfish-cli` | `main`、参数解析、模式分发、Dagger 装配、shade 可执行 jar | api、infra、core、tui |
+| `jellyfish-server` | HTTP 外壳：Undertow 上的 REST + SSE、会话按 id 寻址、HTTP 化人工审批 | api、infra、core、undertow-core |
+| `jellyfish-cli` | `main`、参数解析、模式分发、Dagger 装配、shade 可执行 jar | api、infra、core、tui、server |
 | `jellyfish-script` | 跨语言插件运行时（语言无关机制层）：JSON-RPC over Stdio、静态清单、进程生命周期、事件桥接、熔断 | api（provided） |
 | `jellyfish-plugins` | 官方插件聚合（packaging=pom），只聚合不产出构件 | 各插件子模块 |
 | `jellyfish-plugin-tools` | 五个文件工具：`read_file` / `write_file` / `edit_file` / `list_dir` / `grep_files` | api（provided） |
@@ -432,11 +439,11 @@ jellyfish-script/src/main/java/zcd/jellyfish/script/
 - **启动顺序**：`eventChannel.start()` 之后、`runtimeConfig.refresh()` 之前启动 `MetricsSubscriber`；`shutdown()` 先打健康检查，末尾退订并打指标汇总。
 - **诊断输出必须比被诊断对象更稳**：坏仪表跳过、检查项抛错降级为 DOWN、关闭路径日志失败只记 WARN；健康检查三档 UP/WARN/DOWN，检查项可插拔由装配根跨层拼装。刻意不加 `/metrics`。
 
-### 外壳：CLI 与 TUI
+### 外壳：CLI / TUI / Server
 
-- **三种启动模式、一个内核**：`-cli` / `-tui`（已落地）、`-server`（待落地）共用 main、DI、`AgentHarness`、`CommandManager`，差异收在 `RunMode`；界面层放 `jellyfish-tui`（放 cli 会形成 `cli → tui → cli` 循环依赖）。
-- **外壳只做两件事**：用 `CommandManager.isCommand` 判「命令还是对话」，每轮现读 `SessionManager.current()`。启动期 `SessionBootstrap` 保证有当前会话——裸 `-tui` 例外（进首页，不建会话）。
-- **CLI 输出契约**：回答与命令结果走 stdout，诊断 / 进度 / 日志走 stderr；回答按轮缓冲、收敛时整体写出。退出码 `0/2/3/4/5/6` 是机器契约，占位模式不启动内核直接退 5。
+- **三种启动模式、一个内核**：`-cli` / `-tui` / `-server` 共用 main、DI、`AgentHarness`、`CommandManager`，差异收在 `RunMode`；界面层放 `jellyfish-tui`、服务层放 `jellyfish-server`（放进 cli 会形成 `cli → 子模块 → cli` 循环依赖）。
+- **外壳只做两件事**：用 `CommandManager.isCommand` 判「命令还是对话」，每轮现读 `SessionManager.current()`。启动期 `SessionBootstrap` 保证有当前会话——裸 `-tui`（进首页）与 `-server`（按 id 寻址、启动期不预建）例外。
+- **CLI 输出契约**：回答与命令结果走 stdout，诊断 / 进度 / 日志走 stderr；回答按轮缓冲、收敛时整体写出。退出码 `0/2/3/4/6` 是机器契约（5 随占位模式一起移除）。
 - **TUI 视图 = 会话投影 + `InflightTurn` 暂存区**：消息区不持有第二份消息列表，由 `TranscriptProjector` 纯函数投影；流式当前轮尚不在会话里，必须暂存且随回合终结清空。工具轨迹不进暂存区。
 - **TUI 线程契约**：`ReActListener` 回调都在 react 池线程，界面状态只在渲染线程变更；react 线程只向线程安全暂存区追加并置 volatile 脏标记，`Esc` 中断由渲染线程直接调 `ReActTurn.cancel()`。
 - **TUI 消息区必须是单个 `richText`**：布局子元素到 120～180 个即性能断崖；滚动偏移是 `ChatState` 自己的字段。
@@ -444,6 +451,18 @@ jellyfish-script/src/main/java/zcd/jellyfish/script/
 - **markdown 只在 assistant 正文渲染**：只借 commonmark 的 AST，块级映射与换行自己写；用户消息与工具轨迹保持纯文本。**commonmark 锁 `0.21.0`**（0.22.0 起是 Java 11 字节码），渲染器永不抛异常、解析前先过滤控制字符。
 - **思考过程默认折叠、可全局展开**（`Ctrl+T` / `/thinking` / `--show-thinking`）：思考随消息落会话（`SessionMessage.thinking`），**不进 `LlmMessage`**。开关必须纳入投影的「未变化」判据。
 - **审批浮层优先级高于二级选择页与补全面板**，可见时吞掉其余按键；`Esc` 是「拒绝 + 中断回合」；详情区必须过滤控制字符、超长参数折行而不是截断。
+
+#### Server 的会话、流式与审批
+
+- **会话一律按 path 里的 id 寻址，不读 `SessionManager.current()`**：那是进程级单指针，多客户端下不成立。残留的只有 `/model` `/agent` `/mode` 的「选中标记」——那些只读 `current()`，Server 下退化为无标记（外观问题）。
+- **启动期不建会话**：`SessionBootstrap.deferCreation` 对 SERVER 恒真；`-server` 下 `--session` 判用法错误退 2，`--agent` / `--model` / `--mode` 降级为「新建会话的默认值」。
+- **一会话一在途回合**：`SessionTurns` 用非重入的 `Semaphore(1)` 占位，且**占位早于 `AgentHarness.chat`**（回合任务一提交就 append 用户消息，事后判断冲突已经污染历史）；冲突回 409，`POST /sessions/{id}/cancel` 取消。
+- **SSE 单写者**：socket 写全在 Undertow 工作线程上循环完成，`react` 线程只把事件投进无界队列（`SseReActListener`）；写失败即客户端断连，据此取消回合。并发流用 `maxStreams` 封顶（超限 503），保住 `/health` 这类短请求。
+- **turnId 由外壳生成**，不用 `ReActTurn.getTurnId()`：后者要等 `chat` 返回才拿得到，而监听器必须先交出去，否则早期回调会带 `null`。
+- **审批走 HTTP，但复用 `ApprovalChannel` 不改内核**：SSE 内嵌 `approval_required` / `approval_resolved`（只发属于本会话的头槽位）、`GET /approvals` 给晚到的客户端、`POST /approvals/{id}` 裁决；断连时主动拒绝仍待审的那条，否则 react 线程要阻塞到审批超时。
+- **单槽位是既有语义**：`ApprovalChannel` 全局只有一个头槽位，多会话并发时后面的审批排队——首轮明确不改内核，如实暴露现状。
+- **关闭顺序由 `JellyfishServer` 自己保证**：它的钩子先停 HTTP、再放行 `awaitShutdown()`，使 `run()` 返回后 `Launcher` 的 `finally` 才收内核。
+- **绑定失败退 3**（启动条件不具备），不是 4；macOS 上 Undertow 会设 `SO_REUSEPORT`，已占端口仍能绑上——测「绑定失败」用不可用地址，不要用占端口。
 
 #### TUI 的插件界面贡献
 
@@ -475,7 +494,7 @@ jellyfish-script/src/main/java/zcd/jellyfish/script/
   架构为「控制面单实例 + 每脚本一 worker 进程」；注册来源是脚本目录下的静态 `manifest.json`（协议里**没有**注册方法），因此 `start()` 期零进程、零文件写入，解释器缺失不影响内核启动、工具清单依然完整。Python 网关是**单线程 `select` 事件循环**（因此「fork 时没有线程」恒真），Node 侧天然单线程。真实解释器的端到端测试在 `mvn -Pscript-it test`。
 
   **Node 桥接（P9）**：同一套协议与进程模型，机制层零改动——`jellyfish-plugin-node` 只多一个 `NodeLanguage`（约 150 行）与一个约 40 行的薄插件，其余全在 `jellyfish-script`（`ScriptBridgePlugin` / `ScriptBridgeConfig` / `ScriptLedger`，见「新增一门语言」一节）。Node 运行时零第三方依赖（`script/{gateway,worker,jellyfish_sdk,script_wire,dump_manifest}.js`），示例见 `examples/scripts/node/`。语言侧差异只有四处，都在方案 §15.9：`spawn` + `init` 帧取代 `fork` 的内存继承；卡在同步 JS 里的 worker 收不到 SIGTERM，**两段式关闭的第二步必须放在网关循环里**；`resume` 过的 stdin 让事件循环一直活着，收尾后要显式 `process.exit`；stdout 是协议通道，必须同步写（否则大帧会被 `console.log` 半路插入）。**未落地**：`has_options` 入口的缺陷是 Python SDK 特有的（JS 的处理器签名统一），修 Python 那一条时不必动 Node；`prctl(PR_SET_PDEATHSIG)` 仍只在 Linux 生效且本机无法验证。见 `跨语言插件方案.md` §15.9/§15.10。
-- **`-server` 模式**：HTTP 服务外壳（Undertow），对外暴露能力接口。`ServerRunMode` 目前是占位（不启动内核，退 5），开工时抽 `jellyfish-server` 模块。设计见 `cli方案.md`。
+- **`-server` 模式**：**已落地**（`jellyfish-server`，Undertow 2.2.39.Final，见 `server方案.md`）。REST + SSE 接口面、会话按 id 寻址、一会话一在途回合、HTTP 化人工审批、`GET /health`。**未落地**：鉴权（API key / token）、自带 Web 前端、TLS、审批的多槽位（全局单槽位是既有内核语义）。
 
 ## 编码约定
 

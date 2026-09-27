@@ -25,9 +25,6 @@ public final class ExitCodes {
     /** 运行期失败：回合抛异常，或命令返回 {@code ERROR}。 */
     public static final int RUNTIME_ERROR = 4;
 
-    /** 模式尚未实现：目前为 {@code -server}。 */
-    public static final int NOT_IMPLEMENTED = 5;
-
     /** 回合未收敛：达到最大轮次仍未给出最终回复。 */
     public static final int TRUNCATED = 6;
 

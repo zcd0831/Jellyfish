@@ -121,11 +121,6 @@ public final class TuiRunMode implements RunMode {
         this.console = Objects.requireNonNull(console, "console must not be null");
     }
 
-    @Override
-    public boolean isImplemented() {
-        return true;
-    }
-
     /**
      * 检查是否具备可交互终端。
      * <p>

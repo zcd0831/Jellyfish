@@ -87,9 +87,10 @@ public final class SessionBootstrap {
     /**
      * 判断本次启动是否刻意不建会话。
      * <p>
-     * 只有 TUI 模式且<b>既没指定会话、也没有任何覆盖项</b>时才会走到这里：那种情况下外壳先显示首页
-     * （无当前会话），用户真正发起对话或执行命令时才建会话。
+     * <b>Server 恒不建</b>：服务化之后会话由 HTTP 接口按 id 寻址，启动时没有任何调用方，
+     * 先建一个空会话只会留下一个「谁都没用过」的会话文件（{@code create} 会立即落盘）。
      * <p>
+     * <b>TUI 是有条件地不建</b>：它先进首页（无当前会话），用户真正发起对话时才建。
      * 反过来，只要带了覆盖项，就说明用户已经明确指定了要跑的东西，此时「先建会话把覆盖项落上去」
      * 比「暂存覆盖项、等首条输入再应用」简单得多，也不会出现覆盖项静默丢失。
      *
@@ -97,6 +98,9 @@ public final class SessionBootstrap {
      * @return 不建会话返回 {@code true}
      */
     private static boolean deferCreation(StartupOptions options) {
+        if (options.getMode() == StartupOptions.Mode.SERVER) {
+            return true;
+        }
         return options.getMode() == StartupOptions.Mode.TUI
                 && options.getAgentId() == null
                 && options.getProvider() == null

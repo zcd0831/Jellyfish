@@ -9,22 +9,11 @@ import java.util.Optional;
  * <p>
  * <b>为什么抽成接口</b>：三种模式（CLI 单次 / TUI 交互 / Server HTTP）共享同一个 {@code main}、同一份 DI 装配
  * 与同一个 {@code AgentHarness}，只有「输入从哪来、结果往哪去」不同。把差异收在实现类里之后，
- * {@link zcd.jellyfish.cli.Launcher} 只做「选实现 + 管生命周期」，将来补齐 TUI / Server 时它一行不用改。
- * <p>
- * <b>为什么显式区分「是否已实现」</b>：占位模式与真实现的差别不只是「跑起来有没有效果」——
- * 内核（事件通道、插件运行时、索引）根本不该为一个空壳启动。用一个方法把这个判断交给模式自己回答，
- * 比在 {@code Launcher} 里按模式名枚举更不容易漏。
+ * {@link zcd.jellyfish.cli.Launcher} 只做「选实现 + 管生命周期」，新增模式时它一行不用改。
  *
  * @author zcd
  */
 public interface RunMode {
-
-    /**
-     * 判断本模式在当前版本是否已实现。
-     *
-     * @return 已实现返回 {@code true}；占位实现返回 {@code false}
-     */
-    boolean isImplemented();
 
     /**
      * 运行前环境自检：由模式自己回答「当前环境跑不跑得起来」。

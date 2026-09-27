@@ -90,7 +90,7 @@ public final class StartupOptionsParser {
             + "模式（三选一，必填）：\n"
             + "  -cli                  单次调用、不交互：进一个输入，出一次结果后退出\n"
             + "  -tui                  交互式终端界面\n"
-            + "  -server [端口]        以 HTTP 服务运行（尚未实现），端口缺省 "
+            + "  -server [端口]        以 HTTP 服务运行，端口缺省 "
             + StartupOptions.DEFAULT_PORT + "\n"
             + "\n"
             + "选项：\n"
@@ -109,7 +109,7 @@ public final class StartupOptionsParser {
             + "  -V, --version           显示版本号\n"
             + "\n"
             + "输出约定：回答与命令结果走 stdout，诊断、工具进度与日志走 stderr。\n"
-            + "退出码：0 成功，2 用法错误，3 启动失败，4 运行失败，5 模式未实现，6 回合未收敛。";
+            + "退出码：0 成功，2 用法错误，3 启动失败，4 运行失败，6 回合未收敛。";
 
     private StartupOptionsParser() {
     }
@@ -230,6 +230,12 @@ public final class StartupOptionsParser {
         if (mode != StartupOptions.Mode.SERVER && (!positionals.isEmpty() || portOption != null
                 || hostOption != null)) {
             throw new JellyfishException("只有 -server 支持端口与绑定地址");
+        }
+        if (mode == StartupOptions.Mode.SERVER && sessionId != null) {
+            // Server 的会话由 HTTP path 显式寻址，启动参数指向单个会话没有意义；
+            // 而 -server 下 --agent/--model/--mode 降级为「新建会话的默认值」，因此仍允许。
+            throw new JellyfishException("-server 不支持 --session：会话由 HTTP 接口按 id 寻址"
+                    + "（--agent/--model/--mode 仍可作为新建会话的默认值）");
         }
         if (positionals.size() > 1) {
             throw new JellyfishException("位置参数过多：" + positionals);

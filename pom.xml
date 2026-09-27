@@ -15,6 +15,7 @@
         <module>jellyfish-infra</module>
         <module>jellyfish-core</module>
         <module>jellyfish-tui</module>
+        <module>jellyfish-server</module>
         <module>jellyfish-cli</module>
         <!-- 跨语言插件运行时：语言无关的机制层，被桥接插件各自 shade，不进内核 classpath -->
         <module>jellyfish-script</module>
@@ -28,7 +29,12 @@
         <maven.compiler.target>${java.version}</maven.compiler.target>
         <dagger.version>2.16</dagger.version>
         <javax-inject.version>1</javax-inject.version>
-        <undertow.version>2.4.3.Final</undertow.version>
+        <!-- Undertow：2.2.39.Final 是 2.2.x（Java 8 维护线）的末版。
+             2.3.0 起最低要求 Java 11，且 undertow-servlet 已迁到 jakarta.*；本项目是 JDK 1.8。
+             实测：2.2.39.Final 的 class 主版本号为 52（Java 8），且 7 个 artifact 全为 Java 8。
+             本仓库只用 undertow-core 自带的 HttpHandler，不引 undertow-servlet，故 jakarta 迁移不影响。
+             升级前必须重新验证这条边界。 -->
+        <undertow.version>2.2.39.Final</undertow.version>
         <okhttp.version>4.12.0</okhttp.version>
         <pf4j.version>3.14.1</pf4j.version>
         <jackson.version>2.21.6</jackson.version>

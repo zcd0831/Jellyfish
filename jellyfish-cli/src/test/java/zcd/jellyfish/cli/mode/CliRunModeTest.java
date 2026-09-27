@@ -65,11 +65,6 @@ class CliRunModeTest {
     }
 
     @Test
-    void isImplemented_should_return_true() {
-        assertTrue(mode.isImplemented());
-    }
-
-    @Test
     void run_should_chat_when_input_is_not_command() {
         givenCurrentSession();
         when(commands.isCommand("你好")).thenReturn(false);

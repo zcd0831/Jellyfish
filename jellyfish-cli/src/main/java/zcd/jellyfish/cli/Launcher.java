@@ -21,13 +21,8 @@ import java.util.Optional;
  * {@link AgentHarness#shutdown()}），差别只在 {@link RunMode} 实现；因此子命令之外的一切
  * （会话准备、退出码、异常收敛）都在这里做一次，模式实现不必各自重复。
  * <p>
- * <b>两条刻意的取舍</b>：
- * <ol>
- *     <li><b>占位模式不启动内核</b>：目前只有 {@code -server} 是占位，它在进生命周期之前就返回
- *     {@link ExitCodes#NOT_IMPLEMENTED}，避免白起事件线程、插件扫描与 HTTP 客户端池；</li>
- *     <li><b>shutdown 双保险</b>：{@code addShutdownHook} 覆盖 Ctrl+C / {@code kill}，{@code finally}
- *     覆盖正常路径与异常路径。两侧都会调 {@link AgentHarness#shutdown()}，靠内核自身的幂等保证安全。</li>
- * </ol>
+ * <b>shutdown 双保险</b>：{@code addShutdownHook} 覆盖 Ctrl+C / {@code kill}，{@code finally}
+ * 覆盖正常路径与异常路径。两侧都会调 {@link AgentHarness#shutdown()}，靠内核自身的幂等保证安全。
  * <b>为什么 Ctrl+C 是「整体退出」而不是「只取消当前回合」</b>：后者需要 {@code sun.misc.Signal}
  * 这类 JDK 内部 API（不被 sonar 接受）。进程退出时 {@code ReActLooper.close()} 会打断进行中的回合，
  * 行为可解释，因此本轮接受这个较粗的语义。
@@ -75,9 +70,6 @@ public final class Launcher {
     public int launch(StartupOptions options) {
         Objects.requireNonNull(options, "options must not be null");
         RunMode mode = modeFor(options);
-        if (!mode.isImplemented()) {
-            return mode.run(options);
-        }
         // 环境自检必须排在启动内核之前：不满足时白起插件扫描、事件线程与 HTTP 客户端池毫无意义。
         // 这一步只做判定，不产生任何需要回收的资源。
         Optional<String> problem = mode.checkEnvironment(options);
@@ -136,7 +128,9 @@ public final class Launcher {
                         component.extensionRegistry(), component.eventChannel(), component.approvalChannel(),
                         component.conversationCompactor(), console);
             case SERVER:
-                return new ServerRunMode(console);
+                return new ServerRunMode(component.agentHarness(), component.commandManager(),
+                        component.sessionManager(), component.modelManager(), component.agentManager(),
+                        component.approvalChannel(), component.healthCheck(), console);
             case CLI:
             default:
                 return new CliRunMode(component.agentHarness(), component.commandManager(),

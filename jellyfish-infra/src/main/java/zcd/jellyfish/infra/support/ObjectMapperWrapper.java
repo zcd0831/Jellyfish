@@ -9,6 +9,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import zcd.jellyfish.api.JellyfishException;
 
+import java.io.IOException;
+
 /**
  * 全局唯一的 Jackson 序列化入口。
  * <p>
@@ -47,6 +49,41 @@ public final class ObjectMapperWrapper {
             return MAPPER.writeValueAsString(value);
         } catch (JsonProcessingException e) {
             throw new JellyfishException("failed to serialize object: " + value, e);
+        }
+    }
+
+    /**
+     * 将对象序列化为 JSON 字节。
+     * <p>
+     * <b>为什么直接出字节而不是先出字符串再取 {@code getBytes}</b>：HTTP 响应体本身就是字节流，
+     * 多一步转码只多一次分配；而「统一走本类」的约定仍然成立——调用点拿到的字节一定来自同一个 MAPPER。
+     *
+     * @param value 待序列化对象
+     * @return JSON 字节
+     */
+    public static byte[] writeValueAsBytes(Object value) {
+        try {
+            return MAPPER.writeValueAsBytes(value);
+        } catch (JsonProcessingException e) {
+            throw new JellyfishException("failed to serialize object: " + value, e);
+        }
+    }
+
+    /**
+     * 将 JSON 字节反序列化为指定类型。
+     * <p>
+     * 供 HTTP 请求体直接解析，避免先把字节拼成字符串再解析。
+     *
+     * @param json        JSON 字节
+     * @param targetClass 目标类型
+     * @param <T>         目标类型
+     * @return 反序列化结果
+     */
+    public static <T> T readValue(byte[] json, Class<T> targetClass) {
+        try {
+            return MAPPER.readValue(json, targetClass);
+        } catch (IOException e) {
+            throw new JellyfishException("failed to deserialize json to " + targetClass.getName(), e);
         }
     }
 

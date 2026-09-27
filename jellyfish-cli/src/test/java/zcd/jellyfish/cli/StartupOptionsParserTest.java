@@ -136,6 +136,23 @@ class StartupOptionsParserTest {
     }
 
     @Test
+    void parse_should_fail_when_session_given_to_server() {
+        JellyfishException error = assertThrows(JellyfishException.class,
+                () -> StartupOptionsParser.parse(new String[] {"-server", "--session", "abc"}));
+
+        assertTrue(error.getMessage().contains("-server 不支持 --session"));
+    }
+
+    @Test
+    void parse_should_keep_agent_and_mode_when_server_given() {
+        StartupOptions options = StartupOptionsParser.parse(
+                new String[] {"-server", "--agent", "coder", "--mode", "plan"});
+
+        assertEquals("coder", options.getAgentId());
+        assertEquals(PermissionMode.PLAN, options.getPermissionMode());
+    }
+
+    @Test
     void parse_should_fail_when_more_than_one_positional() {
         JellyfishException error = assertThrows(JellyfishException.class,
                 () -> StartupOptionsParser.parse(new String[] {"-server", "9096", "9097"}));

@@ -13,6 +13,7 @@ import zcd.jellyfish.infra.metrics.HealthCheck;
 import zcd.jellyfish.infra.model.ModelManager;
 import zcd.jellyfish.infra.permission.ApprovalChannel;
 import zcd.jellyfish.infra.permission.PermissionManager;
+import zcd.jellyfish.infra.session.SessionDefaults;
 import zcd.jellyfish.infra.session.SessionManager;
 
 import javax.inject.Singleton;
@@ -113,6 +114,13 @@ public interface JellyfishComponent {
      * @return SessionManager
      */
     SessionManager sessionManager();
+
+    /**
+     * 取本进程内新建会话的待生效默认值。
+     *
+     * @return SessionDefaults
+     */
+    SessionDefaults sessionDefaults();
 
     /**
      * 获取同步扩展点策略。

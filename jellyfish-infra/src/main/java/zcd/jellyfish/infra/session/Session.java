@@ -41,6 +41,21 @@ public final class Session {
     /** 消息列表，按追加顺序排列。 */
     private final List<SessionMessage> messages = new ArrayList<SessionMessage>();
 
+    /**
+     * 串行化「捕获快照 + 落盘」的锁，<b>与实例锁刻意分开</b>。
+     * <p>
+     * <b>为什么不能复用实例锁</b>：落盘会调插件，而插件要写文件、跑 git（{@code GitRepository} 的
+     * 超时是 30 秒）；实例锁同时也护着 {@link #getMessages()} 这类读方法，把它们一起挡在一次 git 提交
+     * 后面，在界面上就是一次卡顿。因此另起一把锁，只挡「同一会话的另一次落盘」。
+     * <p>
+     * <b>为什么需要它</b>：两次并发落盘各自「先捕获再写」时，完全可能是「较旧的快照后写」——
+     * 磁盘上最后留下的反而是旧的那一份。捕获与派发必须在同一把锁里，落盘顺序才等于状态推进顺序。
+     * <p>
+     * <b>不参与死锁</b>：唯一的加锁顺序是「本锁 → 实例锁」（{@code underPersistLock} 里调
+     * {@link #getMessages()} 一类的同步方法），而实例锁从不会在持有时去要本锁。
+     */
+    private final Object persistLock = new Object();
+
     /** 会话标题，可为 {@code null}。 */
     private String title;
 
@@ -244,6 +259,19 @@ public final class Session {
     }
 
     /**
+     * 在「落盘锁」内执行动作，用于串行化「捕获快照 + 交给持久化插件」这一整段。
+     * <p>
+     * 可见性为包级：只有 {@link SessionManager} 需要它，而且只有它知道哪些变更要落盘。
+     *
+     * @param action 锁内执行的动作，不可为 {@code null}
+     */
+    void underPersistLock(Runnable action) {
+        synchronized (persistLock) {
+            action.run();
+        }
+    }
+
+    /**
      * 追加一条消息并累加 token 用量。
      * <p>
      * 包级可见：只有 {@link SessionManager} 能改会话，事件广播与将来的落盘派发都在那里统一发生。
@@ -263,11 +291,16 @@ public final class Session {
      * <p>
      * 给「不产生会话消息的调用」留的口子：{@code /compact} 的摘要调用花的是真金白银的 token，
      * 但它不该在对话里留下一条消息——把它混进消息列表会让屏幕投影多出一条谁也没说过的话。
+     * <p>
+     * <b>一并刷新 {@code updatedAt}</b>：会话列表按最后变更时间倒序，而「只跑了一次 /compact」
+     * 也是一次真实使用；不刷新的话它在列表里的位置会停在最后一次发消息时，
+     * 于是「刚从列表里选的会话」不一定排在第一位。
      *
      * @param callUsage 一次调用的用量，可为 {@code null}（厂商未返回时只累加调用次数）
      */
     synchronized void recordUsage(LlmUsage callUsage) {
         usage = usage.plus(callUsage);
+        updatedAt = System.currentTimeMillis();
     }
 
     /**

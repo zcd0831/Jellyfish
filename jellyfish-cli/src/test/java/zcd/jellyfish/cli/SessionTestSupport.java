@@ -7,6 +7,7 @@ import zcd.jellyfish.infra.session.Session;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.registry.TypeRegistry;
 import zcd.jellyfish.infra.session.SessionManager;
+import zcd.jellyfish.infra.session.SessionDefaults;
 
 /**
  * 测试支撑：造一个真实的会话运行态。
@@ -43,6 +44,6 @@ public final class SessionTestSupport {
         EventPublisher silentPublisher = event -> {
             // 会话事件在外壳测试里没有订阅者，发出去也没人听
         };
-        return new SessionManager(Mockito.mock(AgentManager.class), silentPublisher, new ExtensionRegistry(new TypeRegistry()));
+        return new SessionManager(Mockito.mock(AgentManager.class), silentPublisher, new ExtensionRegistry(new TypeRegistry()), new SessionDefaults());
     }
 }

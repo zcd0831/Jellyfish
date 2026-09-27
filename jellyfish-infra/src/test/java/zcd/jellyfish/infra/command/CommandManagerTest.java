@@ -394,6 +394,104 @@ class CommandManagerTest {
     }
 
     @Test
+    void renderHelp_should_listEverything_whenSessionExists() {
+        // Given
+        register("core", "status", new CommandDescriptor("会话概要", null, null, true),
+                request -> CommandResult.ok("ok"));
+        register("core", "help", new CommandDescriptor("显示帮助", null, null, false),
+                request -> CommandResult.ok("ok"));
+
+        // When
+        String help = manager.renderHelp(true);
+
+        // Then
+        assertTrue(help.startsWith("可用命令（2 条）："));
+        assertTrue(help.contains("/status"));
+        assertTrue(help.contains("/help"));
+    }
+
+    @Test
+    void renderHelp_should_hideSessionRequiredCommands_whenNoSession() {
+        // Given
+        register("core", "status", new CommandDescriptor("会话概要", null, null, true),
+                request -> CommandResult.ok("ok"));
+        register("core", "help", new CommandDescriptor("显示帮助", null, null, false),
+                request -> CommandResult.ok("ok"));
+
+        // When：列出来的每一条都应当是「当下真能用」的
+        String help = manager.renderHelp(false);
+
+        // Then
+        assertTrue(help.startsWith("可用命令（1 条）："));
+        assertFalse(help.contains("/status"));
+        assertTrue(help.contains("/help"));
+    }
+
+    @Test
+    void shouldRunAsCommand_should_followSyntax_whenInputIsNotCommand() {
+        // When / Then：普通文本永远不走命令域
+        assertFalse(manager.shouldRunAsCommand("你好", false));
+        assertFalse(manager.shouldRunAsCommand("你好", true));
+        assertFalse(manager.shouldRunAsCommand(null, false));
+    }
+
+    @Test
+    void shouldRunAsCommand_should_acceptEverything_whenSessionExists() {
+        // Given
+        register("core", "status", new CommandDescriptor("会话概要", null, null, true),
+                request -> CommandResult.ok("ok"));
+
+        // When / Then：有会话时一切照旧，包括未注册的名字（让它报 UNKNOWN）
+        assertTrue(manager.shouldRunAsCommand("/status", true));
+        assertTrue(manager.shouldRunAsCommand("/ghost", true));
+    }
+
+    @Test
+    void shouldRunAsCommand_should_rejectSessionRequiredCommand_whenNoSession() {
+        // Given
+        register("core", "compact", new CommandDescriptor("压缩历史", null, null, true),
+                request -> CommandResult.ok("ok"));
+
+        // When / Then：外壳据此把它当对话发给模型
+        assertFalse(manager.shouldRunAsCommand("/compact", false));
+    }
+
+    @Test
+    void shouldRunAsCommand_should_acceptSessionFreeCommand_whenNoSession() {
+        // Given
+        register("core", "resume", new CommandDescriptor("切换会话", "<sessionId>", Arrays.asList("r"), false),
+                request -> CommandResult.ok("ok"));
+
+        // When / Then：别名同样命中
+        assertTrue(manager.shouldRunAsCommand("/resume", false));
+        assertTrue(manager.shouldRunAsCommand("/r abc", false));
+    }
+
+    @Test
+    void shouldRunAsCommand_should_keepUnknownCommandAsCommand_whenNoSession() {
+        // When / Then：未注册的名字不得变成提示词，否则用户打错命令名会被静默发给模型
+        assertTrue(manager.shouldRunAsCommand("/ghost", false));
+    }
+
+    @Test
+    void shouldRunAsCommand_should_treatAmbiguousAliasAsCommand_whenNoSession() {
+        // Given
+        register("plugin-a", "model", new CommandDescriptor("切模型", null, Arrays.asList("m"), false),
+                request -> CommandResult.ok("model"));
+        register("plugin-a", "mode", new CommandDescriptor("切模式", null, Arrays.asList("m"), true),
+                request -> CommandResult.ok("mode"));
+
+        // When / Then：歧义交给命令域报错，比自行猜一个或当消息强
+        assertTrue(manager.shouldRunAsCommand("/m", false));
+    }
+
+    @Test
+    void shouldRunAsCommand_should_keepMalformedInputAsCommand_whenNoSession() {
+        // When / Then：引号没闭合时用户要看的是那条解析错误，不是「消息已发送」
+        assertTrue(manager.shouldRunAsCommand("/agent \"coder", false));
+    }
+
+    @Test
     void renderHelp_with_name_or_alias_should_render_single_command() {
         // Given
         register("plugin-a", "help", new CommandDescriptor("显示帮助", "[命令]", Arrays.asList("h")),

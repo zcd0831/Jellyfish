@@ -15,6 +15,7 @@ import zcd.jellyfish.infra.llm.LlmMessage;
 import zcd.jellyfish.infra.registry.TypeRegistry;
 import zcd.jellyfish.infra.session.Session;
 import zcd.jellyfish.infra.session.SessionManager;
+import zcd.jellyfish.infra.session.SessionDefaults;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -44,7 +45,7 @@ class CompactionViewTest {
 
     @BeforeEach
     void setUp() {
-        sessions = new SessionManager(agentManager, events, new ExtensionRegistry(new TypeRegistry()));
+        sessions = new SessionManager(agentManager, events, new ExtensionRegistry(new TypeRegistry()), new SessionDefaults());
     }
 
     @Test

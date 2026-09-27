@@ -275,8 +275,9 @@ public abstract class ScriptBridgePlugin implements JellyfishPlugin {
      */
     private void registerStatusCommand(PluginContext context) {
         context.handle(CommandRequest.class, language.id(),
+                // 末尾显式声明 sessionRequired=false：台账只报加载与注册情况，跟会话无关
                 new CommandDescriptor("查看 " + language.displayName() + " 脚本插件的加载与注册情况",
-                        null, null),
+                        null, null, false),
                 request -> CommandResult.ok(ledger.render(language.displayName())));
     }
 

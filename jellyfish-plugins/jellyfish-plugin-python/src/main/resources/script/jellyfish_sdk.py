@@ -142,7 +142,7 @@ def tool(name, description=None, parameters=None, required=None, read_only=False
     return decorate
 
 
-def command(name, summary=None, usage=None, aliases=None, has_options=False):
+def command(name, summary=None, usage=None, aliases=None, has_options=False, session_required=True):
     """声明一条命令。
 
     ``has_options=True`` 表示本命令也回答候选查询（二级选择页）。它与 ``@command_options``
@@ -165,6 +165,11 @@ def command(name, summary=None, usage=None, aliases=None, has_options=False):
 
     候选查询必须**只读且快**（它跑在用户按键的那一拍上），因此更常见的是用
     ``@command_options`` 把它放在单独的函数里。
+
+    ``session_required`` 声明「这条命令是不是必须有会话才能工作」，**缺省 True（保守）**。
+    声明为 False 的命令在没有当前会话时（TUI 首页）也能执行，因此外壳不会把用户手敲的它
+    当成普通对话发给模型。默认值取 True 的理由是：反过来默认「不需要」会让一条依赖会话的命令
+    在无会话时静默地变成一句提示词，而作者根本没这么想过。
     """
 
     def decorate(func):
@@ -176,6 +181,7 @@ def command(name, summary=None, usage=None, aliases=None, has_options=False):
                 "summary": summary or _first_doc_line(func),
                 "usage": usage,
                 "aliases": list(aliases or []),
+                "sessionRequired": bool(session_required),
             },
             "hasOptions": bool(has_options),
             "handler": func,

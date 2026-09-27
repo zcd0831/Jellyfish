@@ -24,6 +24,7 @@
 | 声明能力 | 装饰器 `@tool(...)` / `@command(...)` | 声明函数 `tool({...}, fn)` / `command({...}, fn)` |
 | 处理器签名 | `def f(args, ctx)`（命令是 `tokens, raw, ctx`） | `(params, ctx)`，工具读 `params.args`、命令读 `params.tokens` / `params.raw` |
 | 候选查询（二级选择页） | `has_options=True` 或 `@command_options("x")` | `hasOptions: true` 或 `commandOptions('x', fn)` |
+| 命令是否依赖会话 | `session_required=False`（缺省 `True`，保守） | `sessionRequired: false`（缺省 `true`，保守） |
 | 缺省描述 | 取函数文档字符串第一行 | 必须显式写 `description`（JS 拿不到注释） |
 | 缺省解释器 | `python3`（配置键 `pythonPath`） | `node`（配置键 `nodePath`） |
 | 清单生成器 | `dump_manifest.py` | `dump_manifest.js` |

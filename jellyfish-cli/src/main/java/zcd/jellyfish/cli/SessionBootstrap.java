@@ -16,9 +16,15 @@ import java.util.Objects;
  * 而会话是纯内存运行态、进程启动时一个都没有。把「建第一个会话」放在 {@code Launcher} 这一层，
  * 三种模式共享同一条规则，模式实现本身不必关心自己是不是第一个。
  * <p>
- * <b>TUI 是唯一可以「暂时不建」的模式</b>：它先进首页（没有当前会话），等用户真正发起对话或执行命令时
+ * <b>TUI 与 Server 启动期不建会话</b>：TUI 先进首页（没有当前会话），等用户真正发起对话或执行命令时
  * 才建会话——否则每次「进去看看」都会留下一个空会话文件（会话持久化是 create 的一等职责，建了就一定落盘）。
- * CLI 是单次调用，没有首页这个概念，因此始终在启动期建会话。详见 {@link #deferCreation(StartupOptions)}。
+ * Server 更是如此：会话由 HTTP 接口按 id 寻址，启动时没有任何调用方，先建一个空会话只会留下一个
+ * 「谁都没用过」的文件。CLI 是单次调用，没有首页这个概念，因此始终在启动期建会话。
+ * 详见 {@link #deferCreation(StartupOptions)}。
+ * <p>
+ * <b>启动参数里的覆盖项（{@code --agent} / {@code --model} / {@code --mode}）只归 CLI</b>：
+ * 解析器已经拦住「非 CLI 带这些参数」，因此这里不必再操心「覆盖项要不要暂存到首条输入」——
+ * TUI 是用 {@code /agent} 等命令改「下次会话的默认值」，Server 是用请求体指定，两者都不靠参数。
  * <p>
  * <b>为什么参数校验放在这里而不是解析器</b>：{@code --agent} / {@code --model} 的合法性要靠内核索引判断，
  * 而解析阶段不加载配置（帮助与版本必须能在零配置下工作）。因此「语法」在解析器校验、
@@ -56,11 +62,11 @@ public final class SessionBootstrap {
     /**
      * 保证当前会话存在，并把启动参数里的覆盖项应用到它上面。
      * <p>
-     * <b>返回值可为 {@code null}</b>：只有「TUI 且无 {@code --session}、无任何覆盖项」这一种情况返回
-     * {@code null}，表示「先不建会话、进首页」。其余情况都保证有当前会话。
+     * <b>返回值可为 {@code null}</b>：只有「TUI / Server 且无 {@code --session}」这一种情况返回
+     * {@code null}，表示「先不建会话、进首页（TUI）或等服务端调用（Server）」。其余情况都保证有当前会话。
      *
      * @param options 启动参数，不可为 {@code null}
-     * @return 当前会话；刻意不建会话时（TUI 首页）返回 {@code null}
+     * @return 当前会话；刻意不建会话时（TUI 首页 / Server 启动期）返回 {@code null}
      * @throws JellyfishException {@code --session} 指向不存在的会话、或 {@code --agent} / {@code --model} 不存在时抛出
      */
     public Session ensureCurrentSession(StartupOptions options) {
@@ -87,25 +93,16 @@ public final class SessionBootstrap {
     /**
      * 判断本次启动是否刻意不建会话。
      * <p>
-     * <b>Server 恒不建</b>：服务化之后会话由 HTTP 接口按 id 寻址，启动时没有任何调用方，
-     * 先建一个空会话只会留下一个「谁都没用过」的会话文件（{@code create} 会立即落盘）。
-     * <p>
-     * <b>TUI 是有条件地不建</b>：它先进首页（无当前会话），用户真正发起对话时才建。
-     * 反过来，只要带了覆盖项，就说明用户已经明确指定了要跑的东西，此时「先建会话把覆盖项落上去」
-     * 比「暂存覆盖项、等首条输入再应用」简单得多，也不会出现覆盖项静默丢失。
+     * <b>判据就是「不是 CLI」</b>：TUI 要先进首页、Server 由 HTTP 接口按 id 寻址，二者在启动期都没有
+     * 「当前会话」这个概念。带 {@code --session} 的情形已经在 {@link #ensureCurrentSession} 里提前返回，
+     * 根本走不到这里；而 TUI / Server 带不了覆盖项（解析器已拦住），因此不存在
+     * 「带了覆盖项就必须先建会话把覆盖项落上去」这个问题。
      *
      * @param options 启动参数
      * @return 不建会话返回 {@code true}
      */
     private static boolean deferCreation(StartupOptions options) {
-        if (options.getMode() == StartupOptions.Mode.SERVER) {
-            return true;
-        }
-        return options.getMode() == StartupOptions.Mode.TUI
-                && options.getAgentId() == null
-                && options.getProvider() == null
-                && options.getModel() == null
-                && options.getPermissionMode() == null;
+        return options.getMode() != StartupOptions.Mode.CLI;
     }
 
     /**
@@ -128,8 +125,8 @@ public final class SessionBootstrap {
     /**
      * 把覆盖项应用到既有会话上。
      * <p>
-     * 单次模式下每个进程都是新会话，这条路径主要服务将来的 TUI / Server（同一进程内反复切换会话）；
-     * 现在就写出来是为了让「参数含义」在三种模式间完全一致。
+     * 覆盖项只归 CLI（{@code --agent} / {@code --model} / {@code --mode}），且只在这一种情形下走到：
+     * CLI 带 {@code --session} 切到已有会话后，再把覆盖项落上去。
      *
      * @param options 启动参数
      * @param session 目标会话

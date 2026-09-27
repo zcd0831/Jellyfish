@@ -93,10 +93,7 @@ public final class ServerRunMode implements RunMode {
 
     @Override
     public int run(StartupOptions options) {
-        ServerConfig config = ServerConfig.builder(options.getHost(), options.getPort())
-                .sessionDefaults(options.getAgentId(), options.getProvider(), options.getModel(),
-                        options.getPermissionMode())
-                .build();
+        ServerConfig config = ServerConfig.builder(options.getHost(), options.getPort()).build();
         JellyfishServer server = new JellyfishServer(config, harness, sessions, commands, agents, models,
                 approvals, healthCheck);
         try {

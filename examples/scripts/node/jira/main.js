@@ -135,7 +135,14 @@ function jira(params) {
     return { kind: 'OK', output: `${key} [${issue.status}] ${issue.summary}` };
 }
 
-command({ name: 'jira', summary: '查看或切换当前工单', usage: '/jira [工单号] [状态]', aliases: ['j'] }, jira);
+command({
+    name: 'jira',
+    summary: '查看或切换当前工单',
+    usage: '/jira [工单号] [状态]',
+    aliases: ['j'],
+    // 本命令只读脚本自己的内存状态，与当前会话无关
+    sessionRequired: false,
+}, jira);
 
 /**
  * `/jira` 的候选：现有工单号。

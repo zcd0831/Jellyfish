@@ -42,7 +42,8 @@
         "usage": "/jira [工单号] [状态]",
         "aliases": [
           "j"
-        ]
+        ],
+        "sessionRequired": false
       },
       "hasOptions": false
     }

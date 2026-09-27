@@ -37,6 +37,7 @@ import zcd.jellyfish.infra.model.ResolvedModel;
 import zcd.jellyfish.infra.registry.TypeRegistry;
 import zcd.jellyfish.infra.session.Session;
 import zcd.jellyfish.infra.session.SessionManager;
+import zcd.jellyfish.infra.session.SessionDefaults;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -123,7 +124,7 @@ class ConversationCompactorTest {
     @BeforeEach
     void setUp() {
         extensions = new ExtensionRegistry(new TypeRegistry());
-        sessionManager = new SessionManager(agentManager, events, extensions);
+        sessionManager = new SessionManager(agentManager, events, extensions, new SessionDefaults());
         executor = Executors.newSingleThreadExecutor();
         compactor = newCompactor(executor);
         // 兜底策略：order 排在最后，任何用例自己登记的处理器都排在它前面
@@ -442,7 +443,7 @@ class ConversationCompactorTest {
         // 兜底策略要跟着换注册表：本用例关心的是边界失效的回退，不是「有没有插件」
         extensions.contribute("fallback", CompactionStrategyRequest.class, null,
                 request -> new CompactionStrategy(FALLBACK_PROMPT, null, null), RegisterOptions.order(100));
-        sessionManager = new SessionManager(agentManager, events, extensions);
+        sessionManager = new SessionManager(agentManager, events, extensions, new SessionDefaults());
         executor = Executors.newSingleThreadExecutor();
         compactor = newCompactor(executor);
         sessionManager.restore();

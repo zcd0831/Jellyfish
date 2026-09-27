@@ -29,6 +29,7 @@ import zcd.jellyfish.infra.model.ResolvedModel;
 import zcd.jellyfish.infra.registry.TypeRegistry;
 import zcd.jellyfish.infra.session.Session;
 import zcd.jellyfish.infra.session.SessionManager;
+import zcd.jellyfish.infra.session.SessionDefaults;
 
 import java.util.Collections;
 
@@ -151,7 +152,7 @@ class PromptAssemblerTest {
     @Test
     void systemPromptOf_should_passSessionIdToContribution() {
         // Given：贡献处理器按 sessionId 找回自己的状态
-        SessionManager manager = new SessionManager(agentManager, events, new ExtensionRegistry(new TypeRegistry()));
+        SessionManager manager = new SessionManager(agentManager, events, new ExtensionRegistry(new TypeRegistry()), new SessionDefaults());
         Session session = manager.createDefault();
         final String[] seen = new String[1];
         extensions.contribute("recorder", PromptContributionRequest.class, null, request -> {
@@ -172,7 +173,7 @@ class PromptAssemblerTest {
         when(agentManager.systemPromptOf(null)).thenReturn("你是助手");
         when(toolCatalog.tools()).thenReturn(
                 Collections.singletonList(new LlmTool("read", "读文件", null, null)));
-        SessionManager manager = new SessionManager(agentManager, events, new ExtensionRegistry(new TypeRegistry()));
+        SessionManager manager = new SessionManager(agentManager, events, new ExtensionRegistry(new TypeRegistry()), new SessionDefaults());
         Session session = manager.createDefault();
         manager.appendMessage(session.getSessionId(), LlmMessage.user("你好"), null);
         ResolvedModel resolvedModel = resolvedModel(0, 4096);
@@ -231,7 +232,7 @@ class PromptAssemblerTest {
      * @return 会话域服务
      */
     private SessionManager newSessionManager() {
-        return new SessionManager(agentManager, events, new ExtensionRegistry(new TypeRegistry()));
+        return new SessionManager(agentManager, events, new ExtensionRegistry(new TypeRegistry()), new SessionDefaults());
     }
 
     @Test
@@ -283,7 +284,7 @@ class PromptAssemblerTest {
         // Given：恢复一份「手工改过、边界指向不存在的消息」的会话——
         // 这是该状态唯一可能的来源，正常路径下 SessionManager 会拦住它
         ExtensionRegistry registry = new ExtensionRegistry(new TypeRegistry());
-        SessionManager sessions = new SessionManager(agentManager, events, registry);
+        SessionManager sessions = new SessionManager(agentManager, events, registry, new SessionDefaults());
         registry.contribute("restorer", SessionRestoreRequest.class, null,
                 request -> SessionRestoreResult.of(Collections.singletonList(orphanSnapshot())),
                 RegisterOptions.DEFAULT);

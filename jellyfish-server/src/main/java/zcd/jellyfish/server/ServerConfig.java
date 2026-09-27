@@ -1,13 +1,16 @@
 package zcd.jellyfish.server;
 
-import zcd.jellyfish.api.extension.PermissionMode;
-
 /**
- * Server 外壳的运行参数：绑定地址、并发与体积上限、新建会话的缺省值。
+ * Server 外壳的运行参数：绑定地址、并发与体积上限。
  * <p>
  * <b>为什么不直接用 cli 的 {@code StartupOptions}</b>：那会让 {@code jellyfish-server} 依赖
  * {@code jellyfish-cli}，形成 {@code cli → server → cli} 循环。这里只保留「Server 真正需要的那几项」，
  * 由 {@code ServerRunMode} 从 {@code StartupOptions} 映射过来——映射本身很薄，而依赖方向不能反转。
+ * <p>
+ * <b>没有「新建会话的缺省 agent / 模型 / 权限模式」</b>：那几项由调用方在
+ * {@code POST /sessions} 的请求体里直接给定，不给就在内核里按配置默认值解析（模型默认值归
+ * {@code models.json}，agent 默认值恒为内置）。服务端再存一份启动参数默认值，只会多出
+ * 「到底哪一层生效」这本账。
  * <p>
  * <b>为什么缺省值写在这里而不是读配置</b>：这些都是「外壳级」开关（绑哪个口、一次最多几个流），
  * 与内核配置（models / agents / react）无关；它们唯一的外部来源是命令行。
@@ -45,18 +48,6 @@ public final class ServerConfig {
     /** Undertow 工作线程数。 */
     private final int workerThreads;
 
-    /** 新建会话的缺省 agentId，可为 {@code null}。 */
-    private final String defaultAgentId;
-
-    /** 新建会话的缺省 provider，可为 {@code null}。 */
-    private final String defaultProvider;
-
-    /** 新建会话的缺省模型，可为 {@code null}。 */
-    private final String defaultModel;
-
-    /** 新建会话的缺省权限模式，可为 {@code null}（按 NORMAL）。 */
-    private final PermissionMode defaultPermissionMode;
-
     /**
      * 由构建器构造。
      *
@@ -69,10 +60,6 @@ public final class ServerConfig {
         this.maxStreams = builder.maxStreams;
         this.keepaliveSeconds = builder.keepaliveSeconds;
         this.workerThreads = builder.workerThreads;
-        this.defaultAgentId = builder.defaultAgentId;
-        this.defaultProvider = builder.defaultProvider;
-        this.defaultModel = builder.defaultModel;
-        this.defaultPermissionMode = builder.defaultPermissionMode;
     }
 
     /**
@@ -141,42 +128,6 @@ public final class ServerConfig {
     }
 
     /**
-     * 获取缺省 agentId。
-     *
-     * @return agentId，可能为 {@code null}
-     */
-    public String getDefaultAgentId() {
-        return defaultAgentId;
-    }
-
-    /**
-     * 获取缺省 provider。
-     *
-     * @return provider，可能为 {@code null}
-     */
-    public String getDefaultProvider() {
-        return defaultProvider;
-    }
-
-    /**
-     * 获取缺省模型。
-     *
-     * @return 模型，可能为 {@code null}
-     */
-    public String getDefaultModel() {
-        return defaultModel;
-    }
-
-    /**
-     * 获取缺省权限模式。
-     *
-     * @return 权限模式，可能为 {@code null}
-     */
-    public PermissionMode getDefaultPermissionMode() {
-        return defaultPermissionMode;
-    }
-
-    /**
      * 运行参数构建器。
      *
      * @author zcd
@@ -200,18 +151,6 @@ public final class ServerConfig {
 
         /** 工作线程数。 */
         private int workerThreads = defaultWorkerThreads();
-
-        /** 缺省 agentId。 */
-        private String defaultAgentId;
-
-        /** 缺省 provider。 */
-        private String defaultProvider;
-
-        /** 缺省模型。 */
-        private String defaultModel;
-
-        /** 缺省权限模式。 */
-        private PermissionMode defaultPermissionMode;
 
         /**
          * 构造构建器。
@@ -265,24 +204,6 @@ public final class ServerConfig {
          */
         public Builder workerThreads(int workerThreads) {
             this.workerThreads = workerThreads;
-            return this;
-        }
-
-        /**
-         * 设置新建会话的缺省值。
-         *
-         * @param agentId        agentId，可为 {@code null}
-         * @param provider       provider，可为 {@code null}
-         * @param model          模型，可为 {@code null}
-         * @param permissionMode 权限模式，可为 {@code null}
-         * @return 本构建器
-         */
-        public Builder sessionDefaults(String agentId, String provider, String model,
-                                       PermissionMode permissionMode) {
-            this.defaultAgentId = agentId;
-            this.defaultProvider = provider;
-            this.defaultModel = model;
-            this.defaultPermissionMode = permissionMode;
             return this;
         }
 

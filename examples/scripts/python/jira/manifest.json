@@ -10,7 +10,9 @@
           "description": "工单号，例如 PROJ-1"
         }
       },
-      "required": ["key"],
+      "required": [
+        "key"
+      ],
       "readOnly": true
     },
     {
@@ -26,7 +28,10 @@
           "description": "项目前缀，缺省 PROJ"
         }
       },
-      "required": ["summary"]
+      "required": [
+        "summary"
+      ],
+      "readOnly": false
     }
   ],
   "commands": [
@@ -35,8 +40,12 @@
       "descriptor": {
         "summary": "查看或切换当前工单",
         "usage": "/jira [工单号] [状态]",
-        "aliases": ["j"]
-      }
+        "aliases": [
+          "j"
+        ],
+        "sessionRequired": false
+      },
+      "hasOptions": false
     }
   ],
   "commandOptions": [
@@ -44,6 +53,12 @@
       "name": "jira"
     }
   ],
-  "contributions": ["prompt", "panel"],
-  "events": ["CommandExecutedEvent", "SessionCreatedEvent"]
+  "contributions": [
+    "panel",
+    "prompt"
+  ],
+  "events": [
+    "SessionCreatedEvent",
+    "CommandExecutedEvent"
+  ]
 }

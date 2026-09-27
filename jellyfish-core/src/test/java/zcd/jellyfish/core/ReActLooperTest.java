@@ -42,6 +42,7 @@ import zcd.jellyfish.infra.permission.PermissionManager;
 import zcd.jellyfish.infra.registry.TypeRegistry;
 import zcd.jellyfish.infra.session.Session;
 import zcd.jellyfish.infra.session.SessionManager;
+import zcd.jellyfish.infra.session.SessionDefaults;
 import zcd.jellyfish.infra.tooloutput.ToolOutputLimiter;
 import zcd.jellyfish.infra.tooloutput.ToolOutputStore;
 
@@ -124,7 +125,7 @@ class ReActLooperTest {
     void setUp() {
         executor = Executors.newSingleThreadExecutor();
         extensions = new ExtensionRegistry(new TypeRegistry());
-        sessionManager = new SessionManager(agentManager, events, extensions);
+        sessionManager = new SessionManager(agentManager, events, extensions, new SessionDefaults());
         promptAssembler = new PromptAssembler(agentManager, new ToolCatalog(extensions), runtimeConfig, extensions,
                 new ToolResultAger(runtimeConfig));
         outputLimiter = new ToolOutputLimiter(runtimeConfig, new ToolOutputStore(runtimeConfig));

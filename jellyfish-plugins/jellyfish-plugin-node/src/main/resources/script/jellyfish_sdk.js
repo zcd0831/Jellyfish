@@ -230,9 +230,14 @@ function tool(spec, handler) {
  * 在声明期就把写错的签名挡掉，但漏掉分支的后果同样是响的——
  * `params.tokens` 是 `null`，`null.map(...)` 会立刻抛错。
  *
- * @param {object} spec 声明：`name` / `summary` / `usage` / `aliases` / `hasOptions`
+ * @param {object} spec 声明：`name` / `summary` / `usage` / `aliases` / `hasOptions` / `sessionRequired`
  * @param {Function} handler 处理函数，签名 `(params, ctx)`；命令用 `params.tokens` 与 `params.raw`
  * @returns {Function} 同一个处理函数
+ *
+ * `sessionRequired` 声明「这条命令是不是必须有会话才能工作」，**缺省 `true`（保守）**。
+ * 声明为 `false` 的命令在没有当前会话时（TUI 首页）也能执行，因此外壳不会把用户手敲的它
+ * 当成普通对话发给模型。默认值取 `true` 的理由是：反过来默认「不需要」会让一条依赖会话的命令
+ * 在无会话时静默地变成一句提示词，而作者根本没这么想过。
  */
 function command(spec, handler) {
     requireName(spec, 'command');
@@ -245,6 +250,7 @@ function command(spec, handler) {
             summary: spec.summary === undefined ? null : spec.summary,
             usage: spec.usage === undefined ? null : spec.usage,
             aliases: listOf(spec.aliases),
+            sessionRequired: spec.sessionRequired === undefined ? true : Boolean(spec.sessionRequired),
         },
         hasOptions: Boolean(spec.hasOptions),
     });

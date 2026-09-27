@@ -8,6 +8,7 @@ import java.util.Arrays;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -90,5 +91,21 @@ class CommandDescriptorTest {
         // When / Then
         assertEquals("CommandDescriptor{aliases=[h]}",
                 new CommandDescriptor("帮助", null, Arrays.asList("h")).toString());
+    }
+
+    @Test
+    void sessionRequired_should_defaultToTrue_whenNotDeclared() {
+        // When：三参构造器 = 插件没表态
+        CommandDescriptor descriptor = new CommandDescriptor("说明", null, null);
+
+        // Then：保守假设——一条依赖会话的命令被当成「不需要」，后果是静默地当成提示词发给模型
+        assertTrue(descriptor.isSessionRequired());
+    }
+
+    @Test
+    void sessionRequired_should_followDeclaration() {
+        // When / Then
+        assertFalse(new CommandDescriptor("说明", null, null, false).isSessionRequired());
+        assertTrue(new CommandDescriptor("说明", null, null, true).isSessionRequired());
     }
 }

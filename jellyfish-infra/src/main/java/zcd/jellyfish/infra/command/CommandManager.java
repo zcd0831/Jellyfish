@@ -99,6 +99,42 @@ public class CommandManager {
     }
 
     /**
+     * 判断一行输入在当前上下文下该不该当命令执行。
+     * <p>
+     * <b>为什么需要它</b>：{@link #isCommand(String)} 只做语法判定，而「没有当前会话」时
+     * 一部分命令根本无从执行（{@code /status} 要读会话、{@code /compact} 要压会话历史）。
+     * 外壳需要把这类输入改道成对话，而不是执行出一条报错。
+     * <p>
+     * 判据只有一条：<b>已注册且声明了{@code 不需要会话}的命令在有会话时照旧、无会话时才是「不是命令」</b>。
+     * 两种情形刻意仍返回 {@code true}：
+     * <ul>
+     *     <li><b>语法上不是命令</b>（不以 {@code /} 开头）当然是 {@code false}；</li>
+     *     <li><b>已注册且需要会话</b>在无会话时返回 {@code false}——外壳据此把它当对话发给模型；</li>
+     *     <li><b>未注册的名字</b>仍返回 {@code true}，让命令域报「未知命令」而不是把它当提示词发给模型；</li>
+     *     <li><b>语法错误</b>（如引号没闭合）也返回 {@code true}，让用户看到那条解析错误。</li>
+     * </ul>
+     *
+     * @param input     用户输入原文，可为 {@code null}
+     * @param hasSession 当前是否已有会话
+     * @return 应当按命令执行返回 {@code true}
+     */
+    public boolean shouldRunAsCommand(String input, boolean hasSession) {
+        ParsedCommand parsed = CommandLineParser.parse(input);
+        if (!parsed.isCommand()) {
+            return false;
+        }
+        if (hasSession) {
+            return true;
+        }
+        List<CommandInfo> matched = match(parsed.name());
+        if (matched.size() != 1) {
+            // 未命中（未知命令）或有歧义：都交给命令域去回答，那里的文案比「当消息」有用
+            return true;
+        }
+        return !matched.get(0).isSessionRequired();
+    }
+
+    /**
      * 列出全部命令的结构化清单，按命令名升序。
      * <p>
      * 给「要自己排版」的外壳用：TUI 菜单、Web 下拉、Server 的 RPC 返回值；文本外壳直接用
@@ -218,13 +254,28 @@ public class CommandManager {
 
     /**
      * 渲染全量命令帮助：按命令名升序，列出用法、说明与别名。
+     * <p>
+     * 等价于 {@code renderHelp(true)}：没有会话上下文信息时按「全都列出来」处理。
      *
      * @return 帮助文本，保证非 {@code null}
      */
     public String renderHelp() {
+        return renderHelp(true);
+    }
+
+    /**
+     * 渲染命令帮助：按命令名升序，列出用法、说明与别名。
+     * <p>
+     * <b>没会话时只列「不需要会话」的那些</b>：{@code /status}、{@code /compact} 这类命令在无会话时
+     * 执行不出任何结果，列在帮助里只会让用户敲一次得一条报错。列出来的每一条都是当下真能用的。
+     *
+     * @param hasSession 当前是否已有会话；{@code true} 时列出全部
+     * @return 帮助文本，保证非 {@code null}
+     */
+    public String renderHelp(boolean hasSession) {
         List<CommandInfo> infos;
         try {
-            infos = commands();
+            infos = hasSession ? commands() : sessionFreeCommands();
         } catch (RuntimeException e) {
             // 帮助是外壳的兜底入口，插件注册缺陷不该让它崩
             LOG.warn("读取命令清单失败", e);
@@ -239,6 +290,21 @@ public class CommandManager {
             text.append('\n').append(renderHelpLine(info));
         }
         return text.toString();
+    }
+
+    /**
+     * 取「不需要会话也能工作」的命令子集。
+     *
+     * @return 不可修改的命令清单，按命令名升序
+     */
+    private List<CommandInfo> sessionFreeCommands() {
+        List<CommandInfo> infos = new ArrayList<CommandInfo>();
+        for (CommandInfo info : commands()) {
+            if (!info.isSessionRequired()) {
+                infos.add(info);
+            }
+        }
+        return Collections.unmodifiableList(infos);
     }
 
     /**

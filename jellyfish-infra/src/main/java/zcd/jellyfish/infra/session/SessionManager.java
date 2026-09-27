@@ -30,6 +30,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
@@ -47,13 +48,29 @@ import java.util.concurrent.atomic.AtomicReference;
  * 都必须经本类。因为这些变更要连带做两件横切的事——广播通知、同步落盘扩展点
  * （架构图 {@code SessionMgr ==> ExtReg}）——集中在一处才不会每个调用点各写一遍。
  * <p>
- * <b>持久化是一等职责而非旁路</b>：每次状态变更（含创建与关闭）都会同步派发
- * {@link SessionPersistRequest}，处理器抛出的异常<b>原样上抛</b>——那一刻起「状态已变」与「状态已落盘」
- * 必须同生共死。落盘的是整个会话快照，因此上一次失败的状态会在下一次任何变更时被一并补上。
- * 启动期则由 {@link #restore()} 反向向插件要回会话。
+ * <b>持久化是一等职责而非旁路</b>：状态变更会同步派发 {@link SessionPersistRequest}，处理器抛出的异常
+ * <b>原样上抛</b>——那一刻起「状态已变」与「状态已落盘」必须同生共死。落盘的是整个会话快照，
+ * 因此上一次失败的状态会在下一次任何变更时被一并补上。启动期则由 {@link #restore()} 反向向插件要回会话。
+ * <p>
+ * <b>两个例外，都是刻意的</b>：
+ * <ol>
+ *     <li><b>创建不落盘</b>：{@link #create} 只把会话放进内存。空会话（建了却一个字没说）不该在磁盘上
+ *     留下文件与一条 git 提交，用户「进来看一眼」与「真的用起来」应当能区分开。第一次真实变更
+ *     （含追加消息）会把它落下来——<b>会话文件 = 用户真的对它做过事的会话</b>。</li>
+ *     <li><b>回合内的消息追加不逐条落盘</b>：一次 ReAct 回合会产生 2N+2 条消息（N 为轮数），逐条落盘
+ *     等于把整个会话快照重写 2N+2 次，还附带同数量的 git 提交。因此
+ *     {@link #beginTurn(String)} 到 {@link #flush(String)} 之间只标脏，回合终结时落一次。
+ *     崩潰时最多丢「正在进行的那一个回合」，而<b>已经收敛的回合一定已经落盘</b>。</li>
+ * </ol>
+ * <p>
+ * <b>延迟落盘的失败语义与即时落盘相反</b>：即时落盘失败上抛（回合随之中止），而 {@link #flush(String)}
+ * 失败只记 WARN 并<b>保留脏标记</b>等下一次重试——那时回合已经收敛、回答已经展示给用户，
+ * 把它升级成「回合失败」既补不回来也无从补救，{@link #flushAll()} 在关停时还有一次机会。
  * <p>
  * <b>不持有全局模型状态</b>：当前模型是会话字段，本类只做读写转发；解析与路由仍归 {@code ModelManager}，
- * 因此同一进程内的不同会话可以各用各的模型。
+ * 因此同一进程内的不同会话可以各用各的模型。唯一的例外是"新建会话时的默认值"
+ * （{@link SessionDefaults}，由首页上的 {@code /model} 等命令写入）——它只在 {@link #create} 那一刻
+ * 被当成缺省值填进新会话，填完就跟会话再无关系，之后的切换依然只改会话字段。
  * <p>
  * <b>本轮不做</b>：上下文裁剪与 token 预算——归 {@code core/prompt}，本类只做计量。待办这类
  * 领域状态不再由会话持有，改由插件自持（经提示词贡献扩展点注入），因此本类也不提供对应入口。
@@ -78,21 +95,42 @@ public class SessionManager {
     /** 会话表：sessionId → 会话运行态。 */
     private final Map<String, Session> sessions = new ConcurrentHashMap<String, Session>();
 
+    /** 本进程内「新建会话时使用的默认值」，由首页上的 {@code /model} {@code /agent} {@code /mode} 写入。 */
+    private final SessionDefaults sessionDefaults;
+
+    /**
+     * 正在回合内、因此暂缓逐条落盘的会话。
+     * <p>
+     * 由 {@link #beginTurn(String)} 加入、{@link #flush(String)} 移出；回合终结走 {@code finally}，
+     * 因此异常与取消路径也不会把它留在里面。
+     */
+    private final Set<String> deferred = ConcurrentHashMap.newKeySet();
+
+    /**
+     * 有未落盘变更的会话。
+     * <p>
+     * 只服务于延迟落盘那一条路径：即时落盘的变更当场就写完了，不进这个集合。
+     */
+    private final Set<String> dirty = ConcurrentHashMap.newKeySet();
+
     /** 当前会话标识；{@code null} 表示当前没有会话。 */
     private final AtomicReference<String> currentSessionId = new AtomicReference<String>();
 
     /**
      * 构造会话域服务。
      *
-     * @param agentManager agent 门面，用于解析会话创建时的默认 agent
-     * @param events       通知发布入口
-     * @param extensions   同步扩展点策略，用于派发持久化与恢复请求
+     * @param agentManager    agent 门面，用于解析会话创建时的默认 agent
+     * @param events          通知发布入口
+     * @param extensions      同步扩展点策略，用于派发持久化与恢复请求
+     * @param sessionDefaults 本进程内新建会话的默认值，用于填补调用方未指定的那几项
      */
     @Inject
-    public SessionManager(AgentManager agentManager, EventPublisher events, ExtensionRegistry extensions) {
+    public SessionManager(AgentManager agentManager, EventPublisher events, ExtensionRegistry extensions,
+                          SessionDefaults sessionDefaults) {
         this.agentManager = agentManager;
         this.events = events;
         this.extensions = extensions;
+        this.sessionDefaults = sessionDefaults;
     }
 
     /**
@@ -101,37 +139,54 @@ public class SessionManager {
      * {@code agentId} 为空白时按 {@link AgentManager#resolveDefault()} 绑定默认 agent，结果<b>可能仍为
      * {@code null}</b>——「一个 agent 都没配」是合法状态（全员 fail-open），不应让会话创建失败。
      * <p>
-     * {@code provider} / {@code model} <b>不做</b>默认值解析：它们只影响路由，{@code null} 表示「跟随默认」，
-     * 由调用点在真正发起 LLM 调用时用 {@code ModelManager.resolveDefault()} 解析——那个方法在没有模型时
-     * 抛异常，若在这里调用会把「没配模型」拖成会话创建失败。
+     * <b>未指定的那几项先落到「本进程的待生效默认值」上</b>（{@link SessionDefaults}）：它由首页上的
+     * {@code /model} {@code /agent} {@code /mode} 写入，表达的是「我接下来这次对话要用它」。
+     * 那里也没设过才回到最下层——agent 走内置默认，provider / model 留 {@code null}。
+     * <p>
+     * <b>为什么 provider / model 仍然可以留 {@code null}</b>：它们只影响路由，{@code null} 表示
+     * 「跟随默认」，由调用点在真正发起 LLM 调用时用 {@code ModelManager.resolveDefault()} 解析——
+     * 那个方法在没有模型时抛异常，若在这里调用会把「没配模型」拖成会话创建失败。
      * <p>
      * <b>本方法不自动把新会话设为当前会话</b>：并发创建不应互相抢占当前指针，切换由调用点显式
      * {@link #switchTo(String)} 完成。
+     * <p>
+     * <b>本方法不落盘</b>：建了就落会为「进来看一眼」留下一个空会话文件（以及一条「0 条消息」的 git
+     * 提交）。落盘改由第一次真实变更触发，因此一个从未被使用过的会话在进程退出后自然消失。
+     * 代价是「创建失败」不再在创建那一刻暴露——但磁盘不可写这类问题会在第一次变更时当场暴露，
+     * 而且比「创建时失败」晚不了多少。
      *
      * @param agentId        agent 标识，可为空白（按默认 agent 绑定）
-     * @param provider       provider 名，可为 {@code null}
-     * @param model          model 名，可为 {@code null}
-     * @param permissionMode 权限模式，可为 {@code null}（按 NORMAL 处理）
+     * @param provider       provider 名，可为 {@code null}（按待生效默认值、其次跟随默认）
+     * @param model          model 名，可为 {@code null}（按待生效默认值、其次跟随默认）
+     * @param permissionMode 权限模式，可为 {@code null}（按待生效默认值、其次 NORMAL）
      * @return 新建的会话运行态
      */
     public Session create(String agentId, String provider, String model, PermissionMode permissionMode) {
-        String boundAgentId = StringUtils.isBlank(agentId) ? resolveDefaultAgentId() : agentId;
-        Session session = new Session(UUID.randomUUID().toString(), boundAgentId, provider, model,
-                permissionMode, System.currentTimeMillis());
-        // 先落盘再入表：落盘失败时那次创建就不算发生，而不是「能看见但没存下」
-        persist(session);
+        SessionDefaults.Values defaults = sessionDefaults.snapshot();
+        String requestedAgentId = agentId == null ? defaults.getAgentId() : agentId;
+        String boundAgentId = StringUtils.isBlank(requestedAgentId) ? resolveDefaultAgentId() : requestedAgentId;
+        Session session = new Session(UUID.randomUUID().toString(), boundAgentId,
+                provider == null ? defaults.getProvider() : provider,
+                model == null ? defaults.getModel() : model,
+                permissionMode == null ? defaults.getPermissionMode() : permissionMode,
+                System.currentTimeMillis());
+        // 刻意不落盘：空会话不留文件，第一次真实变更时再落（见方法注释）
         sessions.put(session.getSessionId(), session);
         publish(new SessionCreatedEvent(boundAgentId, session.getSessionId()));
         return session;
     }
 
     /**
-     * 按默认 agent 与常规权限模式创建一个会话。
+     * 按待生效默认值创建一个会话。
+     * <p>
+     * <b>四项全部传 {@code null}</b>（而不是显式传 {@code NORMAL}）：{@code null} 表示
+     * 「按本进程的待生效默认值，其次按更下层的默认」，这正是首页上 {@code /mode plan} 能生效的前提。
+     * 传 {@code NORMAL} 会把那一层默认值直接跳过。
      *
      * @return 新建的会话运行态
      */
     public Session createDefault() {
-        return create(null, null, null, PermissionMode.NORMAL);
+        return create(null, null, null, null);
     }
 
     /**
@@ -198,6 +253,8 @@ public class SessionManager {
         // 先落最后一次快照再移除：落盘失败时宁可不关，也不要留下「已关闭但没存下」的会话
         persist(session);
         sessions.remove(sessionId);
+        deferred.remove(sessionId);
+        dirty.remove(sessionId);
         currentSessionId.compareAndSet(sessionId, null);
         publish(new SessionClosedEvent(sessionId, session.getAgentId(), session.size()));
         return session;
@@ -231,8 +288,10 @@ public class SessionManager {
         if (session == null) {
             return null;
         }
-        deletePersisted(sessionId);
+        deletePersisted(session);
         sessions.remove(sessionId);
+        deferred.remove(sessionId);
+        dirty.remove(sessionId);
         currentSessionId.compareAndSet(sessionId, null);
         publish(new SessionClosedEvent(sessionId, session.getAgentId(), session.size()));
         return session;
@@ -279,13 +338,16 @@ public class SessionManager {
     }
 
     /**
-     * 追加一条消息并累加 token 用量，随后同步落盘并广播 {@link SessionMessageAppendedEvent}。
+     * 追加一条消息并累加 token 用量，随后落盘或标脏，最后广播 {@link SessionMessageAppendedEvent}。
      * <p>
      * 先落会话、再落盘、最后发通知：通知订阅者据 {@code messageId} 回查时，消息一定已经可见；
      * 落盘必须在通知之前，否则「已落盘的会话」会少掉订阅者已经看到的那条消息。
      * <p>
-     * 落盘失败时异常上抛（同步侧无护栏，处置是调用点的责任）：调用方应当让本次回合失败。
-     * 已入内存的这条消息不会被回滚——落盘写的是整个会话快照，下一次成功落盘会把它一并补上。
+     * <b>落盘与否取决于当前是否在回合内</b>：在
+     * {@link #beginTurn(String)} 与 {@link #flush(String)} 之间只标脏（回合结束落一次），
+     * 其余情形即时落盘。即时落盘失败时异常上抛（同步侧无护栏，处置是调用点的责任）：
+     * 调用方应当让本次回合失败。两种情况都已入内存的这条消息都不会被回滚——落盘写的是整个会话快照，
+     * 下一次成功落盘会把它一并补上。
      *
      * @param sessionId 会话标识，不可为空白
      * @param message   消息本体，不可为 {@code null}
@@ -298,10 +360,83 @@ public class SessionManager {
         Session session = require(sessionId);
         SessionMessage sessionMessage = SessionMessage.of(message, usage, thinking);
         session.append(sessionMessage);
-        persist(session);
+        if (deferred.contains(sessionId)) {
+            // 回合内：只标脏，由回合终结时的 flush 统一落一次
+            dirty.add(sessionId);
+        } else {
+            persist(session);
+        }
         publish(new SessionMessageAppendedEvent(session.getSessionId(), sessionMessage.getMessageId(),
                 sessionMessage.getRole()));
         return sessionMessage;
+    }
+
+    /**
+     * 开始一个回合：该会话在回合内的消息追加只标脏，不逐条落盘。
+     * <p>
+     * 幂等：重复调用只是再往集合里放一次。回合终结必须配对调 {@link #flush(String)}，
+     * 否则这次回合的消息要到进程关停时才会被 {@link #flushAll()} 补上。
+     * <p>
+     * <b>只有消息追加被挂起</b>：命令、（{@code /compact} 的）压缩与用量、关闭等入口仍即时落盘。
+     * 因此跑在独立线程上的自动压缩不受回合作用域影响——它本来就是一个独立的落盘单元。
+     *
+     * @param sessionId 会话标识，可为 {@code null}（忽略）
+     */
+    public void beginTurn(String sessionId) {
+        if (sessionId != null) {
+            deferred.add(sessionId);
+        }
+    }
+
+    /**
+     * 结束一个回合并落盘：把该会话移出延迟态，有未落盘变更就落一次。
+     * <p>
+     * <b>失败只记 WARN，不上抛，也不清脏标记</b>：调用点是回合线程的 {@code finally}，
+     * 此刻回答已经生成并展示给用户，把落盘失败升级成回合失败无法补救；保留脏标记则让
+     * {@link #flushAll()} 在关停时还有一次机会。
+     *
+     * @param sessionId 会话标识，可为 {@code null}（忽略）
+     */
+    public void flush(String sessionId) {
+        if (sessionId == null) {
+            return;
+        }
+        deferred.remove(sessionId);
+        if (!dirty.contains(sessionId)) {
+            return;
+        }
+        Session session = sessions.get(sessionId);
+        if (session == null) {
+            // 会话在回合中途被删了：脏标记无处可落，不该留着让关停时再找一遍
+            dirty.remove(sessionId);
+            return;
+        }
+        flushQuietly(session);
+    }
+
+    /**
+     * 落盘所有未落盘的会话，供进程关停时调用。
+     * <p>
+     * <b>为什么关停必须有这一步</b>：回合级落盘把「每次变更即时落盘」换成了「回合终结落一次」，
+     * 于是正常退出这条路径也必须显式补一次，否则用户按 Ctrl+C 就会丢掉当前回合。
+     * <p>
+     * <b>调用时机是硬约束</b>：必须在插件停止<b>之前</b>——落盘经 {@code ExtensionRegistry} 派发
+     * {@link SessionPersistRequest}，插件没了就没人落盘了。
+     * <p>
+     * 失败同样只记 WARN：关停路径上的任何一步都不应该阻断后面的收尾。
+     */
+    public void flushAll() {
+        for (String sessionId : new ArrayList<String>(dirty)) {
+            Session session = sessions.get(sessionId);
+            if (session == null) {
+                dirty.remove(sessionId);
+                continue;
+            }
+            flushQuietly(session);
+        }
+        if (!dirty.isEmpty()) {
+            LOG.warn("仍有会话未能落盘: count={}", dirty.size());
+        }
     }
 
     /**
@@ -474,42 +609,82 @@ public class SessionManager {
      * 与持久化同样的取舍：同一份存储可能同时落在文件、数据库与远端，这些是「都做」而不是「二选一」。
      * 没有插件注册时删除只发生在内存里——没有持久化插件是合法状态。
      * <p>
+     * <b>与落盘共用同一把会话级锁</b>：否则一个正在途中的落盘会在删完之后把文件又写回来（复活）。
      * 处理器抛出的异常原样上抛，由 {@link #delete(String)} 的调用点决定处置。
      *
-     * @param sessionId 会话标识
+     * @param session 待删除的会话运行态
      */
-    private void deletePersisted(String sessionId) {
+    private void deletePersisted(Session session) {
         List<HandlerBinding<SessionDeleteRequest, Void>> bindings =
                 extensions.bindings(SessionDeleteRequest.class, null);
         if (bindings.isEmpty()) {
             return;
         }
-        SessionDeleteRequest request = new SessionDeleteRequest(sessionId);
-        for (HandlerBinding<SessionDeleteRequest, Void> binding : bindings) {
-            extensions.invoke(binding.getHandler(), request);
-        }
+        SessionDeleteRequest request = new SessionDeleteRequest(session.getSessionId());
+        session.underPersistLock(() -> {
+            for (HandlerBinding<SessionDeleteRequest, Void> binding : bindings) {
+                extensions.invoke(binding.getHandler(), request);
+            }
+        });
     }
 
     /**
-     * 同步派发会话持久化：无返回值，但不可丢。
+     * 同步派发会话持久化并清掉脏标记：失败原样上抛，由调用点决定处置。
      * <p>
      * 走类型级贡献而不是具名处理器：同一份会话可以同时落文件、写数据库、推给远端，这些是「都做」。
      * <p>
      * 没有插件注册时直接返回，不做任何快照构造——没有持久化插件是合法状态，不该自担开销。
-     * 处理器抛出的异常原样上抛，处置由各调用点自己决定（见各变更方法的注释）。
+     * 此时脏标记照清：脏的含义是「有变更还没交给持久化扩展点」，没有扩展点就等于没人可交。
+     *
+     * @param session 待落盘的会话运行态
+     * @throws JellyfishException 任一处理器抛出时原样上抛
+     */
+    private void persist(Session session) {
+        doPersist(session);
+        dirty.remove(session.getSessionId());
+    }
+
+    /**
+     * 落盘但不让失败传播：失败只记 WARN 并<b>保留脏标记</b>，等下一次 {@link #flush(String)} 或
+     * {@link #flushAll()} 重试。
+     * <p>
+     * 只在延迟落盘那一条路径上用（见类注释的失败语义说明）。
      *
      * @param session 待落盘的会话运行态
      */
-    private void persist(Session session) {
+    private void flushQuietly(Session session) {
+        try {
+            doPersist(session);
+            dirty.remove(session.getSessionId());
+        } catch (RuntimeException e) {
+            LOG.warn("会话落盘失败，保留未落盘标记待下次重试: sessionId={}", session.getSessionId(), e);
+        }
+    }
+
+    /**
+     * 把快照派发给全部持久化处理器；不碰脏标记，失败原样上抛。
+     * <p>
+     * <b>捕获与派发在同一把会话级锁里</b>：每一次落盘写入的是「捕获那一刻的整个会话」，
+     * 因此两次并发落盘若各自先捕获再写，完全可能是「较旧的快照后写」——磁盘上最后留下的是旧的那份。
+     * 锁住之后，落盘顺序就等于状态推进顺序，最后写下的必定是最新的快照。
+     * <p>
+     * <b>锁是按会话分的，不是全局的</b>：不同会话的落盘互不阻塞（插件写文件、跑 git 都可能耗时）。
+     * 拿不到处理器时提前返回，也避免为一次空派发去抢锁。
+     *
+     * @param session 待落盘的会话运行态
+     */
+    private void doPersist(Session session) {
         List<HandlerBinding<SessionPersistRequest, Void>> bindings =
                 extensions.bindings(SessionPersistRequest.class, null);
         if (bindings.isEmpty()) {
             return;
         }
-        SessionPersistRequest request = new SessionPersistRequest(SessionSnapshots.capture(session));
-        for (HandlerBinding<SessionPersistRequest, Void> binding : bindings) {
-            extensions.invoke(binding.getHandler(), request);
-        }
+        session.underPersistLock(() -> {
+            SessionPersistRequest request = new SessionPersistRequest(SessionSnapshots.capture(session));
+            for (HandlerBinding<SessionPersistRequest, Void> binding : bindings) {
+                extensions.invoke(binding.getHandler(), request);
+            }
+        });
     }
 
     /**

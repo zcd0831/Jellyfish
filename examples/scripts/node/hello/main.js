@@ -135,6 +135,8 @@ command({
     usage: '/hello <名字>',
     aliases: ['hi'],
     hasOptions: true,
+    // 本命令只读脚本自己的内存状态，与当前会话无关
+    sessionRequired: false,
 }, hello);
 
 // ---------------------------------------------------------------- 类型级贡献

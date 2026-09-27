@@ -66,7 +66,7 @@ class SessionManagerTest {
      * @return 会话域服务
      */
     private SessionManager manager() {
-        return new SessionManager(agentManager, events, extensions);
+        return new SessionManager(agentManager, events, extensions, new SessionDefaults());
     }
 
     @Test
@@ -157,10 +157,64 @@ class SessionManagerTest {
         // When
         Session session = manager().createDefault();
 
-        // Then
+        // Then：没有任何待生效默认值时，权限模式落到 NORMAL、模型留空（由调用点按配置默认解析）
         assertEquals(PermissionMode.NORMAL, session.getPermissionMode());
         assertNull(session.getProvider());
         assertNull(session.getModel());
+    }
+
+    @Test
+    void create_should_fill_unspecified_fields_from_pendingDefaults() {
+        // Given：首页上设过待生效默认值
+        SessionDefaults pending = new SessionDefaults();
+        pending.setAgentId(CODER);
+        pending.setModel("openai", "gpt-4o");
+        pending.setPermissionMode(PermissionMode.PLAN);
+        SessionManager manager = new SessionManager(agentManager, events, extensions, pending);
+
+        // When
+        Session session = manager.createDefault();
+
+        // Then：四项都从待生效默认值填进来——这就是「首页设了 /model，下一条消息就真的用它」
+        assertEquals(CODER, session.getAgentId());
+        assertEquals("openai", session.getProvider());
+        assertEquals("gpt-4o", session.getModel());
+        assertEquals(PermissionMode.PLAN, session.getPermissionMode());
+    }
+
+    @Test
+    void create_should_prefer_explicitArgument_over_pendingDefaults() {
+        // Given
+        SessionDefaults pending = new SessionDefaults();
+        pending.setAgentId(CODER);
+        pending.setModel("openai", "gpt-4o");
+        pending.setPermissionMode(PermissionMode.PLAN);
+        SessionManager manager = new SessionManager(agentManager, events, extensions, pending);
+
+        // When：调用方显式指定了全部四项（如 CLI 的 --agent / --model / --mode）
+        Session session = manager.create("writer", "ollama", "llama3", PermissionMode.NORMAL);
+
+        // Then：参数优先，待生效默认值只在「没指定」时才管用
+        assertEquals("writer", session.getAgentId());
+        assertEquals("ollama", session.getProvider());
+        assertEquals("llama3", session.getModel());
+        assertEquals(PermissionMode.NORMAL, session.getPermissionMode());
+    }
+
+    @Test
+    void create_should_keep_modelNull_when_neitherArgumentNorDefaultGiven() {
+        // Given：只设了权限模式，没设模型
+        SessionDefaults pending = new SessionDefaults();
+        pending.setPermissionMode(PermissionMode.PLAN);
+        SessionManager manager = new SessionManager(agentManager, events, extensions, pending);
+
+        // When
+        Session session = manager.create(null, null, null, null);
+
+        // Then：provider / model 留 null = 「跟随配置默认」，不能在创建期就把它们解析掉
+        assertNull(session.getProvider());
+        assertNull(session.getModel());
+        assertEquals(PermissionMode.PLAN, session.getPermissionMode());
     }
 
     @Test

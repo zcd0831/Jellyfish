@@ -89,27 +89,6 @@ class TuiAppTest {
     }
 
     @Test
-    @DisplayName("首页命令分流：/new /resume /delete 不预先建会话，其余命令（含 /session /help）先建会话")
-    void isSessionDomainCommand_should_onlyMatchResumeAndDelete() {
-        assertTrue(TuiApp.isSessionDomainCommand("/new"));
-        assertTrue(TuiApp.isSessionDomainCommand("/resume"));
-        assertTrue(TuiApp.isSessionDomainCommand("/resume abc"));
-        assertTrue(TuiApp.isSessionDomainCommand("/delete abc"));
-        assertTrue(TuiApp.isSessionDomainCommand("/rm abc"));
-
-        assertFalse(TuiApp.isSessionDomainCommand("/session"));
-        assertFalse(TuiApp.isSessionDomainCommand("/help"));
-        assertFalse(TuiApp.isSessionDomainCommand("/model gpt-4"));
-        // /thinking 是外壳命令，在首页上按不能留下空会话
-        assertFalse(TuiApp.isSessionDomainCommand("/thinking"));
-        assertFalse(TuiApp.isSessionDomainCommand("你好"));
-        // 无前缀的普通对话不得被当成命令，否则首页上会跳过建会话
-        assertFalse(TuiApp.isSessionDomainCommand("resume this"));
-        assertFalse(TuiApp.isSessionDomainCommand("delete everything"));
-        assertFalse(TuiApp.isSessionDomainCommand(null));
-    }
-
-    @Test
     @DisplayName("只有无参 /help（含别名）才算「查键位」的那次帮助")
     void isBareHelp_should_matchOnlyBareHelp() {
         assertTrue(TuiApp.isBareHelp("/help"));

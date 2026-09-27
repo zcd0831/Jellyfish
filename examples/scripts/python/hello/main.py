@@ -93,7 +93,7 @@ def hello_remember(args, ctx):
 
 
 @command(name="hello", summary="和示例脚本打个招呼", usage="/hello <名字>", aliases=["hi"],
-         has_options=True)
+         has_options=True, session_required=False)
 def hello(tokens, raw, ctx):
     """``/hello <名字>``，别名 ``/hi``；同时回答候选查询（二级选择页）。
 

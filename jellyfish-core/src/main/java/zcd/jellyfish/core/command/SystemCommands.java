@@ -34,6 +34,7 @@ import zcd.jellyfish.infra.model.ModelManager;
 import zcd.jellyfish.infra.plugin.PluginReloadReport;
 import zcd.jellyfish.infra.session.Session;
 import zcd.jellyfish.infra.session.SessionCompaction;
+import zcd.jellyfish.infra.session.SessionDefaults;
 import zcd.jellyfish.infra.session.SessionManager;
 
 import javax.inject.Inject;
@@ -113,6 +114,14 @@ public class SystemCommands {
     /** agent 门面。 */
     private final AgentManager agentManager;
 
+    /**
+     * 本进程内新建会话的待生效默认值。
+     * <p>
+     * 首页（没有当前会话）上敲 {@code /model x} 时写这里，而不是建一个空会话再把模型设上去：
+     * 用户的意图是「我接下来这次对话要用它」，见 {@link SessionDefaults}。
+     */
+    private final SessionDefaults sessionDefaults;
+
     /** 通知发布入口，用于在切换到无提示词的 agent 时广播配置告警。 */
     private final EventPublisher events;
 
@@ -145,7 +154,8 @@ public class SystemCommands {
     public SystemCommands(ExtensionRegistry extensions, CommandManager commandManager,
                           SessionManager sessionManager, ModelManager modelManager, AgentManager agentManager,
                           EventPublisher events, ConversationCompactor compactor,
-                          RuntimeConfig runtimeConfig, ConfigReloader configReloader) {
+                          RuntimeConfig runtimeConfig, ConfigReloader configReloader,
+                          SessionDefaults sessionDefaults) {
         this.extensions = Objects.requireNonNull(extensions, "extensions must not be null");
         this.commandManager = Objects.requireNonNull(commandManager, "commandManager must not be null");
         this.sessionManager = Objects.requireNonNull(sessionManager, "sessionManager must not be null");
@@ -155,6 +165,7 @@ public class SystemCommands {
         this.compactor = Objects.requireNonNull(compactor, "compactor must not be null");
         this.runtimeConfig = Objects.requireNonNull(runtimeConfig, "runtimeConfig must not be null");
         this.configReloader = Objects.requireNonNull(configReloader, "configReloader must not be null");
+        this.sessionDefaults = Objects.requireNonNull(sessionDefaults, "sessionDefaults must not be null");
     }
 
     /**
@@ -164,28 +175,32 @@ public class SystemCommands {
         if (!subscriptions.isEmpty()) {
             return;
         }
-        subscriptions.add(register("help", new CommandDescriptor("显示命令帮助", "[命令]", aliases("h", "?")),
+        // 末尾的布尔是 sessionRequired：无会话时「还需不需要当前会话」。
+        // 逐条显式写出（即使等于缺省值）是为了让这张分类表在代码里一眼可读，
+        // 而不是要去翻 CommandDescriptor 的缺省值才知道哪几条是有意为之。
+        subscriptions.add(register("help", new CommandDescriptor("显示命令帮助", "[命令]", aliases("h", "?"), false),
                 this::help));
-        subscriptions.add(register("new", new CommandDescriptor("新建会话并切换为当前", null, null), this::newSession));
-        subscriptions.add(register("session", new CommandDescriptor("列出全部会话", null, aliases("sessions")),
+        subscriptions.add(register("new", new CommandDescriptor("新建会话并切换为当前", null, null, false),
+                this::newSession));
+        subscriptions.add(register("session", new CommandDescriptor("列出全部会话", null, aliases("sessions"), false),
                 this::listSessions));
-        subscriptions.add(register("resume", new CommandDescriptor("切换到已有会话", "<sessionId>", null),
+        subscriptions.add(register("resume", new CommandDescriptor("切换到已有会话", "<sessionId>", null, false),
                 this::resume));
-        subscriptions.add(register("model", new CommandDescriptor("查看或切换模型", "[provider/model]", null),
+        subscriptions.add(register("model", new CommandDescriptor("查看或切换模型", "[provider/model]", null, false),
                 this::model));
-        subscriptions.add(register("agent", new CommandDescriptor("查看或切换 agent", "[agentId]", aliases("a")),
+        subscriptions.add(register("agent", new CommandDescriptor("查看或切换 agent", "[agentId]", aliases("a"), false),
                 this::agent));
-        subscriptions.add(register("mode", new CommandDescriptor("查看或切换权限模式", "[plan|normal]", null),
+        subscriptions.add(register("mode", new CommandDescriptor("查看或切换权限模式", "[plan|normal]", null, false),
                 this::mode));
-        subscriptions.add(register("status", new CommandDescriptor("显示当前会话概要", null, null), this::status));
-        subscriptions.add(register("usage", new CommandDescriptor("显示当前会话 token 用量", null, aliases("cost")),
-                this::usage));
+        subscriptions.add(register("status", new CommandDescriptor("显示当前会话概要", null, null, true), this::status));
+        subscriptions.add(register("usage", new CommandDescriptor("显示当前会话 token 用量", null,
+                aliases("cost"), true), this::usage));
         subscriptions.add(register("delete", new CommandDescriptor("删除会话（含持久化文件）", "<sessionId>",
-                aliases("rm")), this::deleteSession));
+                aliases("rm"), false), this::deleteSession));
         subscriptions.add(register("compact", new CommandDescriptor("把更早的对话压成摘要",
-                "[preview]", null), this::compact));
+                "[preview]", null, true), this::compact));
         subscriptions.add(register("reload", new CommandDescriptor("重新加载配置（模型 / agent / 插件）",
-                null, null), this::reload));
+                null, null, false), this::reload));
         // 只读候选查询：与执行处理器平行，外壳「选中命令就弹选择页」时走这条路径，不产生任何副作用
         subscriptions.add(registerOptions("resume", this::resumeOptions));
         subscriptions.add(registerOptions("model", this::modelOptions));
@@ -277,8 +292,8 @@ public class SystemCommands {
      * @return 候选结果；没有当前会话时为空
      */
     private CommandOptions modeOptions(CommandOptionRequest request) {
-        Session session = sessionManager.current();
-        return session == null ? CommandOptions.empty() : CommandOptions.of(modeChoices(session.getPermissionMode()));
+        // 首页也给出候选，并标出待生效的默认值：否则 /mode 在首页敲下去会得到一片空白
+        return CommandOptions.of(modeChoices(effectivePermissionMode(sessionManager.current())));
     }
 
     /**
@@ -290,7 +305,8 @@ public class SystemCommands {
     private CommandResult help(CommandRequest request) {
         CommandArguments arguments = request.getArguments();
         if (arguments.isEmpty()) {
-            return CommandResult.ok(commandManager.renderHelp());
+            // 无会话时只列「当下真能用」的那几条：把 /status 这类列出来只会让人敲一次得一条报错
+            return CommandResult.ok(commandManager.renderHelp(sessionIdOf(request) != null));
         }
         return CommandResult.ok(commandManager.renderHelp(arguments.getTokens().get(0)));
     }
@@ -319,13 +335,23 @@ public class SystemCommands {
     }
 
     /**
-     * 取全部会话并按创建时间升序排列。
+     * 取全部会话并按<b>最后变更时间倒序</b>排列。
+     * <p>
+     * <b>为什么按 {@code updatedAt} 倒序而不是 {@code createdAt} 升序</b>：这三个调用点
+     * （{@code /session}、{@code /resume} 无参、{@code /delete} 无参）都是「找到我最近在用的那个」，
+     * 而创建时间越早的会话越可能已经被丢弃。倒序后列表的第一项就是最近用过的，
+     * 二级选择页的默认高亮项也落在它上面——「恢复上次会话」不需要单独的功能，
+     * 它就是「倒序列表的第一项」。
      *
-     * @return 排序后的会话列表
+     * @return 排序后的会话列表，最近变更的在前
      */
     private List<Session> sortedSessions() {
         List<Session> sessions = new ArrayList<Session>(sessionManager.all());
-        sessions.sort(Comparator.comparingLong(Session::getCreatedAt));
+        // 三个键依次比较，保证是「全序」：只用 updatedAt 一个键时，同一毫秒内建出的两个会话
+        // 会因为 ConcurrentHashMap 的迭代顺序而每次渲染都换位置。
+        sessions.sort(Comparator.<Session>comparingLong(Session::getUpdatedAt).reversed()
+                .thenComparing(Comparator.<Session>comparingLong(Session::getCreatedAt).reversed())
+                .thenComparing(Session::getSessionId));
         return sessions;
     }
 
@@ -437,10 +463,6 @@ public class SystemCommands {
         if (request.getArguments().size() != 1) {
             return CommandResult.error("用法：/model [provider/model]");
         }
-        String sessionId = sessionIdOf(request);
-        if (sessionId == null) {
-            return CommandResult.error("当前没有会话，可用 /new 新建。");
-        }
         String token = request.getArguments().getTokens().get(0);
         String providerName = null;
         String modelName = token;
@@ -456,6 +478,12 @@ public class SystemCommands {
             modelManager.resolve(providerName, modelName);
         } catch (JellyfishException e) {
             return CommandResult.error("模型不存在：" + token);
+        }
+        String sessionId = sessionIdOf(request);
+        if (sessionId == null) {
+            // 首页：改的是「下次建会话时用什么」，不建会话、留在首页
+            sessionDefaults.setModel(providerName, modelName);
+            return CommandResult.ok("已把下次会话的默认模型设为：" + providerName + "/" + modelName);
         }
         sessionManager.switchModel(sessionId, providerName, modelName);
         return CommandResult.ok("已切换模型：" + providerName + "/" + modelName);
@@ -474,15 +502,17 @@ public class SystemCommands {
         if (request.getArguments().size() != 1) {
             return CommandResult.error("用法：/agent [agentId]");
         }
-        String sessionId = sessionIdOf(request);
-        if (sessionId == null) {
-            return CommandResult.error("当前没有会话，可用 /new 新建。");
-        }
         String agentId = request.getArguments().getTokens().get(0);
         try {
             agentManager.require(agentId);
         } catch (JellyfishException e) {
             return CommandResult.error("agent 不存在：" + agentId);
+        }
+        String sessionId = sessionIdOf(request);
+        if (sessionId == null) {
+            // 首页：改的是「下次建会话时用哪个 agent」，不建会话、留在首页
+            sessionDefaults.setAgentId(agentId);
+            return CommandResult.ok("已把下次会话的默认 agent 设为：" + agentId);
         }
         sessionManager.bindAgent(sessionId, agentId);
         return CommandResult.ok(boundAgentMessage(agentId));
@@ -515,27 +545,62 @@ public class SystemCommands {
      * @return 结果
      */
     private CommandResult mode(CommandRequest request) {
-        Session session = resolveSession(request);
-        if (session == null) {
-            return CommandResult.error("当前没有会话，可用 /new 新建。");
+        String sessionId = sessionIdOf(request);
+        if (request.getArguments().size() > 1) {
+            return CommandResult.error("用法：/mode [plan|normal]");
         }
         if (request.getArguments().isEmpty()) {
+            if (sessionId == null) {
+                // 首页：显示待生效的默认权限模式（尚未设过时就是将来会用的 NORMAL）
+                PermissionMode pending = effectivePermissionMode(null);
+                return CommandResult.choices("下次会话的默认权限模式：" + pending.name().toLowerCase(),
+                        modeChoices(pending));
+            }
+            Session session = sessionManager.require(sessionId);
             return CommandResult.choices("当前权限模式：" + session.getPermissionMode().name().toLowerCase(),
                     modeChoices(session.getPermissionMode()));
         }
-        if (request.getArguments().size() != 1) {
+        String mode = request.getArguments().getTokens().get(0).toLowerCase();
+        PermissionMode requested = parsePermissionMode(mode);
+        if (requested == null) {
             return CommandResult.error("用法：/mode [plan|normal]");
         }
-        String mode = request.getArguments().getTokens().get(0).toLowerCase();
+        if (sessionId == null) {
+            // 首页：改的是「下次建会话时用什么权限模式」，不建会话、留在首页
+            sessionDefaults.setPermissionMode(requested);
+            return CommandResult.ok("已把下次会话的默认权限模式设为：" + mode + "。");
+        }
+        sessionManager.setPermissionMode(sessionId, requested);
+        return CommandResult.ok(requested == PermissionMode.PLAN
+                ? "已切换到计划模式（仅只读工具可用）。"
+                : "已切换到常规模式。");
+    }
+
+    /**
+     * 解析权限模式取值。
+     *
+     * @param mode 取值（已转小写）
+     * @return 解析出的权限模式；取值非法时返回 {@code null}
+     */
+    private static PermissionMode parsePermissionMode(String mode) {
         if (MODE_PLAN.equals(mode)) {
-            sessionManager.setPermissionMode(session.getSessionId(), PermissionMode.PLAN);
-            return CommandResult.ok("已切换到计划模式（仅只读工具可用）。");
+            return PermissionMode.PLAN;
         }
-        if (MODE_NORMAL.equals(mode)) {
-            sessionManager.setPermissionMode(session.getSessionId(), PermissionMode.NORMAL);
-            return CommandResult.ok("已切换到常规模式。");
+        return MODE_NORMAL.equals(mode) ? PermissionMode.NORMAL : null;
+    }
+
+    /**
+     * 取会话当前生效的权限模式。
+     *
+     * @param session 会话运行态，可为 {@code null}（首页）
+     * @return 权限模式：有会话时是会话自己的；无会话时是待生效默认值，两者都没有则按 NORMAL
+     */
+    private PermissionMode effectivePermissionMode(Session session) {
+        if (session != null) {
+            return session.getPermissionMode();
         }
-        return CommandResult.error("用法：/mode [plan|normal]");
+        PermissionMode pending = sessionDefaults.snapshot().getPermissionMode();
+        return pending == null ? PermissionMode.NORMAL : pending;
     }
 
     /**
@@ -819,12 +884,15 @@ public class SystemCommands {
      */
     private List<CommandChoice> modelChoices() {
         Session session = sessionManager.current();
+        SessionDefaults.Values defaults = sessionDefaults.snapshot();
+        // 有会话时标会话当前模型，无会话时标「下次会用的那个」——两处都是用户眼前生效的值
+        String currentProvider = session == null ? defaults.getProvider() : session.getProvider();
+        String currentModel = session == null ? defaults.getModel() : session.getModel();
         List<CommandChoice> choices = new ArrayList<CommandChoice>();
         for (Provider provider : modelManager.getProviders()) {
             for (Model model : provider.getModels()) {
                 String value = provider.getName() + "/" + model.getName();
-                boolean selected = session != null && provider.getName().equals(session.getProvider())
-                        && model.getName().equals(session.getModel());
+                boolean selected = provider.getName().equals(currentProvider) && model.getName().equals(currentModel);
                 choices.add(new CommandChoice(value, value, null, selected));
             }
         }
@@ -838,7 +906,8 @@ public class SystemCommands {
      */
     private List<CommandChoice> agentChoices() {
         Session session = sessionManager.current();
-        String boundAgentId = session == null ? null : session.getAgentId();
+        // 有会话时标会话绑定的 agent，无会话时标「下次会用的那个」
+        String boundAgentId = session == null ? sessionDefaults.snapshot().getAgentId() : session.getAgentId();
         String defaultAgentId = agentManager.getDefaultAgentId();
         List<CommandChoice> choices = new ArrayList<CommandChoice>();
         for (AgentDefinition definition : agentManager.all()) {

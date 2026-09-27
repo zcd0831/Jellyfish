@@ -87,7 +87,8 @@ def jira_create(args, ctx):
 # ---------------------------------------------------------------- 命令
 
 
-@command(name="jira", summary="查看或切换当前工单", usage="/jira [工单号] [状态]", aliases=["j"])
+@command(name="jira", summary="查看或切换当前工单", usage="/jira [工单号] [状态]", aliases=["j"],
+         session_required=False)
 def jira(tokens, raw, ctx):
     """``/jira`` 显示列表；``/jira PROJ-1`` 看一个；``/jira PROJ-1 DONE`` 改状态。
 

@@ -53,7 +53,8 @@ public final class TodoPlugin implements JellyfishPlugin {
         // 先装配仓库再注册：处理器一旦注册就可能被调用，依赖必须已经就绪
         TodoStore store = new TodoStore(directory);
         context.handle(CommandRequest.class, "todo",
-                new CommandDescriptor("查看当前会话待办", null, null), new TodoCommand(store));
+                // 末尾显式声明 sessionRequired=true：待办是按会话归属的，没有会话就没有待办可看
+                new CommandDescriptor("查看当前会话待办", null, null, true), new TodoCommand(store));
         context.contribute(PromptContributionRequest.class, new TodoPromptContribution(store));
         context.contribute(StatusLineContributionRequest.class, new TodoStatusLine(store));
         context.contribute(PanelContributionRequest.class, new TodoPanel(store));

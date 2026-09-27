@@ -14,6 +14,7 @@ import zcd.jellyfish.infra.event.EventChannel;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.model.ModelManager;
 import zcd.jellyfish.infra.permission.ApprovalChannel;
+import zcd.jellyfish.infra.session.SessionDefaults;
 import zcd.jellyfish.infra.session.SessionManager;
 import zcd.jellyfish.infra.ui.UiContributions;
 import zcd.jellyfish.tui.TuiApp;
@@ -91,6 +92,9 @@ public final class TuiRunMode implements RunMode {
     /** 输出面板：只在进入备用屏之前用于报告启动期错误。 */
     private final ConsoleIO console;
 
+    /** 本进程内新建会话的待生效默认值：首页状态栏要显示它，否则「将要使用」的展示是过期的。 */
+    private final SessionDefaults sessionDefaults;
+
     /**
      * 构造 TUI 模式。
      *
@@ -108,7 +112,7 @@ public final class TuiRunMode implements RunMode {
     public TuiRunMode(AgentHarness harness, CommandManager commands, SessionManager sessions,
                       ModelManager models, AgentManager agents, ExtensionRegistry extensions,
                       EventChannel events, ApprovalChannel approvals, ConversationCompactor compactor,
-                      ConsoleIO console) {
+                      ConsoleIO console, SessionDefaults sessionDefaults) {
         this.harness = Objects.requireNonNull(harness, "harness must not be null");
         this.commands = Objects.requireNonNull(commands, "commands must not be null");
         this.sessions = Objects.requireNonNull(sessions, "sessions must not be null");
@@ -119,6 +123,7 @@ public final class TuiRunMode implements RunMode {
         this.approvals = Objects.requireNonNull(approvals, "approvals must not be null");
         this.compactor = Objects.requireNonNull(compactor, "compactor must not be null");
         this.console = Objects.requireNonNull(console, "console must not be null");
+        this.sessionDefaults = Objects.requireNonNull(sessionDefaults, "sessionDefaults must not be null");
     }
 
     /**
@@ -146,7 +151,7 @@ public final class TuiRunMode implements RunMode {
         approvals.attach();
         try {
             new TuiApp(harness, commands, sessions, models, agents, uiContributions, approvals,
-                    compactor, options.isShowThinking()).run();
+                    compactor, options.isShowThinking(), sessionDefaults).run();
             return ExitCodes.OK;
         } catch (JellyfishException e) {
             // 回合未收敛仍然只算正常结束：它是「答完了但没收敛」，不是执行失败。

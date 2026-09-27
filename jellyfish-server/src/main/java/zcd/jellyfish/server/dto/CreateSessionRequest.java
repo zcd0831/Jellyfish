@@ -7,8 +7,8 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * {@code POST /sessions} 的请求体：四个字段全可选。
  * <p>
  * <b>为什么全是可空</b>：不填表示「跟随默认」——{@code agentId} / {@code model} 由内核按默认 agent 与
- * 默认模型解析，{@code permissionMode} 按 {@code NORMAL}。服务端启动参数 {@code --agent/--model/--mode}
- * 作为这里的缺省值，因此「服务级默认 + 单次覆盖」在同一处表达。
+ * 默认模型解析，{@code permissionMode} 按 {@code NORMAL}。服务端不再另有一套启动参数默认值：
+ * 「服务级默认」归配置文件（模型默认值在 {@code models.json}），单次覆盖归本请求体。
  * <p>
  * <b>为什么 {@code permissionMode} 是字符串而不是枚举</b>：非法取值要给一条可读的中文提示
  * （「权限模式只能是 NORMAL 或 PLAN」），而直接绑枚举会先被 Jackson 抛成一句泛化错误。

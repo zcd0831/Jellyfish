@@ -165,8 +165,12 @@ public class AgentHarness {
 
     /**
      * 关闭应用：先打一份健康检查（此刻各组件还在运行，报告才有诊断价值），
-     * 再停 ReAct 循环与压缩器（不再接新回合、不再起新压缩），再回收核心命令，
-     * 再停插件（并按 owner 回收注册），最后收敛事件通道；收尾时退订指标并打一份运行期指标汇总。幂等。
+     * 再停 ReAct 循环与压缩器（不再接新回合、不再起新压缩），把未落盘的会话补上，
+     * 再回收核心命令，再停插件（并按 owner 回收注册），最后收敛事件通道；收尾时退订指标并打一份运行期指标汇总。幂等。
+     * <p>
+     * <b>{@code flushAll} 的位置是硬约束</b>：它必须在插件停止<b>之前</b>——落盘经
+     * {@code ExtensionRegistry} 派发 {@code SessionPersistRequest}，插件一旦停掉就没人接了。
+     * 有了它，「回合级落盘」才不至于把「正常退出丢当前回合」变成新行为。
      * <p>
      * 顺序与 {@link #bootstrap()} 相反；任何一步失败都不阻断后续步骤，保证运行总能收敛。
      */
@@ -176,6 +180,8 @@ public class AgentHarness {
         try {
             reActLooper.close();
             conversationCompactor.close();
+            // 必须先于 pluginManager.close()：落盘要经扩展点派发给插件
+            sessionManager.flushAll();
         } finally {
             try {
                 systemCommands.close();

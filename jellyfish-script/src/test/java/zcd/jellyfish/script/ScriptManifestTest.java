@@ -47,8 +47,28 @@ class ScriptManifestTest {
         assertEquals(1, manifest.commands().size());
         assertTrue(manifest.commands().get(0).hasOptions());
         assertEquals("操作", manifest.commands().get(0).descriptor().getSummary());
+        // 清单未声明 sessionRequired：按保守假设当作「需要会话」
+        assertTrue(manifest.commands().get(0).descriptor().isSessionRequired());
         assertEquals(2, manifest.contributions().size());
         assertTrue(manifest.events().contains("SessionCreatedEvent"));
+    }
+
+    @Test
+    @DisplayName("名片里的 sessionRequired 应被读出来，而不是被当成未知键拒绝")
+    void parse_should_readSessionRequired_when_declared() {
+        ScriptManifest manifest = parse("{\"entry\":\"main.py\","
+                + "\"commands\":[{\"name\":\"c\",\"descriptor\":{\"summary\":\"x\","
+                + "\"sessionRequired\":false}}]}");
+
+        assertFalse(manifest.commands().get(0).descriptor().isSessionRequired());
+    }
+
+    @Test
+    @DisplayName("sessionRequired 写错位置（写进命令而不是名片）应被拒绝")
+    void parse_should_reject_when_sessionRequiredIsOutsideDescriptor() {
+        // 它属于名片；写在外面是「写错了地方」，零容忍校验的价值就在于当场报出来
+        assertThrows(JellyfishException.class, () -> parse("{\"entry\":\"main.py\","
+                + "\"commands\":[{\"name\":\"c\",\"sessionRequired\":false}]}"));
     }
 
     @Test

@@ -95,6 +95,7 @@ flowchart TB
 
     %% ===================== 内核内部：接口 + 构造器注入（细实线） =====================
     ReAct -->|"消息 / 上下文 / 当前态 / token"| SessionMgr
+    ReAct ==>|"beginTurn / flush：回合级落盘（不可丢）"| SessionMgr
     ReAct -->|"getCurrentLlmClient"| ModelMgr
     ReAct -->|"调用 LLM"| LLMClient
     ReAct -->|"同步权限检查"| PermMgr
@@ -239,7 +240,7 @@ jellyfish-infra/src/main/java/zcd/jellyfish/infra/
 ├── registry/                   # 注册表底座 TypeRegistry
 ├── extension/                  # 同步派发策略 ExtensionRegistry
 ├── event/                      # 异步派发策略 EventChannel
-├── session/                    # 会话运行态 Session / SessionManager / SessionSnapshots
+├── session/                    # 会话运行态 Session / SessionManager / SessionDefaults / SessionSnapshots
 ├── agent/                      # Agent 定义注册表 AgentManager / AgentRegistry
 ├── command/                    # 命令域服务 CommandManager
 ├── model/                      # 模型注册与路由 ModelManager
@@ -313,13 +314,13 @@ jellyfish-script/src/main/java/zcd/jellyfish/script/
 - **桥接插件的骨架全在 `jellyfish-script/ScriptBridgePlugin`**：探测解释器 → 扫描清单 → 逐脚本按 `pluginId::scriptId` 注册 → 接通事件桥接与熔断 → 注册 `/<语言>` 命令 → 按序关闭。子类只提供 `resolveConfig`（解释器写在哪一个键上、两个默认值）与 `createLanguage`。**要往子类里加第二件事之前，先问它是不是语言无关的**：是就该往上收（判断依据见 `ScriptLanguage` 的 javadoc）。
 - **配置解析、台账渲染与语言无关**：`ScriptBridgeConfig` / `ScriptLedger` 一份服务所有语言；解释器键名保留各语言自己的名字（`pythonPath` / `nodePath`），由薄插件传进去——用户翻配置时找的是他那门语言的词。
 - **`gatewayResources()` 归语言适配**：它是「这门语言的网关由哪几个文件组成」，与解释器路径同类；留给调用方就等于同一份知识在多处各写一遍，而不一致的表现是「网关少了一个文件」——只在第一次调用时才看得见。
-- **两门语言的脚本 API 逐条对应**（`tool` / `command` / `contributes` / `subscribe` / `dumpManifest` / `compareWith`），差异只在语言本身：Python 用装饰器、Node 用「声明 + 就地注册」；Python 从文档字符串取缺省描述，Node 必须显式写 `description`（JS 拿不到注释）。
+- **两门语言的脚本 API 逐条对应**（`tool` / `command` / `contributes` / `subscribe` / `dumpManifest` / `compareWith`），差异只在语言本身：Python 用装饰器、Node 用「声明 + 就地注册」；Python 从文档字符串取缺省描述，Node 必须显式写 `description`（JS 拿不到注释）。**命令名片上的 `session_required` / `sessionRequired` 同样逐条对应，缺省 `True` / `true`**。
 - **候选查询的约定两侧必须一致：`tokens is None`（`tokens === null`）表示「这次是候选查询」**，执行给真实的 `tokens`（`[]` 表示用户没输入参数，与 `None` 不是一回事）。`has_options=True` 让**同一个函数**回答两条路，因此只有这条标记能区分它们；Python 侧还会在**声明期**拒绝看不出两条路的签名并附最小写法，Node 侧拿不到参数名、只能靠 `null` 解引用报错——**约定共享、校验不必对称**。返回一个映射却没有 `choices` 键一律报错，不再补齐成空候选：那正是「忘了分支」的安静版本。
 - **卡死的 worker 怎么收，两门语言的答案不同**：Python 的信号处理器直接 `os._exit`（CPython 在信号处理器返回后才恢复被中断的调用），因此 SIGTERM 一般够用、强杀只在关闭路径上兜底；**Node 的信号处理器排在事件循环上，卡在同步 JS 里的 worker 收不到 SIGTERM**，因此两段式关闭的第二步必须在网关的循环里做。
 - **Node 侧的差异都由语言本身带来**：用 `spawn` + 一条 `init` 帧把脚本目录 / 入口 / 清单送进 worker（Node 没有 `fork`；走 argv 会让清单在进程列表里可见、还会撞参数长度上限）；收尾后必须显式 `process.exit(code)`（`resume` 过的 stdin 是活句柄，会让事件循环一直转）；`require('jellyfish_sdk')` 靠网关给 worker 设 `NODE_PATH`（非相对引入只查 `node_modules` 链与 `NODE_PATH`）。Node 运行时零第三方依赖（`script/{gateway,worker,jellyfish_sdk,script_wire,dump_manifest}.js`），示例见 `examples/scripts/node/`。
 - **协议通道必须同步写**：Python 靠 `PYTHONUNBUFFERED` + 流锁，Node 靠把 `process.stdout.write` 换成同步写。异步缓冲的后果是「一个大结果帧被脚本自己的一行日志半路插入」，而现场是「偶尔收到一帧解析不了」。
 - **离线生成器与运行期入口分开**：清单生成是开发期动作（进程里只该有一个脚本被加载），网关是运行期进程（同时管多个脚本）。`dump_manifest` 与 `gateway --dump-manifest` 共用同一个入口，但网关那侧是延迟加载的，正常路径上连读都不读它。
-- **清单生成器改完实现必须跑一遍**：`--check` 按名字报差异、`--write` 直接落盘（推荐；shell 重定向会先把目标文件截空，而生成器要读它确认入口名）。
+- **清单生成器改完实现必须跑一遍**：`--check` 按名字报差异、`--write` 直接落盘（推荐；shell 重定向会先把目标文件截空，而生成器要读它确认入口名）。**注意 `--check` 只比名字**——名片的 `summary` / `usage` / `aliases` / `sessionRequired` 漂移它看不出来，因此改了名片必须 `--write`，别把 `--check` 通过当成「清单是最新的」。
 
 ### 扩展层：一份注册表 + 两种派发策略
 
@@ -331,9 +332,12 @@ jellyfish-script/src/main/java/zcd/jellyfish/script/
 
 ### 会话与持久化
 
-- **会话状态一律归 `Session`，进程内没有全局当前态**：agentId / 模型 / 权限模式都是会话字段，由 `SessionManager` 统一读写；会话是内存运行态，不设 `session` 配置段。
-- **`SessionManager` 每个变更入口都同步派发 `SessionPersistRequest`，异常原样上抛**：创建先落盘再入表、关闭先落盘再移除、删除走 `SessionDeleteRequest`（删不掉就当没删）。
+- **会话状态一律归 `Session`，进程内没有全局当前态**：agentId / 模型 / 权限模式都是会话字段，由 `SessionManager` 统一读写；会话是内存运行态，不设 `session` 配置段。唯一的进程级字段是 `SessionDefaults`（新建会话的待生效默认值），且**只在 `create` 那一刻被消费**，建完就跟会话无关。
+- **`createDefault()` 四项全传 `null`，包括权限模式**：`null` 的含义是「按待生效默认值、其次按更下层的默认」；显式传 `PermissionMode.NORMAL` 会把首页设的那一层默认值直接跳过。
+- **`SessionManager` 是唯一变更入口，落盘只有两个例外**：变更同步派发 `SessionPersistRequest` 且异常原样上抛（关闭先落盘再移除，删除走 `SessionDeleteRequest`、删不掉就当没删）。例外一：**创建不落盘**——空会话不留文件与提交，`create` 的失败语义随之从「创建时暴露」变成「第一次变更时暴露」。例外二：**回合内的消息追加只标脏**，由 `ReActLooper.execute` 的 `finally` 调 `flush` 落一次（放 `finally` 才盖得住收敛 / 取消 / 超轮次 / 异常四条路径）。因此新契约是「**回合收敛 = 已落盘**」。
 - **恢复的失败语义相反**：`SessionRestoreRequest` 单个插件读不出只告警跳过；恢复必须排在 `pluginManager.bootstrap()` 之后。
+- **延迟落盘的失败语义与即时落盘相反**：`flush` 失败只记 WARN 并**保留脏标记**等下次重试（此刻回合已收敛、回答已展示，升级成回合失败既补不回来也无从补救）。`AgentHarness.shutdown` 必须在 `pluginManager.close()` **之前**调 `flushAll()`——落盘经 `ExtensionRegistry` 派发给插件，插件一停就没人接了；没有这一步，「回合级落盘」会把「Ctrl+C 丢当前回合」变成新行为。
+- **只有消息追加被挂起**：命令、`recordUsage`、`applyCompaction`、`close` 仍即时落盘。因此跑在独立线程上的自动压缩天然不受回合作用域影响——它本来就是一个独立的落盘单元。
 - **跨边界载荷必须是 api 侧快照值类型**（`SessionSnapshot` 及嵌套），映射归 `infra/session/SessionSnapshots`，并用往返测试守字段。**快照类型必须恰好只有一个可见构造器**：新增字段用静态工厂，不要加兼容构造器。
 - **`-parameters` 是全局编译约定，不许去掉**：插件侧 Jackson 靠构造器参数名反序列化，丢了会「文件写得出、重启后读不回」。
 
@@ -412,6 +416,8 @@ jellyfish-script/src/main/java/zcd/jellyfish/script/
 - **`CommandManager` 不注册处理器、不持有会话、不缓存索引**：命令名即路由键，别名与用法来自 `CommandDescriptor`；原文入口与结构化入口共用同一条分发路径，对外壳中立。
 - **系统命令由 `core/command/SystemCommands` 以 owner=core 注册**，`/todo` 由插件注册，`/exit` `/ui` `/thinking` 归外壳；候选查询（`CommandOptionRequest` → `CommandOptions`）是与执行平行的只读路径，不执行命令。
 - **命令审计每个出口经 `finish()` 收口，任何结果下恰好广播一次 `CommandExecutedEvent`**（原文、命令名、三态、owner、耗时，不带输出）；发布失败只记 WARN。
+- **「需不需要会话」是命令自己声明的事实，不是外壳的名单**：`CommandDescriptor.sessionRequired` 缺省 **`true`（保守）**，`ScriptManifest` 的同名字段同口径。外壳据此推导：TUI 首页不列它、手敲它当对话；CLI 启动期必建会话所以不受影响；Server 的会话由请求路径提供。因此「`/new` `/resume` `/delete` 在首页不建会话」这类知识归命令，插件新注册的命令也能被同一规则处理。判定入口是 `CommandManager.shouldRunAsCommand(input, hasSession)`。**未注册的名字与语法错误仍返回 `true`**（交给命令域报错）——否则用户打错命令名会被静默当成提示词发给模型。
+- **`sessionRequired=false` 的命令分两类，别把它们混为一谈**：一类本来就不碰会话（`/help` `/new` `/session` `/resume` `/delete` `/reload`），另一类（`/model` `/agent` `/mode`）是**降级**——有会话时改当前会话，没会话时改「下次建会话的默认值」（`SessionDefaults`），两种情形都不报错、都不建会话。降级那一类必须保证「无会话时也真的能执行完」，否则标志就在说谎。
 
 ### 配置
 
@@ -421,6 +427,7 @@ jellyfish-script/src/main/java/zcd/jellyfish/script/
 - **资源跟着读者走**：`default-agent.json` / `{agentId}.md` 归 infra，摘要指令归压缩插件，`config.json` / `log4j2*.xml` 归 cli——否则换 composition root 时会以「内置 agent 缺失」启动失败而单测全绿。
 - **agent 提示词来自同目录 `{agentId}.md`**，JSON 里的 `systemPrompt` 被忽略；默认 agent 恒为内置（启动与新建会话都绑它，只能 `/agent` 切换）。非法 `agentId` 整条丢弃并告警，用户与内置同名时保留内置。
 - **global/project 合并**：同名 provider / agent / 插件配置段以 project 整对象覆盖；列表段项目级已声明则整体替换（写 `[]` 即清空）。
+- **首页设的「待生效默认值」是运行态，不是配置**：`SessionDefaults` 纯内存、进程退出即失效，**绝不写回任何配置文件**。写配置文件是另一整层能力（写全局还是项目级？项目级覆盖时写全局等于无效；格式保真；与 `/reload` 的顺序），而 `-cli --model x` 今天也是进程级的，语义保持一致、不制造第二套「默认」。它只盖在配置默认值上面（字段为 `null` 表示「这一项继续跟随更下层」），并由 `SessionManager.create` 在建会话那一刻消费。
 - **「字段缺失」≠「显式空数组」**：`allowedTools` / `plugins.enabled` 缺失（null）表示不限制，`[]` 表示一个都不放行 / 不启用；归一成空集合会让 `[]` 退化成 fail-open。`plugins.roots` 不适用。
 - **配置驱动的索引在启动期建立**：构造期只建空索引，`AgentHarness.bootstrap()` 里 `runtimeConfig.refresh()` 之后才装载；`PluginRuntimeConfig` 必须在 `pluginManager.bootstrap()` 之前刷新。
 - **热更新顺序固定**：`modelManager.refresh(true)`（唯一重读文件 + 清客户端缓存）→ `agentManager.refresh(false)` → `pluginRuntimeConfig.refresh` → 比对插件配置段 → `pluginManager.reload` → 广播 `ConfigReloadedEvent`。`synchronized` 单飞，不回滚，触发只有 `/reload`。
@@ -444,12 +451,12 @@ jellyfish-script/src/main/java/zcd/jellyfish/script/
 ### 外壳：CLI / TUI / Server
 
 - **三种启动模式、一个内核**：`-cli` / `-tui` / `-server` 共用 main、DI、`AgentHarness`、`CommandManager`，差异收在 `RunMode`；界面层放 `jellyfish-tui`、服务层放 `jellyfish-server`（放进 cli 会形成 `cli → 子模块 → cli` 循环依赖）。
-- **外壳只做两件事**：用 `CommandManager.isCommand` 判「命令还是对话」，每轮现读 `SessionManager.current()`。启动期 `SessionBootstrap` 保证有当前会话——裸 `-tui`（进首页）与 `-server`（按 id 寻址、启动期不预建）例外。
+- **外壳只做两件事**：用 `CommandManager.shouldRunAsCommand(text, 有无会话)` 判「命令还是对话」（它内部先做 `isCommand` 的语法判定，再按 `sessionRequired` 与当前上下文决定），每轮现读 `SessionManager.current()`。启动期 `SessionBootstrap` 保证有当前会话——裸 `-tui`（进首页）与 `-server`（按 id 寻址、启动期不预建）例外。
 - **CLI 输出契约**：回答与命令结果走 stdout，诊断 / 进度 / 日志走 stderr；回答按轮缓冲、收敛时整体写出。退出码 `0/2/3/4/6` 是机器契约（5 随占位模式一起移除）。
 - **TUI 视图 = 会话投影 + `InflightTurn` 暂存区**：消息区不持有第二份消息列表，由 `TranscriptProjector` 纯函数投影；流式当前轮尚不在会话里，必须暂存且随回合终结清空。工具轨迹不进暂存区。
 - **TUI 线程契约**：`ReActListener` 回调都在 react 池线程，界面状态只在渲染线程变更；react 线程只向线程安全暂存区追加并置 volatile 脏标记，`Esc` 中断由渲染线程直接调 `ReActTurn.cancel()`。
 - **TUI 消息区必须是单个 `richText`**：布局子元素到 120～180 个即性能断崖；滚动偏移是 `ChatState` 自己的字段。
-- **TUI 从首页进入**：无当前会话时显示 `HomeSplash`；外壳自有命令不建会话，`/new` `/resume` `/delete` 不预先建，其余命令与普通文本先建会话再执行。
+- **TUI 从首页进入**：无当前会话时显示 `HomeSplash`；分流完全交给命令域，外壳不维护名字表——`sessionRequired=false` 的命令（`/help` `/new` `/session` `/resume` `/delete` `/reload`，以及降级的 `/model` `/agent` `/mode`）在首页直接执行且不建会话，其余命令与普通文本先建会话；首页手敲一条 `sessionRequired=true` 的命令（`/compact`）按约定当作用户的话发给模型（不额外提示）。首页状态栏按「`SessionDefaults` → 配置默认值」两级解析（`resolvePendingModel`）——不读第一级的话，用户刚在首页改完会看到状态栏仍显示旧值，与实际将要用到的对不上。
 - **markdown 只在 assistant 正文渲染**：只借 commonmark 的 AST，块级映射与换行自己写；用户消息与工具轨迹保持纯文本。**commonmark 锁 `0.21.0`**（0.22.0 起是 Java 11 字节码），渲染器永不抛异常、解析前先过滤控制字符。
 - **思考过程默认折叠、可全局展开**（`Ctrl+T` / `/thinking` / `--show-thinking`）：思考随消息落会话（`SessionMessage.thinking`），**不进 `LlmMessage`**。开关必须纳入投影的「未变化」判据。
 - **审批浮层优先级高于二级选择页与补全面板**，可见时吞掉其余按键；`Esc` 是「拒绝 + 中断回合」；详情区必须过滤控制字符、超长参数折行而不是截断。
@@ -457,7 +464,7 @@ jellyfish-script/src/main/java/zcd/jellyfish/script/
 #### Server 的会话、流式与审批
 
 - **会话一律按 path 里的 id 寻址，不读 `SessionManager.current()`**：那是进程级单指针，多客户端下不成立。残留的只有 `/model` `/agent` `/mode` 的「选中标记」——那些只读 `current()`，Server 下退化为无标记（外观问题）。
-- **启动期不建会话**：`SessionBootstrap.deferCreation` 对 SERVER 恒真；`-server` 下 `--session` 判用法错误退 2，`--agent` / `--model` / `--mode` 降级为「新建会话的默认值」。
+- **启动期不建会话**：`SessionBootstrap.deferCreation` 就是「不是 CLI」——TUI 先进首页、Server 按 id 寻址，两者启动期都没有「当前会话」这个概念。`--agent` / `--model` / `--mode` **只归 CLI**：CLI 不能交互，新会话的初始值只能靠参数给；TUI 用 `/agent` `/model` `/mode` 命令，Server 用 `POST /sessions` 的请求体（不再有「服务级默认值」这一层，模型默认值归 `models.json`）。其余模式带上这些参数一律判用法错误退 2，`-p` / `--show-thinking` 同理——**拒绝而不是静默忽略**。
 - **一会话一在途回合**：`SessionTurns` 用非重入的 `Semaphore(1)` 占位，且**占位早于 `AgentHarness.chat`**（回合任务一提交就 append 用户消息，事后判断冲突已经污染历史）；冲突回 409，`POST /sessions/{id}/cancel` 取消。
 - **SSE 单写者**：socket 写全在 Undertow 工作线程上循环完成，`react` 线程只把事件投进无界队列（`SseReActListener`）；写失败即客户端断连，据此取消回合。并发流用 `maxStreams` 封顶（超限 503），保住 `/health` 这类短请求。
 - **turnId 由外壳生成**，不用 `ReActTurn.getTurnId()`：后者要等 `chat` 返回才拿得到，而监听器必须先交出去，否则早期回调会带 `null`。

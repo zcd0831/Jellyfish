@@ -28,6 +28,7 @@ import zcd.jellyfish.api.extension.CommandChoice;
 import zcd.jellyfish.api.extension.CommandResult;
 import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.infra.agent.AgentManager;
+import zcd.jellyfish.infra.command.CommandInfo;
 import zcd.jellyfish.infra.command.CommandManager;
 import zcd.jellyfish.infra.config.AgentDefinition;
 import zcd.jellyfish.infra.config.Model;
@@ -40,6 +41,7 @@ import zcd.jellyfish.infra.model.ResolvedModel;
 import zcd.jellyfish.infra.registry.TypeRegistry;
 import zcd.jellyfish.infra.session.Session;
 import zcd.jellyfish.infra.session.SessionManager;
+import zcd.jellyfish.infra.session.SessionDefaults;
 
 import java.util.Arrays;
 import java.util.Collections;
@@ -100,11 +102,14 @@ class SystemCommandsTest {
     /** 被测系统命令注册器。 */
     private SystemCommands systemCommands;
 
+    /** 本进程内新建会话的待生效默认值：与 SessionManager 共用一份，才能验证「首页设的值会落到新会话上」。 */
+    private final SessionDefaults sessionDefaults = new SessionDefaults();
+
     @BeforeEach
     void setUp() {
         ExtensionRegistry extensions = new ExtensionRegistry(new TypeRegistry());
         commandManager = new CommandManager(extensions, events);
-        sessionManager = new SessionManager(agentManager, events, extensions);
+        sessionManager = new SessionManager(agentManager, events, extensions, sessionDefaults);
         // 只有 /compact 需要它，用 lenient 免得其余用例因「多余打桩」被 Mockito 判失败
         lenient().when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
         // 压缩策略由插件提供：命令层用例备一个兜底策略，模拟「装了压缩插件」
@@ -115,7 +120,7 @@ class SystemCommandsTest {
         compactor = new ConversationCompactor(sessionManager, modelManager, runtimeConfig,
                 strategyRegistry, events);
         systemCommands = new SystemCommands(extensions, commandManager, sessionManager, modelManager, agentManager,
-                events, compactor, runtimeConfig, configReloader);
+                events, compactor, runtimeConfig, configReloader, sessionDefaults);
         systemCommands.register();
     }
 
@@ -141,6 +146,20 @@ class SystemCommandsTest {
     }
 
     @Test
+    void register_should_mark_sessionRequiredFlags_asDesigned() {
+        // When：把「哪些命令没有当前会话就不能跑」这张表钉在测试里。
+        // 它决定首页上哪些命令不出现、手敲时被当对话——变了就该有人看见。
+        List<String> sessionRequired = commandManager.commands().stream()
+                .filter(CommandInfo::isSessionRequired)
+                .map(CommandInfo::getName)
+                .sorted()
+                .collect(Collectors.toList());
+
+        // Then
+        assertEquals(Arrays.asList("compact", "status", "usage"), sessionRequired);
+    }
+
+    @Test
     void help_should_render_command_list() {
         // When
         CommandResult result = commandManager.execute("/help");
@@ -148,6 +167,34 @@ class SystemCommandsTest {
         // Then
         assertEquals(CommandResult.Kind.OK, result.getKind());
         assertTrue(result.getOutput().contains("可用命令"));
+    }
+
+    @Test
+    void help_should_hide_session_required_commands_when_no_session() {
+        // Given：首页（没有当前会话）
+        assertNull(sessionManager.current());
+
+        // When
+        CommandResult result = commandManager.execute("/help");
+
+        // Then：列出来的每一条都是当下真能用的，敲了不会得到一条「当前没有会话」
+        assertTrue(result.getOutput().contains("/resume"));
+        assertTrue(result.getOutput().contains("/new"));
+        assertFalse(result.getOutput().contains("/status"));
+        assertFalse(result.getOutput().contains("/compact"));
+    }
+
+    @Test
+    void help_should_list_all_commands_when_session_exists() {
+        // Given
+        commandManager.execute("/new");
+
+        // When
+        CommandResult result = commandManager.execute("/help");
+
+        // Then
+        assertTrue(result.getOutput().contains("/status"));
+        assertTrue(result.getOutput().contains("/compact"));
     }
 
     @Test
@@ -194,20 +241,23 @@ class SystemCommandsTest {
     }
 
     @Test
-    void resume_without_argument_should_offer_session_choices() {
-        // Given：两个会话，当前为第二个
-        Session first = sessionManager.createDefault();
+    void resume_without_argument_should_offer_most_recent_session_first() throws InterruptedException {
+        // Given：先建一个会话，隔开一毫秒再用 /new 建第二个（当前会话）——顺序断言依赖两者时间戳不同
+        Session older = sessionManager.createDefault();
+        Thread.sleep(2L);
         commandManager.execute("/new");
+        String newer = sessionManager.current().getSessionId();
 
         // When
         CommandResult result = commandManager.execute("/resume");
 
-        // Then
+        // Then：按最后变更时间倒序，刚建的排第一且带当前标记（这就是「恢复上次会话」无需单独功能的理由）
         assertEquals(CommandResult.Kind.OK, result.getKind());
         assertTrue(result.hasChoices());
         assertEquals(2, result.getChoices().size());
-        assertEquals(first.getSessionId(), result.getChoices().get(0).getValue());
-        assertTrue(result.getChoices().get(1).isCurrent());
+        assertEquals(newer, result.getChoices().get(0).getValue());
+        assertTrue(result.getChoices().get(0).isCurrent());
+        assertEquals(older.getSessionId(), result.getChoices().get(1).getValue());
     }
 
     @Test
@@ -242,12 +292,83 @@ class SystemCommandsTest {
     }
 
     @Test
-    void model_without_argument_should_report_error_when_session_missing() {
+    void model_with_argument_should_set_pending_default_when_session_missing() {
+        // Given：首页（没有当前会话），模型存在
+        when(modelManager.resolve("openai", "gpt-4o")).thenReturn(resolvedModel("openai", "gpt-4o"));
+        assertNull(sessionManager.current());
+
         // When
         CommandResult result = commandManager.execute("/model openai/gpt-4o");
 
-        // Then
+        // Then：不建会话，只记下「下次用什么」——用户的意图是「我接下来这次对话要用它」
+        assertEquals(CommandResult.Kind.OK, result.getKind());
+        assertNull(sessionManager.current());
+        assertEquals("openai", sessionDefaults.snapshot().getProvider());
+        assertEquals("gpt-4o", sessionDefaults.snapshot().getModel());
+
+        // And：下次建出的会话真的用它
+        Session created = sessionManager.createDefault();
+        assertEquals("openai", created.getProvider());
+        assertEquals("gpt-4o", created.getModel());
+    }
+
+    @Test
+    void model_with_argument_should_reject_unknown_model_without_touchingDefaults() {
+        // Given
+        when(modelManager.resolve("openai", "ghost")).thenThrow(new JellyfishException("not found"));
+
+        // When
+        CommandResult result = commandManager.execute("/model openai/ghost");
+
+        // Then：校验先于写入，错了就不该留下一个坏默认值
         assertEquals(CommandResult.Kind.ERROR, result.getKind());
+        assertNull(sessionDefaults.snapshot().getModel());
+    }
+
+    @Test
+    void agent_with_argument_should_set_pending_default_when_session_missing() {
+        // Given
+        assertNull(sessionManager.current());
+
+        // When
+        CommandResult result = commandManager.execute("/agent coder");
+
+        // Then
+        assertEquals(CommandResult.Kind.OK, result.getKind());
+        assertNull(sessionManager.current());
+        assertEquals("coder", sessionDefaults.snapshot().getAgentId());
+        assertEquals("coder", sessionManager.createDefault().getAgentId());
+    }
+
+    @Test
+    void mode_with_argument_should_set_pending_default_when_session_missing() {
+        // Given
+        assertNull(sessionManager.current());
+
+        // When
+        CommandResult result = commandManager.execute("/mode plan");
+
+        // Then
+        assertEquals(CommandResult.Kind.OK, result.getKind());
+        assertNull(sessionManager.current());
+        assertEquals(PermissionMode.PLAN, sessionDefaults.snapshot().getPermissionMode());
+        assertEquals(PermissionMode.PLAN, sessionManager.createDefault().getPermissionMode());
+    }
+
+    @Test
+    void mode_without_argument_should_show_pending_default_when_session_missing() {
+        // Given：首页上先设过默认权限模式
+        commandManager.execute("/mode plan");
+
+        // When
+        CommandResult result = commandManager.execute("/mode");
+
+        // Then：候选要标出待生效的那个，否则 /mode 在首页敲下去是一片空白
+        assertEquals(CommandResult.Kind.OK, result.getKind());
+        assertTrue(result.getOutput().contains("plan"));
+        assertTrue(result.hasChoices());
+        assertTrue(result.getChoices().stream()
+                .anyMatch(choice -> "plan".equals(choice.getValue()) && choice.isCurrent()));
     }
 
     @Test
@@ -339,10 +460,11 @@ class SystemCommandsTest {
 
     @Test
     void commands_should_report_error_when_no_current_session() {
-        // When / Then：依赖会话的命令在无当前会话时应明确报错而不是 NPE
+        // When / Then：必须读会话内容的命令在无当前会话时应明确报错而不是 NPE。
+        // /mode 与 /model 不在此列：它们在首页降级为「设置下次会话的默认值」，是能执行的。
         assertEquals(CommandResult.Kind.ERROR, commandManager.execute("/status").getKind());
         assertEquals(CommandResult.Kind.ERROR, commandManager.execute("/usage").getKind());
-        assertEquals(CommandResult.Kind.ERROR, commandManager.execute("/mode").getKind());
+        assertEquals(CommandResult.Kind.ERROR, commandManager.execute("/compact").getKind());
         assertNull(sessionManager.current());
     }
 

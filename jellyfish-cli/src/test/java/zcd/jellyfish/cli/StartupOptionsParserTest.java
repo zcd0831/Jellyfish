@@ -143,13 +143,63 @@ class StartupOptionsParserTest {
         assertTrue(error.getMessage().contains("-server 不支持 --session"));
     }
 
-    @Test
-    void parse_should_keep_agent_and_mode_when_server_given() {
-        StartupOptions options = StartupOptionsParser.parse(
-                new String[] {"-server", "--agent", "coder", "--mode", "plan"});
+    @ParameterizedTest
+    @ValueSource(strings = {"-tui", "-server"})
+    void parse_should_fail_when_agent_given_outside_cli(String mode) {
+        JellyfishException error = assertThrows(JellyfishException.class,
+                () -> StartupOptionsParser.parse(new String[] {mode, "--agent", "coder"}));
 
-        assertEquals("coder", options.getAgentId());
-        assertEquals(PermissionMode.PLAN, options.getPermissionMode());
+        assertTrue(error.getMessage().contains("--agent 只在 -cli 下被接受"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"-tui", "-server"})
+    void parse_should_fail_when_model_given_outside_cli(String mode) {
+        JellyfishException error = assertThrows(JellyfishException.class,
+                () -> StartupOptionsParser.parse(new String[] {mode, "--model", "openai/gpt-4o"}));
+
+        assertTrue(error.getMessage().contains("--model 只在 -cli 下被接受"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"-tui", "-server"})
+    void parse_should_fail_when_permission_mode_given_outside_cli(String mode) {
+        JellyfishException error = assertThrows(JellyfishException.class,
+                () -> StartupOptionsParser.parse(new String[] {mode, "--mode", "plan"}));
+
+        assertTrue(error.getMessage().contains("--mode 只在 -cli 下被接受"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"-tui", "-server"})
+    void parse_should_fail_when_print_given_outside_cli(String mode) {
+        JellyfishException error = assertThrows(JellyfishException.class,
+                () -> StartupOptionsParser.parse(new String[] {mode, "-p", "hello"}));
+
+        assertTrue(error.getMessage().contains("-p / --print 只在 -cli 下被接受"));
+    }
+
+    @Test
+    void parse_should_fail_when_show_thinking_given_to_server() {
+        JellyfishException error = assertThrows(JellyfishException.class,
+                () -> StartupOptionsParser.parse(new String[] {"-server", "--show-thinking"}));
+
+        assertTrue(error.getMessage().contains("--show-thinking 只在 -cli / -tui 下被接受"));
+    }
+
+    @Test
+    void parse_should_keep_show_thinking_when_tui_given() {
+        StartupOptions options = StartupOptionsParser.parse(new String[] {"-tui", "--show-thinking"});
+
+        assertTrue(options.isShowThinking());
+        assertEquals(StartupOptions.Mode.TUI, options.getMode());
+    }
+
+    @Test
+    void parse_should_keep_session_when_tui_given() {
+        StartupOptions options = StartupOptionsParser.parse(new String[] {"-tui", "--session", "abc"});
+
+        assertEquals("abc", options.getSessionId());
     }
 
     @Test

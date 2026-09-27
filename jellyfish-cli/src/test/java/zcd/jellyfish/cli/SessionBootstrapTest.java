@@ -162,26 +162,14 @@ class SessionBootstrapTest {
     }
 
     @Test
-    void ensureCurrentSession_should_defer_when_tui_without_session_or_overrides() {
+    void ensureCurrentSession_should_defer_when_tui_without_session() {
         when(sessions.current()).thenReturn(null);
 
         Session actual = bootstrap.ensureCurrentSession(StartupOptions.builder(StartupOptions.Mode.TUI).build());
 
-        // TUI 首页：不建会话，但依然做完了存在性校验（无覆盖项时无需校验）
+        // TUI 首页：不建会话（覆盖项只归 CLI，解析器已拦住 TUI 带 --agent/--model/--mode）
         assertNull(actual);
         verify(sessions, never()).create(null, null, null, null);
-    }
-
-    @Test
-    void ensureCurrentSession_should_still_create_when_tui_given_overrides() {
-        when(sessions.current()).thenReturn(null);
-        when(sessions.create("coder", null, null, null)).thenReturn(session);
-
-        Session actual = bootstrap.ensureCurrentSession(
-                StartupOptions.builder(StartupOptions.Mode.TUI).agentId("coder").build());
-
-        assertSame(session, actual);
-        verify(sessions).switchTo(sessionId);
     }
 
     @Test
@@ -214,19 +202,6 @@ class SessionBootstrapTest {
         // Server 恒不建会话：会话由 HTTP 接口按 id 寻址，启动时先建一个只会留下没人用过的空文件
         assertNull(actual);
         verify(sessions, never()).create(null, null, null, null);
-    }
-
-    @Test
-    void ensureCurrentSession_should_defer_on_server_even_with_overrides() {
-        when(sessions.current()).thenReturn(null);
-        when(agents.require("coder")).thenReturn(null);
-
-        Session actual = bootstrap.ensureCurrentSession(
-                StartupOptions.builder(StartupOptions.Mode.SERVER).agentId("coder").build());
-
-        // 覆盖项在 Server 下是「新建会话的默认值」，不在启动期落到任何会话上
-        assertNull(actual);
-        verify(sessions, never()).create("coder", null, null, null);
     }
 
     @Test

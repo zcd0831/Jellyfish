@@ -36,7 +36,19 @@ public final class CommandDescriptor {
     private final List<String> aliases;
 
     /**
-     * 构造命令名片。
+     * 这条命令是否<b>必须</b>有会话上下文才能工作。
+     * <p>
+     * <b>这是一个内核级、外壳中立的事实</b>，不是「界面怎么显示」的开关：外壳各自决定
+     * 「没有会话时该拿它怎么办」（TUI 不列进补全、手敲当对话；CLI 启动期必建会话所以不受影响；
+     * Server 的会话由请求路径提供）。把「首页」这类界面概念写进 api，等于让插件去理解某一个外壳的结构。
+     * <p>
+     * <b>缺省 {@code true}（保守）</b>：插件不声明就当作需要会话。反过来默认「不需要」会让
+     * 一条依赖会话的命令在无会话时被当对话发给模型，而作者根本没这么想过。
+     */
+    private final boolean sessionRequired;
+
+    /**
+     * 构造命令名片，按保守假设计为「需要会话」。
      *
      * @param summary 一句话说明，可为 {@code null}
      * @param usage   用法片段，可为 {@code null}
@@ -44,9 +56,23 @@ public final class CommandDescriptor {
      * @throws JellyfishException 别名为空白、含空白字符，或以命令前缀（{@code /}）开头时抛出
      */
     public CommandDescriptor(String summary, String usage, List<String> aliases) {
+        this(summary, usage, aliases, true);
+    }
+
+    /**
+     * 构造命令名片。
+     *
+     * @param summary         一句话说明，可为 {@code null}
+     * @param usage           用法片段，可为 {@code null}
+     * @param aliases         别名列表，可为 {@code null}
+     * @param sessionRequired 是否必须有会话上下文才能工作
+     * @throws JellyfishException 别名为空白、含空白字符，或以命令前缀（{@code /}）开头时抛出
+     */
+    public CommandDescriptor(String summary, String usage, List<String> aliases, boolean sessionRequired) {
         this.summary = summary;
         this.usage = usage;
         this.aliases = normalizeAliases(aliases);
+        this.sessionRequired = sessionRequired;
     }
 
     /**
@@ -74,6 +100,15 @@ public final class CommandDescriptor {
      */
     public List<String> getAliases() {
         return aliases;
+    }
+
+    /**
+     * 判断这条命令是否必须有会话上下文才能工作。
+     *
+     * @return 需要会话返回 {@code true}；未声明时为 {@code true}
+     */
+    public boolean isSessionRequired() {
+        return sessionRequired;
     }
 
     @Override

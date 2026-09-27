@@ -85,6 +85,18 @@ public final class CommandInfo {
         return descriptor == null ? null : descriptor.getUsage();
     }
 
+    /**
+     * 判断这条命令是否必须有会话上下文才能工作。
+     * <p>
+     * <b>无名片当作需要会话</b>：插件没声明就按保守处理，与
+     * {@link CommandDescriptor} 的缺省值同一个口径。
+     *
+     * @return 需要会话返回 {@code true}；无名片时为 {@code true}
+     */
+    public boolean isSessionRequired() {
+        return descriptor == null || descriptor.isSessionRequired();
+    }
+
     @Override
     public String toString() {
         return "CommandInfo{name=" + name + '}';

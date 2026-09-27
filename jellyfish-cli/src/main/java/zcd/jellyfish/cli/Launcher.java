@@ -126,7 +126,7 @@ public final class Launcher {
                 return new TuiRunMode(component.agentHarness(), component.commandManager(),
                         component.sessionManager(), component.modelManager(), component.agentManager(),
                         component.extensionRegistry(), component.eventChannel(), component.approvalChannel(),
-                        component.conversationCompactor(), console);
+                        component.conversationCompactor(), console, component.sessionDefaults());
             case SERVER:
                 return new ServerRunMode(component.agentHarness(), component.commandManager(),
                         component.sessionManager(), component.modelManager(), component.agentManager(),

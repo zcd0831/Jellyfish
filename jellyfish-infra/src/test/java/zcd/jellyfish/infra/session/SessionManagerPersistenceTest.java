@@ -26,7 +26,11 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -70,18 +74,18 @@ class SessionManagerPersistenceTest {
     void setUp() {
         registry = new TypeRegistry();
         extensions = new ExtensionRegistry(registry);
-        manager = new SessionManager(agentManager, events, extensions);
+        manager = new SessionManager(agentManager, events, extensions, new SessionDefaults());
     }
 
     @Test
-    @DisplayName("创建会话应把新会话落盘")
-    void create_should_persistNewSession() {
+    @DisplayName("创建会话不落盘：建了却没用过的会话不该在磁盘上留文件与提交")
+    void create_should_notPersistNewSession() {
         List<SessionSnapshot> persisted = capturePersistedSnapshots();
 
         Session session = manager.create(null, null, null, null);
 
-        assertEquals(1, persisted.size());
-        assertEquals(session.getSessionId(), persisted.get(0).getSessionId());
+        assertTrue(persisted.isEmpty(), "空会话在进程退出后自然消失");
+        assertSame(session, manager.require(session.getSessionId()));
     }
 
     @Test
@@ -106,8 +110,8 @@ class SessionManagerPersistenceTest {
         manager.switchModel(sessionId, "openai", "gpt-4o");
         manager.setPermissionMode(sessionId, PermissionMode.PLAN);
 
-        // 1 次创建 + 5 次变更
-        assertEquals(6, persisted.size());
+        // 5 次变更，各落一次（创建本身不落盘，回合外也走即时落盘）
+        assertEquals(5, persisted.size());
         SessionSnapshot last = persisted.get(persisted.size() - 1);
         assertEquals("标题", last.getTitle());
         assertEquals("coder", last.getAgentId());
@@ -126,8 +130,9 @@ class SessionManagerPersistenceTest {
 
         manager.close(sessionId);
 
-        assertEquals(3, persisted.size());
-        assertEquals(1, persisted.get(2).getMessages().size());
+        // appendMessage 与 close 各一次（创建不落盘）
+        assertEquals(2, persisted.size());
+        assertEquals(1, persisted.get(1).getMessages().size());
     }
 
     @Test
@@ -186,7 +191,7 @@ class SessionManagerPersistenceTest {
 
         manager.delete(sessionId);
 
-        assertEquals(1, persisted.size(), "只有创建时那一次落盘");
+        assertEquals(0, persisted.size(), "一次都不落：创建不落，delete 也不需要落最后快照");
     }
 
     @Test
@@ -347,6 +352,193 @@ class SessionManagerPersistenceTest {
 
         assertEquals(2, manager.messagesOf("s-1").size());
         assertFalse(manager.messagesOf("s-1").isEmpty());
+    }
+
+    @Test
+    @DisplayName("回合内的消息追加只标脏，一条都不落盘")
+    void appendMessage_should_defer_whenTurnInProgress() {
+        List<SessionSnapshot> persisted = capturePersistedSnapshots();
+        String sessionId = manager.create(null, null, null, null).getSessionId();
+
+        manager.beginTurn(sessionId);
+        manager.appendMessage(sessionId, LlmMessage.user("一"), null);
+        manager.appendMessage(sessionId, LlmMessage.assistant("二"), null);
+
+        assertTrue(persisted.isEmpty(), "回合内不逐条落盘，结束后才落一次");
+    }
+
+    @Test
+    @DisplayName("整个回合只落一次，快照带着回合内的全部消息")
+    void flush_should_persistOnceForWholeTurn() {
+        List<SessionSnapshot> persisted = capturePersistedSnapshots();
+        String sessionId = manager.create(null, null, null, null).getSessionId();
+
+        manager.beginTurn(sessionId);
+        manager.appendMessage(sessionId, LlmMessage.user("一"), null);
+        manager.appendMessage(sessionId, LlmMessage.assistant("二"), null);
+        manager.flush(sessionId);
+
+        assertEquals(1, persisted.size());
+        assertEquals(2, persisted.get(0).getMessages().size());
+    }
+
+    @Test
+    @DisplayName("flush 之后的追加回到即时落盘，不会一直攒着")
+    void appendMessage_should_persistImmediately_afterFlush() {
+        List<SessionSnapshot> persisted = capturePersistedSnapshots();
+        String sessionId = manager.create(null, null, null, null).getSessionId();
+        manager.beginTurn(sessionId);
+        manager.appendMessage(sessionId, LlmMessage.user("一"), null);
+        manager.flush(sessionId);
+
+        manager.appendMessage(sessionId, LlmMessage.assistant("二"), null);
+
+        assertEquals(2, persisted.size());
+    }
+
+    @Test
+    @DisplayName("flush 落盘失败只记 WARN，不上抛：回合已收敛，失败补救不了")
+    void flush_should_notPropagate_whenPersistFails() {
+        String sessionId = manager.create(null, null, null, null).getSessionId();
+        extensions.contribute("broken", SessionPersistRequest.class, null, request -> {
+            throw new JellyfishException("磁盘满了");
+        }, RegisterOptions.DEFAULT);
+        manager.beginTurn(sessionId);
+        manager.appendMessage(sessionId, LlmMessage.user("你好"), null);
+
+        // 回合内追加不上抛（它本来就不落盘），真正会失败的是回合终结的 flush
+        assertDoesNotThrow(() -> manager.flush(sessionId));
+    }
+
+    @Test
+    @DisplayName("flush 失败后保留脏标记，关停时 flushAll 还能补一次")
+    void flushAll_should_retry_whenFlushFailed() {
+        boolean[] broken = {true};
+        List<SessionSnapshot> persisted = new ArrayList<SessionSnapshot>();
+        extensions.contribute("flaky", SessionPersistRequest.class, null, request -> {
+            if (broken[0]) {
+                throw new JellyfishException("磁盘满了");
+            }
+            persisted.add(request.getSnapshot());
+            return null;
+        }, RegisterOptions.DEFAULT);
+        String sessionId = manager.create(null, null, null, null).getSessionId();
+        manager.beginTurn(sessionId);
+        manager.appendMessage(sessionId, LlmMessage.user("你好"), null);
+        manager.flush(sessionId);
+        assertTrue(persisted.isEmpty(), "第一次 flush 失败了");
+
+        broken[0] = false;
+        manager.flushAll();
+
+        assertEquals(1, persisted.size());
+        assertEquals(1, persisted.get(0).getMessages().size());
+    }
+
+    @Test
+    @DisplayName("flushAll 也能落下来的回合正在进行的会话")
+    void flushAll_should_persistDirtySession_whenTurnStillInProgress() {
+        List<SessionSnapshot> persisted = capturePersistedSnapshots();
+        String sessionId = manager.create(null, null, null, null).getSessionId();
+        manager.beginTurn(sessionId);
+        manager.appendMessage(sessionId, LlmMessage.user("你好"), null);
+
+        manager.flushAll();
+
+        assertEquals(1, persisted.size());
+    }
+
+    @Test
+    @DisplayName("flush 对不存在的会话与 null 都是幂等的，不抛错")
+    void flush_should_beIdempotent_whenSessionMissing() {
+        assertDoesNotThrow(() -> manager.flush("missing"));
+        assertDoesNotThrow(() -> manager.flush(null));
+    }
+
+    @Test
+    @DisplayName("同一会话的两次并发落盘必须串行：最后写下的必须是最新那份快照")
+    void persist_should_serializeConcurrentWritesOnSameSession() throws InterruptedException {
+        // Given：第一个落盘进到处理器里就停住，把并发窗口留给第二个线程
+        List<Integer> written = Collections.synchronizedList(new ArrayList<Integer>());
+        AtomicInteger calls = new AtomicInteger();
+        CountDownLatch firstEntered = new CountDownLatch(1);
+        CountDownLatch releaseFirst = new CountDownLatch(1);
+        extensions.contribute("recorder", SessionPersistRequest.class, null, request -> {
+            if (calls.incrementAndGet() == 1) {
+                firstEntered.countDown();
+                awaitQuietly(releaseFirst);
+            }
+            written.add(request.getSnapshot().getMessages().size());
+            return null;
+        }, RegisterOptions.DEFAULT);
+        String sessionId = manager.create(null, null, null, null).getSessionId();
+
+        // When：两个线程各自追加一条消息，走的都是即时落盘
+        Thread first = new Thread(() -> manager.appendMessage(sessionId, LlmMessage.user("一"), null));
+        first.start();
+        assertTrue(firstEntered.await(5, TimeUnit.SECONDS), "第一个落盘没有进入处理器");
+        Thread second = new Thread(() -> manager.appendMessage(sessionId, LlmMessage.user("二"), null));
+        second.start();
+        second.join(200L);
+
+        // Then：第二个应当卡在同一会话的落盘锁上（连快照都还没捕获）
+        assertTrue(second.isAlive(), "同一会话的第二次落盘应当被串行化");
+        releaseFirst.countDown();
+        first.join(5000L);
+        second.join(5000L);
+
+        // 落盘顺序 = 状态推进顺序，因此先写 1 条、再写 2 条；反过来就是「旧快照后写」丢更新
+        assertEquals(Arrays.asList(1, 2), written);
+    }
+
+    @Test
+    @DisplayName("删除与落盘共锁：在途的落盘不该在删除之后把会话又写回来")
+    void delete_should_notBeOvertakenByInFlightPersist() throws InterruptedException {
+        // Given
+        List<String> order = Collections.synchronizedList(new ArrayList<String>());
+        AtomicInteger calls = new AtomicInteger();
+        CountDownLatch firstEntered = new CountDownLatch(1);
+        CountDownLatch releaseFirst = new CountDownLatch(1);
+        extensions.contribute("recorder", SessionPersistRequest.class, null, request -> {
+            if (calls.incrementAndGet() == 1) {
+                firstEntered.countDown();
+                awaitQuietly(releaseFirst);
+            }
+            order.add("persist");
+            return null;
+        }, RegisterOptions.DEFAULT);
+        extensions.contribute("eraser", SessionDeleteRequest.class, null, request -> {
+            order.add("delete");
+            return null;
+        }, RegisterOptions.DEFAULT);
+        String sessionId = manager.create(null, null, null, null).getSessionId();
+
+        // When：一次落盘卡在途中时删这个会话
+        Thread persist = new Thread(() -> manager.appendMessage(sessionId, LlmMessage.user("一"), null));
+        persist.start();
+        assertTrue(firstEntered.await(5, TimeUnit.SECONDS), "落盘没有进入处理器");
+        Thread delete = new Thread(() -> manager.delete(sessionId));
+        delete.start();
+        delete.join(200L);
+        releaseFirst.countDown();
+        persist.join(5000L);
+        delete.join(5000L);
+
+        // Then：删除排在落盘之后，不会出现「删完又被写回来」
+        assertEquals(Arrays.asList("persist", "delete"), order);
+    }
+
+    /**
+     * 等待一个闩锁；中断时恢复中断位，不让检查型异常泄漏到处理器签名里。
+     *
+     * @param latch 闩锁
+     */
+    private static void awaitQuietly(CountDownLatch latch) {
+        try {
+            latch.await(5, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     /**

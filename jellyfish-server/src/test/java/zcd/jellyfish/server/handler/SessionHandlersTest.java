@@ -205,18 +205,16 @@ class SessionHandlersTest {
     }
 
     @Test
-    void create_should_use_server_defaults_when_body_omits_them() {
-        ServerConfig config = ServerConfig.builder("127.0.0.1", 9096)
-                .sessionDefaults("coder", "openai", "gpt-4o", PermissionMode.PLAN).build();
-        SessionHandlers withDefaults = new SessionHandlers(config, sessions, agents, models,
-                new zcd.jellyfish.server.SessionTurns());
+    void create_should_pass_body_values_through_without_server_defaults() {
         Session created = session("s1", 1L);
         when(sessions.create(eq("coder"), eq("openai"), eq("gpt-4o"), eq(PermissionMode.PLAN)))
                 .thenReturn(created);
-        Fixture fixture = fixture("");
+        Fixture fixture = fixture("{\"agentId\":\"coder\",\"provider\":\"openai\","
+                + "\"model\":\"gpt-4o\",\"permissionMode\":\"PLAN\"}");
 
-        withDefaults.create(fixture.exchange, PathParams.empty());
+        handlers.create(fixture.exchange, PathParams.empty());
 
+        // 服务端不再另有「启动参数默认值」这一层，请求体的取值原样交给内核
         verify(sessions).create(eq("coder"), eq("openai"), eq("gpt-4o"), eq(PermissionMode.PLAN));
         verify(fixture.exchange).setStatusCode(201);
     }

@@ -93,17 +93,17 @@ public final class StartupOptionsParser {
             + "  -server [端口]        以 HTTP 服务运行，端口缺省 "
             + StartupOptions.DEFAULT_PORT + "\n"
             + "\n"
-            + "选项：\n"
-            + "  -p, --print <输入>      单次模式的输入；缺省时从 stdin 读到 EOF\n"
-            + "      --session <会话>    切换到已有会话\n"
-            + "      --agent <agentId>   新建会话时绑定 agent\n"
+            + "选项（未标注适用模式的三种模式通用；标注了的只在对应模式下被接受）：\n"
+            + "  -p, --print <输入>      单次模式的输入；缺省时从 stdin 读到 EOF（仅 -cli）\n"
+            + "      --session <会话>    切换到已有会话（-cli / -tui）\n"
+            + "      --agent <agentId>   新会话绑定的 agent（仅 -cli；TUI 用 /agent，Server 用 POST /sessions）\n"
             + "      --model <provider/模型>\n"
-            + "                          新建会话时指定模型（必须含 \"/\"）\n"
+            + "                          新会话指定的模型，必须含 \"/\"（仅 -cli；TUI 用 /model）\n"
             + "      --mode <plan|normal>\n"
-            + "                          新建会话的权限模式\n"
-            + "      --port <端口>       服务器端口（等价于 -server 的位置参数）\n"
-            + "      --host <地址>       服务器绑定地址，缺省 " + StartupOptions.DEFAULT_HOST + "\n"
-            + "      --show-thinking     展示思考过程（cli：打到 stderr；tui：启动时展开）\n"
+            + "                          新会话的权限模式（仅 -cli；TUI 用 /mode）\n"
+            + "      --port <端口>       服务器端口（仅 -server，等价于 -server 的位置参数）\n"
+            + "      --host <地址>       服务器绑定地址（仅 -server），缺省 " + StartupOptions.DEFAULT_HOST + "\n"
+            + "      --show-thinking     展示思考过程（-cli：打到 stderr；-tui：启动时展开）\n"
             + "      --verbose           日志级别降到 DEBUG\n"
             + "  -h, --help              显示本帮助\n"
             + "  -V, --version           显示版本号\n"
@@ -227,6 +227,17 @@ public final class StartupOptionsParser {
         if (mode == null) {
             throw new JellyfishException("请指定启动模式：-cli / -tui / -server（用 -h 查看用法）");
         }
+        requireCliOnly(mode, prompt != null, "-p / --print",
+                "TUI 直接在界面里输入，Server 的对话走 HTTP 接口");
+        requireCliOnly(mode, agentId != null, "--agent",
+                "TUI 用 /agent 设置，Server 在 POST /sessions 请求体里指定");
+        requireCliOnly(mode, provider != null || model != null, "--model",
+                "TUI 用 /model 设置，Server 在 POST /sessions 请求体里指定");
+        requireCliOnly(mode, permissionMode != null, "--mode",
+                "TUI 用 /mode 设置，Server 在 POST /sessions 请求体里指定");
+        if (mode == StartupOptions.Mode.SERVER && showThinking) {
+            throw new JellyfishException("--show-thinking 只在 -cli / -tui 下被接受：-server 没有终端界面");
+        }
         if (mode != StartupOptions.Mode.SERVER && (!positionals.isEmpty() || portOption != null
                 || hostOption != null)) {
             throw new JellyfishException("只有 -server 支持端口与绑定地址");
@@ -254,6 +265,27 @@ public final class StartupOptionsParser {
                 .prompt(prompt).sessionId(sessionId).agentId(agentId).model(provider, model)
                 .permissionMode(permissionMode).port(port).host(hostOption)
                 .showThinking(showThinking).verbose(verbose).help(help).version(version).build();
+    }
+
+    /**
+     * 校验某个参数只在 CLI 下被接受。
+     * <p>
+     * <b>为什么拒绝而不是忽略</b>：{@code -tui --agent coder} 若被静默丢掉，用户会以为参数生效了，
+     * 而实际用的是默认 agent——这种「敲了没反应」比一条用法错误难排查得多。
+     * <p>
+     * 三种模式里只有 CLI 不能交互，因此「新会话的初始值」只能靠参数给定；TUI 有 {@code /agent} 等命令，
+     * Server 由 {@code POST /sessions} 的请求体承担，两侧都不缺能力，参数才是多余的。
+     *
+     * @param mode     启动模式
+     * @param provided 是否提供了该参数
+     * @param flag     旗标名，用于错误信息
+     * @param advice   替代做法，用于错误信息
+     * @throws JellyfishException 非 CLI 模式下提供了该参数时抛出
+     */
+    private static void requireCliOnly(StartupOptions.Mode mode, boolean provided, String flag, String advice) {
+        if (mode != StartupOptions.Mode.CLI && provided) {
+            throw new JellyfishException(flag + " 只在 -cli 下被接受（" + mode.getFlag() + "）：" + advice);
+        }
     }
 
     /**

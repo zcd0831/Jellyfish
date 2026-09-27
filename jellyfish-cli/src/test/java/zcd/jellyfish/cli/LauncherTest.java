@@ -27,6 +27,7 @@ import zcd.jellyfish.infra.config.RuntimeConfig;
 import zcd.jellyfish.infra.permission.ApprovalChannel;
 import zcd.jellyfish.infra.registry.TypeRegistry;
 import zcd.jellyfish.infra.session.Session;
+import zcd.jellyfish.infra.session.SessionDefaults;
 import zcd.jellyfish.infra.session.SessionManager;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -106,6 +107,9 @@ class LauncherTest {
     private EventPublisher events;
 
     private SessionManager sessions;
+
+    /** 首页状态栏要读的待生效默认值；TUI 装配需要它。 */
+    private final SessionDefaults sessionDefaults = new SessionDefaults();
 
     private Session session;
 
@@ -273,6 +277,7 @@ conversationCompactor = new ConversationCompactor(sessions, models, runtimeConfi
         when(component.eventChannel()).thenReturn(eventChannel);
         when(component.approvalChannel()).thenReturn(approvalChannel);
         when(component.conversationCompactor()).thenReturn(conversationCompactor);
+        when(component.sessionDefaults()).thenReturn(sessionDefaults);
     }
 
     /**

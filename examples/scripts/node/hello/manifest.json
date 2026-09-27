@@ -38,7 +38,8 @@
         "usage": "/hello <名字>",
         "aliases": [
           "hi"
-        ]
+        ],
+        "sessionRequired": false
       },
       "hasOptions": true
     }

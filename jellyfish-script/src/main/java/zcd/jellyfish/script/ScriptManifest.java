@@ -58,7 +58,7 @@ public final class ScriptManifest {
     private static final Set<String> COMMAND_KEYS = keys("name", "descriptor", "hasOptions");
 
     /** 命令名片允许的键。 */
-    private static final Set<String> DESCRIPTOR_KEYS = keys("summary", "usage", "aliases");
+    private static final Set<String> DESCRIPTOR_KEYS = keys("summary", "usage", "aliases", "sessionRequired");
 
     /** 候选查询条目允许的键。 */
     private static final Set<String> COMMAND_OPTION_KEYS = keys("name");
@@ -285,11 +285,13 @@ public final class ScriptManifest {
     private static CommandDescriptor descriptor(JsonNode node, String where) {
         String path = where + ".descriptor";
         if (node == null || node.isNull()) {
+            // 整块名片都没写：按缺省处理（含 sessionRequired = true 这个保守假设）
             return new CommandDescriptor(null, null, null);
         }
         requireObject(node, path);
         rejectUnknownKeys(node, path, DESCRIPTOR_KEYS);
-        return new CommandDescriptor(text(node, "summary"), text(node, "usage"), strings(node.get("aliases"), path));
+        return new CommandDescriptor(text(node, "summary"), text(node, "usage"),
+                strings(node.get("aliases"), path), bool(node, "sessionRequired", true));
     }
 
     /**

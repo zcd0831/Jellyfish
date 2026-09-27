@@ -29,6 +29,7 @@ import zcd.jellyfish.infra.model.ModelManager;
 import zcd.jellyfish.infra.model.ResolvedModel;
 import zcd.jellyfish.infra.permission.ApprovalChannel;
 import zcd.jellyfish.infra.session.Session;
+import zcd.jellyfish.infra.session.SessionDefaults;
 import zcd.jellyfish.infra.session.SessionManager;
 import zcd.jellyfish.infra.session.SessionMessage;
 import zcd.jellyfish.infra.ui.OwnedPanel;
@@ -36,15 +37,12 @@ import zcd.jellyfish.infra.ui.UiContributions;
 import zcd.jellyfish.infra.ui.UiSnapshot;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.Set;
 
 /**
  * TUI 外壳：交互式终端界面的组装与事件循环。
@@ -70,10 +68,9 @@ import java.util.Set;
  * </ol>
  * <p>
  * <b>首页与会话页是同一个界面的两种投影</b>：裸 {@code -tui} 启动时没有当前会话，消息区显示
- * {@link HomeSplash} 字标（首页）；用户真正发起对话或执行命令时才建会话（见
- * {@link #SESSION_DOMAIN_COMMANDS}），界面随之变成会话投影。因为视图本来就是「会话的投影」，
- * 两种状态共用同一条渲染路径（{@link ChatState} 按 {@code sessionId} 是否为 {@code null} 分支），
- * 不需要第二套界面。壳内唯一的硬约束是「不要假设当前会话一定存在」——
+ * {@link HomeSplash} 字标（首页）；用户真正发起对话时才建会话，界面随之变成会话投影。因为视图本来就是
+ * 「会话的投影」，两种状态共用同一条渲染路径（{@link ChatState} 按 {@code sessionId} 是否为 {@code null}
+ * 分支），不需要第二套界面。壳内唯一的硬约束是「不要假设当前会话一定存在」——
  * 补全、候选查询、命令分发都可能在首页发生。
  * <p>
  * <b>回合为什么是异步的</b>：{@code chat} 返回 {@link ReActTurn} 句柄并在专用线程池里推进，
@@ -125,6 +122,15 @@ public final class TuiApp extends ToolkitApp {
      */
     private final ConversationCompactor compactor;
 
+    /**
+     * 本进程内新建会话的待生效默认值。
+     * <p>
+     * 首页状态栏要读它：那里展示的是「现在如果用，会用哪个 agent 与模型」，而
+     * {@code /model} {@code /agent} {@code /mode} 在首页改的就是这个值。不读它，用户改完会看到
+     * 状态栏依旧显示配置默认值——展示与实际将要使用的值对不上。
+     */
+    private final SessionDefaults sessionDefaults;
+
     /** 视图状态。 */
     private final ChatState chatState = new ChatState();
 
@@ -168,21 +174,6 @@ public final class TuiApp extends ToolkitApp {
     /** {@code /thinking} 在补全清单里的条目。 */
     private static final CommandInfo THINKING_INFO = new CommandInfo(ShellCommand.THINKING_NAME,
             new CommandDescriptor("展开 / 折叠思考过程", null, null));
-
-    /**
-     * 「会话域命令」：在首页上执行时<b>不</b>先建当前会话的那些命令。
-     * <p>
-     * 只有这几类不属于「先建一个新会话再执行」语义：{@code /new} 自己就会建会话，
-     * {@code /resume} 是切到<b>已有</b>会话，{@code /delete} 是删掉某个会话。尤其是 {@code /delete}：
-     * 若它也在首页先建一个空会话，就会变成「删了一个、又造了一个」，净效果为零，
-     * 正好与用户要的清理目标相反；{@code /new} 若先建一个，一次会多出一条空会话。
-     * 其余命令（含 {@code /session}）一律先建会话再执行。
-     * <p>
-     * 命令名与别名镜像 {@code core/command/SystemCommands} 的注册。与 {@link ShellCommand}
-     * 硬编码外壳命令名是同一类取舍：外壳需要知道少数几条命令的语义来分流。
-     */
-    private static final Set<String> SESSION_DOMAIN_COMMANDS = Collections.unmodifiableSet(
-            new HashSet<String>(Arrays.asList("new", "resume", "delete", "rm")));
 
     /**
      * 插件 UI 的逃生门系统属性。
@@ -255,6 +246,28 @@ public final class TuiApp extends ToolkitApp {
     public TuiApp(AgentHarness harness, CommandManager commands, SessionManager sessions, ModelManager models,
                   AgentManager agents, UiContributions uiContributions, ApprovalChannel approvals,
                   ConversationCompactor compactor, boolean thinkingExpanded) {
+        this(harness, commands, sessions, models, agents, uiContributions, approvals, compactor,
+                thinkingExpanded, new SessionDefaults());
+    }
+
+    /**
+     * 构造 TUI 外壳。
+     *
+     * @param harness  智能入口，不可为 {@code null}
+     * @param commands 命令域服务，不可为 {@code null}
+     * @param sessions 会话域服务，不可为 {@code null}
+     * @param models   模型门面，不可为 {@code null}
+     * @param agents   agent 门面，不可为 {@code null}
+     * @param uiContributions 插件 UI 贡献门面，不可为 {@code null}
+     * @param approvals 人工审批通道，不可为 {@code null}
+     * @param compactor 会话压缩器，不可为 {@code null}
+     * @param thinkingExpanded 启动时是否展开思考过程（{@code --show-thinking} 置为 {@code true}）
+     * @param sessionDefaults 本进程内新建会话的待生效默认值，不可为 {@code null}
+     */
+    public TuiApp(AgentHarness harness, CommandManager commands, SessionManager sessions, ModelManager models,
+                  AgentManager agents, UiContributions uiContributions, ApprovalChannel approvals,
+                  ConversationCompactor compactor, boolean thinkingExpanded,
+                  SessionDefaults sessionDefaults) {
         this.harness = Objects.requireNonNull(harness, "harness must not be null");
         this.commands = Objects.requireNonNull(commands, "commands must not be null");
         this.sessions = Objects.requireNonNull(sessions, "sessions must not be null");
@@ -263,6 +276,7 @@ public final class TuiApp extends ToolkitApp {
         this.uiContributions = Objects.requireNonNull(uiContributions, "uiContributions must not be null");
         this.approvals = Objects.requireNonNull(approvals, "approvals must not be null");
         this.compactor = Objects.requireNonNull(compactor, "compactor must not be null");
+        this.sessionDefaults = Objects.requireNonNull(sessionDefaults, "sessionDefaults must not be null");
         this.uiCache = new UiCache(uiContributions);
         this.pluginPanelsEnabled = pluginPanelsEnabled();
         this.input = new ChatInputView(inputKeys);
@@ -447,7 +461,11 @@ public final class TuiApp extends ToolkitApp {
     }
 
     /**
-     * 取全部可用命令，供补全过滤。
+     * 取当前上下文下可用的命令，供补全过滤。
+     * <p>
+     * <b>首页时滤掉需要会话的那些</b>：{@code /compact} 这类命令在首页上根本不是命令
+     * （手敲会被当对话发给模型），列在补全面板里只会误导。判据来自命令自己的名片
+     * （{@code CommandDescriptor.sessionRequired}），外壳不维护第二份名单。
      * <p>
      * 在外壳自有命令之外追加一条 {@code /exit}：它不进内核命令注册表（见 {@link ShellCommand}），
      * 但用户敲补全时应该看得到它。追加后重排序，保持清单整体按命令名升序。
@@ -456,7 +474,14 @@ public final class TuiApp extends ToolkitApp {
      */
     private List<CommandInfo> availableCommands() {
         try {
-            List<CommandInfo> infos = new ArrayList<CommandInfo>(commands.commands());
+            boolean hasSession = currentSessionIdOrNull() != null;
+            List<CommandInfo> infos = new ArrayList<CommandInfo>();
+            for (CommandInfo info : commands.commands()) {
+                if (hasSession || !info.isSessionRequired()) {
+                    infos.add(info);
+                }
+            }
+            // 外壳自有命令全都不依赖会话，永远列出来
             infos.add(EXIT_INFO);
             infos.add(UI_INFO);
             infos.add(THINKING_INFO);
@@ -506,9 +531,13 @@ public final class TuiApp extends ToolkitApp {
     /**
      * 处理用户提交。
      * <p>
-     * <b>首页上的分流规则</b>：普通文本与绝大多数命令都先建一个当前会话再执行
-     * （见 {@link #SESSION_DOMAIN_COMMANDS} 说明例外），{@code /exit} {@code /ui} 是外壳自有命令，
-     * 不建会话。
+     * <b>首页上的分流完全交给命令域</b>：{@code CommandManager.shouldRunAsCommand} 回答
+     * 「这条输入在当前上下文下该不该当命令」。外壳不再维护一份「哪些命令在首页不建会话」的名字表——
+     * 那份知识归命令自己的名片（{@code CommandDescriptor.sessionRequired}），
+     * 否则插件新注册一条命令时，外壳无从得知它需不需要会话。
+     * <p>
+     * 走到 {@code false} 分支的就是「要发给模型」的那一类：普通文本，或者<b>在首页手敲了一条需要会话的
+     * 命令</b>（{@code /compact}）——按约定它当作用户的话发出去。
      */
     private void submit() {
         if (input.isBlank()) {
@@ -531,18 +560,13 @@ public final class TuiApp extends ToolkitApp {
             return;
         }
         String sessionId = currentSessionIdOrNull();
-        if (sessionId == null && !isSessionDomainCommand(text)) {
-            // 首页 + 非会话域命令：先建会话再执行，界面随之进入会话页
-            sessionId = createSession();
-        }
-        if (commands.isCommand(text)) {
+        if (commands.shouldRunAsCommand(text, sessionId != null)) {
             executeCommand(text, sessionId);
             return;
         }
         if (sessionId == null) {
-            // 理论不可达：非命令文本不会命中会话域例外，上面一定已经建过会话
-            chatState.appendNotice("当前没有会话，可用 /new 新建。", ShellNotice.Kind.ERROR);
-            return;
+            // 首页上要发给模型：建会话，界面随之进入会话页
+            sessionId = createSession();
         }
         startTurn(text, sessionId);
     }
@@ -660,20 +684,6 @@ public final class TuiApp extends ToolkitApp {
             default:
                 return ShellNotice.Kind.INFO;
         }
-    }
-
-    /**
-     * 判断一条输入是不是「会话域命令」（在首页上不建会话）。
-     * <p>
-     * 只取第一个词并去掉前缀，不查注册表——与 {@link ShellCommand} 同口径：外壳只需要知道
-     * {@link #SESSION_DOMAIN_COMMANDS} 这一小撮名字就能分流，「有没有这条命令」由命令域回答。
-     *
-     * @param text 用户输入原文
-     * @return 是会话域命令返回 {@code true}
-     */
-    static boolean isSessionDomainCommand(String text) {
-        String token = firstToken(text);
-        return token != null && SESSION_DOMAIN_COMMANDS.contains(token);
     }
 
     /**
@@ -807,28 +817,52 @@ public final class TuiApp extends ToolkitApp {
     }
 
     /**
-     * 装配首页（无会话）状态栏数据：展示「将要使用的」默认 agent 与默认模型。
+     * 装配首页（无会话）状态栏数据：展示「将要使用的」agent、模型与权限模式。
      * <p>
      * 首页没有会话，但状态栏也不应该是一片空白：用户正要看的就是「现在如果用，会用哪个 agent 与模型」，
-     * 因此这里解析配置默认值而不是显示 {@code -}。权限模式取 {@link PermissionMode#NORMAL}，
-     * 与 {@code SessionManager.createDefault()} 建的会话一致，保证「首页看到的」和「建出来的」相同。
+     * 而 {@code /model} {@code /agent} {@code /mode} 在首页改的就是这份待生效默认值
+     * （{@link SessionDefaults}）。因此这里按「待生效默认值 → 配置默认值」两级解析：
+     * 不读第一级的话，用户改完会看到状态栏仍显示旧值，与实际将要用到的对不上。
      * <p>
      * 解析失败（没配模型）只退回 {@code null}，让状态栏退回「默认」字样，不因配置问题整行消失。
      *
      * @return 状态栏数据，保证非 {@code null}
      */
     private StatusBarView.Info homeStatusInfo() {
-        ResolvedModel resolved = null;
+        String provider = null;
+        String model = null;
+        int contextLength = 0;
         try {
-            resolved = models.resolveDefault();
+            ResolvedModel resolved = resolvePendingModel();
+            provider = resolved == null ? null : resolved.getProviderName();
+            model = resolved == null ? null : resolved.getModelName();
+            contextLength = resolved == null ? 0 : resolved.getModel().getContextLength();
         } catch (JellyfishException e) {
             LOG.debug("首页解析默认模型失败：{}", e.getMessage());
         }
-        String provider = resolved == null ? null : resolved.getProviderName();
-        String model = resolved == null ? null : resolved.getModelName();
-        int contextLength = resolved == null ? 0 : resolved.getModel().getContextLength();
-        return new StatusBarView.Info(defaultAgentId(), provider, model, PermissionMode.NORMAL,
+        SessionDefaults.Values defaults = sessionDefaults.snapshot();
+        String agentId = defaults.getAgentId() == null ? defaultAgentId() : defaults.getAgentId();
+        PermissionMode mode = defaults.getPermissionMode() == null
+                ? PermissionMode.NORMAL : defaults.getPermissionMode();
+        return new StatusBarView.Info(agentId, provider, model, mode,
                 System.getProperty("user.dir"), 0L, contextLength, null);
+    }
+
+    /**
+     * 解析首页上「将要使用」的模型：待生效默认值优先，未设置时才跟随配置默认。
+     * <p>
+     * 待生效默认值里可能只设了一半（例如只有 provider）——那不是一个可解析的模型，
+     * 此时回退到配置默认值：状态栏显示一个真实会用的模型，比显示半个意义大。
+     *
+     * @return 解析结果；解析不到时返回 {@code null}
+     * @throws JellyfishException 配置里没有可用模型时抛出
+     */
+    private ResolvedModel resolvePendingModel() {
+        SessionDefaults.Values defaults = sessionDefaults.snapshot();
+        if (defaults.getProvider() != null && defaults.getModel() != null) {
+            return models.resolve(defaults.getProvider(), defaults.getModel());
+        }
+        return models.resolveDefault();
     }
 
     /**

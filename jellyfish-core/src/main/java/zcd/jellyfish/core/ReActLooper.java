@@ -188,6 +188,11 @@ public class ReActLooper implements AutoCloseable {
 
     /**
      * 回合入口：追加用户消息后进入循环，异常统一收敛成 {@link ReActListener#onError}。
+     * <p>
+     * <b>回合的首尾就是延迟落盘的开头与结尾</b>：{@code beginTurn} 之后，回合内的消息追加只标脏，
+     * {@code finally} 里的 {@code flush} 把整个回合一次性落盘。放在 {@code finally} 是为了盖住全部
+     * 四条终结路径——正常收敛、取消、达到最大轮次、异常；放在这里而不是外壳，是因为外壳有三份
+     * （CLI / TUI / Server），而回合只有这一处。
      *
      * @param turn      回合句柄
      * @param sessionId 会话标识
@@ -196,6 +201,7 @@ public class ReActLooper implements AutoCloseable {
      * @return 回合结果
      */
     private ReActResult execute(ReActTurnImpl turn, String sessionId, String userInput, ReActListener listener) {
+        sessionManager.beginTurn(sessionId);
         try {
             Session session = sessionManager.require(sessionId);
             sessionManager.appendMessage(sessionId, LlmMessage.user(userInput), null);
@@ -207,6 +213,8 @@ public class ReActLooper implements AutoCloseable {
             JellyfishException wrapped = new JellyfishException("react turn failed: " + e.getMessage(), e);
             listener.onError(wrapped);
             throw wrapped;
+        } finally {
+            sessionManager.flush(sessionId);
         }
     }
 

@@ -654,7 +654,7 @@ commons-exec 会为 stdout 与 stderr 各起一条泵线程，它们都会调 `s
 | **3** | shell 插件全量 | 新增模块 `jellyfish-plugins/jellyfish-plugin-shell`（`plugin.properties` / `ShellPlugin` / `ShellTool` / `ShellArguments` / `ShellInvocation` / `ShellResult` / `ShellEnvironment` / `CommandPolicy` / `ShellPermissionContribution` / `ShellProcessRunner` / `ShellProcess` / `ShellProcessLauncher` / `CommonsExecShellProcessLauncher` / `ShellOutputCapture` / `ProcessTrees` / `PluginConfig` + pom 的 shade 配置）；改 `jellyfish-plugins/pom.xml`。**已落地**（99 个单测 + 11 个端到端用例） |
 | **4** | 文档与端到端 | 新增 `docs/shell-tool-design.md`（本文）已存在；新增 `jellyfish-plugin-shell/src/test/.../*IT.java` 与 `shell-it` profile；改 `AGENTS.md` |
 
-`AGENTS.md` 在批次 4 需要补的内容：新插件条目与模块表、三条不变式（I1/I2/I3）、取消令牌语义与「回调必须快」、捕获期 sink 的角色与「两个触发点一份实现」、权限三态与「插件不能放宽」的新形式（含脚本侧 `permission` 由两态升为三态）、`read_file` 单行超长报错、shell 的「无沙箱」声明与 `askTools: ["shell"]` 推荐、两条计时器（墙钟 + 静默，后者缺省关闭）的存在与分工、watchdog 与脚本插件的场景差异。
+`AGENTS.md` 在批次 4 需要补的内容：新插件条目与模块表、三条不变式（I1/I2/I3）、取消令牌语义与「回调必须快」、捕获期 sink 的角色与「两个触发点一份实现」、权限三态与「插件不能放宽」的新形式（含脚本侧 `permission` 由两态升为三态）、`read_file` 单行超长报错、shell 的「无沙箱」声明，以及与 `askTools` 的真实关系（见 §10.5）、两条计时器（墙钟 + 静默，后者缺省关闭）的存在与分工、watchdog 与脚本插件的场景差异。
 
 ---
 
@@ -741,3 +741,19 @@ commons-exec 会为 stdout 与 stderr 各起一条泵线程，它们都会调 `s
 
 **要做时注意**：真正的边界是审批与白名单。若确实要收紧，应当在<b>白名单那一层</b>收紧
 （默认拒绝）而不是在分类器上打补丁，因为前者是安全机制，后者是便利机制。
+
+### 10.5 `shell` 与 `askTools` 的真实关系（写文档时才发现的语义）
+
+**起初的写法**（已纠正）：建议把 `shell` 放进 `askTools`，理由是「分类器会代它把只读查询放行」。
+
+**实际不是这样**：`PermissionManager.decide` 先跑核心策略，`askTools` 命中即得 `ASK`；之后插件的裁定只能
+**升级**——`ABSTAIN` 是「无异议」，不参与降级。因此 `askTools: ["shell"]` 的结果是
+**每条命令都要批准**（连 `git status` 也要），分类器那一刻形同虚设。
+
+| 配置 | 只读命令 | 写类命令 |
+| --- | --- | --- |
+| `shell` **不在** `askTools`（缺省） | 无异议 → 静默执行 | 分类器 `ASK` → 弹一次批准 |
+| `shell` **在** `askTools` | 核心 `ASK` → 也要批准 | 也要批准 |
+
+**因此文档口径应当是**：缺省即是推荐姿态；`askTools: ["shell"]` 是「最强姿态、代价是全都要点」；
+`-cli` / `-server` 没有人在场，`askTools` 等于禁用，那两个模式靠 `allowedCommands`。

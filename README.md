@@ -371,7 +371,8 @@ TUI 状态栏也会追加 `已压缩 N 条（丢弃 M 条）`；压缩期间状�
       "dir": "~/jellyfish/tool-outputs",
       "keepFiles": 200,
       "maxBytes": 52428800,
-      "keepRecentMessages": 20
+      "keepRecentMessages": 20,
+      "spillMaxBytes": 33554432
     }
   },
   "permission": {
@@ -382,9 +383,11 @@ TUI 状态栏也会追加 `已压缩 N 条（丢弃 M 条）`；压缩期间状�
 
 `react` 段控制 ReAct 循环：`maxRounds` 是单回合最大轮数；`contextReserveTokens` 是上下文预算里为系统提示词 / 插件注入的上下文预留的 token；`maxToolOutputChars` 是单个工具输出回灌模型前的截断长度，也是**硬上限**（工具失控时由它保命）；`compactKeepRecentMessages` 是压缩默认保留的最近消息条数（写 `0` 即「不保留原文」）；`compactMaxSummaryChars` 是摘要长度上限（提示模型别写太长，真超了按码点本地截断并留标记）；`autoCompactPercent` 是上下文用到多少百分比就自动压缩（写 `0` 关闭自动压缩，只留手动 `/compact`）。缺省值即为上表；非法值（非正数）回退到缺省值。
 
-`react.toolOutput` 段只管工具结果太长时怎么办：`dir` 是完整内容的落盘根目录（缺省 `~/jellyfish/tool-outputs`，运行产物写在这里而不是项目目录）；`keepFiles` / `maxBytes` 是每个会话在该目录下的文件数与字节数上限（缺省 200 个 / 50 MiB，写 `0` 关闭清理），超了从最旧的开始删；`keepRecentMessages` 是组装请求时最近多少条消息里的工具结果保留完整内容（缺省 20，写 `0` 关闭该裁剪）。
+`react.toolOutput` 段只管工具结果太长时怎么办：`dir` 是完整内容的落盘根目录（缺省 `~/jellyfish/tool-outputs`，运行产物写在这里而不是项目目录）；`keepFiles` / `maxBytes` 是每个会话在该目录下的文件数与字节数上限（缺省 200 个 / 50 MiB，写 `0` 关闭清理），超了从最旧的开始删；`keepRecentMessages` 是组装请求时最近多少条消息里的工具结果保留完整内容（缺省 20，写 `0` 关闭该裁剪）；`spillMaxBytes` 是单个工具结果的落盘上限（缺省 32 MiB，运行期钳制为不超过 `maxBytes`），触及上限时后续内容不再保存、信封会带 `_partial` 说明它不完整。
 
-**工具结果超过 `maxToolOutputChars` 时不会被从中间切断**：完整内容先落盘，回灌给模型的是一段合法 JSON 信封，内含 `_truncated`、原始大小、`_path` 与 `preview`（结构化结果是截断后的子树，纯文本是截断后的字符串）。模型据此知道发生了什么、去哪回查。工具自身也默认限流（`read_file` 的 `max_bytes`、`list_dir` 的 `limit`/`offset`、`grep_files` 的 `max_line_chars`/`max_bytes`），让绝大多数调用根本用不到内核这层兜底。
+**工具结果超过 `maxToolOutputChars` 时不会被从中间切断**：完整内容先落盘，回灌给模型的是一段合法 JSON 信封，内含 `_truncated`、原始大小、`_path` 与 `preview`（结构化结果是截断后的子树，纯文本是截断后的字符串）。**预览取头 30% + 尾 70%**，并写明省略了多少行、多少字符——结论往往在末尾，只留头会让模型看到「一切正常的前 90%」。模型据此知道发生了什么、去哪回查。工具自身也默认限流（`read_file` 的 `max_bytes`、`list_dir` 的 `limit`/`offset`、`grep_files` 的 `max_line_chars`/`max_bytes`），让绝大多数调用根本用不到内核这层兜底。
+
+**`read_file` 遇到「单行就超过 `max_bytes`」会报错而不是切短**：切短会产出一行看起来完整、实际残缺的内容，而模型无从判断自己拿到的是不是全文。错误信息里给了三条出路（缩小 `limit`、调大 `max_bytes`、改用 `grep_files` 定位）。多行累加超预算仍然是正常分页（内容还在文件里，可按 `offset` 续读）。
 
 `permission` 段当前只有 `approvalTimeoutSeconds`：`askTools` 里的工具在 TUI 上弹审批框后最多等这么久，超时按拒绝处理。它有缺省值（120 秒）而不允许「永不超时」——审批请求发生在 `react` 线程上并被同步等待，一个永远不来的答复就是一条永远不返回的线程。
 
@@ -420,6 +423,7 @@ TUI 状态栏也会追加 `已压缩 N 条（丢弃 M 条）`；压缩期间状�
 | `jellyfish-plugin-compact` | `jellyfish-compact` | 会话压缩策略：提供摘要指令与保留条数/摘要上限（**不装它就没有压缩**，见下文） |
 | `jellyfish-plugin-python` | `jellyfish-plugin-python` | Python 脚本插件运行时：把 `scripts/python/<id>/` 下的脚本目录变成标准插件（控制面网关 + 每脚本一 worker 进程） |
 | `jellyfish-plugin-node` | `jellyfish-plugin-node` | Node 脚本插件运行时：与 Python 同构（同一套协议与进程模型），零第三方依赖 |
+| `jellyfish-plugin-shell` | `jellyfish-shell` | 命令行：`shell` 工具（`/bin/sh -c` 执行命令原文）+ 命令分类器（只读不打扰、灾难形状拒绝、其余审批）。**没有沙箱**，见下文 |
 
 `jellyfish-tools` 的五个工具：
 
@@ -445,6 +449,7 @@ cp jellyfish-plugins/jellyfish-plugin-project/target/jellyfish-plugin-project-*.
 cp jellyfish-plugins/jellyfish-plugin-compact/target/jellyfish-plugin-compact-*.jar plugins/
 cp jellyfish-plugins/jellyfish-plugin-python/target/jellyfish-plugin-python-*.jar plugins/
 cp jellyfish-plugins/jellyfish-plugin-node/target/jellyfish-plugin-node-*.jar plugins/
+cp jellyfish-plugins/jellyfish-plugin-shell/target/jellyfish-plugin-shell-*.jar plugins/
 ```
 
 插件配置写在 `jellyfish.json` 的 `plugins.configurations.<pluginId>` 段：
@@ -470,6 +475,13 @@ cp jellyfish-plugins/jellyfish-plugin-node/target/jellyfish-plugin-node-*.jar pl
       },
       "jellyfish-project": {
         "maxInlineBytes": 32768
+      },
+      "jellyfish-shell": {
+        "timeoutSeconds": 120,
+        "maxTimeoutSeconds": 1800,
+        "idleTimeoutSeconds": 0,
+        "environment": {},
+        "allowedCommands": []
       }
     }
   }
@@ -486,6 +498,10 @@ cp jellyfish-plugins/jellyfish-plugin-node/target/jellyfish-plugin-node-*.jar pl
 - `todoDir`（默认 `~/jellyfish/todos`）：待办文件目录，一个会话一个 JSON 文件，空表会删掉文件。
 - `keepRecentMessages` / `maxSummaryChars`（`jellyfish-compact`，**都可省略**）：本插件对压缩参数的覆盖值；省略时用内核 `react` 段的缺省值。省略是「不表态」，不是「用 0」。
 - `maxInlineBytes`（`jellyfish-project`，默认 `32768` 即 32 KiB）：约定文件**多大以内可以把原文放进 system prompt**。超过它只给路径指引；写 `0` 表示从不内联（彻底关掉内联的逃生门）。上限 1 MiB，超出或为负数会在启动期直接报错。约定文件名固定为 `AGENTS.md`，查找基准固定为进程工作目录——这两项不可配。
+- `timeoutSeconds`（`jellyfish-shell`，默认 `120`）：命令最多允许跑多久；单次调用可以用 `timeout_seconds` 参数覆盖，并被 `maxTimeoutSeconds`（默认 `1800`）钳制。**不支持「不超时」**——保留一个上限，避免配置写错变成无限等待。
+- `idleTimeoutSeconds`（`jellyfish-shell`，默认 `0` 即**关闭**）：连续多久没有任何输出就判定卡住。墙钟回答「最多跑多久」，它回答「多久没动静就当死了」：一条持续打印进度的 `mvn test` 跑 20 分钟不该被误杀，而 `docker build` 之类确实可能长时间无输出，所以缺省不开。**模型不能设置它**，它是用户的环境策略。
+- `environment`（`jellyfish-shell`）：额外注入或覆盖的环境变量。子进程默认**继承**父进程环境，但名字匹配 `*KEY*` / `*TOKEN*` / `*SECRET*` / `*PASSWORD*` / `*CREDENTIAL*` 的变量**不会**传下去（工具输出会送到远端 LLM），另有一组防挂死默认值（`PAGER=cat`、`GIT_PAGER=cat`、`GIT_TERMINAL_PROMPT=0`、`TERM=dumb`、`NO_COLOR=1`、`DEBIAN_FRONTEND=noninteractive`）。这里写的值可以盖掉默认值。`sensitivePatterns` 用于**追加**剔除模式。
+- `allowedCommands`（`jellyfish-shell`，默认 `[]`）：**非空即默认拒绝**的前缀白名单，支持 `git status` 这种两 token 形式（单 token 覆盖该命令的全部子命令）。它服务于 `-cli` / `-server` 这类没有人在场批准的模式，且**不受 `commandPolicy.enabled` 影响**。
 
 ### 待办（jellyfish-todo）
 
@@ -530,6 +546,38 @@ cp jellyfish-plugins/jellyfish-plugin-node/target/jellyfish-plugin-node-*.jar pl
 **每个会话只读一次盘**：第一次组装请求时读取并缓存，同一会话后续每轮直接用缓存（会话关闭或删除时丢弃）。这与 Codex、Claude Code 的行为一致，代价是**会话中途修改 `AGENTS.md` 不生效**——开一个新会话即可。
 
 注意缓存省的是磁盘 I/O 与「读文件」这个动作，**不省 token**：system prompt 每轮都要随请求发出去，内联的原文每轮都要重新计费。这也正是上限必须压住的原因。
+
+### 命令行（jellyfish-shell）
+
+`shell` 工具让模型在本机执行命令。**它没有沙箱**：命令以本进程的权限运行，能读写你这个用户的任意文件。
+
+| 参数 | 说明 |
+| --- | --- |
+| `command` | 命令行原文，交给 `/bin/sh -c` 执行——管道、重定向、通配符都按 shell 语义工作 |
+| `cwd` | 工作目录，相对路径按进程工作目录解析；缺省为进程工作目录 |
+| `timeout_seconds` | 本次调用的超时秒数，被 `maxTimeoutSeconds` 钳制 |
+
+- **每次调用都是一个全新的 shell**，`cd` 不跨调用保留：需要换目录就用 `cd 目录 && 命令` 或传 `cwd`。
+- **`stdin` 在启动后立即关闭**：`vi` / `ssh` / `sudo` 这类交互式命令会立刻失败。这不是缺陷——TUI 处于 raw 模式，子进程直接写终端会把界面画烂。
+- **stdout 与 stderr 合并**成一条流（到达顺序，像终端一样）。
+- **非零退出码是结果而不是错误**：`grep` 没匹配到返回 1，这在输出里如实报告；工具调用本身不算失败。
+- **超时与静默**：见上文两个配置项。被终止时输出里会说明是墙钟超时、静默判定还是取消，并附上已经捕获的部分输出。命令的输出是**边产生边捕获**的：内存占用与输出体积无关，超限部分落盘，回灌给模型的是头尾预览加路径。
+- **执行期的输出会实时显示**：`-cli` 写到 stderr，`-tui` 在消息区显示「运行中的工具轨迹」块（只保留末尾若干行，工具一返回就被正式结果取代）。
+- **环境变量**：继承父进程，但剔除凭据命名的变量并注入防挂死默认值，见上文。
+
+**权限与分类器**：插件会按命令原文做三态判定——只读查询（`ls`、`git status`、`cat`……）不打扰你；极少几条灾难形状（`rm -rf /`、`mkfs`、`dd of=/dev/`）直接拒绝；其余升级为人工审批。
+
+- **分类器不是安全边界**：`FOO=bar cmd`、`$(...)`、`&&` 链都能绕过它。它的价值是让你不必为每次 `git status` 点一次批准——否则你最终会把 `shell` 从 `askTools` 里整个拿掉，那才是真正的风险。
+- **`find` / `git fetch` / `npm test` 刻意不算只读**：`find -delete` 会删东西，`git fetch` 改 ref，`npm test` 执行仓库里的任意代码。
+- **默认配置（`shell` 不在 `askTools` 里）就是推荐的姿态**：只读命令静默执行，其余命令由分类器升级为审批，你会看到一次批准框。
+- **把 `shell` 写进 `askTools` 则是「每条命令都要批准」**（连 `git status` 也要）：核心策略的 `ASK` 无法被插件的「无异议」降级——插件的裁定只能收紧、不能放宽。想要最强姿态就用它，代价是噪音。
+- **`-cli` / `-server` 下没有人在场**：`askTools` 等于禁用（无审批者即拒绝），这两个模式应当靠 `allowedCommands` 白名单。
+- **不做目录围栏**：它可绕过（`cd /`、绝对路径、`sh -c` 嵌套），与文件工具没有围栏也不自洽，还会挡住合法需求。真正的边界是审批加白名单。
+- **`allowedCommands` 白名单**（非空即默认拒绝）是给 `-cli` / `-server` 这类没有人在场的模式准备的安全网。
+- **Windows 未验证**：非 POSIX 平台映射成 `cmd.exe /c`，但没有在真机上跑过。
+- **进程树只能尽力杀**：`sh -c` 的直接子进程是 shell，杀掉它不一定带走 `npm run dev` 拉起的孙进程。工具会用 `pgrep -P` 递归尽力而为，**杀不干净是已知边界**。
+
+端到端测试会真的起进程再杀掉它们，因此单独一个 profile：`mvn -q -Pshell-it test`。
 
 ### 会话压缩（jellyfish-compact）
 

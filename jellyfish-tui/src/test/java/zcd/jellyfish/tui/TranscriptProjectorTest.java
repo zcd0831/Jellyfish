@@ -612,6 +612,132 @@ class TranscriptProjectorTest {
         return turn.snapshot();
     }
 
+    @Test
+    @DisplayName("工具在跑时显示它的名字与实时输出，而不是「处理中…」")
+    void project_should_render_running_tool_output() {
+        InflightTurn turn = new InflightTurn();
+        turn.begin();
+        turn.appendText("我先跑个命令");
+        turn.clearText();
+        turn.beginTool("bash");
+        turn.appendToolOutput("构建中\n完成\n");
+
+        List<VisualLine> lines = project(Collections.<SessionMessage>emptyList(), turn.snapshot());
+
+        assertEquals(Arrays.asList(
+                "",
+                "  \u23fa jellyfish",
+                "      \u23bf bash",
+                "      \u2502 构建中",
+                "      \u2502 完成"), texts(lines));
+    }
+
+    @Test
+    @DisplayName("工具还没输出时也先显示名字——否则那段时间与卡死没两样")
+    void project_should_render_tool_name_before_output() {
+        InflightTurn turn = new InflightTurn();
+        turn.begin();
+        turn.beginTool("bash");
+
+        List<VisualLine> lines = project(Collections.<SessionMessage>emptyList(), turn.snapshot());
+
+        assertEquals(Arrays.asList("", "  \u23fa jellyfish", "      \u23bf bash"), texts(lines));
+    }
+
+    @Test
+    @DisplayName("已在助手块内时不重复打表头——上一轮 assistant 消息已经打过了")
+    void project_should_not_repeat_header_for_running_tool() {
+        InflightTurn turn = new InflightTurn();
+        turn.begin();
+        turn.beginTool("bash");
+        turn.appendToolOutput("输出\n");
+        List<SessionMessage> messages = Collections.singletonList(
+                SessionMessage.of(LlmMessage.assistant("", Collections.emptyList())));
+
+        List<VisualLine> lines = project(messages, turn.snapshot());
+
+        assertEquals(Arrays.asList(
+                "",
+                "  \u23fa jellyfish",
+                "      \u23bf bash",
+                "      \u2502 输出"), texts(lines));
+    }
+
+    @Test
+    @DisplayName("规则 1 优先：模型又开始说话时实时输出不再占据屏幕")
+    void project_should_prefer_streaming_text_over_tool_output() {
+        InflightTurn turn = new InflightTurn();
+        turn.begin();
+        turn.beginTool("bash");
+        turn.appendToolOutput("输出\n");
+        turn.appendText("模型继续说");
+
+        List<VisualLine> lines = project(Collections.<SessionMessage>emptyList(), turn.snapshot());
+
+        assertFalse(lineTexts(lines).contains("      \u2502 输出"), lineTexts(lines).toString());
+        assertTrue(lineTexts(lines).contains("    模型继续说"), lineTexts(lines).toString());
+    }
+
+    @Test
+    @DisplayName("实时输出里的控制字符被滤掉——一段 ESC 序列就能改写屏幕")
+    void project_should_strip_control_chars_from_tool_output() {
+        InflightTurn turn = new InflightTurn();
+        turn.begin();
+        turn.beginTool("bash");
+        turn.appendToolOutput("\u001b[2J危险\r\n");
+
+        List<VisualLine> lines = project(Collections.<SessionMessage>emptyList(), turn.snapshot());
+
+        assertEquals(Arrays.asList(
+                "",
+                "  \u23fa jellyfish",
+                "      \u23bf bash",
+                "      \u2502 [2J危险"), texts(lines));
+    }
+
+    @Test
+    @DisplayName("实时输出的空行不留下竖线，只留一个空行")
+    void project_should_render_blank_tool_line_as_empty() {
+        InflightTurn turn = new InflightTurn();
+        turn.begin();
+        turn.beginTool("bash");
+        turn.appendToolOutput("a\n\nb\n");
+
+        List<VisualLine> lines = project(Collections.<SessionMessage>emptyList(), turn.snapshot());
+
+        assertEquals(Arrays.asList(
+                "",
+                "  \u23fa jellyfish",
+                "      \u23bf bash",
+                "      \u2502 a",
+                "",
+                "      \u2502 b"), texts(lines));
+    }
+
+    @Test
+    @DisplayName("清掉实时输出后回到「处理中…」")
+    void project_should_fall_back_to_pending_when_tool_output_cleared() {
+        InflightTurn turn = new InflightTurn();
+        turn.begin();
+        turn.beginTool("bash");
+        turn.appendToolOutput("输出\n");
+
+        turn.clearToolOutput();
+
+        List<VisualLine> lines = project(Collections.<SessionMessage>emptyList(), turn.snapshot());
+        assertEquals(Collections.singletonList("      \u23bf 处理中\u2026"), texts(lines));
+    }
+
+    /**
+     * 抽取每行的纯文本（便于用 assertTrue 做包含断言）。
+     *
+     * @param lines 视觉行
+     * @return 纯文本列表
+     */
+    private static List<String> lineTexts(List<VisualLine> lines) {
+        return texts(lines);
+    }
+
     /**
      * 构造已正常结束的快照。
      *

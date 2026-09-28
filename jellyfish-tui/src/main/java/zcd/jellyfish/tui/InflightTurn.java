@@ -1,5 +1,10 @@
 package zcd.jellyfish.tui;
 
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Deque;
+import java.util.List;
 import java.util.Objects;
 
 /**
@@ -26,6 +31,22 @@ import java.util.Objects;
  * 无界缓冲会把内存吃光，而流式期间每秒几十次追加让这种失控增长很快。因此超过上限时
  * <b>保留最新的部分</b>并置截断标记：流式期间用户的注意力在末尾，配合「跟随底部」的滚动策略，
  * 保留尾部比保留开头更符合实际阅读行为。
+ * <p>
+ * <b>运行中的工具轨迹为什么也放在这里</b>：工具结果（{@code tool} 消息）要等工具<b>返回之后</b>
+ * 才落库，而命令行的输出是在它返回<b>之前</b>持续产生的。这段时间是屏幕上唯一「什么都看不到」的
+ * 窗口（会话里没有、暂存区里也没有），而它可能长达几分钟。因此实时输出必须暂存在这里。
+ * <p>
+ * 它是暂存区的第二个例外，但理由与第一个相同：暂存的是<b>尚未成为会话消息</b>的内容。
+ * 工具一返回、结果落库，这份内容就被清掉，权威文本只剩下会话里的那一份。
+ * <p>
+ * <b>工具轨迹为什么比正文更小</b>：它只服务于「让用户知道命令还在干活」。正文丢掉后用户就看不到
+ * 回答本身，而这里丢掉的内容在工具返回时会被权威结果取代。因此它留末 {@value #MAX_TOOL_OUTPUT_LINES} 行、
+ * 每行 {@value #MAX_TOOL_OUTPUT_LINE_CHARS} 字符，且<b>不标「已折叠」</b>——那块标记会被误读成
+ * 「工具结果被截断了」，而真正可能截断结果的是内核的截断中间件，它有自己的一套标识。
+ * <p>
+ * <b>线程契约（本节与其他部分不同）</b>：{@code appendText}/{@code appendThinking} 只由 {@code react}
+ * 线程调用，但 {@link #appendToolOutput(String)} 由<b>工具自己的泵线程</b>调用，stdout 与 stderr 两条
+ * 线程会<b>并发</b>进来，因此它比其余方法更需要那个实例锁（外面还会再有一层显示层过滤）。
  *
  * @author zcd
  */
@@ -36,6 +57,12 @@ public final class InflightTurn {
 
     /** 单回合思考过程上限（字符数）。思考只用于展示，上限比正文更小。 */
     static final int MAX_THINKING_CHARS = 64 * 1024;
+
+    /** 运行中工具轨迹保留的行数上限（保留最新的这些行）。 */
+    static final int MAX_TOOL_OUTPUT_LINES = 20;
+
+    /** 运行中工具轨迹单行的字符上限。 */
+    static final int MAX_TOOL_OUTPUT_LINE_CHARS = 200;
 
     /** 回合终局。 */
     public enum Outcome {
@@ -74,6 +101,25 @@ public final class InflightTurn {
     /** 当前轮思考过程增量。 */
     private final StringBuilder thinking = new StringBuilder();
 
+    /**
+     * 已完整的工具输出行（每行都见过一个换行），超出上限时保留最新的若干行。
+     * <p>
+     * 用行而不是单个大缓冲：行的边界是换行，而换行只有工具自己知道；先在这里切好，
+     * 渲染层就不必再对一段可能从行中间开始的文本做切行。
+     */
+    private final Deque<String> toolOutputLines = new ArrayDeque<String>();
+
+    /**
+     * 工具的「尚未换行的当前行」。
+     * <p>
+     * 与 {@link #toolOutputLines} 分开是必要的：命令的最后一行往往不带换行，而一个以换行结尾的
+     * 片段也不该凭空多出一条空行。分成「已完整的行 + 当前行」之后，两种情形都不需要特判。
+     */
+    private final StringBuilder toolCurrentLine = new StringBuilder();
+
+    /** 正在执行的工具名，不在执行中时为 {@code null}。 */
+    private String runningToolName;
+
     /** 正文是否因超限被截断。 */
     private boolean textTruncated;
 
@@ -96,10 +142,66 @@ public final class InflightTurn {
         synchronized (this) {
             text.setLength(0);
             thinking.setLength(0);
+            toolOutputLines.clear();
+            toolCurrentLine.setLength(0);
+            runningToolName = null;
             textTruncated = false;
             thinkingTruncated = false;
             outcome = Outcome.RUNNING;
             errorMessage = null;
+            dirty = true;
+        }
+    }
+
+    /**
+     * 记录一个工具开始执行，并清空上一个工具的实时输出。
+     * <p>
+     * 名字先于输出生效：一条要跑几十秒、什么都不输出的命令，屏幕上至少得先出现它的名字，
+     * 否则那段时间与「卡死了」看不出区别。
+     *
+     * @param toolName 工具名，可为 {@code null}
+     */
+    public void beginTool(String toolName) {
+        synchronized (this) {
+            runningToolName = toolName;
+            toolOutputLines.clear();
+            toolCurrentLine.setLength(0);
+            dirty = true;
+        }
+    }
+
+    /**
+     * 追加一段工具执行期的输出。
+     * <p>
+     * <b>可能被多条线程并发调用</b>（stdout / stderr 各一条泵线程），因此整体在实例锁内完成。
+     * 超出行数或行内字符上限的部分直接丢掉：这是显示层的暂存，权威文本由工具返回后的截断中间件负责。
+     *
+     * @param chunk 输出片段，{@code null} 或空串忽略；可能不含换行、可能不是一个完整的行
+     */
+    public void appendToolOutput(String chunk) {
+        if (chunk == null || chunk.isEmpty()) {
+            return;
+        }
+        synchronized (this) {
+            appendChunk(chunk);
+            dirty = true;
+        }
+    }
+
+    /**
+     * 清空运行中工具的名字与输出。
+     * <p>
+     * 调用时机是工具<b>返回</b>的那一刻：结果随后就会落库，再由会话投影渲染成正式的工具轨迹。
+     * 留着不清会让同一件事在屏幕上出现两份（一份实时、一份落库后）。
+     */
+    public void clearToolOutput() {
+        synchronized (this) {
+            runningToolName = null;
+            if (toolOutputLines.isEmpty() && toolCurrentLine.length() == 0) {
+                return;
+            }
+            toolOutputLines.clear();
+            toolCurrentLine.setLength(0);
             dirty = true;
         }
     }
@@ -193,7 +295,7 @@ public final class InflightTurn {
      */
     public synchronized Snapshot snapshot() {
         return new Snapshot(outcome, errorMessage, text.toString(), thinking.toString(),
-                textTruncated, thinkingTruncated);
+                textTruncated, thinkingTruncated, runningToolName, toolLines());
     }
 
     /**
@@ -203,6 +305,64 @@ public final class InflightTurn {
      */
     public synchronized boolean isRunning() {
         return outcome == Outcome.RUNNING;
+    }
+
+    /**
+     * 取当前工具的完整行列表：已完整的行 + 尚未换行的当前行，并保留最新的若干行。
+     * <p>
+     * 行数上限在这里统一施加（而不是只在追加时），否则「当前行」会成为上限之外的额外一行——
+     * 一个长期只输出不带换行内容的命令能让它无限增长下去。
+     *
+     * @return 行列表，保证非 {@code null}
+     */
+    private List<String> toolLines() {
+        List<String> lines = new ArrayList<String>(toolOutputLines.size() + 1);
+        lines.addAll(toolOutputLines);
+        if (toolCurrentLine.length() > 0) {
+            lines.add(toolCurrentLine.toString());
+        }
+        if (lines.size() > MAX_TOOL_OUTPUT_LINES) {
+            return new ArrayList<String>(lines.subList(lines.size() - MAX_TOOL_OUTPUT_LINES, lines.size()));
+        }
+        return lines;
+    }
+
+    /**
+     * 把一段输出按换行拆成行追加进缓冲，并在超行数时保留最新的那几行。
+     *
+     * @param chunk 输出片段
+     */
+    private void appendChunk(String chunk) {
+        int start = 0;
+        while (true) {
+            int newline = chunk.indexOf('\n', start);
+            boolean last = newline < 0;
+            appendSegment(last ? chunk.substring(start) : chunk.substring(start, newline));
+            if (last) {
+                break;
+            }
+            // 换行：当前行到此完整（空串也是一条完整的空行），收进行缓冲再开新的当前行
+            toolOutputLines.addLast(toolCurrentLine.toString());
+            toolCurrentLine.setLength(0);
+            start = newline + 1;
+        }
+        while (toolOutputLines.size() > MAX_TOOL_OUTPUT_LINES) {
+            toolOutputLines.removeFirst();
+        }
+    }
+
+    /**
+     * 把一段不带换行的文本追加到当前行。
+     *
+     * @param segment 文本片段，可为空串
+     */
+    private void appendSegment(String segment) {
+        if (toolCurrentLine.length() >= MAX_TOOL_OUTPUT_LINE_CHARS) {
+            // 这一行已经满了：本段的字符属于「显示层溢出」，丢掉即可，工具返回后仍有权威文本
+            return;
+        }
+        int room = MAX_TOOL_OUTPUT_LINE_CHARS - toolCurrentLine.length();
+        toolCurrentLine.append(segment, 0, Math.min(room, segment.length()));
     }
 
     /**
@@ -249,6 +409,12 @@ public final class InflightTurn {
         /** 思考过程是否被截断。 */
         private final boolean thinkingTruncated;
 
+        /** 正在执行的工具名，不在执行中时为 {@code null}。 */
+        private final String runningToolName;
+
+        /** 运行中工具的输出行（保留最新的若干行），保证非 {@code null}。 */
+        private final List<String> toolOutputLines;
+
         /**
          * 构造快照。
          *
@@ -258,15 +424,20 @@ public final class InflightTurn {
          * @param thinking          思考过程文本
          * @param textTruncated     正文是否被截断
          * @param thinkingTruncated 思考过程是否被截断
+         * @param runningToolName   正在执行的工具名，可为 {@code null}
+         * @param toolOutputLines   运行中工具的输出行
          */
         Snapshot(Outcome outcome, String errorMessage, String text, String thinking,
-                 boolean textTruncated, boolean thinkingTruncated) {
+                 boolean textTruncated, boolean thinkingTruncated, String runningToolName,
+                 List<String> toolOutputLines) {
             this.outcome = outcome;
             this.errorMessage = errorMessage;
             this.text = text;
             this.thinking = thinking;
             this.textTruncated = textTruncated;
             this.thinkingTruncated = thinkingTruncated;
+            this.runningToolName = runningToolName;
+            this.toolOutputLines = Collections.unmodifiableList(toolOutputLines);
         }
 
         /**
@@ -329,8 +500,27 @@ public final class InflightTurn {
          * @return 无内容返回 {@code true}
          */
         public boolean isEmpty() {
-            boolean noContent = text.isEmpty() && thinking.isEmpty();
+            boolean noContent = text.isEmpty() && thinking.isEmpty()
+                    && runningToolName == null && toolOutputLines.isEmpty();
             return noContent && (outcome == Outcome.RUNNING || outcome == Outcome.IDLE);
+        }
+
+        /**
+         * 获取正在执行的工具名。
+         *
+         * @return 工具名，不在执行中则为 {@code null}
+         */
+        public String getRunningToolName() {
+            return runningToolName;
+        }
+
+        /**
+         * 获取运行中工具的输出行。
+         *
+         * @return 输出行（保留最新的若干行），保证非 {@code null}
+         */
+        public List<String> getToolOutputLines() {
+            return toolOutputLines;
         }
     }
 }

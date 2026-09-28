@@ -10,9 +10,13 @@ import java.util.Objects;
 /**
  * {@link ReActListener} 的 TUI 实现：把 {@code react} 线程上的 7 个回调，翻译成「往暂存区追加字节」。
  * <p>
- * <b>它是线程契约的落点</b>：所有回调都发生在 {@code react} 池线程，而界面状态只允许在渲染线程上变更。
- * 因此本类的全部职责就是「只做线程安全的最小动作」——写 {@link InflightTurn}，
- * 一行界面代码都不碰。界面在下一帧由渲染线程读 {@link InflightTurn#snapshot()} 得到。
+ * <b>它是线程契约的落点</b>：除 {@link #onToolCallOutput(String, String, String)} 以外的回调都发生在
+ * {@code react} 池线程，而界面状态只允许在渲染线程上变更。因此本类的全部职责就是「只做线程安全的最小动作」——
+ * 写 {@link InflightTurn}，一行界面代码都不碰。界面在下一帧由渲染线程读 {@link InflightTurn#snapshot()} 得到。
+ * <p>
+ * <b>{@code onToolCallOutput} 为什么只能做「追加」</b>：它由工具的输出泵线程触发，stdout 与 stderr
+ * 两条线程会并发进来。{@link InflightTurn#appendToolOutput(String)} 自己是同步的，因此这里不必再加锁；
+ * 但绝不能在它里面做界面相关的事——那些东西只允许发生在渲染线程上。
  * <p>
  * <b>为什么不像 {@code CliReActListener} 那样处理「中间轮次文本」</b>：CLI 要把工具调用之前的模型文本
  * 转写到 stderr，是为了守住「stdout 严格等于最终回答」这条字节级契约。TUI 没有这条契约：
@@ -57,16 +61,28 @@ public final class TuiReActListener implements ReActListener {
         // 走到这里说明本轮模型响应已经落库，暂存区里的正文成了重复内容，必须清掉。
         // 清空晚于落库是安全的：ReActLooper 先 appendMessage 再回调。
         inflight.clearText();
+        // 工具名先记下：一条只输出或根本不输出的命令，屏幕上也先得有个名字
+        inflight.beginTool(toolName);
+    }
+
+    @Override
+    public void onToolCallOutput(String toolCallId, String toolName, String chunk) {
+        // 这条回调不在 react 线程上（工具的输出泵线程，stdout / stderr 各一条且会并发），
+        // 因此这里只做一件线程安全的事：往暂存区追加。界面仍然只在渲染线程上变更。
+        inflight.appendToolOutput(chunk);
     }
 
     @Override
     public void onToolCallCompleted(String toolCallId, String toolName, boolean success, String output) {
-        // 工具轨迹直接由会话消息投影得出（assistant.toolCalls 与 tool 消息都已落库），此处无需记录
+        // 工具轨迹直接由会话消息投影得出（assistant.toolCalls 与 tool 消息都已落库），此处无需记录。
+        // 实时输出要清掉：留到下一帧就是同一件事在屏幕上出现两份（一份实时、一份落库后）
+        inflight.clearToolOutput();
     }
 
     @Override
     public void onComplete(ReActResult result) {
         inflight.clearText();
+        inflight.clearToolOutput();
         boolean truncated = result != null && result.isTruncated();
         inflight.finish(truncated ? InflightTurn.Outcome.TRUNCATED : InflightTurn.Outcome.COMPLETED, null);
     }
@@ -74,12 +90,14 @@ public final class TuiReActListener implements ReActListener {
     @Override
     public void onCancelled() {
         inflight.clearText();
+        inflight.clearToolOutput();
         inflight.finish(InflightTurn.Outcome.CANCELLED, null);
     }
 
     @Override
     public void onError(Throwable error) {
         inflight.clearText();
+        inflight.clearToolOutput();
         String message = messageOf(error);
         LOG.debug("TUI 回合失败：{}", message, error);
         inflight.finish(InflightTurn.Outcome.ERROR, message);

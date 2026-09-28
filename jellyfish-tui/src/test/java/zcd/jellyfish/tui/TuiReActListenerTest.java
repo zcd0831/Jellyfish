@@ -8,6 +8,7 @@ import zcd.jellyfish.core.ReActResult;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -151,6 +152,50 @@ class TuiReActListenerTest {
         listener.onError(null);
 
         assertEquals("未知错误", inflight.snapshot().getErrorMessage());
+    }
+
+    @Test
+    @DisplayName("onToolCallOutput 把实时输出写进暂存区")
+    void onToolCallOutput_should_append_lines() {
+        listener.onToolCallStarted("c1", "bash");
+
+        listener.onToolCallOutput("c1", "bash", "第一行\n第二行\n");
+
+        assertEquals("bash", inflight.snapshot().getRunningToolName());
+        assertEquals("第一行", inflight.snapshot().getToolOutputLines().get(0));
+    }
+
+    @Test
+    @DisplayName("onToolCallOutput 置脏标记——不置的话渲染线程不会取这一帧")
+    void onToolCallOutput_should_mark_dirty() {
+        inflight.clearDirty();
+
+        listener.onToolCallOutput("c1", "bash", "x");
+
+        assertTrue(inflight.isDirty());
+    }
+
+    @Test
+    @DisplayName("onToolCallCompleted 清掉实时输出——结果随后由会话投影渲染，留着就是两份")
+    void onToolCallCompleted_should_clear_tool_output() {
+        listener.onToolCallStarted("c1", "bash");
+        listener.onToolCallOutput("c1", "bash", "输出\n");
+
+        listener.onToolCallCompleted("c1", "bash", true, "输出");
+
+        assertNull(inflight.snapshot().getRunningToolName());
+        assertTrue(inflight.snapshot().getToolOutputLines().isEmpty());
+    }
+
+    @Test
+    @DisplayName("回合终结时清掉实时输出")
+    void onComplete_should_clear_tool_output() {
+        listener.onToolCallStarted("c1", "bash");
+        listener.onToolCallOutput("c1", "bash", "输出\n");
+
+        listener.onComplete(ReActResult.completed("s1", "答案", 1));
+
+        assertTrue(inflight.snapshot().getToolOutputLines().isEmpty());
     }
 
     @Test

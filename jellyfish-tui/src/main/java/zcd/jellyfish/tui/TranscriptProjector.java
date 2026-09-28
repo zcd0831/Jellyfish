@@ -3,6 +3,7 @@ package zcd.jellyfish.tui;
 import dev.tamboui.style.Style;
 import zcd.jellyfish.infra.llm.LlmMessage;
 import zcd.jellyfish.infra.session.SessionMessage;
+import zcd.jellyfish.tui.text.ControlChars;
 import zcd.jellyfish.tui.text.DisplayWidth;
 import zcd.jellyfish.tui.text.LineWrapper;
 import zcd.jellyfish.tui.text.MarkdownRenderer;
@@ -32,6 +33,7 @@ import java.util.List;
  *   ⏺ jellyfish
  *     助手正文（markdown：标题 / 列表 / 引用 / 代码块 / 行内样式）
  *       ⎿ 工具轨迹（暗色）
+ *       │   工具执行中的实时输出（暗色，只留末尾若干行，工具一返回就被正式结果取代）
  *       ✻ 思考过程（暗色斜体）
  *       ⎿ 已中断（黄）/ 错误（红）
  * </pre>
@@ -56,6 +58,14 @@ public final class TranscriptProjector {
 
     /** 工具轨迹前缀。 */
     static final String TRACE_PREFIX = "      \u23bf ";
+
+    /**
+     * 运行中工具输出的前缀。
+     * <p>
+     * 与 {@link #TRACE_PREFIX} 等宽但换一个字符：输出行是工具轨迹的延续，用竖线表明「都在同一个工具里」，
+     * 而不是又开了一个工具。
+     */
+    static final String TOOL_OUTPUT_PREFIX = "      \u2502 ";
 
     /** 思考过程前缀。 */
     static final String THINKING_PREFIX = "      \u273b ";
@@ -210,7 +220,7 @@ public final class TranscriptProjector {
             out.addAll(notice(noticeSource.get(noticeIndex), width));
             noticeIndex++;
         }
-        appendInflight(out, inflight, thinkingExpanded, width);
+        appendInflight(out, inflight, thinkingExpanded, insideAssistantBlock, width);
         return out;
     }
 
@@ -462,9 +472,10 @@ public final class TranscriptProjector {
      * @param inflight 暂存区快照
      * @param thinkingExpanded 是否展开思考过程
      * @param width    可用列数
+     * @param insideAssistantBlock 投影到这里时是否已在助手块内（决定要不要补表头）
      */
     private static void appendInflight(List<VisualLine> out, InflightTurn.Snapshot inflight,
-                                       boolean thinkingExpanded, int width) {
+                                       boolean thinkingExpanded, boolean insideAssistantBlock, int width) {
         String thinking = inflight.getThinking();
         String text = inflight.getText();
         InflightTurn.Outcome outcome = inflight.getOutcome();
@@ -472,6 +483,12 @@ public final class TranscriptProjector {
         if (outcome == InflightTurn.Outcome.RUNNING) {
             boolean hasBody = !isBlank(text) || !isBlank(thinking);
             if (!hasBody) {
+                // 工具在跑：显示它的名字与实时输出末尾若干行。
+                // 这个分支必须排在「处理中…」之前——命令行可能跑几分钟，在那几分钟里
+                // 「处理中…」传达的信息量是零，而一条卡死的命令与一条在跑的看起来完全一样
+                if (appendRunningTool(out, inflight, insideAssistantBlock, width)) {
+                    return;
+                }
                 // 没有可显示增量时给一个「还在干活」的信号，否则屏幕看起来像卡死了
                 out.add(VisualLine.of(new StyledSegment(NOTICE_PREFIX + "处理中\u2026", PENDING_STYLE)));
                 return;
@@ -490,6 +507,53 @@ public final class TranscriptProjector {
             return;
         }
         appendOutcomeNotice(out, inflight, width);
+    }
+
+    /**
+     * 投影运行中的工具轨迹（工具名 + 实时输出的末尾若干行）。
+     * <p>
+     * <b>为什么必须有这一块</b>：命令行的输出是在工具<b>返回之前</b>产生的，而这段时间里会话里
+     * 还没有 tool 消息。没有它，屏幕上只剩「处理中…」——用户无法区分「还在跑」与「卡住了」。
+     * <p>
+     * <b>它为什么不用标「已截断」</b>：行数与行内字符数都由 {@link InflightTurn} 截过，
+     * 但工具一返回，这里就会被会话投影出的正式轨迹与结果取代。在这里标「已截断」
+     * 会被读成「工具结果被截断了」，而真正会截断结果的是内核的截断中间件，它有自己的一套标识。
+     * <p>
+     * <b>表头为什么不无条件补</b>：行到这里时通常已经在助手块内（上一轮 assistant 消息刚落库），
+     * 再打一个表头会让屏幕上出现两个连续的表头。沿用 {@code appendToolTrace} 的同一判断。
+     *
+     * @param out      输出列表
+     * @param inflight 暂存区快照
+     * @param insideAssistantBlock 是否已在助手块内
+     * @param width    可用列数
+     * @return 是否产出了内容
+     */
+    private static boolean appendRunningTool(List<VisualLine> out, InflightTurn.Snapshot inflight,
+                                             boolean insideAssistantBlock, int width) {
+        String toolName = inflight.getRunningToolName();
+        List<String> lines = inflight.getToolOutputLines();
+        if (toolName == null && lines.isEmpty()) {
+            return false;
+        }
+        out.add(VisualLine.EMPTY);
+        if (!insideAssistantBlock) {
+            out.add(VisualLine.of(new StyledSegment(ASSISTANT_HEADER, ASSISTANT_HEADER_STYLE)));
+        }
+        String label = toolName == null || toolName.isEmpty() ? "工具" : toolName;
+        out.addAll(LineWrapper.wrap(new StyledSegment(TRACE_PREFIX, TRACE_STYLE),
+                wrapBody(label, TRACE_STYLE), width));
+        for (String line : lines) {
+            // 控制字符必须在显示边界上滤掉：命令输出里的一个 ESC 序列能改写屏幕。
+            // 与 MarkdownRenderer / ApprovalPrompt 同一处理位置
+            String filtered = ControlChars.strip(line);
+            if (filtered == null || filtered.isEmpty()) {
+                out.add(VisualLine.EMPTY);
+                continue;
+            }
+            out.addAll(LineWrapper.wrap(new StyledSegment(TOOL_OUTPUT_PREFIX, TRACE_STYLE),
+                    wrapBody(filtered, TRACE_STYLE), width));
+        }
+        return true;
     }
 
     /**

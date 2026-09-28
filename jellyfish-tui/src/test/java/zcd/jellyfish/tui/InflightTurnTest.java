@@ -6,6 +6,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -14,6 +15,8 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -102,6 +105,115 @@ class InflightTurnTest {
         turn.finish(InflightTurn.Outcome.ERROR, "连接超时");
 
         assertEquals("连接超时", turn.snapshot().getErrorMessage());
+    }
+
+    @Test
+    @DisplayName("工具开始先记下名字：一条不输出的命令也得先有个名字，否则与卡死没两样")
+    void beginTool_should_expose_name_before_any_output() {
+        InflightTurn turn = new InflightTurn();
+        turn.begin();
+
+        turn.beginTool("bash");
+
+        InflightTurn.Snapshot snapshot = turn.snapshot();
+        assertEquals("bash", snapshot.getRunningToolName());
+        assertTrue(snapshot.getToolOutputLines().isEmpty());
+        assertFalse(snapshot.isEmpty(), "只有工具名也算有内容可显示");
+    }
+
+    @Test
+    @DisplayName("工具输出按换行拆行，同一行的多段拼接")
+    void appendToolOutput_should_split_lines_and_join_partial_line() {
+        InflightTurn turn = new InflightTurn();
+        turn.beginTool("bash");
+
+        turn.appendToolOutput("第一");
+        turn.appendToolOutput("行\n第二行");
+
+        assertEquals(java.util.Arrays.asList("第一行", "第二行"), turn.snapshot().getToolOutputLines());
+    }
+
+    @Test
+    @DisplayName("工具输出超过行数上限时保留最新的若干行")
+    void appendToolOutput_should_keep_latest_lines_when_over_limit() {
+        InflightTurn turn = new InflightTurn();
+        turn.beginTool("bash");
+
+        for (int i = 1; i <= InflightTurn.MAX_TOOL_OUTPUT_LINES + 5; i++) {
+            turn.appendToolOutput("第" + i + "行\n");
+        }
+
+        List<String> lines = turn.snapshot().getToolOutputLines();
+        // 留最后一行空行（换行开出来的），因此最后一条有内容的行在前一个位置
+        assertTrue(lines.contains("第" + (InflightTurn.MAX_TOOL_OUTPUT_LINES + 5) + "行"), lines.toString());
+        assertFalse(lines.contains("第1行"), lines.toString());
+        assertTrue(lines.size() <= InflightTurn.MAX_TOOL_OUTPUT_LINES + 1, lines.toString());
+    }
+
+    @Test
+    @DisplayName("单行超长时保留行首——行的开头才是它的身份")
+    void appendToolOutput_should_keep_head_when_line_too_long() {
+        InflightTurn turn = new InflightTurn();
+        turn.beginTool("bash");
+
+        turn.appendToolOutput(repeat("a", InflightTurn.MAX_TOOL_OUTPUT_LINE_CHARS + 100));
+
+        String line = turn.snapshot().getToolOutputLines().get(0);
+        assertEquals(InflightTurn.MAX_TOOL_OUTPUT_LINE_CHARS, line.length());
+    }
+
+    @Test
+    @DisplayName("清空工具轨迹同时清掉名字与输出——工具返回后结果就落库了，两份会重")
+    void clearToolOutput_should_drop_name_and_lines() {
+        InflightTurn turn = new InflightTurn();
+        turn.begin();
+        turn.beginTool("bash");
+        turn.appendToolOutput("输出\n");
+
+        turn.clearToolOutput();
+
+        InflightTurn.Snapshot snapshot = turn.snapshot();
+        assertNull(snapshot.getRunningToolName());
+        assertTrue(snapshot.getToolOutputLines().isEmpty());
+    }
+
+    @Test
+    @DisplayName("begin 清掉上一回合的工具轨迹")
+    void begin_should_reset_tool_output() {
+        InflightTurn turn = new InflightTurn();
+        turn.beginTool("bash");
+        turn.appendToolOutput("上一回合的输出\n");
+
+        turn.begin();
+
+        assertNull(turn.snapshot().getRunningToolName());
+        assertTrue(turn.snapshot().getToolOutputLines().isEmpty());
+    }
+
+    @Test
+    @DisplayName("工具输出的快照不可变：渲染线程拿到的不会随后续追加变化")
+    void snapshot_should_return_unmodifiable_tool_lines() {
+        InflightTurn turn = new InflightTurn();
+        turn.beginTool("bash");
+        turn.appendToolOutput("a\n");
+        List<String> lines = turn.snapshot().getToolOutputLines();
+
+        turn.appendToolOutput("b\n");
+
+        assertEquals(Collections.singletonList("a"), lines.subList(0, 1));
+        assertThrows(UnsupportedOperationException.class, () -> lines.add("c"));
+    }
+
+    @Test
+    @DisplayName("工具输出的空增量被忽略")
+    void appendToolOutput_should_ignore_blank_chunk() {
+        InflightTurn turn = new InflightTurn();
+        turn.beginTool("bash");
+
+        turn.appendToolOutput(null);
+        turn.appendToolOutput("");
+
+        assertTrue(turn.snapshot().getToolOutputLines().isEmpty());
     }
 
     @Test

@@ -1,6 +1,6 @@
 # shell 命令执行工具 · 技术设计文档
 
-- 状态：已评审；**批次 1、2、3 已落地**，批次 4（文档与 README 同步）实施中（见 §8）
+- 状态：已评审；**批次 1、2、3、4 全部落地**（见 §8）
 - 版本：0.0.1-SNAPSHOT 对应
 - 范围：内核（`jellyfish-api` / `jellyfish-infra` / `jellyfish-core` / `jellyfish-tui` / `jellyfish-cli`）与新增插件 `jellyfish-plugin-shell`
 

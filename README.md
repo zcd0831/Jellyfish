@@ -208,9 +208,13 @@ java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -server 9096
 | `POST` | `/approvals/{requestId}` | 裁决审批（`{"approved":true|false}`） |
 | `GET` | `/health` | 健康报告（UP / WARN / DOWN） |
 
-**SSE 事件**：`turn_start` / `text` / `thinking` / `tool_start` / `tool_done` / `approval_required` /
-`approval_resolved` / `done` / `cancelled` / `error`；空闲超时写 `: keepalive` 注释帧。
+**SSE 事件**：`turn_start` / `text` / `thinking` / `tool_start` / `tool_output` / `tool_done` /
+`approval_required` / `approval_resolved` / `done` / `cancelled` / `error`；空闲超时写 `: keepalive` 注释帧。
 `done` / `cancelled` / `error` 是终态，写出后流结束。
+
+- `tool_output` 是工具**执行期**的实时输出（命令行跑十分钟时能看见动静），载荷 `{turnId,toolCallId,toolName,chunk}`。
+  **它是可丢的过程信息**：服务端按待发条数封顶（超出即丢），客户端应当把它当成进度展示，
+  **权威结果始终是 `tool_done` 里的 `output`**。
 
 几条与内核语义相关的约定：
 

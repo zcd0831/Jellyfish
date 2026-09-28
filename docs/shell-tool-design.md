@@ -1,6 +1,6 @@
 # shell 命令执行工具 · 技术设计文档
 
-- 状态：已评审；**批次 1、2、3、4 全部落地**（见 §8）
+- 状态：已评审；**批次 1、2、3、4 全部落地**（见 §8），并已完成收尾核算（见 §10：做掉的、明确不做的、留待下一期的）
 - 版本：0.0.1-SNAPSHOT 对应
 - 范围：内核（`jellyfish-api` / `jellyfish-infra` / `jellyfish-core` / `jellyfish-tui` / `jellyfish-cli`）与新增插件 `jellyfish-plugin-shell`
 
@@ -339,7 +339,7 @@ publishAudit(request, decision, source);
 | core | `ReActListener` 新增 `default void onToolCallOutput(String toolCallId, String toolName, String chunk) {}`；`ReActLooper` 造 sink 时把 tee 接到监听器 |
 | TUI | `InflightTurn` 新增 `beginTool(toolName)` / `appendToolOutput(chunk)` / `clearToolOutput()`：**有界行缓冲**（末 20 行 × 每行 200 字符，另存「尚未换行的当前行」）；`onToolCallCompleted` 时清空（真实结果随后由会话投影渲染）；`TranscriptProjector` 渲染为「运行中的工具轨迹」块（`⎿ 工具名` + `│ 输出行`） |
 | CLI | `CliReActListener.onToolCallOutput` 写 stderr（既有契约：stdout 严格等于最终回答）。首个 chunk 前先写一行 `│ 工具名`，每行行首补同一个缩进 |
-| Server | **本批不做**：`SseReActListener` 用默认空实现，SSE 客户端看不到实时输出（见 §10.2） |
+| Server | `SseReActListener.onToolCallOutput` 投一条 `tool_output` 事件（`turnId` / `toolCallId` / `toolName` / `chunk`）。**唯一自带上限的通道**：待发条数超 64 即丢弃并计数——它的生产者是子进程而不是模型，消费端可能是慢连接，无界队列会跟着涨（见 §10.2） |
 
 **实现时定下的细节（都不需要配置）**：
 
@@ -387,10 +387,9 @@ publishAudit(request, decision, source);
 | `cwd` | string | 否 | 工作目录，相对路径按进程工作目录解析（`ToolPaths` 口径）；缺省进程工作目录 |
 | `timeout_seconds` | integer | 否 | 覆盖缺省超时，受 `maxTimeoutSeconds` 钳制 |
 
-> **原设计里的 `max_bytes` 已去掉**：预览预算由内核在造 sink 时固定（`react.toolOutput` 那一段），
-> 插件拿到的只是一个 `ToolOutputSink` 接口，没有任何地方能覆盖它。要支持「本次调用多要一点预览」
-> 得往 api 加一个带预算的 sink 工厂（可加性改动，但属于 api 变更），因此记在 §10.3 里等定，
-> 而不是先声明一个做不到的参数。
+> **原设计里的 `max_bytes` 已去掉，且经核算后明确不做**：预览预算由内核在造 sink 时固定
+> （`react.toolOutput` 那一段），插件拿到的只是一个 `ToolOutputSink` 接口，没有任何地方能覆盖它；
+> 而调大它是上下文脚枪、调小它不如直接在命令里写 `head -50`。完整论证见 §10.3。
 
 描述文本要向模型交代三件事：① `cd` **不跨调用持久**（每次都是新 shell），需要切换目录就用 `cd X && cmd` 或传 `cwd`；② 读文件/搜索应优先用 `read_file` / `grep_files` / `list_dir`；③ 不要用它执行交互式命令（stdin 已重定向到 `/dev/null`，会立刻失败）。
 
@@ -604,6 +603,10 @@ commons-exec 会为 stdout 与 stderr 各起一条泵线程，它们都会调 `s
 | `TuiReActListener` | 实时输出写进暂存区并置脏标记、`onToolCallCompleted` / 回合终结时清掉 |
 | `TranscriptProjector` | 运行中工具块的前缀与层级、已在助手块内时不重复表头、正文优先于实时输出、控制字符被滤掉、空行不留竖线、清空后回到「处理中…」 |
 | `CliReActListener` | 实时输出走 stderr 而 stdout 一字不变、每行只补一次缩进、半行输出在工具结束行之前先收尾、切换工具时另起一块 |
+| `SseReActListener` | `tool_output` 事件的四个字段、待发超 64 条时丢弃并计数（取走之后又允许继续推）、空片段不入队 |
+| `ChatHandler` | 事件流里真的出现 `event: tool_output` 与其 `chunk` 载荷（守着「监听器发了但外壳没接」这种断链） |
+| `ToolOutputEnvelope` | `stub()` 保留预览首行、结构化预览不取首行、首行超 400 字符时截断 |
+| `ToolResultAger` | 老化后仍能从 stub 里读到结论行（`exit: 1`） |
 
 进程相关逻辑通过接缝（把"启动进程"抽象成一个接口）用假实现验证，不在单测里 fork 真进程。
 
@@ -629,7 +632,11 @@ commons-exec 会为 stdout 与 stderr 各起一条泵线程，它们都会调 `s
 
 ### 6.3 回归
 
-批次 1 与 2 的主验收是 `mvn -q test` 全绿 + JaCoCo，且**现有 5 个文件工具与脚本插件的端到端（`-Pscript-it`）不受影响**。
+主验收是 `mvn -q test` 全绿 + JaCoCo，且**现有 5 个文件工具与脚本插件的端到端（`-Pscript-it`）不受影响**；
+Server 侧另有 `-Pserver-it`（真 Undertow + 真内核走回环）。
+
+**收尾核算时新增的四个组**（`-server` 实时输出 + stub 保留结论行）：`SseReActListenerTest` 13 例、
+`ChatHandlerTest` 7 例、`ToolOutputEnvelopeTest` 12 例、`ToolResultAgerTest` 5 例，全绿。
 
 ---
 
@@ -690,57 +697,79 @@ commons-exec 会为 stdout 与 stderr 各起一条泵线程，它们都会调 `s
 
 ---
 
-## 10. 后续优化项（本期不做）
+## 10. 收尾核算：做掉的、明确不做的、留待下一期的
 
-### 10.1 工具结果元数据升为一等公民
+### 10.1 工具结果元数据：只做「穿过老化」，不做结构化 metadata
 
 **本期做法**：`summary` 被拼成正文首行（§4.4）。
 
 **为什么现在这样**：summary 必须在「未溢出」（纯文本）与「溢出」（JSON 信封）两条路径上都可见，而信封只存在于后者——正文首行是唯一能保证「退出码永远在同一个地方」的位置。同时信封字段的定位是**内核自己要读**的元数据（`_truncated` 给老化判定、`_path` 与 `_total_chars` 给 `stub()`），而 summary 是工具的语义、内核从不读它，塞进信封等于让内核背一个自己不用却要跟着 schema 演进的字段。
 
-**它的代价**：退出码等元数据只能被模型「读文本」消费，不能机器直读；上下文老化成 `stub()` 后消失（路径仍在，回查一跳）。注意：**字段方案也救不了老化那一条**，除非同时改 `stub()`。
+**收尾时发现的事实（比原描述更严重）**：原以为「老化后路径还在，回查一跳」就够了，实际上**落盘文件里没有元数据行**——
+`SpillCapturingSink.write(chunk)` 只把正文写盘，元数据行是 `renderEnvelope()` 事后拼上去的
+（`prefix = summary + "\n"`）。于是溢出 + 老化之后，退出码/终止原因/cwd 在上下文里没有了、在文件里也没有。
+测试自己就把这条钉住了：`assertEquals(expected.toString(), read(envelope.getPath()))` 的期望值是**纯正文**。
 
-**更合理的形态**（下一期）：
+**已做的修法（不动 api、不动 schema）**：`ToolOutputEnvelope.stub()` 保留**预览首行**。
+预览首行按设计就是元数据行（`prefix` 恒定前置），而 `preview` 本来就在信封里，
+所以既不需要新字段（§4.4 那条「内核背一个自己不用的字段」的反对意见不成立——`stub()` 就是它的用处），
+也让「结论在正文首行」这条不变式从装饰性变成承重的。边界：
 
-1. **`ToolCallResult` 承载结构化元数据**，而不是让工具拼一行 prose：`ToolCallResult(toolName, output, metadata)`，metadata 是一份有约定小 schema 的映射（`exitCode` / `durationMs` / `cwd` / `binary` …）。
-2. **内核统一渲染**：非溢出路径把元数据渲染成固定的首行（**位置不变**），溢出路径同时写进信封字段。这样既机器可读、又保住「两条路径同一位置」这条性质。
-3. **`ToolResultAger.stub()` 按声明保留关键字段**（退出码、路径），于是「退出码」这类信息能穿过上下文老化。
-4. **顺带解锁两件事**：TUI 可以按元数据渲染语义（非零退出码 → 警告标记），指标与审计可以按退出码统计。
+- **只在文本预览上取首行**：结构化预览的「首行」是右花括号/方括号，没有结论的含义；
+- **首行超过 400 字符时截断**：首行本身可能是巨长的一行（单行 JSON、压缩日志），原样搬进 stub 等于把老化省下的上下文又还回去；
+- 取不到就退回原行为（降级安全）。
 
-**为什么不在本期做**：它要改 `ToolCallResult`（api 面）与 shell 之外的调用点，而且需要先想清楚「元数据 schema 归内核还是归工具」。等本轮跑起来、真实看到哪些元数据值得保留，再定 schema 更稳。
+**结构化 metadata 仍然不做**（`ToolCallResult(toolName, output, metadata)` 那一版）：
 
-**与本期决策的关系**：本期的「正文首行」是它的**子集**——「位置一致」这条性质被继承下来，所以这次的选择是可加性的，不是将来需要推翻的临时方案。
+1. **成本被低估**：它要动 `ToolCallResult`（api 面）→ 所有构造点，脚本桥接还要过两个语言的 `ExtensionCodecs`；
+   而所需的关键价值（穿过老化）已经用上面那一行拿到了。
+2. **收益今天为零**：它想解锁的「TUI 按退出码渲染警告标记」「指标按退出码统计」，
+   **一个消费方都还不存在**。等第一个真实消费方出现时再定 schema 更稳。
+3. 届时若真要做，第 2 步「内核统一渲染成固定首行」的位置契约已经由本期钉住了，可直接沿用。
 
-### 10.2 Server 的实时输出（本批未做）
+### 10.2 Server 的实时输出（已落地）
 
-**现状**：`SseReActListener` 用 `ReActListener` 的默认空实现，因此 SSE 客户端看不到工具执行期的输出（`-cli` / `-tui` 已能看到）。
+**已实现**：`tool_output` 事件（`turnId` / `toolCallId` / `toolName` / `chunk`）+ `SseReActListener` 的待发条数上限（64，超出即丢弃并计数）。
 
-**为什么本批没做**：它不是一个「顺手补上」的一行——SSE 是给机器读的流，需要一个新的事件类型与字段约定（增量、可丢、丢失后的对账），并且要与现有 `SseReActListener` 的无界队列单写者模式对齐。它属于外壳侧的独立小批，混进本批会让「内核与两套外壳都已对齐」这个验收点变得含糊。
+**落地时定下的两点**：
 
-**要做时的形状**：新增一个可丢的 `tool_output` SSE 事件（带 `turnId` / `toolCallId` / `chunk`），并在 `SseReActListener` 里按「队列满就丢」处理——与 TUI 的有界缓冲同口径。
+1. **它是唯一自带上限的通道**：`SseReActListener` 的无界队列是刻意的（正文增量受模型输出上限约束，丢了即错），
+   而实时工具输出的生产者是子进程、消费者可能是慢连接，因此这里必须封顶。**按条数封顶而不是字节数**：
+   调度单位就是条，一条事件即一帧，泵每次交付的片段大小固定，条数上限同时就是内存上限。
+2. **丢弃不打断任何东西**：丢弃只计数、只记日志，权威文本随后由 `tool_done` 给出——
+   这正是 I3「显示通道可丢、捕获通道不可丢」在第三条外壳上的同口径落地。
 
-### 10.3 每次调用的预览预算覆盖（`max_bytes`）
+**遗留**：丢弃计数目前只在监听器上可观测（测试与台账），没有推给客户端。客户端要自己意识到
+「实时流有缺口、以 `tool_done` 为准」——README 里已写明这条约定。
 
-**现状**：`shell` 工具没有 `max_bytes` 参数（原设计里有，见 §4.8.2 的说明）。
+### 10.3 每次调用的预览预算覆盖（`max_bytes`）：**明确不做**
 
-**为什么做不到**：预览预算是内核在造 sink 时读 `react.toolOutput` 定下的，插件拿到的只有
-`ToolOutputSink` 接口，没有覆盖入口。
+**原设计的形状**：给 api 加带预算的 sink 工厂，让 `shell` 能按调用覆盖预览长度。
 
-**要做时的形状**：给 api 加一个带预算的 sink 工厂（例如
-`ToolOutputSink.withBudget(int maxChars)` 或 `ToolOutputLimiter.sink(..., budget)` 的变体），
-由内核钳制在全局上限之内。它是<b>可加性</b>改动，但动的是 api 面，因此单独一批做。
+**结论：不做**，理由是参数的两个方向都没有正收益：
 
-### 10.4 只读分类对重定向与复合命令不设防
+| 方向 | 后果 |
+| --- | --- |
+| **调大** | 预览预算是**上下文保护**机制（`react.toolOutput.maxToolOutputChars`），让调用方抬它就是造一个撑爆上下文的脚枪——还得靠内核钳制兜底，那这个参数的存在意义就只剩「多一层」 |
+| **调小** | 模型**事先并不知道**该截到多少才合适；而命令自己就能整形输出（`head -50`、`grep -m 20`、`--quiet`），这才是惯用做法，还顺带省掉计算 |
+
+也就是说它**没有正收益方向**，只是给 api 加一个面。保留「已记录的缺口」比补上它更好——
+真要收紧某条命令的输出，本来就该在命令里写。
+
+### 10.4 只读分类对重定向与复合命令不设防：**明确不做**
 
 **现状**：`echo x > /etc/y` 会被判为只读（首个 token 是 `echo`）而不再打扰用户；
 `ls && rm -rf x` 同理（首个 token 是 `ls`）。
 
-**为什么不改**：§4.8.9 已经写明「分类器不是安全边界」，而它存在的理由是「让只读查询不再打扰人」。
-把 `>`、`&&`、`;`、`$()` 一律判成「要审批」会把最常见的复合查询也变成打扰，
-用户最终会把 `shell` 从 `askTools` 里整个拿掉——那是更大的风险。
+**结论：不做**，真正的防线已经部署，而改分类器的代价与风险都更高：
 
-**要做时注意**：真正的边界是审批与白名单。若确实要收紧，应当在<b>白名单那一层</b>收紧
-（默认拒绝）而不是在分类器上打补丁，因为前者是安全机制，后者是便利机制。
+- **审批框里显示的是完整命令原文**（`ls && rm -rf x` 一字不差地给人看）。人看一眼就拒了——
+  这比让分类器猜意图有效得多，也正是「审批是安全边界」这句话的落地形式。
+- **改分类器等于写半个解析器**：`>` 要区分 `2>&1`、引号内的 `>`、heredoc；`&&` 一收紧，
+  最常见的 `git status && git diff` 就变成打扰。写不干净就是「有防线的错觉」，正是 §1.1 拒绝的那类设计。
+- **唯一的例外场景是 `-cli` / `-server`**：那里没有审批者，分类器的「只读」判定事实上是唯一放行口。
+  但那两个模式的正确答案已经存在——`allowedCommands` 非空即默认拒绝。若确实要收紧，
+  应当收紧<b>白名单</b>（安全机制）而不是在分类器（便利机制）上打补丁。
 
 ### 10.5 `shell` 与 `askTools` 的真实关系（写文档时才发现的语义）
 

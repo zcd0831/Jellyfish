@@ -20,6 +20,7 @@ mvn -q compile
 mvn -q package -DskipTests
 mvn -q test                        # 全量单测（JUnit5 + Mockito + JaCoCo）
 mvn -q -Pserver-it test            # Server 模式端到端（真 Undertow + 真内核，走本机回环）
+mvn -q -Pshell-it test             # shell 插件端到端（真 /bin/sh，会真起进程再杀掉）
 mvn -q -Dtest=ChatStateTest test   # 单类单测，把类名换成目标测试类
 ```
 
@@ -84,7 +85,7 @@ flowchart TB
 
     subgraph "外部依赖·插件"
         direction LR
-        Plugins["PF4J 插件<br>tools / session-file / todo / project / compact<br>+ python 桥接（脚本进程由它承载）"]
+        Plugins["PF4J 插件<br>tools / session-file / todo / project / compact / shell<br>+ python / node 桥接（脚本进程由它承载）"]
     end
 
     %% ===================== 外壳入口：命令走用户输入，不走 LLM =====================
@@ -177,7 +178,7 @@ Maven 多模块；根 `jellyfish`（`zcd:jellyfish:0.0.1-SNAPSHOT`）是 `packag
 ```mermaid
 flowchart LR
     API["jellyfish-api<br>插件 SPI + 扩展点/事件模型 + 统一异常"]
-    PLUGINS["jellyfish-plugins<br>官方插件聚合：tools / session-file / todo / project / compact<br>+ python / node 桥接"]
+    PLUGINS["jellyfish-plugins<br>官方插件聚合：tools / session-file / todo / project / compact / shell<br>+ python / node 桥接"]
     SCRIPT["jellyfish-script<br>跨语言插件运行时（语言无关机制层，被桥接插件 shade）"]
     INFRA["jellyfish-infra<br>【基础设施层】"]
     CORE["jellyfish-core<br>【应用层】"]
@@ -224,6 +225,7 @@ flowchart LR
 | `jellyfish-plugin-project` | 项目约定：探测工作目录下 `AGENTS.md`，小文件内联原文、大文件只给路径 | api（provided） |
 | `jellyfish-plugin-node` | Node 桥接插件：与 python 插件同构（同一个 `ScriptBridgePlugin` 骨架），差异只有 `NodeLanguage` 与网关资源 `script/gateway.js`（Node 事件循环）、`script/worker.js`、`script/jellyfish_sdk.js`、`script/script_wire.js`、`script/dump_manifest.js`。**零第三方依赖**（只用 Node 内置模块，因此不需要 npm install） | api（provided）、jellyfish-script（shade） |
 | `jellyfish-plugin-compact` | 压缩策略：摘要指令 + 保留条数与摘要上限；不启用它压缩整体不可用 | api（provided） |
+| `jellyfish-plugin-shell` | 命令行：`shell` 工具（`/bin/sh -c` 执行命令原文）+ 命令分类器（只读不打扰 / 灾难形状拒绝 / 其余审批）。**无沙箱**，能读写本用户任意文件；自带 commons-exec（**shade 进插件包**，内核 classpath 上不出现它） | api（provided）、commons-exec（shade） |
 | `jellyfish-plugin-python` | Python 桥接插件：读静态清单完成注册、自带 `/<lang>` 状态命令（含熔断与事件计数）、把每个脚本调用都经熔断装饰器转发、把内核事件推给脚本（`ScriptEventBridge`），把 Python 脚本插件以标准 PF4J 插件的形态接入内核（控制面单进程 + 每脚本一 worker 进程）。网关资源 `script/gateway.py`（单线程 select 事件循环）、`script/worker.py`、`script/jellyfish_sdk.py`（脚本作者唯一的 API）、`script/script_wire.py`（分帧）、`script/dump_manifest.py`（清单生成器，`gateway.py --dump-manifest` 转发同一入口）。示例插件见仓库顶层 `examples/scripts/python/`（`hello` 教学最小集、`jira` 真实形态），**端到端用例直接加载它们**，因此示例不会腐烂 | api（provided）、jellyfish-script（shade） |
 
 包结构（只列包与少数枢纽类；其余类直接读代码）：
@@ -343,9 +345,12 @@ jellyfish-script/src/main/java/zcd/jellyfish/script/
 
 ### 权限与审批
 
-- **权限三层**：核心策略 → PLAN 只读白名单 → 插件两态拦截，再统一处理 ASK 与审计。fail-open 只覆盖「取不到策略」；策略一旦生效，它的否定就是硬结论。
+- **权限三层**：核心策略 → PLAN 只读白名单 → 插件拦截，再统一处理 ASK 与审计。fail-open 只覆盖「取不到策略」；策略一旦生效，它的否定就是硬结论。
+- **插件拦截是三态 `PermissionVerdict`（`ABSTAIN` / `ASK` / `DENY`），合并取最严（`DENY > ASK > ABSTAIN`）且 `DENY` 短路**；同为 `ASK` 时保留先到者的理由（覆盖它只会让审计里的理由随插件顺序变化）。插件抛错按 `ABSTAIN` 处理。
 - **ASK 由 `ApprovalChannel` 收口，只有明确批准才放行**：无审批者、超时、溢出、通道关闭、中断一律拒绝（fail-closed）；超时来自 `permission.approvalTimeoutSeconds`（缺省 120，每轮现读）。
-- **只读白名单 = `ToolDescriptor.readOnly`（提供方声明，随 handler 落表）∪ `plugins.configurations.<pluginId>.readOnlyTools`（用户只能追加）**，由 `ReadOnlyTools` 现算；插件返回值是两态 `PermissionVeto`，因此「插件只能拒绝、不能要求审批」是编译期约束。
+- **只读白名单 = `ToolDescriptor.readOnly`（提供方声明，随 handler 落表）∪ `plugins.configurations.<pluginId>.readOnlyTools`（用户只能追加）**，由 `ReadOnlyTools` 现算。
+- **`PermissionVerdict` 里没有 `ALLOW`，因此「插件不能放宽核心策略」是编译期约束**；`ASK` 只可能让调用更严——它最终仍走 `ApprovalChannel`，拿不到批准就降级为拒绝。**需要 `ASK` 的理由**：只有两态时「只读命令免打扰、写类命令要人看一眼」根本写不出来，用户只剩「全放行」与「每次都点批准」两个选择，而后者最终会退化成前者。
+- **跨语言权限协议同口径**：`PermissionCodec` 的结果载荷是 `{"verdict":"ABSTAIN|ASK|DENY","reason":...}`，脚本侧保留布尔与字符串简写（`true`/`"deny"`/`"ask"`）；未知裁定报错，不静默按无异议。
 
 ### ReAct、上下文与压缩
 
@@ -363,13 +368,42 @@ jellyfish-script/src/main/java/zcd/jellyfish/script/
 
 ### 工具结果截断与卸载
 
-- **工具输出只有一个硬截断点**：`ReActLooper.executeTool` 经 `ToolOutputLimiter.limit` 把「工具原始输出对象」变成回灌文本，回灌给模型、写入会话、通知外壳用的是同一份文本。
+- **工具输出只有一个硬截断点**：`ReActLooper.executeTool` 经 `ToolOutputLimiter.limit` 把「工具原始输出对象」变成回灌文本，回灌给模型、写入会话、通知外壳用的是同一份文本。**两个触发点（事后截断、捕获期溢出）共用同一份预览切分与信封实现**，参数各自算、格式只有一套。
+- **预览是头 30% + 尾 70%**（`ToolOutputPreview`，比例与省略标记是常量、不开放配置）：结论往往在末尾，只留头会让模型看到「一切正常的前 90%」；省略标记写明省略的行数与字符数。结构化数组是「前缀 + 哨兵元素 + 后缀」，对象只取前缀字段——避免模型把两段当成一份连续数据。
+- **捕获期 sink 让内存占用与输出体积无关**：`ToolOutputSink.write` 是无界输出（命令行）的入口，`SpillCapturingSink` 阈值前缓冲、溢出时转写磁盘、之后内存里只留头尾窗口。**落盘只在溢出时发生**，短输出不产生任何文件。
+- **`finish()` 幂等**：内核在 `finally` 兜底调用，工具自己也会调；收尾之后再写入会被丢弃并记 WARN。
+- **落盘上限 `spillMaxBytes`（缺省 32 MiB，运行期钳制不超过 `maxBytes`）**：触及上限时写入截到上限为止（不是整个放弃——那会留下空文件而信封却说「文件里有前一段」），并置信封字段 `_partial`，否则「完整内容在 path」就是假话。
+- **实时输出是旁路**：`ReActListener.onToolCallOutput` 由工具的泵线程触发（**不在 react 线程上、可能被并发调用**），可丢、抛错被隔离；**它绝不能阻塞**，否则子进程会因管道写满而停住。它只用于过程展示，落会话与回灌模型的仍是同一份权威文本。
 - **区分文本与结构化，绝不按字符切**：字符串按行截断；脚本工具返回的 `Map`/`List` 先序列化再按 JSON 子树截断（数组取前缀、对象取前缀字段），回灌的一定是一段合法 JSON 信封。**不要在任何地方对可能是 JSON 的输出做 `substring`**。
 - **信封是唯一格式**：`react.toolOutput` 定义落盘与上下文治理；超限时完整内容落盘，回灌 `{_truncated, _tool, _total_chars, _total_lines, _path, _hint, preview}`。渲染与解析共用 `ToolOutputEnvelope` 的字段常量，禁止两处各写一遍键名。
 - **落盘失败不是回合失败**：`ToolOutputStore.store` 失败只返回 `null` 并 WARN，信封记 `_path: null` 并说明不可恢复；磁盘不可写不该把「一次工具调用」升级成故障。
 - **清理只报告不阻断**：每会话按文件数 / 总字节上限从最旧删起，且永不删刚落盘的那个；写临时文件再原子改名（与 PID 文件同口径）。
 - **上下文老化排在机械裁剪之前**：`ToolResultAger` 把「保留窗口之外」的信封换成带路径的 stub，只改本次请求、Session 一条不动；`keepRecentMessages` 写 `0` 表示关闭。`ContextWindow` 对 `tool` 消息不做逐字符截断，直接替成 stub。
 - **工具层先自我限流**：`read_file` 有 `max_bytes`、`list_dir` 有 `limit`/`offset`、`grep_files` 有 `max_line_chars`/`max_bytes`；工具层限不住时再由中间件兜底，两层都不能省。
+- **`read_file` 单行就超过 `max_bytes` 时报错，不切短**：切短会输出一行「看起来完整、实际残缺」的内容，模型无从判断自己拿到的是不是全文；错误文案给出三条出路（缩小 `limit`、调大 `max_bytes`、改用 `grep_files`）。多行累加超预算仍照旧分页（内容还在文件里，可按 `offset` 续读），两条路径的语义要分清。
+
+### 工具调用的取消与长任务
+
+- **取消令牌 `CancellationToken` 随 `ToolCallRequest` 交给工具**（未提供时为 `NONE`）：同步派发不会中断正在执行的工具，长阻塞的工具（命令行）只能靠它自己响应。它刻意**不走可丢的事件通道**——取消是「按下 Esc 之后必须成立的同步事实」。
+- **`ReActTurnImpl` 兼作令牌**：回调**恰好执行一次**（注册时已取消则立即执行）、单个回调抛错不影响其余；回调可能在渲染线程上执行，**因此只能是「发个信号、置个标志」这类快动作**。
+- **`ToolOutputSink` 是内核实现、插件只往里写**：插件因此不知道落盘路径、目录、命名与信封格式。它必须线程安全（stdout / stderr 两条泵线程并发调用）且必须持续接受写入。
+
+### 命令行与进程
+
+- **`shell` 没有沙箱**：命令以本进程权限执行，能读写本用户任意文件。这是能力而非漏洞，但必须让用户知道。
+- **`shell` 默认不进 `askTools`，而这是刻意的**：分类器会把只读命令判成无异议（静默执行）、把其余命令升级为 `ASK`（弹一次批准框）。把 `shell` 写进 `askTools` 则是「每条命令都批准」——核心策略的 `ASK` 无法被插件的 `ABSTAIN` 降级，插件裁定只能收紧不能放宽。这一点常被写反，改动前先看 `PermissionManager.decide`。
+- **不做目录围栏**：可绕过（`cd /`、绝对路径、`sh -c` 嵌套）、与 `read_file` / `write_file` 没有围栏不自洽、还会挡住合法需求。真正的边界是审批加白名单。
+- **命令原文交给 `/bin/sh -c`**，因此管道、重定向、通配符按 shell 语义工作；每次调用都是新 shell，`cd` 不跨调用保留（要换目录就传 `cwd` 或 `cd X && cmd`）。Windows 映射 `cmd.exe /c` 但**未验证**。
+- **`stdin` 在启动后立即关闭**：交互式命令（`vi` / `ssh` / `sudo`）必须快速失败，且绝不能抢终端——TUI 处于 raw 模式，子进程直接写终端会把界面画烂。
+- **stdout 与 stderr 合并为一条流**（到达顺序，像终端）；**必须持续排空**，即使已经放弃保留内容——停止读取会让子进程因管道写满而永久阻塞，表现是「命令卡死」。
+- **非零退出码如实报告，不抛异常**：`grep` 返回 1 是信息；抛异常会把「命令说了没有」与「命令根本没跑起来」混成一件事。
+- **两道计时器互相独立**：墙钟（缺省 120 秒，模型可用 `timeout_seconds` 覆盖并被 `maxTimeoutSeconds` 钳制，缺省 1800）与静默（`idleTimeoutSeconds`，**缺省关闭**，只有用户能配）。前者回答「最多跑多久」，后者回答「多久没动静就当死了」；有些命令确实长时间无输出，因此静默缺省不开。**两者与取消在同一个等待循环里判定**，同一次调用的终止只有一个发起方——这也是不使用 `ExecuteWatchdog` 的原因。
+- **终止链是 TERM → 宽限 → KILL，并尽力杀进程树**：只杀直接子进程会让 `npm run dev` 拉起的孙进程继续跑（「报告已终止，端口却还占着」）。JDK 8 没有 `ProcessHandle.descendants()`，只能靠 `pgrep -P` 递归，**杀不干净是已知边界**。
+- **取消回调只发信号**：它可能在界面渲染线程上执行，因此不等待、不递归；完整的终止链由等待循环在几十毫秒内接手。**判定顺序必须是「先看令牌，再看进程是否退出」**——取消回调会直接杀进程，先判退出会把取消误报成正常完成。
+- **环境是「继承 + 默认脱敏 + 防挂死」**：丢掉 `PATH` 会让几乎所有命令 command not found，因此不采用严格白名单；代价是脱敏必须默认开启（名字匹配 `*KEY*` / `*TOKEN*` / `*SECRET*` / `*PASSWORD*` / `*CREDENTIAL*` 的变量不传子进程）——工具输出会送到远端 LLM。防挂死注入 `PAGER=cat` / `GIT_PAGER=cat` / `GIT_TERMINAL_PROMPT=0` / `TERM=dumb` / `NO_COLOR=1` / `DEBIAN_FRONTEND=noninteractive`。
+- **命令分类器是便利机制，不是安全边界**：按命令原文的前缀匹配，`FOO=bar cmd`、`$(...)`、`&&` 链、`sh -c` 嵌套都能绕过。它的价值是让只读查询不再打扰人，从而避免用户因为嫌烦把 `shell` 从 `askTools` 里整个拿掉。`find` / `git fetch` / `npm test` **刻意不算只读**（`find -delete`、改远端 ref、执行仓库里的任意代码）。
+- **前缀白名单与分类器是两件事**：`allowedCommands` 非空即**默认拒绝**（给 `-cli` / `-server` 这类没有人在场的模式准备的安全网），且**不受 `commandPolicy.enabled` 影响**——那个开关关掉的是分类器这个便利机制，不是用户明确声明的约束。
+- **插件停止时必须终止在途命令**（`stop()` → 杀在途），否则用户看到的是「jellyfish 都退出了，那条命令还在跑」。
 
 ### 故障模型与熔断
 
@@ -502,6 +536,8 @@ jellyfish-script/src/main/java/zcd/jellyfish/script/
 - **跨语言**：`prctl(PR_SET_PDEATHSIG)` 已实现，但只在 Linux 生效、本机（macOS）无法验证——**正确性不依赖它**（孤儿检测靠定时器）。`status` 协议方法经决策**不做**，进程侧状态改随 `worker_state` 推送。真实解释器的端到端测试在 `mvn -Pscript-it test`，不进 `mvn test`。
 - **`-server`**：**已落地**（`jellyfish-server`，Undertow 2.2.39.Final）——REST + SSE 接口面、会话按 id 寻址、一会话一在途回合、HTTP 化人工审批、`GET /health` 都在。**后续项**：鉴权（API key / token）。**明确不做**：自带 Web 前端、TLS、审批的多槽位（全局单槽位是既有内核语义，只如实暴露）。
 - **压缩**：只有插件提供策略才可用；不启用 `jellyfish-compact` 时压缩整体不可用且**不回退内置**（刻意如此，见「ReAct、上下文与压缩」）。
+- **`shell`**：**已落地**（`jellyfish-plugin-shell`，commons-exec shade 进插件包）。**已知边界**：Windows 映射未验证；进程树只能尽力杀（`pgrep -P` 不存在或没权限时退化为只杀直接子进程）；分类器可被 `FOO=bar cmd` / `$(...)` / `&&` 链绕过。**后续项**：每次调用的预览预算覆盖（原设计的 `max_bytes` 参数，需要 api 加带预算的 sink 工厂）；只读分类对重定向与复合命令不设防（若要收紧应在白名单那一层，别在便利机制上打补丁）。
+- **实时输出**：`-cli` 写 stderr、`-tui` 渲染「运行中的工具轨迹」块。**后续项**：`-server` 的 SSE 客户端目前看不到工具执行期输出（`SseReActListener` 用默认空实现），要做时加一个可丢的 `tool_output` 事件。
 
 ## 编码约定
 

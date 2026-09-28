@@ -28,12 +28,12 @@ class PermissionCheckRequestTest {
     }
 
     @Test
-    void getResultType_should_be_permission_veto() {
+    void getResultType_should_be_permission_verdict() {
         // Given
         PermissionCheckRequest request = new PermissionCheckRequest("agent-a", "read_file", null);
 
-        // Then：插件侧结果只有两态，ASK 在插件侧不可表达
-        assertEquals(PermissionVeto.class, request.getResultType());
+        // Then：插件侧结果没有「放行」这一态，放宽核心策略在类型上就写不出来
+        assertEquals(PermissionVerdict.class, request.getResultType());
     }
 
     @Test

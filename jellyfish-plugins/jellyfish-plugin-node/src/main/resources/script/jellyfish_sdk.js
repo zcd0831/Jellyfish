@@ -89,6 +89,11 @@ const contributionTypes = new Set();
 const EMITTABLE_EVENTS = Object.freeze(['PluginNotificationEvent', 'ConfigWarningEvent']);
 
 /**
+ * 权限拦截能表达的三态；刻意没有「放行」——脚本只能收紧，不能放宽内核已经允许的调用。
+ */
+const PERMISSION_VERDICTS = Object.freeze(['ABSTAIN', 'ASK', 'DENY']);
+
+/**
  * 脚本侧的可预期失败。
  *
  * 抛出它等于告诉宿主「这次调用失败了」，宿主会把它转成协议错误回灌给模型
@@ -601,24 +606,60 @@ register('panel', () => ({}), (result) => {
 
 register('permission', () => ({}), (result) => {
     if (result === undefined || result === null || result === false) {
-        return { denied: false };
+        return { verdict: 'ABSTAIN' };
     }
     if (result === true) {
-        return { denied: true };
+        return { verdict: 'DENY' };
     }
     if (typeof result === 'string') {
-        return { denied: true, reason: result };
+        if (result.trim().toLowerCase() === 'ask') {
+            return { verdict: 'ASK' };
+        }
+        return { verdict: 'DENY', reason: result };
     }
     const mapping = asMapping(result, null);
     if (mapping === null) {
-        throw new ScriptError('权限拦截返回值必须是布尔、原因字符串或 {denied, reason}');
+        throw new ScriptError("权限拦截返回值必须是 null、布尔、'ask'、原因字符串或 {verdict, reason}");
     }
-    const shaped = Object.assign({}, mapping);
-    if (shaped.denied === undefined) {
-        shaped.denied = false;
+    if (Object.keys(mapping).length === 0) {
+        return { verdict: 'ABSTAIN' };
+    }
+    if (mapping.verdict !== undefined) {
+        return shapedVerdict(mapping);
+    }
+    if (mapping.denied !== undefined) {
+        // 旧写法：denied=true 等价 DENY
+        const shaped = { verdict: mapping.denied ? 'DENY' : 'ABSTAIN' };
+        if (mapping.reason !== undefined && mapping.reason !== null) {
+            shaped.reason = mapping.reason;
+        }
+        return shaped;
+    }
+    throw new ScriptError('权限拦截返回值含未知键，允许：verdict / reason（旧写法为 denied / reason）');
+});
+
+/**
+ * 校验并归一 `{verdict, reason}` 写法。
+ *
+ * 没有「放行」这一态：脚本只能收紧，不能放宽内核已经允许的调用。
+ * 未知裁定一律报错而不是静默按无异议处理。
+ *
+ * @param {Record<string, unknown>} mapping 脚本返回的映射
+ * @returns {Record<string, unknown>} 协议载荷
+ */
+function shapedVerdict(mapping) {
+    const verdict = mapping.verdict;
+    if (typeof verdict !== 'string' || !PERMISSION_VERDICTS.includes(verdict.trim().toUpperCase())) {
+        throw new ScriptError(
+            `verdict 必须是 ${PERMISSION_VERDICTS.join(' / ')}，实际是 ${JSON.stringify(verdict)}`
+        );
+    }
+    const shaped = { verdict: verdict.trim().toUpperCase() };
+    if (mapping.reason !== undefined && mapping.reason !== null) {
+        shaped.reason = mapping.reason;
     }
     return shaped;
-});
+}
 
 // ---- 会话持久化 / 恢复 / 删除 ---------------------------------------------
 

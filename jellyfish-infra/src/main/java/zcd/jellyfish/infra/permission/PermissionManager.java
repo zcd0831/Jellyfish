@@ -7,7 +7,7 @@ import zcd.jellyfish.api.event.notification.PermissionDecidedEvent;
 import zcd.jellyfish.api.extension.PermissionCheckRequest;
 import zcd.jellyfish.api.extension.PermissionDecision;
 import zcd.jellyfish.api.extension.PermissionMode;
-import zcd.jellyfish.api.extension.PermissionVeto;
+import zcd.jellyfish.api.extension.PermissionVerdict;
 import zcd.jellyfish.infra.config.PermissionApprovalSettings;
 import zcd.jellyfish.infra.config.RuntimeConfig;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
@@ -25,7 +25,8 @@ import java.util.Objects;
  * <ol>
  *     <li><b>核心策略</b>（普通 Java 代码，不开扩展点）：agent 策略的显式拒绝 &gt; 需人工审批 &gt;
  *     允许范围收窄 &gt; PLAN 只读白名单；</li>
- *     <li><b>插件拦截</b>：类型级扩展点，按 {@code order} 升序调用，遇到拦截即短路；</li>
+ *     <li><b>插件拦截</b>：类型级扩展点，按 {@code order} 升序调用，结论取最严
+ *     （{@code DENY > ASK > ABSTAIN}），遇 {@code DENY} 短路；</li>
  *     <li><b>ASK 处理</b>：经 {@link ApprovalChannel} 向审批者提问，无审批者 / 超时 / 异常一律拒绝，
  *     绝不静默放行。</li>
  * </ol>
@@ -34,6 +35,7 @@ import java.util.Objects;
  * <p>
  * <b>fail-open 的适用域</b>：只有「取不到策略」（未绑定 agent、无策略）才按放行处理；
  * 一旦策略生效，它的否定结论（PLAN 白名单、允许范围收窄）就是硬结论——否则 PLAN 模式会形同虚设。
+ * 插件侧的三态裁定同样只能收紧：它没有「放行」这一态，因此不存在插件把核心策略的拒绝改回放行的路径。
  * <p>
  * <b>编排写在这里是刻意的</b>：注册表只提供「有序查找」与「执行单个处理器」，调用几个、何时短路、
  * 异常怎么处置全部由本调用点决定（与「组合规则属于调用方」一致）。
@@ -107,13 +109,23 @@ public class PermissionManager {
         String source = CORE_SOURCE;
         if (!decision.isDenied()) {
             // 核心策略已经拒绝时不必再问插件：结果不可能更宽，问了也只是白跑一遍插件代码
-            for (HandlerBinding<PermissionCheckRequest, PermissionVeto> binding
+            for (HandlerBinding<PermissionCheckRequest, PermissionVerdict> binding
                     : extensions.bindings(PermissionCheckRequest.class, null)) {
-                PermissionVeto veto = intercept(binding, request);
-                if (veto != null && veto.isDenied()) {
-                    decision = PermissionDecision.deny(veto.getReason());
+                PermissionVerdict verdict = intercept(binding, request);
+                if (verdict == null || verdict.isAbstain()) {
+                    continue;
+                }
+                if (verdict.isDenied()) {
+                    // DENY 一定是最严的结论，不必再问后面的插件
+                    decision = PermissionDecision.deny(verdict.getReason());
                     source = binding.getOwner();
                     break;
+                }
+                if (!decision.isAsk()) {
+                    // 同为 ASK 时保留先到者的理由：两个插件都要求审批时，原因属于「先说出来的那个」，
+                    // 覆盖它只会让审计里的理由随插件顺序变化，没有信息增益
+                    decision = PermissionDecision.ask(verdict.getReason());
+                    source = binding.getOwner();
                 }
             }
         }
@@ -153,14 +165,14 @@ public class PermissionManager {
     /**
      * 执行单个插件拦截处理器。
      * <p>
-     * 拦截处理器抛异常时按「无异议」处理：同步侧本就没有护栏，这里是调用点自己决定的那一层——
-     * 一个插件的故障不应该让整条工具调用链崩掉。
+     * 拦截处理器抛异常或返回 {@code null} 时按「无异议」处理：同步侧本就没有护栏，这里是调用点
+     * 自己决定的那一层——一个插件的故障不应该让整条工具调用链崩掉。
      *
      * @param binding 带来源的处理器绑定
      * @param request 权限检查请求
-     * @return 拦截裁定，{@code null} 表示无异议
+     * @return 裁定，{@code null} 表示无异议
      */
-    private PermissionVeto intercept(HandlerBinding<PermissionCheckRequest, PermissionVeto> binding,
+    private PermissionVerdict intercept(HandlerBinding<PermissionCheckRequest, PermissionVerdict> binding,
                                      PermissionCheckRequest request) {
         try {
             return extensions.invoke(binding.getHandler(), request);

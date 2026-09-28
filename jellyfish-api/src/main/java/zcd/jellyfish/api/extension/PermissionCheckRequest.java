@@ -16,14 +16,15 @@ import java.util.Map;
  * 携带 {@code arguments} 是刻意的：拦截策略常常要看参数（例如命令里出现危险操作），
  * 而拦截发生在执行之前、参数已经齐备。
  * <p>
- * 结果类型是 {@link PermissionVeto} 而不是 {@link PermissionDecision}：插件只能表达「不拦截 / 拦截」，
- * 判定结论（含 {@code ASK}）只能由内核给出。
+ * 结果类型是 {@link PermissionVerdict} 而不是 {@link PermissionDecision}：插件能表达的只有
+ * 「无异议 / 要求人工审批 / 拒绝」，<b>没有「放行」</b>——判定结论（含放行）只能由内核的核心策略给出。
+ * 三态里的 {@code ASK} 只可能让调用更严，不会放宽任何一层。
  * <p>
  * 不可变，可安全跨线程传递。
  *
  * @author zcd
  */
-public final class PermissionCheckRequest extends ExtensionRequest<PermissionVeto> {
+public final class PermissionCheckRequest extends ExtensionRequest<PermissionVerdict> {
 
     /** 发起调用的 agentId，未绑定 agent 时为 {@code null}。 */
     private final String agentId;
@@ -53,7 +54,7 @@ public final class PermissionCheckRequest extends ExtensionRequest<PermissionVet
      */
     public PermissionCheckRequest(String agentId, String toolName, Map<String, Object> arguments,
                                   PermissionMode mode, String sessionId) {
-        super(PermissionVeto.class, sessionId);
+        super(PermissionVerdict.class, sessionId);
         if (toolName == null || toolName.trim().isEmpty()) {
             throw new JellyfishException("tool name must not be blank");
         }

@@ -32,7 +32,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * 恰好互为镜像，只是方向相反。
  * <p>
  * <b>为什么不开扩展点</b>：审批需要独占终端的模态交互，而插件在架构上「碰不到界面、也拿不到布局」。
- * 因此审批者只能是外壳（{@link #attach()}），插件无法参与——它仍然可以拦（{@code PermissionVeto}），
+ * 因此审批者只能是外壳（{@link #attach()}），插件无法参与——它仍然可以拦（{@code PermissionVerdict}），
  * 但拦完之后的放行与否不归它管。
  * <p>
  * <b>fail-closed</b>：未挂审批者、超时、排队超出上限、通道已关闭、线程被中断，<b>一律拒绝</b>。

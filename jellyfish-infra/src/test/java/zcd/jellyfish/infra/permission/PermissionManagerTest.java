@@ -13,7 +13,7 @@ import zcd.jellyfish.api.extension.ExtensionHandler;
 import zcd.jellyfish.api.extension.PermissionCheckRequest;
 import zcd.jellyfish.api.extension.PermissionDecision;
 import zcd.jellyfish.api.extension.PermissionMode;
-import zcd.jellyfish.api.extension.PermissionVeto;
+import zcd.jellyfish.api.extension.PermissionVerdict;
 import zcd.jellyfish.infra.config.PermissionApprovalSettings;
 import zcd.jellyfish.infra.config.RuntimeConfig;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
@@ -94,9 +94,9 @@ class PermissionManagerTest {
         // Given：策略显式拒绝，同时有一个只想拦截的插件
         when(policies.policyOf("agent-a")).thenReturn(PermissionPolicy.of(toolSet("bash"), null, null));
         AtomicInteger intercepted = new AtomicInteger();
-        ExtensionHandler<PermissionCheckRequest, PermissionVeto> guard = request -> {
+        ExtensionHandler<PermissionCheckRequest, PermissionVerdict> guard = request -> {
             intercepted.incrementAndGet();
-            return PermissionVeto.deny("插件也要拦");
+            return PermissionVerdict.deny("插件也要拦");
         };
         extensions.contribute("guard", PermissionCheckRequest.class, null, guard, RegisterOptions.DEFAULT);
 
@@ -232,11 +232,11 @@ class PermissionManagerTest {
     void decide_should_deny_and_short_circuit_when_plugin_intercepts() {
         // Given：两个拦截插件，order 靠前的先执行
         when(policies.policyOf("agent-a")).thenReturn(PermissionPolicy.unrestricted());
-        ExtensionHandler<PermissionCheckRequest, PermissionVeto> guard = request -> PermissionVeto.deny("危险命令");
+        ExtensionHandler<PermissionCheckRequest, PermissionVerdict> guard = request -> PermissionVerdict.deny("危险命令");
         AtomicInteger tailCalls = new AtomicInteger();
-        ExtensionHandler<PermissionCheckRequest, PermissionVeto> tail = request -> {
+        ExtensionHandler<PermissionCheckRequest, PermissionVerdict> tail = request -> {
             tailCalls.incrementAndGet();
-            return PermissionVeto.deny("后面的拦截");
+            return PermissionVerdict.deny("后面的拦截");
         };
         extensions.contribute("guard", PermissionCheckRequest.class, null, guard, RegisterOptions.order(-1));
         extensions.contribute("tail", PermissionCheckRequest.class, null, tail, RegisterOptions.DEFAULT);
@@ -255,7 +255,7 @@ class PermissionManagerTest {
     void decide_should_deny_and_attribute_to_plugin_when_core_requires_approval() {
         // Given：核心要求审批，插件也拦截
         when(policies.policyOf("agent-a")).thenReturn(PermissionPolicy.of(null, toolSet("deploy"), null));
-        ExtensionHandler<PermissionCheckRequest, PermissionVeto> guard = request -> PermissionVeto.deny("插件拦截");
+        ExtensionHandler<PermissionCheckRequest, PermissionVerdict> guard = request -> PermissionVerdict.deny("插件拦截");
         extensions.contribute("guard", PermissionCheckRequest.class, null, guard, RegisterOptions.DEFAULT);
 
         // When
@@ -268,10 +268,91 @@ class PermissionManagerTest {
     }
 
     @Test
+    void decide_should_route_plugin_ask_to_approval() {
+        // Given：插件把一道自己拦不住的调用升级为人工审批，但没有人在场
+        stubApprovalTimeout();
+        when(policies.policyOf("agent-a")).thenReturn(PermissionPolicy.unrestricted());
+        ExtensionHandler<PermissionCheckRequest, PermissionVerdict> guard =
+                request -> PermissionVerdict.ask("写类命令需要人看一眼");
+        extensions.contribute("guard", PermissionCheckRequest.class, null, guard, RegisterOptions.DEFAULT);
+
+        // When
+        PermissionDecision decision = manager.decide(new PermissionCheckRequest("agent-a", "shell", null));
+
+        // Then：插件的 ASK 只是「更严」，最终仍受 fail-closed 约束
+        assertTrue(decision.isDenied());
+        assertTrue(decision.getReason().contains("写类命令需要人看一眼"), decision.getReason());
+        assertTrue(decision.getReason().contains(ApprovalChannel.NO_APPROVER), decision.getReason());
+    }
+
+    @Test
+    void decide_should_allow_when_plugin_asks_and_approval_is_granted() {
+        // Given
+        requireApproval();
+        when(policies.policyOf("agent-a")).thenReturn(PermissionPolicy.unrestricted());
+        ExtensionHandler<PermissionCheckRequest, PermissionVerdict> guard =
+                request -> PermissionVerdict.ask("需要审批");
+        extensions.contribute("guard", PermissionCheckRequest.class, null, guard, RegisterOptions.DEFAULT);
+        answerApproval(true);
+
+        // When
+        PermissionDecision decision = manager.decide(new PermissionCheckRequest("agent-a", "shell", null));
+
+        // Then：升级为审批之后走的就是与核心策略 ASK 完全相同的那条路
+        assertTrue(decision.isAllowed());
+        assertEquals(PermissionManager.APPROVAL_SOURCE, captureEvent().getSource());
+    }
+
+    @Test
+    void decide_should_let_later_deny_win_over_earlier_ask() {
+        // Given：order 靠前的插件 ASK、靠后的插件 DENY
+        // 刻意不 stub 审批超时：若 DENY 没短路，后面的审批路径会因为拿不到超时配置而直接报错
+        channel.attach();
+        when(policies.policyOf("agent-a")).thenReturn(PermissionPolicy.unrestricted());
+        ExtensionHandler<PermissionCheckRequest, PermissionVerdict> asker =
+                request -> PermissionVerdict.ask("想升级为审批");
+        ExtensionHandler<PermissionCheckRequest, PermissionVerdict> denier =
+                request -> PermissionVerdict.deny("但后面这个直接拒绝");
+        extensions.contribute("asker", PermissionCheckRequest.class, null, asker, RegisterOptions.order(-1));
+        extensions.contribute("denier", PermissionCheckRequest.class, null, denier, RegisterOptions.DEFAULT);
+
+        // When
+        PermissionDecision decision = manager.decide(new PermissionCheckRequest("agent-a", "shell", null));
+
+        // Then：取最严，DENY 短路，审批通道根本不该被问起
+        assertTrue(decision.isDenied());
+        assertEquals("但后面这个直接拒绝", decision.getReason());
+        assertEquals("denier", captureEvent().getSource());
+        assertFalse(channel.pending().isPresent());
+    }
+
+    @Test
+    void decide_should_keep_first_reason_when_two_plugins_ask() {
+        // Given：两个插件都要求审批
+        stubApprovalTimeout();
+        when(policies.policyOf("agent-a")).thenReturn(PermissionPolicy.unrestricted());
+        ExtensionHandler<PermissionCheckRequest, PermissionVerdict> first =
+                request -> PermissionVerdict.ask("先到的理由");
+        ExtensionHandler<PermissionCheckRequest, PermissionVerdict> second =
+                request -> PermissionVerdict.ask("后到的理由");
+        extensions.contribute("first", PermissionCheckRequest.class, null, first, RegisterOptions.order(-1));
+        extensions.contribute("second", PermissionCheckRequest.class, null, second, RegisterOptions.DEFAULT);
+
+        // When
+        PermissionDecision decision = manager.decide(new PermissionCheckRequest("agent-a", "shell", null));
+
+        // Then：同为 ASK 时保留先到者，审计里的理由才不会随插件顺序变化；
+        // 而「因 ASK 走了审批」这件事仍然如实反映在审计来源上
+        assertTrue(decision.getReason().contains("先到的理由"), decision.getReason());
+        assertFalse(decision.getReason().contains("后到的理由"), decision.getReason());
+        assertEquals(PermissionManager.APPROVAL_SOURCE, captureEvent().getSource());
+    }
+
+    @Test
     void decide_should_ignore_plugin_veto_that_is_not_denied() {
         // Given
         when(policies.policyOf("agent-a")).thenReturn(PermissionPolicy.unrestricted());
-        ExtensionHandler<PermissionCheckRequest, PermissionVeto> guard = request -> PermissionVeto.none();
+        ExtensionHandler<PermissionCheckRequest, PermissionVerdict> guard = request -> PermissionVerdict.abstain();
         extensions.contribute("guard", PermissionCheckRequest.class, null, guard, RegisterOptions.DEFAULT);
 
         // When
@@ -286,7 +367,7 @@ class PermissionManagerTest {
     void decide_should_ignore_null_veto_result() {
         // Given：处理器允许返回 null（ExtensionRegistry 不做结果强制）
         when(policies.policyOf("agent-a")).thenReturn(PermissionPolicy.unrestricted());
-        ExtensionHandler<PermissionCheckRequest, PermissionVeto> guard = request -> null;
+        ExtensionHandler<PermissionCheckRequest, PermissionVerdict> guard = request -> null;
         extensions.contribute("guard", PermissionCheckRequest.class, null, guard, RegisterOptions.DEFAULT);
 
         // When
@@ -300,7 +381,7 @@ class PermissionManagerTest {
     void decide_should_ignore_plugin_failure() {
         // Given：一个插件抛异常不应该让整条调用链崩掉
         when(policies.policyOf("agent-a")).thenReturn(PermissionPolicy.unrestricted());
-        ExtensionHandler<PermissionCheckRequest, PermissionVeto> broken = request -> {
+        ExtensionHandler<PermissionCheckRequest, PermissionVerdict> broken = request -> {
             throw new IllegalStateException("boom");
         };
         extensions.contribute("broken", PermissionCheckRequest.class, null, broken, RegisterOptions.DEFAULT);

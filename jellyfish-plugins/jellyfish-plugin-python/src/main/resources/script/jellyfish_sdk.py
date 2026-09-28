@@ -552,19 +552,61 @@ _register("panel", _args_none, _shape_panel)
 
 # ---- 权限拦截 -------------------------------------------------------------
 
+#: 权限拦截能表达的三态；刻意没有「放行」。
+_PERMISSION_VERDICTS = ("ABSTAIN", "ASK", "DENY")
+
 
 def _shape_permission(result):
+    """权限拦截返回值整形。
+
+    接受的写法：
+
+    * ``None`` / ``False`` —— 无异议（不改变内核策略的结论）；
+    * ``True`` —— 拒绝；
+    * ``"ask"`` —— 升级为人工审批；
+    * 其他字符串 —— 带理由的拒绝；
+    * ``{"verdict": "ABSTAIN"/"ASK"/"DENY", "reason": ...}``；
+    * ``{"denied": bool, "reason": ...}`` —— 旧写法，仍接受。
+
+    **没有「放行」这一写法**：脚本只能收紧，不能放宽内核已经允许的调用。
+    未知裁定一律报错而不是静默按无异议处理——写错一个字母就让一道本该有人看的调用直接放行，
+    是最难排查的那种错。
+    """
     if result is None or result is False:
-        return {"denied": False}
+        return {"verdict": "ABSTAIN"}
     if result is True:
-        return {"denied": True}
+        return {"verdict": "DENY"}
     if isinstance(result, str):
-        return {"denied": True, "reason": result}
+        if result.strip().lower() == "ask":
+            return {"verdict": "ASK"}
+        return {"verdict": "DENY", "reason": result}
     mapping = _as_mapping(result)
     if mapping is None:
-        raise ScriptError("权限拦截返回值必须是布尔、原因字符串或 {denied, reason}")
-    shaped = dict(mapping)
-    shaped.setdefault("denied", False)
+        raise ScriptError('权限拦截返回值必须是 None、布尔、"ask"、原因字符串或 {verdict, reason}')
+    if not mapping:
+        return {"verdict": "ABSTAIN"}
+    if "verdict" in mapping:
+        return _shaped_verdict(mapping)
+    if "denied" in mapping:
+        shaped = {"verdict": "DENY" if mapping.get("denied") else "ABSTAIN"}
+        if mapping.get("reason") is not None:
+            shaped["reason"] = mapping["reason"]
+        return shaped
+    raise ScriptError("权限拦截返回值含未知键，允许：verdict / reason（旧写法为 denied / reason）")
+
+
+def _shaped_verdict(mapping):
+    """校验并归一 ``{verdict, reason}`` 写法。
+
+    :param mapping: 脚本返回的映射
+    :return: 协议载荷
+    """
+    verdict = mapping.get("verdict")
+    if not isinstance(verdict, str) or verdict.strip().upper() not in _PERMISSION_VERDICTS:
+        raise ScriptError("verdict 必须是 ABSTAIN / ASK / DENY，实际是 %r" % (verdict,))
+    shaped = {"verdict": verdict.strip().upper()}
+    if mapping.get("reason") is not None:
+        shaped["reason"] = mapping["reason"]
     return shaped
 
 

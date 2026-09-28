@@ -8,6 +8,7 @@ import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
 import zcd.jellyfish.core.command.SystemCommands;
 import zcd.jellyfish.core.compact.ConversationCompactor;
+import zcd.jellyfish.core.input.InputDirectives;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.config.PluginsSettings;
 import zcd.jellyfish.infra.config.RuntimeConfig;
@@ -80,6 +81,10 @@ class AgentHarnessTest {
     @Mock
     private ConversationCompactor conversationCompactor;
 
+    /** 输入指令服务。 */
+    @Mock
+    private InputDirectives inputDirectives;
+
     /** 指标订阅者。 */
     @Mock
     private MetricsSubscriber metricsSubscriber;
@@ -143,9 +148,10 @@ class AgentHarnessTest {
         // When
         harness.shutdown();
 
-        // Then：先停 ReAct，再回收核心命令，再插件，最后通道
-        InOrder order = Mockito.inOrder(reActLooper, systemCommands, pluginManager, eventChannel);
+        // Then：先停 ReAct 与输入指令，再回收核心命令，再插件，最后通道
+        InOrder order = Mockito.inOrder(reActLooper, inputDirectives, systemCommands, pluginManager, eventChannel);
         order.verify(reActLooper).close();
+        order.verify(inputDirectives).close();
         order.verify(systemCommands).close();
         order.verify(pluginManager).close();
         order.verify(eventChannel).close();
@@ -178,6 +184,6 @@ class AgentHarnessTest {
     private AgentHarness newHarness() {
         return new AgentHarness(runtimeConfig, eventChannel, modelManager, agentManager, pluginRuntimeConfig,
                 pluginManager, reActLooper, systemCommands, sessionManager, conversationCompactor,
-                metricsSubscriber, metricsRegistry, healthCheck);
+                inputDirectives, metricsSubscriber, metricsRegistry, healthCheck);
     }
 }

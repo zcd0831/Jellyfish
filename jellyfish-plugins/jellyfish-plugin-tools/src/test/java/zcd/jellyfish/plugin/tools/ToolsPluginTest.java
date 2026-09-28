@@ -8,6 +8,9 @@ import org.mockito.ArgumentMatchers;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import zcd.jellyfish.api.extension.ExtensionHandler;
+import zcd.jellyfish.api.extension.InputReferenceDescriptor;
+import zcd.jellyfish.api.extension.InputReferenceRequest;
+import zcd.jellyfish.api.extension.PromptContributionRequest;
 import zcd.jellyfish.api.extension.ToolCallRequest;
 import zcd.jellyfish.api.extension.ToolCallResult;
 import zcd.jellyfish.api.extension.ToolDescriptor;
@@ -90,5 +93,17 @@ class ToolsPluginTest {
         tool.register(context);
 
         verify(context).handle(eq(ToolCallRequest.class), eq("read_file"), eq(tool.descriptor()), eq(tool));
+    }
+
+    @Test
+    @DisplayName("启动时应注册 @ 引用补全与约定贡献")
+    void start_should_registerReferenceCompletionAndConvention() {
+        new ToolsPlugin().start(context);
+
+        verify(context).handle(eq(InputReferenceRequest.class), eq(FileReferenceCompletion.MARKER),
+                any(InputReferenceDescriptor.class),
+                any(ExtensionHandler.class));
+        verify(context).contribute(eq(PromptContributionRequest.class),
+                any(FileReferencePromptContribution.class));
     }
 }

@@ -3,6 +3,7 @@ package zcd.jellyfish.cli.di;
 import dagger.Component;
 import zcd.jellyfish.core.AgentHarness;
 import zcd.jellyfish.core.compact.ConversationCompactor;
+import zcd.jellyfish.core.input.InputDirectives;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.command.CommandManager;
 import zcd.jellyfish.infra.config.RuntimeConfig;
@@ -92,6 +93,16 @@ public interface JellyfishComponent {
      * @return ConversationCompactor
      */
     ConversationCompactor conversationCompactor();
+
+    /**
+     * 获取输入指令服务。
+     * <p>
+     * 调用点是外壳：{@code -tui} 用它把 {@code !} 这类行首指令变成工具调用、把 {@code @} 这类行内标记
+     * 变成补全候选；内核侧只有 {@code AgentHarness} 持有一份用于关闭。
+     *
+     * @return InputDirectives
+     */
+    InputDirectives inputDirectives();
 
     /**
      * 获取命令域服务。

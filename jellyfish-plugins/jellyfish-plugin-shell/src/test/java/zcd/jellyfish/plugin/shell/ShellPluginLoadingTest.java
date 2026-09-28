@@ -6,6 +6,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.pf4j.PluginState;
+import zcd.jellyfish.api.extension.InputDirectiveDescriptor;
+import zcd.jellyfish.api.extension.InputDirectiveRequest;
 import zcd.jellyfish.api.extension.PermissionCheckRequest;
 import zcd.jellyfish.api.extension.ToolCallRequest;
 import zcd.jellyfish.api.extension.ToolDescriptor;
@@ -124,6 +126,19 @@ class ShellPluginLoadingTest {
     }
 
     @Test
+    @DisplayName("输入指令 ! 应被登记为路由键注册")
+    void bootstrap_should_registerInputDirective() throws IOException {
+        installPlugin();
+
+        manager = newManager();
+        manager.bootstrap();
+
+        assertEquals(1, extensions.descriptorBindings(InputDirectiveRequest.class,
+                InputDirectiveDescriptor.class).size());
+        assertEquals(1, extensions.handlers(InputDirectiveRequest.class, ShellInputDirective.MARKER).size());
+    }
+
+    @Test
     @DisplayName("插件卸载后工具注册应被按 owner 全部回收")
     void close_should_unregisterShellTool() throws IOException {
         installPlugin();
@@ -135,6 +150,7 @@ class ShellPluginLoadingTest {
 
         assertTrue(extensions.handlers(ToolCallRequest.class, ShellTool.TOOL_NAME).isEmpty());
         assertTrue(extensions.descriptorBindings(PermissionCheckRequest.class, Object.class).isEmpty());
+        assertTrue(extensions.handlers(InputDirectiveRequest.class, ShellInputDirective.MARKER).isEmpty());
     }
 
     /**

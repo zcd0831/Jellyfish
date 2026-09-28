@@ -74,6 +74,9 @@ public final class ChatShell {
     /** 补全面板标题。 */
     private static final String COMPLETION_TITLE = " 命令 ";
 
+    /** 引用补全面板标题。 */
+    private static final String REFERENCE_TITLE = " 引用 ";
+
     /** 输入区视图。 */
     private final ChatInputView input;
 
@@ -112,6 +115,19 @@ public final class ChatShell {
             return Overlay.none();
         }
         return new Overlay(COMPLETION_TITLE, completionLines);
+    }
+
+    /**
+     * 构造行内引用补全面板的浮层。
+     *
+     * @param referenceLines 补全内容行，可为 {@code null} 或空
+     * @return 浮层；无内容时返回空浮层
+     */
+    public static Overlay referenceOverlay(List<VisualLine> referenceLines) {
+        if (referenceLines == null || referenceLines.isEmpty()) {
+            return Overlay.none();
+        }
+        return new Overlay(REFERENCE_TITLE, referenceLines);
     }
 
     /**

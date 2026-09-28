@@ -26,6 +26,7 @@ import zcd.jellyfish.core.prompt.ContextUsage;
 import zcd.jellyfish.core.prompt.PromptAssembler;
 import zcd.jellyfish.core.prompt.ToolCatalog;
 import zcd.jellyfish.core.prompt.ToolResultAger;
+import zcd.jellyfish.core.tool.ToolExecutor;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.config.Model;
 import zcd.jellyfish.infra.config.Provider;
@@ -549,8 +550,9 @@ class ReActLooperTest {
      * @return ReAct 循环器
      */
     private ReActLooper newLooper() {
-        return new ReActLooper(sessionManager, modelManager, permissionManager, extensions, events,
-                promptAssembler, runtimeConfig, conversationCompactor, outputLimiter, executor);
+        return new ReActLooper(sessionManager, modelManager,
+                new ToolExecutor(permissionManager, extensions, events, outputLimiter),
+                events, promptAssembler, runtimeConfig, conversationCompactor, executor);
     }
 
     /**

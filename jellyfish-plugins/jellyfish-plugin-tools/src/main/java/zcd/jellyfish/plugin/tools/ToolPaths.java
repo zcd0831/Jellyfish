@@ -32,6 +32,18 @@ final class ToolPaths {
     }
 
     /**
+     * 取进程工作目录。
+     * <p>
+     * 供需要枚举目录的场景使用（输入框的 {@code @} 引用补全），遗循「相对路径按进程工作目录解析」
+     * 这一条口径——补全与工具看到的是同一个基准。
+     *
+     * @return 进程工作目录，保证非 {@code null}
+     */
+    static Path workingDirectory() {
+        return WORKING_DIRECTORY;
+    }
+
+    /**
      * 把模型给的路径解析成规范化的绝对路径。
      *
      * @param raw 原始路径，不可为空白

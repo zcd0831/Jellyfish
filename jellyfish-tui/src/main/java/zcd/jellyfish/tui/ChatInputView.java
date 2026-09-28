@@ -211,6 +211,28 @@ public final class ChatInputView implements Element {
     }
 
     /**
+     * 取光标在输入文本中的字符偏移。
+     * <p>
+     * 供行内引用补全定位「光标落在哪个片段里」。{@code TextAreaState} 只暴露行/列，
+     * 因此这里按行遍历换算成绝对偏移。
+     *
+     * @return 字符偏移，保证在 {@code [0, text().length()]} 范围内
+     */
+    public int cursor() {
+        String text = text();
+        int row = state.cursorRow();
+        int offset = 0;
+        int seen = 0;
+        while (offset < text.length() && seen < row) {
+            if (text.charAt(offset) == '\n') {
+                seen++;
+            }
+            offset++;
+        }
+        return Math.max(0, Math.min(text.length(), offset + state.cursorCol()));
+    }
+
+    /**
      * 取出输入内容并清空输入框。
      *
      * @return 去除首尾空白后的内容，保证非 {@code null}

@@ -2,6 +2,9 @@ package zcd.jellyfish.plugin.tools;
 
 import zcd.jellyfish.api.plugin.JellyfishPlugin;
 import zcd.jellyfish.api.plugin.PluginContext;
+import zcd.jellyfish.api.extension.InputReferenceDescriptor;
+import zcd.jellyfish.api.extension.InputReferenceRequest;
+import zcd.jellyfish.api.extension.PromptContributionRequest;
 
 import java.util.Arrays;
 import java.util.Collections;
@@ -38,5 +41,11 @@ public final class ToolsPlugin implements JellyfishPlugin {
             // 名字即路由键，工具名全局唯一这一点由 handle 的同键唯一语义保证
             tool.register(context);
         }
+        // 输入框的行内引用：@ 只做补全，真正的读取仍由模型走 read_file，因此没有绕过权限面
+        context.handle(InputReferenceRequest.class, FileReferenceCompletion.MARKER,
+                new InputReferenceDescriptor("引用工作目录下的文件（补全路径）"),
+                new FileReferenceCompletion());
+        // 约定必须让模型知道，否则 @a.txt 在它眼里只是一段普通文字
+        context.contribute(PromptContributionRequest.class, new FileReferencePromptContribution());
     }
 }

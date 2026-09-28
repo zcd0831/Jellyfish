@@ -6,6 +6,9 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.pf4j.PluginState;
+import zcd.jellyfish.api.extension.InputReferenceDescriptor;
+import zcd.jellyfish.api.extension.InputReferenceRequest;
+import zcd.jellyfish.api.extension.PromptContributionRequest;
 import zcd.jellyfish.api.extension.ToolCallRequest;
 import zcd.jellyfish.api.extension.ToolDescriptor;
 import zcd.jellyfish.infra.event.EventChannel;
@@ -107,6 +110,19 @@ class ToolsPluginLoadingTest {
     }
 
     @Test
+    @DisplayName("启动后 @ 引用补全与约定贡献都应从注册表可见")
+    void bootstrap_should_registerReferenceCompletionAndConvention() throws IOException {
+        installPlugin();
+
+        manager = newManager();
+        manager.bootstrap();
+
+        assertEquals(1, extensions.descriptorBindings(InputReferenceRequest.class,
+                InputReferenceDescriptor.class).size());
+        assertEquals(1, extensions.bindings(PromptContributionRequest.class, null).size());
+    }
+
+    @Test
     @DisplayName("插件卸载后工具注册应被按 owner 全部回收")
     void close_should_unregisterAllTools() throws IOException {
         installPlugin();
@@ -117,6 +133,8 @@ class ToolsPluginLoadingTest {
         manager = null;
 
         assertTrue(extensions.handlers(ToolCallRequest.class, "read_file").isEmpty());
+        assertTrue(extensions.handlers(InputReferenceRequest.class, FileReferenceCompletion.MARKER).isEmpty());
+        assertTrue(extensions.bindings(PromptContributionRequest.class, null).isEmpty());
     }
 
     /**

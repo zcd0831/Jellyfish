@@ -20,6 +20,10 @@ import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.api.ui.UiRegion;
 import zcd.jellyfish.core.AgentHarness;
 import zcd.jellyfish.core.compact.ConversationCompactor;
+import zcd.jellyfish.core.input.InputDirectiveCall;
+import zcd.jellyfish.core.input.InputDirectiveRun;
+import zcd.jellyfish.core.input.InputDirectives;
+import zcd.jellyfish.core.input.InputReferenceCompletion;
 import zcd.jellyfish.core.ReActTurn;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.command.CommandInfo;
@@ -122,6 +126,9 @@ public final class TuiApp extends ToolkitApp {
      */
     private final ConversationCompactor compactor;
 
+    /** 输入指令服务：{@code !} / {@code @} 的解析、执行与补全全在内核，外壳只渲染与分流。 */
+    private final InputDirectives inputDirectives;
+
     /**
      * 本进程内新建会话的待生效默认值。
      * <p>
@@ -147,6 +154,15 @@ public final class TuiApp extends ToolkitApp {
 
     /** 命令补全状态：只由渲染线程读写。 */
     private final CommandCompletion completion = new CommandCompletion();
+
+    /** 行内引用补全状态：只由渲染线程读写。 */
+    private final InputReferenceCompletionState referenceCompletion = new InputReferenceCompletionState();
+
+    /** 上一次引用补全查询的键（原文 + 光标），用于免去无意义的重复插件调用。 */
+    private String lastReferenceQueryKey;
+
+    /** 上一次引用补全的查询结果，与 {@link #lastReferenceQueryKey} 成对使用。 */
+    private InputReferenceCompletion lastReferenceCompletion = InputReferenceCompletion.empty();
 
     /** 二级选择页状态：只由渲染线程读写。 */
     private final CommandChoicePicker picker = new CommandChoicePicker();
@@ -223,50 +239,13 @@ public final class TuiApp extends ToolkitApp {
      * @param uiContributions 插件 UI 贡献门面，不可为 {@code null}
      * @param approvals 人工审批通道，不可为 {@code null}
      * @param compactor 会话压缩器，不可为 {@code null}
-     */
-    public TuiApp(AgentHarness harness, CommandManager commands, SessionManager sessions, ModelManager models,
-                  AgentManager agents, UiContributions uiContributions, ApprovalChannel approvals,
-                  ConversationCompactor compactor) {
-        this(harness, commands, sessions, models, agents, uiContributions, approvals, compactor, false);
-    }
-
-    /**
-     * 构造 TUI 外壳，并指定思考过程的初始展开状态。
-     *
-     * @param harness  智能入口，不可为 {@code null}
-     * @param commands 命令域服务，不可为 {@code null}
-     * @param sessions 会话域服务，不可为 {@code null}
-     * @param models   模型门面，不可为 {@code null}
-     * @param agents   agent 门面，不可为 {@code null}
-     * @param uiContributions 插件 UI 贡献门面，不可为 {@code null}
-     * @param approvals 人工审批通道，不可为 {@code null}
-     * @param compactor 会话压缩器，不可为 {@code null}
-     * @param thinkingExpanded 启动时是否展开思考过程（{@code --show-thinking} 置为 {@code true}）
-     */
-    public TuiApp(AgentHarness harness, CommandManager commands, SessionManager sessions, ModelManager models,
-                  AgentManager agents, UiContributions uiContributions, ApprovalChannel approvals,
-                  ConversationCompactor compactor, boolean thinkingExpanded) {
-        this(harness, commands, sessions, models, agents, uiContributions, approvals, compactor,
-                thinkingExpanded, new SessionDefaults());
-    }
-
-    /**
-     * 构造 TUI 外壳。
-     *
-     * @param harness  智能入口，不可为 {@code null}
-     * @param commands 命令域服务，不可为 {@code null}
-     * @param sessions 会话域服务，不可为 {@code null}
-     * @param models   模型门面，不可为 {@code null}
-     * @param agents   agent 门面，不可为 {@code null}
-     * @param uiContributions 插件 UI 贡献门面，不可为 {@code null}
-     * @param approvals 人工审批通道，不可为 {@code null}
-     * @param compactor 会话压缩器，不可为 {@code null}
+     * @param inputDirectives 输入指令服务，不可为 {@code null}
      * @param thinkingExpanded 启动时是否展开思考过程（{@code --show-thinking} 置为 {@code true}）
      * @param sessionDefaults 本进程内新建会话的待生效默认值，不可为 {@code null}
      */
     public TuiApp(AgentHarness harness, CommandManager commands, SessionManager sessions, ModelManager models,
                   AgentManager agents, UiContributions uiContributions, ApprovalChannel approvals,
-                  ConversationCompactor compactor, boolean thinkingExpanded,
+                  ConversationCompactor compactor, InputDirectives inputDirectives, boolean thinkingExpanded,
                   SessionDefaults sessionDefaults) {
         this.harness = Objects.requireNonNull(harness, "harness must not be null");
         this.commands = Objects.requireNonNull(commands, "commands must not be null");
@@ -276,6 +255,7 @@ public final class TuiApp extends ToolkitApp {
         this.uiContributions = Objects.requireNonNull(uiContributions, "uiContributions must not be null");
         this.approvals = Objects.requireNonNull(approvals, "approvals must not be null");
         this.compactor = Objects.requireNonNull(compactor, "compactor must not be null");
+        this.inputDirectives = Objects.requireNonNull(inputDirectives, "inputDirectives must not be null");
         this.sessionDefaults = Objects.requireNonNull(sessionDefaults, "sessionDefaults must not be null");
         this.uiCache = new UiCache(uiContributions);
         this.pluginPanelsEnabled = pluginPanelsEnabled();
@@ -374,6 +354,9 @@ public final class TuiApp extends ToolkitApp {
         int width = ChatLayout.messageWidth(size.width(), declared);
         // 补全每帧现算：命令清单不缓存（插件热部署后立刻可见），输入文本随按键而变
         completion.refresh(input.text(), availableCommands());
+        syncReferenceCompletion();
+        // 指令进度每帧对齐一次：执行线程只写暂存区，这里负责在它结束时收尾
+        syncDirective();
         Overlay overlay = buildOverlay(width);
         // 模态浮层打开时面板让位（只影响本帧显示，落位与缓存都不动）
         Map<UiRegion, OwnedPanel> panels = ChatShell.visiblePanels(declared, overlay);
@@ -439,7 +422,64 @@ public final class TuiApp extends ToolkitApp {
             return new Overlay(" " + picker.getBaseCommand() + " ",
                     CommandChoicePickerView.render(picker, width));
         }
-        return ChatShell.completionOverlay(CommandCompletionView.render(completion, width));
+        // 命令补全优先于引用补全：两者不会同时命中（一个片段不可能既是 /xxx 又是 @xxx），
+        // 但顺序写死比依赖「不会同时发生」更稳，也不会让将来新增的标记抢了命令的位置
+        Overlay commandOverlay = ChatShell.completionOverlay(CommandCompletionView.render(completion, width));
+        if (!commandOverlay.isEmpty()) {
+            return commandOverlay;
+        }
+        return ChatShell.referenceOverlay(InputReferenceCompletionView.render(referenceCompletion, width));
+    }
+
+    /**
+     * 对齐行内引用补全：按当前输入与光标位置向内核要一次结果。
+     * <p>
+     * <b>为什么按「原文 + 光标」缓存一次</b>：渲染循环约 26fps 且输入往往一动不动，
+     * 而补全查询会同步调用插件（可能在列举目录）。键没变就直接复用上一帧的结果，
+     * 于是只有真正敲键或移光标时才会问插件一次。
+     */
+    private void syncReferenceCompletion() {
+        String text = input.text();
+        int cursor = input.cursor();
+        String key = text + '\u0000' + cursor;
+        if (!key.equals(lastReferenceQueryKey)) {
+            lastReferenceQueryKey = key;
+            lastReferenceCompletion = queryReferenceCompletion(text, cursor);
+        }
+        referenceCompletion.refresh(text, lastReferenceCompletion);
+    }
+
+    /**
+     * 问内核要一次引用补全候选。
+     *
+     * @param text   输入框原文
+     * @param cursor 光标字符偏移
+     * @return 补全结果，保证非 {@code null}
+     */
+    private InputReferenceCompletion queryReferenceCompletion(String text, int cursor) {
+        try {
+            return inputDirectives.complete(text, cursor, currentSessionIdOrNull());
+        } catch (RuntimeException e) {
+            // 补全失败不该把界面弄崩：退化成「未命中」，用户还可以手敲路径
+            LOG.warn("引用补全失败：{}", e.getMessage());
+            return InputReferenceCompletion.empty();
+        }
+    }
+
+    /**
+     * 对齐输入指令的收尾。
+     * <p>
+     * 指令跑在 {@code input-directive} 线程上，渲染线程每帧轮询一次句柄（与压缩状态同一形态）：
+     * 执行结束时把暂存区置为终态，下一帧就不再显示「运行中」。结果消息由内核自己落会话，
+     * 因此这里不贴任何外壳提示——投影会自动把它显示出来。
+     */
+    private void syncDirective() {
+        InputDirectiveRun run = chatState.getDirective();
+        if (run == null || !run.isDone()) {
+            return;
+        }
+        chatState.clearDirective();
+        chatState.getInflight().finish(InflightTurn.Outcome.COMPLETED, null);
     }
 
     /**
@@ -538,6 +578,10 @@ public final class TuiApp extends ToolkitApp {
      * <p>
      * 走到 {@code false} 分支的就是「要发给模型」的那一类：普通文本，或者<b>在首页手敲了一条需要会话的
      * 命令</b>（{@code /compact}）——按约定它当作用户的话发出去。
+     * <p>
+     * <b>输入指令排在命令域之后、对话之前</b>：{@code !} 这类行首标记与 {@code /} 不会撞车，
+     * 而它需要会话（结果要落进历史），因此到了这一步就先建会话再交给内核解析。没有插件认领时
+     * 返回空，输入原样变成一次普通对话——这正是「卸了插件就没有那个语法」的落点。
      */
     private void submit() {
         if (input.isBlank()) {
@@ -565,10 +609,42 @@ public final class TuiApp extends ToolkitApp {
             return;
         }
         if (sessionId == null) {
-            // 首页上要发给模型：建会话，界面随之进入会话页
+            // 首页上要发给模型或交给输入指令：先建会话，界面随之进入会话页
             sessionId = createSession();
         }
+        if (startDirective(text, sessionId)) {
+            return;
+        }
         startTurn(text, sessionId);
+    }
+
+    /**
+     * 尝试把一行输入当作输入指令启动。
+     * <p>
+     * <b>解析放在重置暂存区之前，但执行之后</b>：解析是同步的纯函数（没有指令就什么都不做），
+     * 先把暂存区重置再提交执行，才不会把执行线程可能已经写出的第一段实时输出抹掉。
+     *
+     * @param text      用户输入原文
+     * @param sessionId 当前会话标识
+     * @return 已启动指令返回 {@code true}；无人认领返回 {@code false}（调用方按普通对话处理）
+     */
+    private boolean startDirective(String text, String sessionId) {
+        Optional<InputDirectiveCall> call = inputDirectives.resolve(sessionId, text);
+        if (!call.isPresent()) {
+            return false;
+        }
+        // 必须先重置：执行线程在提交后的任意时刻就可能开始产出实时输出
+        chatState.beginDirective();
+        uiCache.invalidate();
+        try {
+            InputDirectiveRun run = inputDirectives.start(sessionId, call.get(),
+                    new TuiReActListener(chatState.getInflight()));
+            chatState.bindDirective(run);
+        } catch (JellyfishException e) {
+            LOG.warn("TUI 输入指令启动失败：{}", e.getMessage());
+            chatState.getInflight().finish(InflightTurn.Outcome.ERROR, e.getMessage());
+        }
+        return true;
     }
 
     /**
@@ -987,8 +1063,9 @@ public final class TuiApp extends ToolkitApp {
                     submit();
                     return EventResult.HANDLED;
                 case CANCEL:
-                    // 先收起补全面板再谈中断：无进行中回合时 cancelTurn 是空操作，两者可以共存
+                    // 先收起浮层再谈中断：无进行中工作时时 cancelTurn 是空操作，两者可以共存
                     completion.dismiss();
+                    referenceCompletion.dismiss();
                     chatState.cancelTurn();
                     return EventResult.HANDLED;
                 case TOGGLE_THINKING:
@@ -1016,7 +1093,7 @@ public final class TuiApp extends ToolkitApp {
             completion.refresh(input.text(), availableCommands());
             // 无候选时一并不接管这三个键：否则光标会被「无匹配命令」的占位行锁住动不了
             if (!completion.isActive() || completion.getCandidates().isEmpty()) {
-                return EventResult.UNHANDLED;
+                return handleReferenceCompletion(action);
             }
             switch (action) {
                 case COMPLETE_PREV:
@@ -1060,6 +1137,54 @@ public final class TuiApp extends ToolkitApp {
                 completion.refresh(accepted, availableCommands());
                 completion.dismiss();
             }
+            return EventResult.HANDLED;
+        }
+
+        /**
+         * 处理行内引用补全的导航与接受。
+         * <p>
+         * <b>面板没弹时一律返回 {@code UNHANDLED}</b>：{@code ↑}/{@code ↓} 要落回输入框做光标移动。
+         * 与命令补全不同的是，这里会先重新问一次内核——光标位置是片段的一部分，
+         * 而按键处理发生在上一帧之后，不能假定状态还是最新的。
+         *
+         * @param action 补全动作
+         * @return 处理结果
+         */
+        private EventResult handleReferenceCompletion(InputAction action) {
+            syncReferenceCompletion();
+            if (!referenceCompletion.isActive() || referenceCompletion.getCandidates().isEmpty()) {
+                return EventResult.UNHANDLED;
+            }
+            switch (action) {
+                case COMPLETE_PREV:
+                    referenceCompletion.moveUp();
+                    return EventResult.HANDLED;
+                case COMPLETE_NEXT:
+                    referenceCompletion.moveDown();
+                    return EventResult.HANDLED;
+                case COMPLETE_ACCEPT:
+                    return acceptReference();
+                default:
+                    return EventResult.UNHANDLED;
+            }
+        }
+
+        /**
+         * 确认引用补全的选中项：把片段换成候选的插入文本。
+         * <p>
+         * 目录候选接受后不关闭面板（用户显然是继续往里钻），文件候选则记入「已关闭」，
+         * 面板自动收起——这条规则归状态对象，这里不重复判断。
+         *
+         * @return 处理结果
+         */
+        private EventResult acceptReference() {
+            String accepted = referenceCompletion.accept(input.text());
+            if (accepted == null) {
+                return EventResult.UNHANDLED;
+            }
+            input.replaceText(accepted);
+            // 输入变了，下一帧会重新问内核；先让缓存键失效，避免复用旧片段的候选
+            lastReferenceQueryKey = null;
             return EventResult.HANDLED;
         }
 

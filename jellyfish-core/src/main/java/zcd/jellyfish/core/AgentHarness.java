@@ -5,6 +5,7 @@ import org.slf4j.LoggerFactory;
 
 import zcd.jellyfish.core.command.SystemCommands;
 import zcd.jellyfish.core.compact.ConversationCompactor;
+import zcd.jellyfish.core.input.InputDirectives;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.config.RuntimeConfig;
 import zcd.jellyfish.infra.event.EventChannel;
@@ -75,6 +76,9 @@ public class AgentHarness {
     /** 会话压缩器：{@code /compact} 的执行体，关闭时要先停掉它的线程池。 */
     private final ConversationCompactor conversationCompactor;
 
+    /** 输入指令服务：关闭时要先停掉它的线程池并取消在途命令。 */
+    private final InputDirectives inputDirectives;
+
     /** 会话域服务：启动末期向插件要回历史会话。 */
     private final SessionManager sessionManager;
 
@@ -100,6 +104,7 @@ public class AgentHarness {
      * @param systemCommands       内核系统命令注册器
      * @param sessionManager       会话域服务
      * @param conversationCompactor 会话压缩器
+     * @param inputDirectives      输入指令服务
      * @param metricsSubscriber    指标订阅者
      * @param metricsRegistry      指标注册表
      * @param healthCheck          健康检查
@@ -109,7 +114,8 @@ public class AgentHarness {
                         AgentManager agentManager, PluginRuntimeConfig pluginRuntimeConfig,
                         PF4JPluginManager pluginManager, ReActLooper reActLooper, SystemCommands systemCommands,
                         SessionManager sessionManager, ConversationCompactor conversationCompactor,
-                        MetricsSubscriber metricsSubscriber, MetricsRegistry metricsRegistry,
+                        InputDirectives inputDirectives, MetricsSubscriber metricsSubscriber,
+                        MetricsRegistry metricsRegistry,
                         HealthCheck healthCheck) {
         this.runtimeConfig = runtimeConfig;
         this.eventChannel = eventChannel;
@@ -121,6 +127,7 @@ public class AgentHarness {
         this.systemCommands = systemCommands;
         this.sessionManager = sessionManager;
         this.conversationCompactor = conversationCompactor;
+        this.inputDirectives = inputDirectives;
         this.metricsSubscriber = metricsSubscriber;
         this.metricsRegistry = metricsRegistry;
         this.healthCheck = healthCheck;
@@ -179,6 +186,9 @@ public class AgentHarness {
         LOG.info("健康检查: {}", healthReportText());
         try {
             reActLooper.close();
+            // 与 reActLooper 同类：先停「还会发起工具调用」的入口，再谈落盘与摘插件。
+            // 它内部会取消在途命令，否则关闭会被一条长命令拖到它自己的超时
+            inputDirectives.close();
             conversationCompactor.close();
             // 必须先于 pluginManager.close()：落盘要经扩展点派发给插件
             sessionManager.flushAll();

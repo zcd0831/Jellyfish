@@ -23,6 +23,7 @@ import zcd.jellyfish.infra.event.EventChannelOptions;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.model.ModelManager;
 import zcd.jellyfish.core.compact.ConversationCompactor;
+import zcd.jellyfish.core.input.InputDirectives;
 import zcd.jellyfish.infra.config.RuntimeConfig;
 import zcd.jellyfish.infra.permission.ApprovalChannel;
 import zcd.jellyfish.infra.registry.TypeRegistry;
@@ -85,6 +86,10 @@ class LauncherTest {
      * 全程不提交任务，因此它一个线程都不会起。
      */
     private ConversationCompactor conversationCompactor;
+
+    /** 输入指令服务：本测试只验证装配，不真的执行指令。 */
+    @Mock
+    private InputDirectives inputDirectives;
 
     @Mock
     private AgentHarness harness;
@@ -277,6 +282,7 @@ conversationCompactor = new ConversationCompactor(sessions, models, runtimeConfi
         when(component.eventChannel()).thenReturn(eventChannel);
         when(component.approvalChannel()).thenReturn(approvalChannel);
         when(component.conversationCompactor()).thenReturn(conversationCompactor);
+        when(component.inputDirectives()).thenReturn(inputDirectives);
         when(component.sessionDefaults()).thenReturn(sessionDefaults);
     }
 

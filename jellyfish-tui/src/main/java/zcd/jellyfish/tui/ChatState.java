@@ -1,6 +1,7 @@
 package zcd.jellyfish.tui;
 
 import zcd.jellyfish.core.ReActTurn;
+import zcd.jellyfish.core.input.InputDirectiveRun;
 import zcd.jellyfish.infra.session.SessionMessage;
 import zcd.jellyfish.tui.text.VisualLine;
 
@@ -46,6 +47,15 @@ public final class ChatState {
 
     /** 当前进行中的回合句柄，无回合时为 {@code null}。 */
     private ReActTurn currentTurn;
+
+    /**
+     * 当前进行中的输入指令句柄，无指令时为 {@code null}。
+     * <p>
+     * <b>为什么与回合共用暂存区</b>：{@code !} 这类指令同样会产出实时输出，复用 {@link InflightTurn}
+     * 才能共用 {@link TranscriptProjector} 的同一套渲染，不必为它开第二条投影路径。
+     * 两者互斥（{@link #beginTurn} / {@link #beginDirective} 都会清掉对方），不会同时存在。
+     */
+    private InputDirectiveRun currentDirective;
 
     /** 最近一次会话标识，用于识别会话切换。 */
     private String lastSessionId;
@@ -181,6 +191,44 @@ public final class ChatState {
     public void beginTurn(ReActTurn turn) {
         inflight.begin();
         this.currentTurn = turn;
+        this.currentDirective = null;
+    }
+
+    /**
+     * 开始一次输入指令执行：重置暂存区。
+     * <p>
+     * <b>必须在提交执行之前调用</b>：执行线程可能在提交后的任意时刻开始产出实时输出，
+     * 晚一步重置就会把那一段抹掉。句柄随后由 {@link #bindDirective} 绑定。
+     */
+    public void beginDirective() {
+        inflight.begin();
+        this.currentDirective = null;
+        this.currentTurn = null;
+    }
+
+    /**
+     * 绑定当前进行中的输入指令，供轮询收尾与 {@code Esc} 取消。
+     *
+     * @param run 指令句柄，可为 {@code null}（表示清空）
+     */
+    public void bindDirective(InputDirectiveRun run) {
+        this.currentDirective = run;
+    }
+
+    /**
+     * 取当前进行中的输入指令。
+     *
+     * @return 指令句柄；无进行中指令时为 {@code null}
+     */
+    public InputDirectiveRun getDirective() {
+        return currentDirective;
+    }
+
+    /**
+     * 清除当前指令句柄（执行已结束）。
+     */
+    public void clearDirective() {
+        this.currentDirective = null;
     }
 
     /**
@@ -202,16 +250,21 @@ public final class ChatState {
     }
 
     /**
-     * 中断当前回合。
+     * 中断当前正在进行的工作：优先取消 ReAct 回合，否则取消输入指令。
      * <p>
      * 中断必须由渲染线程主动调用（而不是等 {@code react} 线程投递消息），否则用户按下 {@code Esc}
-     * 之后界面上不会有任何立刻可见的反应——那与「卡死」无法区分。句柄为空或回合已结束时什么都不做，
+     * 之后界面上不会有任何立刻可见的反应——那与「卡死」无法区分。句柄为空或已结束时什么都不做，
      * 因此重复按 {@code Esc} 是安全的。
      */
     public void cancelTurn() {
         ReActTurn turn = currentTurn;
         if (turn != null) {
             turn.cancel();
+            return;
+        }
+        InputDirectiveRun run = currentDirective;
+        if (run != null) {
+            run.cancel();
         }
     }
 

@@ -2,6 +2,8 @@ package zcd.jellyfish.plugin.shell;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import zcd.jellyfish.api.extension.InputDirectiveDescriptor;
+import zcd.jellyfish.api.extension.InputDirectiveRequest;
 import zcd.jellyfish.api.extension.PermissionCheckRequest;
 import zcd.jellyfish.api.extension.ToolCallRequest;
 import zcd.jellyfish.api.plugin.JellyfishPlugin;
@@ -15,12 +17,15 @@ import zcd.jellyfish.api.plugin.PluginContext;
  * {@code jellyfish.json} 里 {@code plugins.configurations.jellyfish-shell} 的可配置性，
  * 以及热部署。内核也不必为「执行命令」这件事背一个总是存在的安全面。
  * <p>
- * <b>它注册两个扩展点，且第二个性质不同</b>：
+ * <b>它注册三个扩展点，后两个性质不同</b>：
  * <ul>
  *     <li>{@link ToolCallRequest}（路由键 {@code shell}）：执行命令；</li>
  *     <li>{@link PermissionCheckRequest}（<b>类型级</b>贡献）：给命令分类。
  *     类型级意味着它会看到<b>所有</b>工具调用，因此处理器必须自己先判断工具名——
- *     否则它会给其它工具下错结论。</li>
+ *     否则它会给其它工具下错结论；</li>
+ *     <li>{@link InputDirectiveRequest}（路由键 {@code !}）：把输入框里以 {@code !} 开头的行
+ *     翻译成一次 {@code shell} 工具调用。它只声明意图，执行仍由内核的工具执行器接管，
+ *     因此权限与审批不会被绕过。卸载本插件后 {@code !} 不再被认领，用户敲它就只是一段普通文本。</li>
  * </ul>
  * <b>为什么不注册提示词贡献</b>：工具名片里的描述已经把「cd 不跨调用保留」「优先用
  * read_file」这些话说清楚了，再往 system prompt 里塞一段就是每轮都重复付费。
@@ -46,6 +51,9 @@ public final class ShellPlugin implements JellyfishPlugin {
         // 先装配再注册：处理器一旦注册就可能被调用，依赖必须已经就绪
         context.handle(ToolCallRequest.class, ShellTool.TOOL_NAME, ShellTool.descriptor(), tool);
         context.contribute(PermissionCheckRequest.class, new ShellPermissionContribution(config.commandPolicy()));
+        context.handle(InputDirectiveRequest.class, ShellInputDirective.MARKER,
+                new InputDirectiveDescriptor("执行一条 shell 命令（结果进入上下文）"),
+                new ShellInputDirective());
         this.runner = created;
         LOG.info("命令行插件已启动: timeout={}s maxTimeout={}s idleTimeout={}s allowed={}",
                 Integer.valueOf(config.timeoutSeconds()), Integer.valueOf(config.maxTimeoutSeconds()),

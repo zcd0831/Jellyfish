@@ -43,6 +43,7 @@ flowchart TB
                 SessionMgr["SessionManager<br>会话 + 消息 + token + 当前态"]
                 AgentMgr["AgentManager + AgentRegistry<br>Agent 定义与权限策略"]
                 CommandMgr["CommandManager<br>解析 / 分发 / 清单（无状态，对外壳中立）"]
+                InputMgr["InputDirectives<br>输入指令：! / @（外壳中立）"]
                 ModelMgr["ModelManager<br>Provider/Model 注册与路由"]
                 LLMClient["LLMClient<br>统一 LLM 调用抽象"]
                 PermMgr["PermissionManager<br>核心策略 → PLAN 白名单 → 插件拦截"]
@@ -92,6 +93,7 @@ flowchart TB
     CLI ==>|"命令原文 + sessionId"| CommandMgr
     CLI ==>|"命令名 + 参数 + sessionId"| CommandMgr
     CLI -->|"chat：唯一入口"| ReAct
+    CLI -->|"! / @：解析 / 执行 / 补全"| InputMgr
     CommandMgr ==>|"CommandResult / 清单 / 帮助"| CLI
 
     %% ===================== 内核内部：接口 + 构造器注入（细实线） =====================
@@ -109,6 +111,8 @@ flowchart TB
     ReAct ==>|"ToolCallRequest（工具名 + 参数）"| ExtReg
     ReAct ==>|"PromptContributionRequest（只进 system prompt）"| ExtReg
     SessionMgr ==>|"会话持久化 / 恢复（不可丢）"| ExtReg
+    InputMgr ==>|"ToolCallRequest（经 ToolExecutor：权限 + 截断唯一入口）"| ExtReg
+    InputMgr ==>|"结果落 user 消息（不可丢）"| SessionMgr
     PermMgr ==>|"权限拦截（插件只能返回两态）"| ExtReg
     ExtReg ==>|"贡献结果"| ReAct
 
@@ -161,7 +165,7 @@ flowchart TB
     classDef ext fill:#FAFAFA,stroke:#AAA,color:#444
 
     class ReAct app
-    class SessionMgr,AgentMgr,ModelMgr,LLMClient,PermMgr,CommandMgr kernel
+    class SessionMgr,AgentMgr,ModelMgr,LLMClient,PermMgr,CommandMgr,InputMgr kernel
     class Registry,ExtReg,EventCh,PluginMgr,PluginCtx extlayer
     class Runtime,Reloader,Metrics support
     class LLM,Plugins,Jelly,Agents ext
@@ -261,6 +265,8 @@ jellyfish-core/src/main/java/zcd/jellyfish/core/
 ├── ReActTurn / ReActListener / ReActResult
 ├── prompt/                     # PromptAssembler / ContextWindow / ToolCatalog / TokenEstimator / ToolResultAger
 ├── compact/                    # ConversationCompactor / CompactionPlan / CompactionHealthIndicator
+├── tool/                       # ToolExecutor（权限→路由→截断的唯一执行点）/ CancellationTokenSource
+├── input/                      # InputDirectives / InputDirectiveRun / InputDirectiveCall / InputReferenceCompletion
 └── command/                    # SystemCommands（owner=core）
 
 jellyfish-cli/src/main/java/zcd/jellyfish/cli/
@@ -331,6 +337,19 @@ jellyfish-script/src/main/java/zcd/jellyfish/script/
 - **类型即地址**：请求类型本身就是身份，注册表按「类型 + 路由键」找 handler；插件拿不到的类型就注册不了。
 - **同步侧只提供有序查找与单处理器执行，注册表不做编排**：`handler` 同键唯一（0 个 `NO_HANDLER`、多个 `AMBIGUOUS_HANDLER`），`descriptorBindings` 取描述符清单（描述符为空的注册也返回）。调用顺序与结果合并由调用方决定。
 - **同步派发没有超时、白名单、异常隔离**：调用方需要确定结果，若不能容忍插件阻塞或抛错，必须自己在调用点设超时或捕获。
+
+### 输入指令与文件引用（插件扩展）
+
+- **输入框的特殊语法归插件，不归外壳**：`!`（执行命令）由 shell 插件提供、`@`（引用文件）由 tools 插件提供。**没有插件就没有这个语法**——注册表里查不到标记就当作普通文本，外壳不维护「哪些标记需要哪个插件」的名单。
+- **插件只能声明映射，执行权始终在内核**：`InputDirectiveResult` 只能表达「请用这个工具、这几个参数跑一次」或「我不认领」。插件拿不到 `PermissionManager`，因此不可能自己起进程或写文件，也就无法绕过权限。任何在 handler 里直接执行命令的实现都是错的。
+- **执行体是 `ToolExecutor`，与模型发起的工具调用同一条路径**：权限判定、人工审批、取消令牌、超时、进程树终止、输出截断与落盘全部一致。`ReActLooper` 与本服务共用它，这是「执行语义只有一份」的落点。
+- **标记就是路由键**：`!`/`@` 用 `handle`（同键唯一）注册，两个插件抢同一个标记会在插件启动时以 `DUPLICATE_HANDLER` 当场暴露。标记必须是单个非空白字符（`InputMarkers` 一处校验）。
+- **两个请求类型分开**：`InputDirectiveRequest`（行首、提交时一次解析、可触发执行）与 `InputReferenceRequest`（行内、渲染线程每帧可能问一次、纯只读）。合成一个会让「这条标记要不要参与每帧补全」变成一个需要判别的字段。
+- **`!` 的结果落成 user 消息，不是 tool 消息**：这里没有模型回合，tool 消息必须与一条 `assistant.toolCalls` 配对，而这里根本没有。user 消息对所有厂商都合法，且与普通历史一样参与上下文裁剪与压缩。回合外追加即时会落盘，不需要 `flush`。
+- **`@` 不内联、不展开**：`@路径` 提交时原样留在历史里，真正的读取由模型调用 `read_file`（tools 插件另贡献一条 system prompt 约定把这件事告诉模型）。因此没有内容治理、没有新鲜度问题，权限与 `max_bytes` 也自动生效。
+- **片段切分由内核算，插件不重复实现**：`InputDirectives.complete` 从光标向前扫到空白得到片段、取出标记之后的 `token` 交给插件，并把替换区间一并返回（`InputReferenceCompletion`）。外壳只做渲染与回填。
+- **执行是异步的，界面每帧轮询句柄**：`InputDirectiveRun` 由外壳轮询 `isDone()` 收尾（与压缩状态同一形态）；`Esc` 调 `cancel()`，经 `CancellationToken` 送达工具（命令行靠它杀进程）。`beginDirective` 必须早于提交执行——执行线程可能在提交后立刻写出第一段实时输出，晚一步重置会把它抹掉。
+- **关闭顺序**：`AgentHarness.shutdown` 在 `reActLooper.close()` 之后调 `InputDirectives.close()`（取消在途命令并停线程池），仍必须早于 `pluginManager.close()`。
 
 ### 会话与持久化
 
@@ -493,7 +512,7 @@ jellyfish-script/src/main/java/zcd/jellyfish/script/
 - **TUI 视图 = 会话投影 + `InflightTurn` 暂存区**：消息区不持有第二份消息列表，由 `TranscriptProjector` 纯函数投影；流式当前轮尚不在会话里，必须暂存且随回合终结清空。工具轨迹不进暂存区。
 - **TUI 线程契约**：`ReActListener` 回调都在 react 池线程，界面状态只在渲染线程变更；react 线程只向线程安全暂存区追加并置 volatile 脏标记，`Esc` 中断由渲染线程直接调 `ReActTurn.cancel()`。
 - **TUI 消息区必须是单个 `richText`**：布局子元素到 120～180 个即性能断崖；滚动偏移是 `ChatState` 自己的字段。
-- **TUI 从首页进入**：无当前会话时显示 `HomeSplash`；分流完全交给命令域，外壳不维护名字表——`sessionRequired=false` 的命令（`/help` `/new` `/session` `/resume` `/delete` `/reload`，以及降级的 `/model` `/agent` `/mode`）在首页直接执行且不建会话，其余命令与普通文本先建会话；首页手敲一条 `sessionRequired=true` 的命令（`/compact`）按约定当作用户的话发给模型（不额外提示）。首页状态栏按「`SessionDefaults` → 配置默认值」两级解析（`resolvePendingModel`）——不读第一级的话，用户刚在首页改完会看到状态栏仍显示旧值，与实际将要用到的对不上。
+- **TUI 从首页进入**：无当前会话时显示 `HomeSplash`；分流完全交给命令域，外壳不维护名字表——`sessionRequired=false` 的命令（`/help` `/new` `/session` `/resume` `/delete` `/reload`，以及降级的 `/model` `/agent` `/mode`）在首页直接执行且不建会话，其余命令与普通文本先建会话；首页手敲一条 `sessionRequired=true` 的命令（`/compact`）按约定当作用户的话发给模型（不额外提示）。**输入指令（`!`）排在命令域之后、对话之前**，且一律先建会话（结果要落进历史）——它的分流也是问内核（`InputDirectives.resolve`），外壳同样不维护标记名单。首页状态栏按「`SessionDefaults` → 配置默认值」两级解析（`resolvePendingModel`）——不读第一级的话，用户刚在首页改完会看到状态栏仍显示旧值，与实际将要用到的对不上。
 - **markdown 只在 assistant 正文渲染**：只借 commonmark 的 AST，块级映射与换行自己写；用户消息与工具轨迹保持纯文本。**commonmark 锁 `0.21.0`**（0.22.0 起是 Java 11 字节码），渲染器永不抛异常、解析前先过滤控制字符。
 - **思考过程默认折叠、可全局展开**（`Ctrl+T` / `/thinking` / `--show-thinking`）：思考随消息落会话（`SessionMessage.thinking`），**不进 `LlmMessage`**。开关必须纳入投影的「未变化」判据。
 - **审批浮层优先级高于二级选择页与补全面板**，可见时吞掉其余按键；`Esc` 是「拒绝 + 中断回合」；详情区必须过滤控制字符、超长参数折行而不是截断。

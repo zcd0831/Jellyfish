@@ -5,6 +5,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.function.Executable;
 import zcd.jellyfish.core.ReActTurn;
+import zcd.jellyfish.core.input.InputDirectiveRun;
 import zcd.jellyfish.infra.llm.LlmMessage;
 import zcd.jellyfish.infra.session.SessionMessage;
 import zcd.jellyfish.tui.text.VisualLine;
@@ -216,6 +217,49 @@ class ChatStateTest {
         state.getInflight().finish(InflightTurn.Outcome.COMPLETED, null);
 
         assertFalse(state.isTurnRunning());
+    }
+
+    @Test
+    @DisplayName("输入指令与回合并用同一个暂存区：beginDirective 后即处于进行中")
+    void beginDirective_should_markRunning() {
+        state.beginDirective();
+
+        assertTrue(state.isTurnRunning());
+        assertNull(state.getDirective());
+    }
+
+    @Test
+    @DisplayName("绑定指令后 getDirective 返回它，clearDirective 清掉")
+    void bindDirective_should_exposeHandle() {
+        InputDirectiveRun run = new InputDirectiveRun("r1", "!", "!ls");
+
+        state.bindDirective(run);
+        assertEquals(run, state.getDirective());
+
+        state.clearDirective();
+        assertNull(state.getDirective());
+    }
+
+    @Test
+    @DisplayName("没有回合时 Esc 应取消输入指令")
+    void cancelTurn_should_cancel_directive_when_no_turn() {
+        InputDirectiveRun run = new InputDirectiveRun("r1", "!", "!ls");
+        state.beginDirective();
+        state.bindDirective(run);
+
+        state.cancelTurn();
+
+        assertTrue(run.isCancelled());
+    }
+
+    @Test
+    @DisplayName("beginTurn 应清掉上一条指令句柄，避免过期句柄被取消")
+    void beginTurn_should_clear_directive() {
+        state.bindDirective(new InputDirectiveRun("r1", "!", "!ls"));
+
+        state.beginTurn(null);
+
+        assertNull(state.getDirective());
     }
 
     @Test

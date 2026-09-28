@@ -1,5 +1,8 @@
 package zcd.jellyfish.cli.console;
 
+import java.util.Map;
+
+import zcd.jellyfish.api.extension.ToolMetadata;
 import zcd.jellyfish.core.ReActListener;
 import zcd.jellyfish.core.ReActResult;
 
@@ -156,11 +159,37 @@ public final class CliReActListener implements ReActListener {
     }
 
     @Override
-    public void onToolCallCompleted(String toolCallId, String toolName, boolean success, String output) {
+    public void onToolCallCompleted(String toolCallId, String toolName, boolean success, String output,
+                                    Map<String, Object> metadata) {
         closeThinkingLine();
         closeToolOutputLine();
+        // 只读工具（read_file 之类）没有元数据，这一行因此保持原样；命令类工具带上退出码时补在末尾
         console.writeErrLine(TOOL_END_PREFIX + toolName + (success ? " 完成" : " 失败")
-                + "（" + lengthOf(output) + " 字符）");
+                + "（" + lengthOf(output) + " 字符）" + outcomeSuffix(metadata));
+    }
+
+    /**
+     * 把元数据里值得人看的一两个事实拼成简短后缀。
+     * <p>
+     * 只拼退出码与非正常终止：这两件事决定了「刚才那条命令到底成没成」，而命令行这边没有界面
+     * 可以渲染标记，只能写成文字。信息缺失时返回空串——元数据是旁路信息，不该在展示上留残迹。
+     *
+     * @param metadata 工具结果元数据，可为 {@code null}
+     * @return 后缀文本，无可用信息时返回空串
+     */
+    private static String outcomeSuffix(Map<String, Object> metadata) {
+        if (metadata == null || metadata.isEmpty()) {
+            return "";
+        }
+        Object exitCode = metadata.get(ToolMetadata.KEY_EXIT_CODE);
+        if (exitCode instanceof Number && ((Number) exitCode).intValue() != 0) {
+            return "，退出码 " + exitCode;
+        }
+        Object terminal = metadata.get(ToolMetadata.KEY_TERMINAL);
+        if (terminal instanceof String && !ToolMetadata.TERMINAL_COMPLETED.equals(terminal)) {
+            return "，" + terminal;
+        }
+        return "";
     }
 
     @Override

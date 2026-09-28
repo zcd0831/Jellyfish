@@ -147,7 +147,7 @@ class SseReActListenerTest {
     void onToolCallCompleted_should_enqueue_tool_done_event() {
         SseReActListener listener = listener();
 
-        listener.onToolCallCompleted("c1", "read_file", true, "content");
+        listener.onToolCallCompleted("c1", "read_file", true, "content", null);
 
         SseEvent event = listener.pollNow();
         assertEquals("tool_done", event.getName());

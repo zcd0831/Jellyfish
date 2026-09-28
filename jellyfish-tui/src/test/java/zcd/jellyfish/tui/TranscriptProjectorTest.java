@@ -2,6 +2,7 @@ package zcd.jellyfish.tui;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import zcd.jellyfish.api.extension.ToolMetadata;
 import zcd.jellyfish.infra.llm.LlmMessage;
 import zcd.jellyfish.infra.session.SessionMessage;
 import zcd.jellyfish.tui.text.VisualLine;
@@ -9,7 +10,9 @@ import zcd.jellyfish.tui.text.VisualLine;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -105,6 +108,57 @@ class TranscriptProjectorTest {
                 completed());
 
         assertEquals(Arrays.asList("", "  \u276f ## 这不是标题"), texts(lines));
+    }
+
+    @Test
+    @DisplayName("失败的命令要在轨迹上一眼看出：只有元数据能给出这个信号")
+    void project_should_mark_failed_tool_from_metadata() {
+        // Given：命令跑完了但退出码非零（界面上看不出「成没成」是这条轨迹最大的信息缺口）
+        Map<String, Object> metadata = new HashMap<String, Object>();
+        metadata.put(ToolMetadata.KEY_EXIT_CODE, Integer.valueOf(1));
+        List<SessionMessage> messages = Arrays.asList(
+                SessionMessage.of(LlmMessage.assistant("跑一下", Collections.emptyList())),
+                SessionMessage.ofTool(LlmMessage.tool("c1", "shell", "cwd: /x · exit: 1"), metadata));
+
+        // When
+        List<VisualLine> lines = project(messages, completed());
+
+        // Then：红色后缀接在工具名之后（判据来自字段，不解析首行文案）
+        assertEquals(Arrays.asList(
+                "",
+                "  \u23fa jellyfish",
+                "    跑一下",
+                "      \u23bf shell \u26a0 退出码 1"), texts(lines));
+    }
+
+    @Test
+    @DisplayName("被终止的命令（超时 / 取消）同样要标出来：那正是「为什么没有输出」的答案")
+    void project_should_mark_terminated_tool() {
+        Map<String, Object> metadata = new HashMap<String, Object>();
+        metadata.put(ToolMetadata.KEY_TERMINAL, "TIMEOUT");
+        List<SessionMessage> messages = Collections.singletonList(
+                SessionMessage.ofTool(LlmMessage.tool("c1", "shell", "已超时"), metadata));
+
+        List<VisualLine> lines = project(messages, completed());
+
+        assertEquals(Arrays.asList(
+                "",
+                "  \u23fa jellyfish",
+                "      \u23bf shell \u26a0 TIMEOUT"), texts(lines));
+    }
+
+    @Test
+    @DisplayName("成功的命令不加任何后缀：成功是常态，标出来只会埋掉需要看见的那几条")
+    void project_should_notMark_successfulTool() {
+        Map<String, Object> metadata = new HashMap<String, Object>();
+        metadata.put(ToolMetadata.KEY_EXIT_CODE, Integer.valueOf(0));
+        metadata.put(ToolMetadata.KEY_TERMINAL, ToolMetadata.TERMINAL_COMPLETED);
+        List<SessionMessage> messages = Collections.singletonList(
+                SessionMessage.ofTool(LlmMessage.tool("c1", "shell", "cwd: /x · exit: 0"), metadata));
+
+        List<VisualLine> lines = project(messages, completed());
+
+        assertFalse(texts(lines).toString().contains(TranscriptProjector.WARNING_MARK), texts(lines).toString());
     }
 
     @Test

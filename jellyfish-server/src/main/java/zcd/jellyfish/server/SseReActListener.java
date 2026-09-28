@@ -11,6 +11,7 @@ import zcd.jellyfish.server.dto.TurnToolDoneEvent;
 import zcd.jellyfish.server.dto.TurnToolStartEvent;
 import zcd.jellyfish.server.dto.TurnToolOutputEvent;
 
+import java.util.Map;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
@@ -136,9 +137,10 @@ public final class SseReActListener implements ReActListener {
     }
 
     @Override
-    public void onToolCallCompleted(String toolCallId, String toolName, boolean success, String output) {
+    public void onToolCallCompleted(String toolCallId, String toolName, boolean success, String output,
+                                    Map<String, Object> metadata) {
         queue.offer(new SseEvent("tool_done",
-                new TurnToolDoneEvent(turnId, toolCallId, toolName, success, output), false));
+                new TurnToolDoneEvent(turnId, toolCallId, toolName, success, output, metadata), false));
     }
 
     @Override

@@ -1,5 +1,7 @@
 package zcd.jellyfish.tui;
 
+import java.util.Map;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import zcd.jellyfish.core.ReActListener;
@@ -73,8 +75,11 @@ public final class TuiReActListener implements ReActListener {
     }
 
     @Override
-    public void onToolCallCompleted(String toolCallId, String toolName, boolean success, String output) {
-        // 工具轨迹直接由会话消息投影得出（assistant.toolCalls 与 tool 消息都已落库），此处无需记录。
+    public void onToolCallCompleted(String toolCallId, String toolName, boolean success, String output,
+                                    Map<String, Object> metadata) {
+        // 工具轨迹直接由会话消息投影得出（assistant.toolCalls 与 tool 消息都已落库，元数据也随之落库），
+        // 此处无需记录任何东西——包括警告标记：它由投影读 SessionMessage 的元数据渲染，
+        // 在这里再存一份只会多出「重启后标记消失」的不一致。
         // 实时输出要清掉：留到下一帧就是同一件事在屏幕上出现两份（一份实时、一份落库后）
         inflight.clearToolOutput();
     }

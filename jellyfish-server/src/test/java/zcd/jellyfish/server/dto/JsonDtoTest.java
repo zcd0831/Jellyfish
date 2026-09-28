@@ -26,6 +26,27 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class JsonDtoTest {
 
     @Test
+    void turnToolDoneEvent_should_exposeMetadataAsJsonObject() {
+        Map<String, Object> metadata = new LinkedHashMap<String, Object>();
+        metadata.put("exitCode", Integer.valueOf(1));
+        metadata.put("terminal", "COMPLETED");
+
+        String json = ObjectMapperWrapper.writeValueAsString(new TurnToolDoneEvent("t1", "c1", "shell", true,
+                "cwd: /x · exit: 1", metadata));
+
+        // 字段名就是 HTTP 合同，因此断言字面量
+        assertTrue(json.contains("\"metadata\":{\"exitCode\":1,\"terminal\":\"COMPLETED\"}"), json);
+    }
+
+    @Test
+    void turnToolDoneEvent_should_exposeEmptyMetadata_when_absent() {
+        String json = ObjectMapperWrapper.writeValueAsString(new TurnToolDoneEvent("t1", "c1", "read_file", true,
+                "内容", null));
+
+        assertTrue(json.contains("\"metadata\":{}"), json);
+    }
+
+    @Test
     void createSessionRequest_should_bind_all_fields_when_json_given() {
         CreateSessionRequest request = ObjectMapperWrapper.readValue(
                 "{\"agentId\":\"coder\",\"provider\":\"openai\",\"model\":\"gpt-4o\",\"permissionMode\":\"PLAN\"}",

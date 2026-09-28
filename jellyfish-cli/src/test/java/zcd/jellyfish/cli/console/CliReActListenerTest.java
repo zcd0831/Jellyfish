@@ -2,7 +2,11 @@ package zcd.jellyfish.cli.console;
 
 import org.junit.jupiter.api.Test;
 import zcd.jellyfish.api.JellyfishException;
+import zcd.jellyfish.api.extension.ToolMetadata;
 import zcd.jellyfish.core.ReActResult;
+
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -104,7 +108,7 @@ class CliReActListenerTest {
         RecordingConsoleIO console = new RecordingConsoleIO(null);
         CliReActListener listener = new CliReActListener(console, false);
 
-        listener.onToolCallCompleted("call-1", "read_file", true, "0123456789");
+        listener.onToolCallCompleted("call-1", "read_file", true, "0123456789", null);
 
         assertEquals("", console.out());
         assertEquals("← read_file 完成（10 字符）\n", console.err());
@@ -116,9 +120,52 @@ class CliReActListenerTest {
         RecordingConsoleIO console = new RecordingConsoleIO(null);
         CliReActListener listener = new CliReActListener(console, false);
 
-        listener.onToolCallCompleted("call-1", "bash", false, null);
+        listener.onToolCallCompleted("call-1", "bash", false, null, null);
 
         assertEquals("← bash 失败（0 字符）\n", console.err());
+    }
+
+    @Test
+    void onToolCallCompleted_should_append_exit_code_when_command_failed() {
+        // Given：命令跑了但退出码非零——命令行这边没有界面能画标记，只能写成文字
+        RecordingConsoleIO console = new RecordingConsoleIO(null);
+        CliReActListener listener = new CliReActListener(console, false);
+        Map<String, Object> metadata = new LinkedHashMap<String, Object>();
+        metadata.put(ToolMetadata.KEY_EXIT_CODE, Integer.valueOf(2));
+        metadata.put(ToolMetadata.KEY_TERMINAL, ToolMetadata.TERMINAL_COMPLETED);
+
+        // When
+        listener.onToolCallCompleted("call-1", "shell", true, "构建失败", metadata);
+
+        // Then
+        assertEquals("← shell 完成（4 字符），退出码 2\n", console.err());
+    }
+
+    @Test
+    void onToolCallCompleted_should_append_terminal_when_terminated() {
+        RecordingConsoleIO console = new RecordingConsoleIO(null);
+        CliReActListener listener = new CliReActListener(console, false);
+        Map<String, Object> metadata = new LinkedHashMap<String, Object>();
+        metadata.put(ToolMetadata.KEY_TERMINAL, "TIMEOUT");
+
+        listener.onToolCallCompleted("call-1", "shell", true, "部分输出", metadata);
+
+        assertEquals("← shell 完成（4 字符），TIMEOUT\n", console.err());
+    }
+
+    @Test
+    void onToolCallCompleted_should_stay_silent_when_outcome_is_normal() {
+        // 成功与「零退出码」都不该在结束行上留下残迹
+        RecordingConsoleIO console = new RecordingConsoleIO(null);
+        CliReActListener listener = new CliReActListener(console, false);
+        Map<String, Object> metadata = new LinkedHashMap<String, Object>();
+        metadata.put(ToolMetadata.KEY_EXIT_CODE, Integer.valueOf(0));
+        metadata.put(ToolMetadata.KEY_TERMINAL, ToolMetadata.TERMINAL_COMPLETED);
+        metadata.put("durationMs", Long.valueOf(12L));
+
+        listener.onToolCallCompleted("call-1", "shell", true, "一切正常", metadata);
+
+        assertEquals("← shell 完成（4 字符）\n", console.err());
     }
 
     @Test
@@ -195,7 +242,7 @@ class CliReActListenerTest {
 
         listener.onText("我先看一下文件。");
         listener.onToolCallStarted("call-1", "read_file");
-        listener.onToolCallCompleted("call-1", "read_file", true, "ok");
+        listener.onToolCallCompleted("call-1", "read_file", true, "ok", null);
         listener.onText("结论是两句话。");
         listener.onComplete(ReActResult.completed("s1", "结论是两句话。", 2));
 
@@ -326,7 +373,7 @@ class CliReActListenerTest {
 
         // 输出停在半行（命令的最后一行往往不带换行）：结束行不能紧贴在它后面
         listener.onToolCallOutput("call-1", "bash", "没有换行的尾巴");
-        listener.onToolCallCompleted("call-1", "bash", true, "ok");
+        listener.onToolCallCompleted("call-1", "bash", true, "ok", null);
 
         assertTrue(console.err().contains("  │ 没有换行的尾巴\n← bash 完成"), console.err());
     }

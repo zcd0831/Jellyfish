@@ -125,7 +125,7 @@ class ChatHandlerTest {
             listener.onText("hello");
             listener.onToolCallStarted("c1", "read_file");
             listener.onToolCallOutput("c1", "shell", "building...");
-            listener.onToolCallCompleted("c1", "read_file", true, "ok");
+            listener.onToolCallCompleted("c1", "read_file", true, "ok", null);
             listener.onComplete(ReActResult.completed("s1", "hello", 1));
             return new FakeTurn("t1");
         });

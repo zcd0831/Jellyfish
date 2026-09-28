@@ -1,6 +1,7 @@
 package zcd.jellyfish.tui;
 
 import dev.tamboui.style.Style;
+import zcd.jellyfish.api.extension.ToolMetadata;
 import zcd.jellyfish.infra.llm.LlmMessage;
 import zcd.jellyfish.infra.session.SessionMessage;
 import zcd.jellyfish.tui.text.ControlChars;
@@ -12,6 +13,7 @@ import zcd.jellyfish.tui.text.VisualLine;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Map;
 import java.util.List;
 
 /**
@@ -66,6 +68,9 @@ public final class TranscriptProjector {
      * 而不是又开了一个工具。
      */
     static final String TOOL_OUTPUT_PREFIX = "      \u2502 ";
+
+    /** 失败标记：与工具名同行，一眼能看出这条轨迹没跑成。 */
+    static final String WARNING_MARK = "\u26a0";
 
     /** 思考过程前缀。 */
     static final String THINKING_PREFIX = "      \u273b ";
@@ -460,9 +465,38 @@ public final class TranscriptProjector {
         }
         String name = message.getMessage().getName();
         String label = name == null || name.isEmpty() ? "工具" : name;
-        out.addAll(LineWrapper.wrap(new StyledSegment(TRACE_PREFIX, TRACE_STYLE),
-                wrapBody(label, TRACE_STYLE), width));
+        List<StyledSegment> body = new ArrayList<StyledSegment>();
+        body.addAll(wrapBody(label, TRACE_STYLE));
+        // 错误用红色后缀而不是把整行变红：工具名与结论要能一起读，整行染色会让
+        // 「哪个工具失败了」这条信息淹没在颜色里。判据来自元数据字段，不去解析首行文案
+        body.addAll(wrapBody(failureSuffix(message), ERROR_STYLE));
+        out.addAll(LineWrapper.wrap(new StyledSegment(TRACE_PREFIX, TRACE_STYLE), body, width));
         return true;
+    }
+
+    /**
+     * 取工具轨迹的失败后缀。
+     * <p>
+     * <b>为什么读元数据而不是读首行文案</b>：首行那句「exit: 1」是给模型看的措辞，
+     * 展示若依赖它，改一个措辞标记就会消失。元数据是同一份事实的结构化版本，
+     * 判据（退出码非零或非正常终止）由 {@code ToolMetadata#failed} 统一给出。
+     * <p>
+     * <b>为什么只标失败</b>：成功是常态，逐条标「exit: 0」只会把真正需要一眼看见的那几条埋掉。
+     *
+     * @param message 工具消息，不可为 {@code null}
+     * @return 后缀文本；成功或没有元数据时返回空串
+     */
+    private static String failureSuffix(SessionMessage message) {
+        Map<String, Object> metadata = message.getMetadata();
+        if (!ToolMetadata.failed(metadata)) {
+            return "";
+        }
+        Object exitCode = metadata.get(ToolMetadata.KEY_EXIT_CODE);
+        if (exitCode instanceof Number) {
+            return " " + WARNING_MARK + " 退出码 " + exitCode;
+        }
+        Object terminal = metadata.get(ToolMetadata.KEY_TERMINAL);
+        return " " + WARNING_MARK + " " + terminal;
     }
 
     /**

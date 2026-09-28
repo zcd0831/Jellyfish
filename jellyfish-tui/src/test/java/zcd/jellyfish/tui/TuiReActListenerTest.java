@@ -82,7 +82,7 @@ class TuiReActListenerTest {
     void onToolCallCompleted_should_not_store_anything() {
         listener.onText("正文");
 
-        listener.onToolCallCompleted("c1", "read_file", true, "内容");
+        listener.onToolCallCompleted("c1", "read_file", true, "内容", null);
 
         assertEquals("正文", inflight.snapshot().getText());
     }
@@ -181,7 +181,7 @@ class TuiReActListenerTest {
         listener.onToolCallStarted("c1", "bash");
         listener.onToolCallOutput("c1", "bash", "输出\n");
 
-        listener.onToolCallCompleted("c1", "bash", true, "输出");
+        listener.onToolCallCompleted("c1", "bash", true, "输出", null);
 
         assertNull(inflight.snapshot().getRunningToolName());
         assertTrue(inflight.snapshot().getToolOutputLines().isEmpty());

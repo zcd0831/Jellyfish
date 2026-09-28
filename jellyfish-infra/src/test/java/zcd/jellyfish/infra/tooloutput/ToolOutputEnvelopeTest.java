@@ -39,6 +39,30 @@ class ToolOutputEnvelopeTest {
     }
 
     @Test
+    @DisplayName("部分落盘应在信封与 stub 里都如实标注")
+    void text_should_carryPartialFlag() {
+        // Given：捕获期溢出且触及落盘上限
+        ToolOutputEnvelope envelope = ToolOutputEnvelope.text("shell", 5000, 10, "/tmp/spill.txt",
+                ToolOutputEnvelope.hint("/tmp/spill.txt", true), "preview", true);
+
+        // When
+        ToolOutputEnvelope parsed = ToolOutputEnvelope.parse(envelope.render());
+
+        // Then：不讲清楚的话，「完整内容在 path」就是一句假话
+        assertNotNull(parsed);
+        assertTrue(parsed.isPartial());
+        assertTrue(parsed.stub().contains("不完整"), parsed.stub());
+    }
+
+    @Test
+    @DisplayName("恢复指引应区分完整落盘、部分落盘与落盘失败三种情形")
+    void hint_should_describeRecoveryPath() {
+        assertTrue(ToolOutputEnvelope.hint("/tmp/a.txt").contains("完整内容已落盘"));
+        assertTrue(ToolOutputEnvelope.hint("/tmp/a.txt", true).contains("未捕获"));
+        assertTrue(ToolOutputEnvelope.hint(null).contains("不可写"));
+    }
+
+    @Test
     @DisplayName("结构化信封应可往返：预览保持数组形态")
     void render_should_roundTripStructuredPreview() {
         // Given

@@ -15,8 +15,10 @@ import zcd.jellyfish.api.event.notification.ToolCallCompletedEvent;
 import zcd.jellyfish.api.extension.ExtensionHandler;
 import zcd.jellyfish.api.extension.PermissionCheckRequest;
 import zcd.jellyfish.api.extension.PermissionDecision;
+import zcd.jellyfish.api.extension.CancellationToken;
 import zcd.jellyfish.api.extension.ToolCallRequest;
 import zcd.jellyfish.api.extension.ToolCallResult;
+import zcd.jellyfish.api.extension.ToolOutputSink;
 import zcd.jellyfish.api.extension.ToolDescriptor;
 import zcd.jellyfish.core.compact.ConversationCompactor;
 import zcd.jellyfish.core.prompt.ContextUsage;
@@ -58,6 +60,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -251,6 +254,84 @@ class ReActLooperTest {
         // Then
         assertEquals("知道了", result.getContent());
         assertTrue(session.getMessages().get(2).getMessage().getContent().startsWith("未知工具"));
+    }
+
+    @Test
+    void chat_should_pass_cancellation_token_and_sink_to_tool() {
+        // Given
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        when(permissionManager.decide(any(PermissionCheckRequest.class)))
+                .thenReturn(PermissionDecision.allow(null));
+        List<CancellationToken> tokens = new ArrayList<>();
+        List<ToolOutputSink> sinks = new ArrayList<>();
+        registerTool("read", request -> {
+            tokens.add(request.getCancellationToken());
+            sinks.add(request.getOutputSink());
+            return new ToolCallResult("read", "ok");
+        });
+        stubResponses(toolCallResponse("call_1", "read"), LlmResponse.text("好"));
+        Session session = sessionManager.createDefault();
+
+        // When
+        newLooper().chat(session.getSessionId(), "读文件", new RecordingListener()).await();
+
+        // Then：两者都必须真的送到工具手里，而不是只存在于接口上
+        assertEquals(1, tokens.size());
+        assertNotNull(tokens.get(0));
+        assertFalse(tokens.get(0).isCancelled());
+        assertEquals(1, sinks.size());
+        assertNotSame(ToolOutputSink.NOOP, sinks.get(0));
+    }
+
+    @Test
+    void chat_should_keepCapturedOutput_when_tool_fails() {
+        // Given：工具已经产出了一部分输出才失败
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        when(permissionManager.decide(any(PermissionCheckRequest.class)))
+                .thenReturn(PermissionDecision.allow(null));
+        registerTool("read", request -> {
+            request.getOutputSink().write("已捕获的输出");
+            throw new IllegalStateException("磁盘坏了");
+        });
+        stubResponses(toolCallResponse("call_1", "read"), LlmResponse.text("换一种方式"));
+        Session session = sessionManager.createDefault();
+
+        // When
+        newLooper().chat(session.getSessionId(), "读文件", new RecordingListener()).await();
+
+        // Then：现场不能被「工具执行失败」这一句话盖掉
+        String fedBack = session.getMessages().get(2).getMessage().getContent();
+        assertTrue(fedBack.startsWith("已捕获的输出"), fedBack);
+        assertTrue(fedBack.contains("工具执行失败"), fedBack);
+    }
+
+    @Test
+    void chat_should_fire_cancel_callback_registered_by_running_tool() throws InterruptedException {
+        // Given：工具阻塞在自持的闸门上，并在开始后注册取消回调
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        when(permissionManager.decide(any(PermissionCheckRequest.class)))
+                .thenReturn(PermissionDecision.allow(null));
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch cancelled = new CountDownLatch(1);
+        registerTool("read", request -> {
+            request.getCancellationToken().onCancel(cancelled::countDown);
+            started.countDown();
+            release.await(5, TimeUnit.SECONDS);
+            return new ToolCallResult("read", "ok");
+        });
+        stubResponses(toolCallResponse("call_1", "read"));
+        Session session = sessionManager.createDefault();
+        ReActTurn turn = newLooper().chat(session.getSessionId(), "读文件", new RecordingListener());
+
+        // When：工具正在跑时取消回合（真实形态是渲染线程按 Esc）
+        assertTrue(started.await(5, TimeUnit.SECONDS));
+        turn.cancel();
+
+        // Then：回调必须被触发——这是「Esc 能打断在跑的命令」的全部依据
+        assertTrue(cancelled.await(5, TimeUnit.SECONDS), "取消回调未被执行");
+        release.countDown();
+        turn.await();
     }
 
     @Test

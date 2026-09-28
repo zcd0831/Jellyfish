@@ -21,6 +21,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -97,7 +98,7 @@ class ToolOutputStoreTest {
         Files.write(blocker, "x".getBytes(StandardCharsets.UTF_8));
         when(runtimeConfig.getReactSettings()).thenReturn(
                 new ReactSettings(null, null, null, null, null, null,
-                        new ToolOutputSettings(blocker.toString(), 0, 0L, null)));
+                        new ToolOutputSettings(blocker.toString(), 0, 0L, null, null)));
 
         // When / Then
         assertNull(store.store("s", "c", "t", "content", false));
@@ -141,7 +142,93 @@ class ToolOutputStoreTest {
     private void settings(int keepFiles, long maxBytes) {
         when(runtimeConfig.getReactSettings()).thenReturn(
                 new ReactSettings(null, null, null, null, null, null,
-                        new ToolOutputSettings(tempDir.toString(), keepFiles, maxBytes, null)));
+                        new ToolOutputSettings(tempDir.toString(), keepFiles, maxBytes, null, null)));
+    }
+
+    @Test
+    @DisplayName("增量写入应在收尾时原子改名，且不留临时文件")
+    void open_should_writeIncrementally_andCommitAtomically() throws IOException {
+        // Given
+        settings(0, 0);
+        ToolOutputStore.SpillWriter writer = store.open("s-1", "call-1", "shell");
+
+        // When
+        writer.write("a");
+        writer.write("b");
+        writer.write("c");
+        String path = writer.commit();
+
+        // Then：读到半成品比读不到更糟，因此收尾之前它对外不存在
+        assertNotNull(path);
+        assertEquals("abc", new String(Files.readAllBytes(Paths.get(path)), StandardCharsets.UTF_8));
+        assertFalse(containsPartFile(tempDir.resolve("s-1")));
+    }
+
+    @Test
+    @DisplayName("增量写入的收尾应幂等")
+    void commit_should_beIdempotent() {
+        // Given
+        settings(0, 0);
+        ToolOutputStore.SpillWriter writer = store.open("s-1", "call-1", "shell");
+        writer.write("x");
+
+        // When
+        String first = writer.commit();
+        String second = writer.commit();
+
+        // Then
+        assertNotNull(first);
+        assertEquals(first, second);
+    }
+
+    @Test
+    @DisplayName("放弃时应删掉临时文件且不返回路径")
+    void abort_should_deleteTempFile() throws IOException {
+        // Given
+        settings(0, 0);
+        ToolOutputStore.SpillWriter writer = store.open("s-1", "call-1", "shell");
+        writer.write("half-written");
+
+        // When
+        writer.abort();
+
+        // Then
+        assertNull(writer.commit());
+        assertFalse(containsPartFile(tempDir.resolve("s-1")));
+    }
+
+    @Test
+    @DisplayName("目录不可用时返回失效写入器而不报错")
+    void open_should_returnFailedWriter_whenDirectoryUnavailable() throws IOException {
+        // Given：把落盘根目录指向一个普通文件
+        Path blocker = tempDir.resolve("blocker");
+        Files.write(blocker, java.util.Collections.singletonList("x"), StandardCharsets.UTF_8);
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings(null, null, null, null, null, null,
+                new ToolOutputSettings(blocker.toString(), 0, 0L, 0L, null)));
+
+        // When：磁盘不可写不该把一次工具调用升级成故障
+        ToolOutputStore.SpillWriter writer = store.open("s-1", "call-1", "shell");
+        writer.write("content");
+
+        // Then
+        assertEquals(0L, writer.getBytesWritten());
+        assertNull(writer.commit());
+    }
+
+    /**
+     * 判断目录下是否还留着临时文件。
+     *
+     * @param directory 目录
+     * @return 存在返回 {@code true}
+     * @throws IOException 列举失败时抛出
+     */
+    private static boolean containsPartFile(Path directory) throws IOException {
+        if (!Files.exists(directory)) {
+            return false;
+        }
+        try (java.util.stream.Stream<Path> stream = Files.list(directory)) {
+            return stream.anyMatch(path -> path.getFileName().toString().endsWith(".part"));
+        }
     }
 
     /**

@@ -100,7 +100,7 @@ class ToolResultAgerTest {
     private void keepRecent(int keepRecent) {
         when(runtimeConfig.getReactSettings()).thenReturn(
                 new ReactSettings(null, null, null, null, null, null,
-                        new ToolOutputSettings(null, null, null, keepRecent)));
+                        new ToolOutputSettings(null, null, null, null, keepRecent)));
     }
 
     /**

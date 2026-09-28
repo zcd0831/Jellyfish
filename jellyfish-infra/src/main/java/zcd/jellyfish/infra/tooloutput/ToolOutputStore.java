@@ -8,7 +8,9 @@ import zcd.jellyfish.infra.support.HomePaths;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
+import java.io.BufferedWriter;
 import java.io.IOException;
+import java.io.Writer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.DirectoryStream;
@@ -98,6 +100,203 @@ public class ToolOutputStore {
     }
 
     /**
+     * 开一个增量写入器：内容边产生边落盘，适用于「捕获期就溢出」的无界输出。
+     * <p>
+     * <b>与 {@link #store} 的分工</b>：{@code store} 用于事后截断（内容已经完整地在内存里），
+     * 本方法用于捕获期溢出（内容可能永远不该被完整物化）。两者共用同一套目录、命名、
+     * 原子改名与清理规则，因此落盘目录里不会出现两种风格的产物。
+     * <p>
+     * <b>打开失败不报错</b>：返回一个「已失效」的写入器，它的 {@code write} 是无操作、
+     * {@code commit} 返回 {@code null}。调用方因此不需要为「磁盘不可写」写一条分支——
+     * 与 {@code store} 失败返回 {@code null} 是同一个口径：磁盘问题不该把一次工具调用升级成故障。
+     *
+     * @param sessionId  会话标识，可为 {@code null}（归到 {@code unknown-session}）
+     * @param toolCallId 工具调用标识，可为 {@code null}
+     * @param toolName   工具名，可为 {@code null}
+     * @return 增量写入器，保证非 {@code null}
+     */
+    public SpillWriter open(String sessionId, String toolCallId, String toolName) {
+        ToolOutputSettings settings = runtimeConfig.getReactSettings().getToolOutput();
+        try {
+            Path directory = sessionDirectory(settings, sessionId);
+            Path target = directory.resolve(fileName(toolCallId, toolName, false));
+            Path temp = Files.createTempFile(directory, ".tmp-", ".part");
+            return new SpillWriter(directory, target, temp, settings,
+                    new BufferedWriter(Files.newBufferedWriter(temp, StandardCharsets.UTF_8)));
+        } catch (IOException | RuntimeException e) {
+            LOG.warn("工具结果增量落盘失败，转入不可恢复路径: sessionId={} tool={} reason={}", sessionId, toolName,
+                    e.toString());
+            return new SpillWriter(null, null, null, null, null);
+        }
+    }
+
+    /**
+     * 增量写入器：边写边落盘，收尾时原子改名。
+     * <p>
+     * <b>为什么单独存在</b>：命令行的输出是「无界且不可再取」的——整份物化进内存会撑爆 JVM，
+     * 而先攒后写又会让「已经产生的那部分」在溢出时才落到磁盘。本类让写入从第一段就开始。
+     * <p>
+     * <b>为什么写入过程对外不可见</b>：本类不会把自己写了一半的临时文件暴露出去，
+     * 也不参与任何互斥判断；它在 {@link #commit()} 之前对外不存在。读到一个只写了一半的文件
+     * 比没有文件更糟——它会被当成真的。
+     * <p>
+     * <b>调用方必须显式收尾</b>：{@link #commit()} 或 {@link #abort()}，两者幂等。
+     * 未收尾就丢弃实例会在缓存目录下留下一个 {@code .part} 临时文件，由后续的清理当作普通文件删除。
+     * <p>
+     * <b>并发前提</b>：调用方必须保证同一会话目录不会并发写入（内核当前的前提是一轮内工具串行、
+     * 一会话一在途回合）。否则另一个调用的清理会把正在写的 {@code .part} 当成「最旧文件」删掉。
+     *
+     * @author zcd
+     */
+    public static final class SpillWriter {
+
+        /** 目标目录，打开失败时为 {@code null}。 */
+        private final Path directory;
+
+        /** 最终文件路径，打开失败时为 {@code null}。 */
+        private final Path target;
+
+        /** 临时文件路径，打开失败时为 {@code null}。 */
+        private final Path temp;
+
+        /** 本次生效的清理配置，打开失败时为 {@code null}。 */
+        private final ToolOutputSettings settings;
+
+        /** 底层写入器，打开失败或收尾后为 {@code null}。 */
+        private Writer writer;
+
+        /** 是否已出现写入失败：一旦置位就不再尝试写入，并在收尾时删除临时文件。 */
+        private boolean failed;
+
+        /** 是否已完成收尾（commit 或 abort）。 */
+        private boolean closed;
+
+        /** 已写入的字节数（按 UTF-8 计），供调用方判断是否触及落盘上限。 */
+        private long bytesWritten;
+
+        /** {@link #commit()} 的结果缓存，保证幂等。 */
+        private String committedPath;
+
+        /**
+         * 构造写入器。
+         *
+         * @param directory 目标目录，可为 {@code null}（打开失败）
+         * @param target    最终文件路径，可为 {@code null}
+         * @param temp      临时文件路径，可为 {@code null}
+         * @param settings  清理配置，可为 {@code null}
+         * @param writer    底层写入器，可为 {@code null}
+         */
+        private SpillWriter(Path directory, Path target, Path temp, ToolOutputSettings settings, Writer writer) {
+            this.directory = directory;
+            this.target = target;
+            this.temp = temp;
+            this.settings = settings;
+            this.writer = writer;
+            this.failed = writer == null;
+        }
+
+        /**
+         * 追加一段文本。
+         * <p>
+         * <b>线程安全</b>：命令行的 stdout 与 stderr 由两条泵线程各自读取，本方法会被并发调用。
+         *
+         * @param text 文本片段，可为 {@code null} 或空串
+         */
+        public synchronized void write(String text) {
+            if (failed || writer == null || text == null || text.isEmpty()) {
+                return;
+            }
+            try {
+                writer.write(text);
+                bytesWritten += utf8Length(text);
+            } catch (IOException | RuntimeException e) {
+                failed = true;
+                LOG.warn("工具结果增量写入失败，该结果转入不可恢复路径: file={} reason={}", temp, e.toString());
+            }
+        }
+
+        /**
+         * 获取已写入的字节数。
+         *
+         * @return UTF-8 字节数，保证非负
+         */
+        public synchronized long getBytesWritten() {
+            return bytesWritten;
+        }
+
+        /**
+         * 收尾：刷新、原子改名，并做一次清理。
+         *
+         * @return 最终文件的绝对路径；打开失败、写入失败或改名失败时为 {@code null}
+         */
+        public synchronized String commit() {
+            if (committedPath != null) {
+                return committedPath;
+            }
+            if (closed) {
+                return null;
+            }
+            closed = true;
+            closeQuietly();
+            if (failed || temp == null || target == null) {
+                deleteQuietly(temp);
+                return null;
+            }
+            try {
+                move(temp, target);
+            } catch (IOException e) {
+                LOG.warn("工具结果增量落盘收尾失败: file={} reason={}", target, e.toString());
+                deleteQuietly(temp);
+                return null;
+            }
+            cleanup(directory, target, settings);
+            committedPath = target.toAbsolutePath().toString();
+            return committedPath;
+        }
+
+        /**
+         * 放弃本次写入：关闭并删除临时文件。
+         * <p>
+         * 与 {@link #commit()} 二选一，先调用的那个生效。
+         */
+        public synchronized void abort() {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            closeQuietly();
+            deleteQuietly(temp);
+        }
+
+        /**
+         * 关闭底层写入器，失败只记 WARN。
+         */
+        private void closeQuietly() {
+            Writer current = writer;
+            writer = null;
+            if (current == null) {
+                return;
+            }
+            try {
+                current.close();
+            } catch (IOException e) {
+                failed = true;
+                LOG.warn("工具结果临时文件关闭失败: file={} reason={}", temp, e.toString());
+            }
+        }
+
+        /**
+         * 计算文本的 UTF-8 字节数。
+         *
+         * @param text 文本
+         * @return 字节数
+         */
+        private static long utf8Length(String text) {
+            return text.getBytes(StandardCharsets.UTF_8).length;
+        }
+    }
+
+    /**
      * 计算某会话的落盘目录，不存在时创建。
      *
      * @param settings  工具结果设置
@@ -123,11 +322,38 @@ public class ToolOutputStore {
     private static void writeAtomically(Path directory, Path target, String content) throws IOException {
         Path temp = Files.createTempFile(directory, ".tmp-", ".part");
         Files.write(temp, content.getBytes(StandardCharsets.UTF_8));
+        move(temp, target);
+    }
+
+    /**
+     * 把临时文件改名到目标路径，尽量保留原子性。
+     *
+     * @param temp   临时文件
+     * @param target 目标路径
+     * @throws IOException 改名失败时抛出
+     */
+    private static void move(Path temp, Path target) throws IOException {
         try {
             Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
         } catch (AtomicMoveNotSupportedException e) {
             // 少数文件系统不支持原子改名，退化成普通覆盖：宁可丢原子性，也不要让结果根本落不了盘
             Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING);
+        }
+    }
+
+    /**
+     * 删除文件，失败只记 WARN。
+     *
+     * @param file 文件，可为 {@code null}
+     */
+    private static void deleteQuietly(Path file) {
+        if (file == null) {
+            return;
+        }
+        try {
+            Files.deleteIfExists(file);
+        } catch (IOException e) {
+            LOG.warn("清理工具结果临时文件失败: file={} reason={}", file, e.toString());
         }
     }
 

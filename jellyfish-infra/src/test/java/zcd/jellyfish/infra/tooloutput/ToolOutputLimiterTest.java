@@ -138,6 +138,83 @@ class ToolOutputLimiterTest {
         verify(store).store("s", "c", "read_file", text, false);
     }
 
+    @Test
+    @DisplayName("超长文本应保留开头与结尾，并写明省略量")
+    void limit_should_keepBothEnds_when_textTooLong() {
+        // Given：多行文本，头尾都能辨认
+        maxChars(600);
+        StringBuilder source = new StringBuilder();
+        for (int i = 0; i < 400; i++) {
+            source.append("line-").append(i).append('\n');
+        }
+        String text = source.toString();
+        when(store.store("s", "c", "read_file", text, false)).thenReturn("/tmp/spill.txt");
+
+        // When
+        String output = limiter.limit("s", "c", "read_file", text);
+
+        // Then：结论往往在末尾，只留头会让模型看到「一切正常的前 90%」
+        ToolOutputEnvelope envelope = ToolOutputEnvelope.parse(output);
+        assertNotNull(envelope, output);
+        String preview = envelope.getPreview().asText();
+        assertTrue(preview.startsWith("line-0\n"), preview);
+        assertTrue(preview.endsWith("line-399\n"), preview);
+        assertTrue(preview.contains("省略"), preview);
+        assertFalse(preview.contains("line-200\n"), preview);
+    }
+
+    @Test
+    @DisplayName("回灌文本不得超过配置的字符上限（含转义膨胀）")
+    void limit_should_respectMaxChars_evenWhenEscapingExpands() {
+        // Given：正文里全是会被 JSON 转义的字符（引号与换行各自膨胀一倍）
+        int maxChars = 800;
+        maxChars(maxChars);
+        StringBuilder source = new StringBuilder();
+        for (int i = 0; i < 500; i++) {
+            source.append("a\"b\\c").append(i).append('\n');
+        }
+        when(store.store(anyString(), anyString(), anyString(), anyString(), eq(false)))
+                .thenReturn("/tmp/spill.txt");
+
+        // When
+        String output = limiter.limit("s", "c", "read_file", source.toString());
+
+        // Then：信封开销预算是估计，渲染后的校正循环必须把实际膨胀兜住
+        ToolOutputEnvelope envelope = ToolOutputEnvelope.parse(output);
+        assertNotNull(envelope, output);
+        assertTrue(output.length() <= maxChars, "长度 " + output.length());
+    }
+
+    @Test
+    @DisplayName("超长数组应以「前缀 + 哨兵 + 后缀」截断，且仍是合法 JSON")
+    void limit_should_keepBothEndsOfArray_withSentinel() {
+        // Given
+        maxChars(600);
+        List<String> items = new ArrayList<String>();
+        for (int i = 0; i < 200; i++) {
+            items.add("item-" + i);
+        }
+        when(store.store(eq("s"), eq("c"), eq("jira"), anyString(), eq(true))).thenReturn("/tmp/spill.json");
+
+        // When
+        String output = limiter.limit("s", "c", "jira", items);
+
+        // Then
+        JsonNode preview = ObjectMapperWrapper.readTree(output).path("preview");
+        assertTrue(preview.isArray());
+        assertTrue(preview.size() < items.size());
+        assertEquals("item-0", preview.get(0).asText());
+        assertEquals("item-199", preview.get(preview.size() - 1).asText());
+        // 中间必须有一项显眼的哨兵：不加的话模型会把前后两段当成一份连续的数据
+        boolean hasSentinel = false;
+        for (JsonNode element : preview) {
+            if (element.isTextual() && element.asText().contains("省略")) {
+                hasSentinel = true;
+            }
+        }
+        assertTrue(hasSentinel, preview.toString());
+    }
+
     /**
      * 把本次生效的输出字符上限写进配置桩。
      *

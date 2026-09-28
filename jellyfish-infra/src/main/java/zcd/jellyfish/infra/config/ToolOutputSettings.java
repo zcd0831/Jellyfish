@@ -16,6 +16,10 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  *     放在用户主目录而不是项目目录，是因为它是运行产物、不是项目内容，写进项目会污染工作区；</li>
  *     <li>{@code keepFiles}：每个会话在该目录下最多保留多少个结果文件，写 {@code 0} 关闭清理；</li>
  *     <li>{@code maxBytes}：每个会话在该目录下最多占用多少字节，写 {@code 0} 关闭清理；</li>
+ *     <li>{@code spillMaxBytes}：单个结果最多落盘多少字节，写 {@code 0} 表示不限制。
+ *     它面向的是「捕获期溢出」那条路径——无界输出（命令行的 {@code yes}）可以一直写，
+ *     必须有一个人喊停；超出部分仍会继续被读取并丢弃，并如实标在回灌文本里。
+ *     本类只如实携带用户写的值，与 {@code maxBytes} 的钳制关系在运行期处理（见 {@code SpillCapturingSink}）；</li>
  *     <li>{@code keepRecentMessages}：组装请求时，最近多少条消息里的工具结果保留完整内容，
  *     更早的、已落盘的旧结果替换成一行 stub，写 {@code 0} 关闭该项（全部保留）。</li>
  * </ul>
@@ -36,6 +40,14 @@ public class ToolOutputSettings {
     /** 每会话最多占用的字节数缺省值（50 MiB）。 */
     public static final long DEFAULT_MAX_BYTES = 50L * 1024L * 1024L;
 
+    /**
+     * 单个结果最多落盘的字节数缺省值（32 MiB）。
+     * <p>
+     * 刻意定得比 {@link #DEFAULT_MAX_BYTES} 小：一个结果文件不该把整个会话目录的预算吃干，
+     * 否则「刚写的那个把自己之外的都挤掉」会让同一批结果里只剩下它一个。
+     */
+    public static final long DEFAULT_SPILL_MAX_BYTES = 32L * 1024L * 1024L;
+
     /** 上下文中保留完整工具结果的最近消息条数缺省值。 */
     public static final int DEFAULT_KEEP_RECENT_MESSAGES = 20;
 
@@ -48,6 +60,9 @@ public class ToolOutputSettings {
     /** 每会话最多占用的字节数，{@code 0} 表示不清理。 */
     private final long maxBytes;
 
+    /** 单个结果最多落盘的字节数，{@code 0} 表示不限制。 */
+    private final long spillMaxBytes;
+
     /** 上下文中保留完整工具结果的最近消息条数，{@code 0} 表示不裁剪。 */
     private final int keepRecentMessages;
 
@@ -55,7 +70,7 @@ public class ToolOutputSettings {
      * 构造缺省工具结果设置。
      */
     public ToolOutputSettings() {
-        this(null, null, null, null);
+        this(null, null, null, null, null);
     }
 
     /**
@@ -66,6 +81,8 @@ public class ToolOutputSettings {
      *                           {@code 0} 合法（表示不清理）
      * @param maxBytes           每会话最多占用的字节数，负数或缺省按缺省值处理；
      *                           {@code 0} 合法（表示不清理）
+     * @param spillMaxBytes      单个结果最多落盘的字节数，负数或缺省按缺省值处理；
+     *                           {@code 0} 合法（表示不限制）
      * @param keepRecentMessages 保留完整工具结果的最近消息条数，负数或缺省按缺省值处理；
      *                           {@code 0} 合法（表示不裁剪）
      */
@@ -73,10 +90,13 @@ public class ToolOutputSettings {
     public ToolOutputSettings(@JsonProperty("dir") String dir,
                               @JsonProperty("keepFiles") Integer keepFiles,
                               @JsonProperty("maxBytes") Long maxBytes,
+                              @JsonProperty("spillMaxBytes") Long spillMaxBytes,
                               @JsonProperty("keepRecentMessages") Integer keepRecentMessages) {
         this.dir = dir == null || dir.trim().isEmpty() ? DEFAULT_DIR : dir.trim();
         this.keepFiles = keepFiles != null && keepFiles >= 0 ? keepFiles : DEFAULT_KEEP_FILES;
         this.maxBytes = maxBytes != null && maxBytes >= 0 ? maxBytes : DEFAULT_MAX_BYTES;
+        this.spillMaxBytes = spillMaxBytes != null && spillMaxBytes >= 0
+                ? spillMaxBytes : DEFAULT_SPILL_MAX_BYTES;
         this.keepRecentMessages = keepRecentMessages != null && keepRecentMessages >= 0
                 ? keepRecentMessages : DEFAULT_KEEP_RECENT_MESSAGES;
     }
@@ -109,6 +129,15 @@ public class ToolOutputSettings {
     }
 
     /**
+     * 获取单个结果最多落盘的字节数。
+     *
+     * @return 字节上限，保证非负；{@code 0} 表示不限制
+     */
+    public long getSpillMaxBytes() {
+        return spillMaxBytes;
+    }
+
+    /**
      * 获取保留完整工具结果的最近消息条数。
      *
      * @return 消息条数，保证非负；{@code 0} 表示不裁剪
@@ -123,12 +152,13 @@ public class ToolOutputSettings {
      * 供 {@link ReactSettings#isDefault()} 判断「整段是否什么都没配」，因此只比较是否等于缺省，
      * 不比较字段来源。
      *
-     * @return 四项都等于缺省值返回 {@code true}
+     * @return 各项都等于缺省值返回 {@code true}
      */
     public boolean isDefault() {
         return DEFAULT_DIR.equals(dir)
                 && keepFiles == DEFAULT_KEEP_FILES
                 && maxBytes == DEFAULT_MAX_BYTES
+                && spillMaxBytes == DEFAULT_SPILL_MAX_BYTES
                 && keepRecentMessages == DEFAULT_KEEP_RECENT_MESSAGES;
     }
 }

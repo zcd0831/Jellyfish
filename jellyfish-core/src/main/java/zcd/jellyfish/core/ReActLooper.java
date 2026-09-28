@@ -14,6 +14,7 @@ import zcd.jellyfish.api.extension.PermissionCheckRequest;
 import zcd.jellyfish.api.extension.PermissionDecision;
 import zcd.jellyfish.api.extension.ToolCallRequest;
 import zcd.jellyfish.api.extension.ToolCallResult;
+import zcd.jellyfish.api.extension.ToolOutputSink;
 import zcd.jellyfish.core.compact.ConversationCompactor;
 import zcd.jellyfish.core.prompt.PromptAssembler;
 import zcd.jellyfish.core.prompt.PromptAssembly;
@@ -255,7 +256,7 @@ public class ReActLooper implements AutoCloseable {
                 if (turn.isCancelled()) {
                     return cancel(sessionId, listener, round);
                 }
-                String output = executeTool(session, toolCall, listener);
+                String output = executeTool(turn, session, toolCall, listener);
                 sessionManager.appendMessage(sessionId, LlmMessage.tool(toolCall.getId(), toolCall.getName(), output),
                         null);
             }
@@ -367,26 +368,35 @@ public class ReActLooper implements AutoCloseable {
     /**
      * 执行一次工具调用，任何失败都转成可回灌的结果文本。
      *
+     * @param turn     回合句柄，兼作取消令牌
      * @param session  会话运行态
      * @param toolCall 工具调用
      * @param listener 监听器
      * @return 工具结果文本，保证非 {@code null}
      */
-    private String executeTool(Session session, LlmToolCall toolCall, ReActListener listener) {
+    private String executeTool(ReActTurnImpl turn, Session session, LlmToolCall toolCall, ReActListener listener) {
         String toolCallId = toolCall.getId();
         String toolName = toolCall.getName();
         events.publish(new ToolCallStartedEvent(toolCallId, toolName, session.getSessionId()));
         listener.onToolCallStarted(toolCallId, toolName);
         long start = System.currentTimeMillis();
+        // 捕获通道与取消令牌都随请求交给工具：无界输出的工具（命令行）靠前者不必物化整份输出，
+        // 靠后者才能在用户按下 Esc 时被打断——同步派发不会中断正在执行的工具。
+        // 实时输出旁路（tee）暂不接线，由实时输出通道那一批接上。
+        ToolOutputSink sink = outputLimiter.sink(session.getSessionId(), toolCallId, toolName, null);
         Object raw;
         boolean success = true;
         try {
-            raw = invokeTool(session, toolCall);
+            raw = invokeTool(turn, session, toolCall, sink);
         } catch (RuntimeException e) {
             // 同步侧没有护栏，异常处置是调用点（这里）的责任：记失败、回灌、继续循环
             LOG.warn("工具执行失败: sessionId={} tool={}", session.getSessionId(), toolName, e);
-            raw = "工具执行失败：" + messageOf(e);
+            raw = failureText(sink, e);
             success = false;
+        } finally {
+            // 工具自己应当已经收尾；这里是兜底，保证落盘句柄一定释放、临时文件一定改名。
+            // 幂等，因此正常路径上再调一次不会有副作用
+            sink.finish();
         }
         // 截断与落盘只在这里做一次：回灌给模型、写入会话、通知外壳看到的必须是同一份文本，
         // 否则会出现「界面显示全文、模型收到信封」这种无法排查的不一致
@@ -404,11 +414,13 @@ public class ReActLooper implements AutoCloseable {
      * <b>不在这里序列化</b>：截断必须知道「这是字符串还是结构化对象」才能选对算法，
      * 一旦在这里转成文本，那份信息就丢失了。
      *
+     * @param turn     回合句柄，兼作取消令牌
      * @param session  会话运行态
      * @param toolCall 工具调用
+     * @param sink     输出捕获通道
      * @return 工具输出对象，可为 {@code null}
      */
-    private Object invokeTool(Session session, LlmToolCall toolCall) {
+    private Object invokeTool(ReActTurnImpl turn, Session session, LlmToolCall toolCall, ToolOutputSink sink) {
         String toolName = toolCall.getName();
         Map<String, Object> arguments = parseArguments(toolCall.getArguments());
         PermissionDecision decision = permissionManager.decide(new PermissionCheckRequest(session.getAgentId(),
@@ -426,8 +438,34 @@ public class ReActLooper implements AutoCloseable {
             return "工具注册冲突：" + toolName;
         }
         ToolCallResult result = extensions.invoke(handler,
-                new ToolCallRequest(toolName, arguments, session.getSessionId()));
+                new ToolCallRequest(toolName, arguments, session.getSessionId(), turn, sink));
         return result == null ? null : result.getOutput();
+    }
+
+    /**
+     * 组装工具失败时的回灌文本。
+     * <p>
+     * <b>已捕获的输出不能丢</b>：命令跑到一半失败（或超时、被取消）时，已经产出的那部分输出
+     * 往往是排查失败的唯一线索。因此先收尾捕获通道，把它的结果拼在错误信息前面，
+     * 而不是让「工具执行失败」这一句话盖掉全部现场。
+     *
+     * @param sink  输出捕获通道
+     * @param error 失败原因
+     * @return 回灌文本，保证非 {@code null}
+     */
+    private static String failureText(ToolOutputSink sink, RuntimeException error) {
+        String message = "工具执行失败：" + messageOf(error);
+        String captured;
+        try {
+            captured = sink.finish();
+        } catch (RuntimeException e) {
+            LOG.warn("工具输出收尾失败，仅回灌错误信息", e);
+            return message;
+        }
+        if (captured == null || captured.isEmpty()) {
+            return message;
+        }
+        return captured + "\n[" + message + "]";
     }
 
     /**

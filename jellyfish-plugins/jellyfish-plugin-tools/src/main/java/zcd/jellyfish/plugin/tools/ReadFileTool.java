@@ -25,6 +25,11 @@ import java.util.Arrays;
  * 日志）。字节上限是本工具自己的默认安全带，让它在绝大多数情况下不需要惊动内核的硬截断；
  * 内核那层仍会再兜一次底，两道都不能省。
  * <p>
+ * <b>单行就超过 {@code max_bytes} 时报错，不切短</b>：切短会输出一行「看起来完整、实际残缺」的内容，
+ * 而模型无从判断自己拿到的是不是全文。报错给出的三条出路（缩小 {@code limit}、调大 {@code max_bytes}、
+ * 改用 {@code grep_files}）都能让它拿到有用的东西。这与「多行超预算就分页」不矛盾：
+ * 那种情形下内容仍在文件里，可以按 offset 续读。
+ * <p>
  * 无状态，可安全复用。
  *
  * @author zcd
@@ -105,7 +110,6 @@ public final class ReadFileTool implements PluginTool {
         int taken = 0;
         long usedBytes = 0L;
         boolean moreContent = false;
-        boolean lineCut = false;
         try (BufferedReader reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
             String line;
             while ((line = reader.readLine()) != null) {
@@ -121,13 +125,10 @@ public final class ReadFileTool implements PluginTool {
                 long lineBytes = utf8Length(line) + (taken > 0 ? 1 : 0);
                 if (usedBytes + lineBytes > maxBytes) {
                     if (taken == 0) {
-                        // 首行就超预算：把这一行按字节切短，再继续看下一行以确认「还有没有」
-                        line = cutToBytes(line, maxBytes);
-                        usedBytes += utf8Length(line);
-                        taken++;
-                        text.append(line);
-                        lineCut = true;
-                        continue;
+                        // 首行本身就超过预算：这不是「分页装不下」，而是这一行根本放不进来。
+                        // 切短会输出一行看似完整、实际残缺的内容，因此报错并给出三条出路
+                        throw new JellyfishException("单行超过 max_bytes（" + utf8Length(line) + " 字节 > "
+                                + maxBytes + "）：请缩小 limit、调大 max_bytes，或改用 grep_files 定位该行");
                     }
                     moreContent = true;
                     break;
@@ -149,31 +150,20 @@ public final class ReadFileTool implements PluginTool {
             }
             throw new JellyfishException("起始行超出文件行数: offset=" + offset + "，文件共 " + lineNumber + " 行");
         }
-        if (moreContent || lineCut) {
-            appendTruncationHint(text, offset + taken, moreContent, lineCut);
+        if (moreContent) {
+            appendTruncationHint(text, offset + taken);
         }
         return text.toString();
     }
 
     /**
-     * 追加截断提示：说明是行被切短还是后面还有内容，并给出可继续读取的偏移。
+     * 追加截断提示：说明后面还有内容，并给出可继续读取的偏移。
      *
-     * @param text        目标缓冲
-     * @param nextOffset  下一条可继续读取的起始行号
-     * @param moreContent 后面是否还有未读内容
-     * @param lineCut     是否发生了「单行被切短」
+     * @param text       目标缓冲
+     * @param nextOffset 下一条可继续读取的起始行号
      */
-    private static void appendTruncationHint(StringBuilder text, int nextOffset, boolean moreContent, boolean lineCut) {
-        text.append("\n[已截断：");
-        if (lineCut) {
-            text.append("单行超过 max_bytes 已截断；");
-        }
-        if (moreContent) {
-            text.append("文件还有更多内容，可用 offset=").append(nextOffset).append(" 继续读取");
-        } else {
-            text.append("已到文件末尾，如需完整单行请调大 max_bytes");
-        }
-        text.append(']');
+    private static void appendTruncationHint(StringBuilder text, int nextOffset) {
+        text.append("\n[已截断：文件还有更多内容，可用 offset=").append(nextOffset).append(" 继续读取]");
     }
 
     /**
@@ -210,27 +200,5 @@ public final class ReadFileTool implements PluginTool {
             return 3;
         }
         return 4;
-    }
-
-    /**
-     * 按字节上限把一行切短，切口落在码点边界上。
-     *
-     * @param line     原始行
-     * @param maxBytes 字节上限
-     * @return 切短后的行
-     */
-    private static String cutToBytes(String line, int maxBytes) {
-        long bytes = 0L;
-        int index = 0;
-        while (index < line.length()) {
-            int codePoint = line.codePointAt(index);
-            long next = bytes + utf8Length(codePoint);
-            if (next > maxBytes) {
-                break;
-            }
-            bytes = next;
-            index += Character.charCount(codePoint);
-        }
-        return line.substring(0, index);
     }
 }

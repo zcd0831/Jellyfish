@@ -151,15 +151,29 @@ class ReadFileToolTest {
     }
 
     @Test
-    @DisplayName("单行超过 max_bytes 时应切短并说明是单行被截断")
-    void handle_should_cutLine_when_singleLineExceedsMaxBytes() throws Exception {
+    @DisplayName("单行超过 max_bytes 时应报错并给出三条出路")
+    void handle_should_fail_when_singleLineExceedsMaxBytes() throws Exception {
         Path file = write("a.txt", "abcdefghij");
 
-        String output = invoke(tool, args("path", file.toString(), "max_bytes", 4));
+        JellyfishException failure = expectFailure(
+                () -> invoke(tool, args("path", file.toString(), "max_bytes", 4)));
 
-        assertTrue(output.startsWith("abcd"), output);
-        assertFalse(output.contains("efghij"), output);
-        assertTrue(output.contains("单行超过 max_bytes"), output);
+        // 切短会输出一行看似完整、实际残缺的内容，因此宁可报错并让模型换个方式拿
+        assertTrue(failure.getMessage().contains("单行超过 max_bytes"), failure.getMessage());
+        assertTrue(failure.getMessage().contains("limit"), failure.getMessage());
+        assertTrue(failure.getMessage().contains("grep_files"), failure.getMessage());
+    }
+
+    @Test
+    @DisplayName("多行累加超预算仍应分页而不是报错")
+    void handle_should_stillPaginate_when_totalExceedsMaxBytes() throws Exception {
+        // Given：每行都不超预算，只是加起来超了——这种情形内容还在文件里，可以续读
+        Path file = write("a.txt", "aaaa\nbbbb\ncccc");
+
+        String output = invoke(tool, args("path", file.toString(), "max_bytes", 10));
+
+        assertFalse(output.contains("cccc"), output);
+        assertTrue(output.contains("offset="), output);
     }
 
     @Test

@@ -373,12 +373,13 @@ jellyfish-script/src/main/java/zcd/jellyfish/script/
 - **捕获期 sink 让内存占用与输出体积无关**：`ToolOutputSink.write` 是无界输出（命令行）的入口，`SpillCapturingSink` 阈值前缓冲、溢出时转写磁盘、之后内存里只留头尾窗口。**落盘只在溢出时发生**，短输出不产生任何文件。
 - **`finish()` 幂等**：内核在 `finally` 兜底调用，工具自己也会调；收尾之后再写入会被丢弃并记 WARN。
 - **落盘上限 `spillMaxBytes`（缺省 32 MiB，运行期钳制不超过 `maxBytes`）**：触及上限时写入截到上限为止（不是整个放弃——那会留下空文件而信封却说「文件里有前一段」），并置信封字段 `_partial`，否则「完整内容在 path」就是假话。
-- **实时输出是旁路**：`ReActListener.onToolCallOutput` 由工具的泵线程触发（**不在 react 线程上、可能被并发调用**），可丢、抛错被隔离；**它绝不能阻塞**，否则子进程会因管道写满而停住。它只用于过程展示，落会话与回灌模型的仍是同一份权威文本。
+- **实时输出是旁路**：`ReActListener.onToolCallOutput` 由工具的泵线程触发（**不在 react 线程上、可能被并发调用**），可丢、抛错被隔离；**它绝不能阻塞**，否则子进程会因管道写满而停住。它只用于过程展示，落会话与回灌模型的仍是同一份权威文本。**三条显示通道同口径，但缓冲策略各按自己的消费者定**：TUI 保留末 20 行、CLI 直接写 stderr、Server 按待发条数封顶（它是唯一必须封顶的——生产者是子进程、消费者可能是慢连接，无界队列会跟着涨）。
 - **区分文本与结构化，绝不按字符切**：字符串按行截断；脚本工具返回的 `Map`/`List` 先序列化再按 JSON 子树截断（数组取前缀、对象取前缀字段），回灌的一定是一段合法 JSON 信封。**不要在任何地方对可能是 JSON 的输出做 `substring`**。
 - **信封是唯一格式**：`react.toolOutput` 定义落盘与上下文治理；超限时完整内容落盘，回灌 `{_truncated, _tool, _total_chars, _total_lines, _path, _hint, preview}`。渲染与解析共用 `ToolOutputEnvelope` 的字段常量，禁止两处各写一遍键名。
 - **落盘失败不是回合失败**：`ToolOutputStore.store` 失败只返回 `null` 并 WARN，信封记 `_path: null` 并说明不可恢复；磁盘不可写不该把「一次工具调用」升级成故障。
 - **清理只报告不阻断**：每会话按文件数 / 总字节上限从最旧删起，且永不删刚落盘的那个；写临时文件再原子改名（与 PID 文件同口径）。
 - **上下文老化排在机械裁剪之前**：`ToolResultAger` 把「保留窗口之外」的信封换成带路径的 stub，只改本次请求、Session 一条不动；`keepRecentMessages` 写 `0` 表示关闭。`ContextWindow` 对 `tool` 消息不做逐字符截断，直接替成 stub。
+- **stub 必须保留预览首行**：工具把结论（退出码 / 终止原因 / cwd）放在正文首行，而**落盘文件里只有正文**——丢了这一行，一条老化后的命令结果就再也回答不了「它成没成」。首行长度上限 400 字符（单行 JSON 那种巨长首行不能把 stub 变回原样），结构化预览不取首行（它的首行没有结论的含义）。
 - **工具层先自我限流**：`read_file` 有 `max_bytes`、`list_dir` 有 `limit`/`offset`、`grep_files` 有 `max_line_chars`/`max_bytes`；工具层限不住时再由中间件兜底，两层都不能省。
 - **`read_file` 单行就超过 `max_bytes` 时报错，不切短**：切短会输出一行「看起来完整、实际残缺」的内容，模型无从判断自己拿到的是不是全文；错误文案给出三条出路（缩小 `limit`、调大 `max_bytes`、改用 `grep_files`）。多行累加超预算仍照旧分页（内容还在文件里，可按 `offset` 续读），两条路径的语义要分清。
 
@@ -536,8 +537,8 @@ jellyfish-script/src/main/java/zcd/jellyfish/script/
 - **跨语言**：`prctl(PR_SET_PDEATHSIG)` 已实现，但只在 Linux 生效、本机（macOS）无法验证——**正确性不依赖它**（孤儿检测靠定时器）。`status` 协议方法经决策**不做**，进程侧状态改随 `worker_state` 推送。真实解释器的端到端测试在 `mvn -Pscript-it test`，不进 `mvn test`。
 - **`-server`**：**已落地**（`jellyfish-server`，Undertow 2.2.39.Final）——REST + SSE 接口面、会话按 id 寻址、一会话一在途回合、HTTP 化人工审批、`GET /health` 都在。**后续项**：鉴权（API key / token）。**明确不做**：自带 Web 前端、TLS、审批的多槽位（全局单槽位是既有内核语义，只如实暴露）。
 - **压缩**：只有插件提供策略才可用；不启用 `jellyfish-compact` 时压缩整体不可用且**不回退内置**（刻意如此，见「ReAct、上下文与压缩」）。
-- **`shell`**：**已落地**（`jellyfish-plugin-shell`，commons-exec shade 进插件包）。**已知边界**：Windows 映射未验证；进程树只能尽力杀（`pgrep -P` 不存在或没权限时退化为只杀直接子进程）；分类器可被 `FOO=bar cmd` / `$(...)` / `&&` 链绕过。**后续项**：每次调用的预览预算覆盖（原设计的 `max_bytes` 参数，需要 api 加带预算的 sink 工厂）；只读分类对重定向与复合命令不设防（若要收紧应在白名单那一层，别在便利机制上打补丁）。
-- **实时输出**：`-cli` 写 stderr、`-tui` 渲染「运行中的工具轨迹」块。**后续项**：`-server` 的 SSE 客户端目前看不到工具执行期输出（`SseReActListener` 用默认空实现），要做时加一个可丢的 `tool_output` 事件。
+- **`shell`**：**已落地**（`jellyfish-plugin-shell`，commons-exec shade 进插件包）。**已知边界**：Windows 映射未验证；进程树只能尽力杀（`pgrep -P` 不存在或没权限时退化为只杀直接子进程）；分类器可被 `FOO=bar cmd` / `$(...)` / `&&` 链绕过。**明确不做**：每次调用的预览预算覆盖（调大是上下文脚枪、调小不如直接在命令里写 `head -50`）；只读分类对重定向与复合命令不设防（真正的防线是审批框里那条完整命令原文，要收紧应当在白名单那一层）。
+- **实时输出**：三种外壳都有——`-cli` 写 stderr、`-tui` 渲染「运行中的工具轨迹」块、`-server` 推可丢的 `tool_output` SSE 事件。**已知边界**：`-server` 的丢弃计数只在服务端可观测，没有推给客户端（客户端以 `tool_done` 为准）。
 
 ## 编码约定
 

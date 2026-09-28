@@ -18,6 +18,7 @@ import zcd.jellyfish.api.extension.PermissionDecision;
 import zcd.jellyfish.api.extension.CancellationToken;
 import zcd.jellyfish.api.extension.ToolCallRequest;
 import zcd.jellyfish.api.extension.ToolCallResult;
+import zcd.jellyfish.api.extension.ToolMetadata;
 import zcd.jellyfish.api.extension.ToolOutputSink;
 import zcd.jellyfish.api.extension.ToolDescriptor;
 import zcd.jellyfish.core.compact.ConversationCompactor;
@@ -52,6 +53,8 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -221,6 +224,50 @@ class ReActLooperTest {
         assertEquals("文件内容", session.getMessages().get(2).getMessage().getContent());
         assertEquals(Collections.singletonList("read"), listener.toolStarted);
         assertEquals(Collections.singletonList("read:true"), listener.toolCompleted);
+    }
+
+    @Test
+    void chat_should_deliver_tool_metadata_to_listener_and_session() {
+        // Given：工具报告「命令跑了但失败」——元数据是界面渲染失败标记的唯一依据
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        when(permissionManager.decide(any(PermissionCheckRequest.class)))
+                .thenReturn(PermissionDecision.allow(null));
+        Map<String, Object> metadata = new HashMap<String, Object>();
+        metadata.put(ToolMetadata.KEY_EXIT_CODE, Integer.valueOf(1));
+        metadata.put(ToolMetadata.KEY_TERMINAL, ToolMetadata.TERMINAL_COMPLETED);
+        registerTool("shell", request -> new ToolCallResult("shell", "cwd: /x · exit: 1", metadata));
+        stubResponses(toolCallResponse("call_1", "shell"), LlmResponse.text("失败了"));
+        Session session = sessionManager.createDefault();
+        RecordingListener listener = new RecordingListener();
+
+        // When
+        newLooper().chat(session.getSessionId(), "跑一下", listener).await();
+
+        // Then：两条路都要拿到（监听器管当前帧，会话管重投影与重启后的历史）
+        assertEquals(1, listener.toolMetadata.size());
+        assertEquals(Integer.valueOf(1), listener.toolMetadata.get(0).get(ToolMetadata.KEY_EXIT_CODE));
+        Map<String, Object> persisted = session.getMessages().get(2).getMetadata();
+        assertEquals(Integer.valueOf(1), persisted.get(ToolMetadata.KEY_EXIT_CODE));
+        assertEquals("cwd: /x · exit: 1", session.getMessages().get(2).getMessage().getContent());
+    }
+
+    @Test
+    void chat_should_passEmptyMetadata_when_toolGivesNone() {
+        // Given：普通工具没有元数据，监听器不该收到 null（否则每个实现都要判空）
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        when(permissionManager.decide(any(PermissionCheckRequest.class)))
+                .thenReturn(PermissionDecision.allow(null));
+        registerTool("read", request -> new ToolCallResult("read", "文件内容"));
+        stubResponses(toolCallResponse("call_1", "read"), LlmResponse.text("读完了"));
+        Session session = sessionManager.createDefault();
+        RecordingListener listener = new RecordingListener();
+
+        // When
+        newLooper().chat(session.getSessionId(), "读文件", listener).await();
+
+        // Then
+        assertTrue(listener.toolMetadata.get(0).isEmpty());
+        assertTrue(session.getMessages().get(2).getMetadata().isEmpty());
     }
 
     @Test
@@ -593,6 +640,9 @@ class ReActLooperTest {
         /** 工具结束（名称:成功）记录。 */
         private final List<String> toolCompleted = new ArrayList<String>();
 
+        /** 工具结束时的元数据（按调用顺序）。 */
+        private final List<Map<String, Object>> toolMetadata = new ArrayList<Map<String, Object>>();
+
         /** 工具执行期输出片段。 */
         private final List<String> toolOutput = new ArrayList<String>();
 
@@ -614,8 +664,10 @@ class ReActLooperTest {
         }
 
         @Override
-        public void onToolCallCompleted(String toolCallId, String toolName, boolean success, String output) {
+        public void onToolCallCompleted(String toolCallId, String toolName, boolean success, String output,
+                                       Map<String, Object> metadata) {
             toolCompleted.add(toolName + ":" + success);
+            toolMetadata.add(metadata);
         }
 
         @Override

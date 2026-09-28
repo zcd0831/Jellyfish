@@ -4,6 +4,9 @@ import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.infra.llm.LlmMessage;
 import zcd.jellyfish.infra.llm.LlmUsage;
 
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -42,7 +45,42 @@ public final class SessionMessage {
     private final String thinking;
 
     /**
+     * 工具结果消息的结构化元数据，仅 tool 消息可能非空。
+     * <p>
+     * <b>为什么不放进 {@link LlmMessage}</b>：与 {@code thinking} 同一条理由——那是要发给厂商的
+     * 请求模型，而元数据（退出码、终止原因）是本地展示与审计信息。因此它跟着 {@code thinking}
+     * 落在会话域这一层。
+     */
+    private final Map<String, Object> metadata;
+
+    /**
      * 构造一条会话消息。
+     *
+     * @param messageId 消息唯一标识，不可为空白
+     * @param timestamp 消息产生时间戳（epoch millis）
+     * @param message   消息本体，不可为 {@code null}
+     * @param usage     token 用量，可为 {@code null}
+     * @param thinking  思考过程，可为 {@code null}
+     * @param metadata  工具结果元数据，可为 {@code null}（等价空映射）
+     * @throws JellyfishException 消息标识为空白，或消息本体为 {@code null} 时抛出
+     */
+    public SessionMessage(String messageId, long timestamp, LlmMessage message, LlmUsage usage, String thinking,
+                          Map<String, Object> metadata) {
+        if (messageId == null || messageId.trim().isEmpty()) {
+            throw new JellyfishException("messageId must not be blank");
+        }
+        this.messageId = messageId;
+        this.timestamp = timestamp;
+        this.message = Objects.requireNonNull(message, "message must not be null");
+        this.usage = usage;
+        this.thinking = thinking;
+        this.metadata = metadata == null || metadata.isEmpty()
+                ? Collections.<String, Object>emptyMap()
+                : Collections.unmodifiableMap(new LinkedHashMap<String, Object>(metadata));
+    }
+
+    /**
+     * 构造一条不带元数据的会话消息。
      *
      * @param messageId 消息唯一标识，不可为空白
      * @param timestamp 消息产生时间戳（epoch millis）
@@ -52,14 +90,7 @@ public final class SessionMessage {
      * @throws JellyfishException 消息标识为空白，或消息本体为 {@code null} 时抛出
      */
     public SessionMessage(String messageId, long timestamp, LlmMessage message, LlmUsage usage, String thinking) {
-        if (messageId == null || messageId.trim().isEmpty()) {
-            throw new JellyfishException("messageId must not be blank");
-        }
-        this.messageId = messageId;
-        this.timestamp = timestamp;
-        this.message = Objects.requireNonNull(message, "message must not be null");
-        this.usage = usage;
-        this.thinking = thinking;
+        this(messageId, timestamp, message, usage, thinking, null);
     }
 
     /**
@@ -110,6 +141,18 @@ public final class SessionMessage {
     }
 
     /**
+     * 用当前时刻与自动生成的标识构造一条带工具元数据的消息。
+     *
+     * @param message  消息本体，不可为 {@code null}
+     * @param metadata 工具结果元数据，可为 {@code null}
+     * @return 会话消息
+     */
+    public static SessionMessage ofTool(LlmMessage message, Map<String, Object> metadata) {
+        return new SessionMessage(UUID.randomUUID().toString(), System.currentTimeMillis(), message, null,
+                null, metadata);
+    }
+
+    /**
      * 获取消息唯一标识。
      *
      * @return 消息唯一标识
@@ -152,6 +195,15 @@ public final class SessionMessage {
      */
     public String getThinking() {
         return thinking;
+    }
+
+    /**
+     * 获取工具结果的结构化元数据。
+     *
+     * @return 元数据，保证非 {@code null}，无元数据时为空映射
+     */
+    public Map<String, Object> getMetadata() {
+        return metadata;
     }
 
     /**

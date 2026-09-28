@@ -1,5 +1,7 @@
 package zcd.jellyfish.core;
 
+import java.util.Map;
+
 /**
  * ReAct 回合的流式回调。
  * <p>
@@ -13,6 +15,10 @@ package zcd.jellyfish.core;
  * <p>
  * 所有方法都是默认空实现：只想拿最终结果的调用方可以只覆盖 {@link #onComplete(ReActResult)}，
  * 或者直接用 {@link #NOOP} 配合 {@link ReActTurn#await()}。
+ * <p>
+ * <b>元数据为什么要跟着 {@code output} 一起给</b>：{@code output} 是给模型看的文本，
+ * 界面要判断「命令成没成」只能去解析它的首行文案——那等于把展示绑死在措辞上。元数据是同一份事实的
+ * 结构化版本（见 {@code ToolMetadata}），界面读字段即可。
  *
  * @author zcd
  */
@@ -75,8 +81,10 @@ public interface ReActListener {
      * @param toolName   工具名
      * @param success    是否成功
      * @param output     结果文本（失败时为错误说明）
+     * @param metadata   工具结果的结构化元数据，保证非 {@code null}，无元数据时为空映射
      */
-    default void onToolCallCompleted(String toolCallId, String toolName, boolean success, String output) {
+    default void onToolCallCompleted(String toolCallId, String toolName, boolean success, String output,
+                                     Map<String, Object> metadata) {
     }
 
     /**

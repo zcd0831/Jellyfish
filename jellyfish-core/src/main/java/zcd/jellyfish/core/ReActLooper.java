@@ -256,9 +256,12 @@ public class ReActLooper implements AutoCloseable {
                 if (turn.isCancelled()) {
                     return cancel(sessionId, listener, round);
                 }
-                String output = executeTool(turn, session, toolCall, listener);
-                sessionManager.appendMessage(sessionId, LlmMessage.tool(toolCall.getId(), toolCall.getName(), output),
-                        null);
+                ToolCallResult outcome = executeTool(turn, session, toolCall, listener);
+                // 元数据随工具结果消息落会话：会话是「界面看到什么」的真源，而界面后的重投影
+                // （以及 -resume 之后的历史）只有拿到字段才能渲染警告标记
+                sessionManager.appendMessage(sessionId,
+                        LlmMessage.tool(toolCall.getId(), toolCall.getName(), outputOf(outcome)),
+                        null, null, outcome.getMetadata());
             }
         }
         LOG.warn("ReAct 达到最大轮次: sessionId={} maxRounds={}", sessionId, maxRounds);
@@ -372,9 +375,10 @@ public class ReActLooper implements AutoCloseable {
      * @param session  会话运行态
      * @param toolCall 工具调用
      * @param listener 监听器
-     * @return 工具结果文本，保证非 {@code null}
+     * @return 工具结果（{@code output} 为回灌文本，{@code metadata} 为结构化元数据），保证非 {@code null}
      */
-    private String executeTool(ReActTurnImpl turn, Session session, LlmToolCall toolCall, ReActListener listener) {
+    private ToolCallResult executeTool(ReActTurnImpl turn, Session session, LlmToolCall toolCall,
+                                       ReActListener listener) {
         String toolCallId = toolCall.getId();
         String toolName = toolCall.getName();
         events.publish(new ToolCallStartedEvent(toolCallId, toolName, session.getSessionId()));
@@ -385,28 +389,50 @@ public class ReActLooper implements AutoCloseable {
         // tee 把捕获到的片段同时转给外壳：它只是旁路（可丢、抛错被隔离），既不参与回灌也不落盘
         ToolOutputSink sink = outputLimiter.sink(session.getSessionId(), toolCallId, toolName,
                 chunk -> listener.onToolCallOutput(toolCallId, toolName, chunk));
-        Object raw;
+        ToolCallResult invoked;
         boolean success = true;
         try {
-            raw = invokeTool(turn, session, toolCall, sink);
+            invoked = invokeTool(turn, session, toolCall, sink);
         } catch (RuntimeException e) {
             // 同步侧没有护栏，异常处置是调用点（这里）的责任：记失败、回灌、继续循环
             LOG.warn("工具执行失败: sessionId={} tool={}", session.getSessionId(), toolName, e);
-            raw = failureText(sink, e);
+            invoked = new ToolCallResult(toolName, failureText(sink, e));
             success = false;
         } finally {
             // 工具自己应当已经收尾；这里是兜底，保证落盘句柄一定释放、临时文件一定改名。
             // 幂等，因此正常路径上再调一次不会有副作用
             sink.finish();
         }
+        if (invoked == null) {
+            // 处理器返回 null 是允许的（api 里 output 可为 null），这里补一个空结果，
+            // 让下面那条「文本 + 元数据」的统一处理不必到处判空
+            invoked = new ToolCallResult(toolName, null);
+        }
         // 截断与落盘只在这里做一次：回灌给模型、写入会话、通知外壳看到的必须是同一份文本，
         // 否则会出现「界面显示全文、模型收到信封」这种无法排查的不一致
+        Object raw = invoked.getOutput();
         String output = outputLimiter.limit(session.getSessionId(), toolCallId, toolName, raw);
         long duration = System.currentTimeMillis() - start;
         events.publish(new ToolCallCompletedEvent(toolCallId, toolName, success, duration,
                 success ? null : output, session.getSessionId()));
-        listener.onToolCallCompleted(toolCallId, toolName, success, output);
-        return output;
+        // 元数据不受截断影响：它描述的是「命令成没成」，与回灌文本被截成什么样无关
+        listener.onToolCallCompleted(toolCallId, toolName, success, output, invoked.getMetadata());
+        return new ToolCallResult(toolName, output, invoked.getMetadata());
+    }
+
+    /**
+     * 取工具结果的回灌文本。
+     * <p>
+     * {@code executeTool} 返回的是统一的 {@link ToolCallResult}（文本 + 元数据），而写会话时只需要文本。
+     * {@code output} 在这里恒为 {@code String}（由 {@code ToolOutputLimiter} 渲染），但仍按
+     * {@code Object} 声明——工具结果本来就可以是结构化对象，类型由载体决定。
+     *
+     * @param outcome 工具结果，不可为 {@code null}
+     * @return 回灌文本，可为 {@code null}
+     */
+    private static String outputOf(ToolCallResult outcome) {
+        Object output = outcome.getOutput();
+        return output == null ? null : output.toString();
     }
 
     /**
@@ -419,28 +445,28 @@ public class ReActLooper implements AutoCloseable {
      * @param session  会话运行态
      * @param toolCall 工具调用
      * @param sink     输出捕获通道
-     * @return 工具输出对象，可为 {@code null}
+     * @return 工具结果，可为 {@code null}（工具返回 {@code null} 时）
      */
-    private Object invokeTool(ReActTurnImpl turn, Session session, LlmToolCall toolCall, ToolOutputSink sink) {
+    private ToolCallResult invokeTool(ReActTurnImpl turn, Session session, LlmToolCall toolCall,
+                                      ToolOutputSink sink) {
         String toolName = toolCall.getName();
         Map<String, Object> arguments = parseArguments(toolCall.getArguments());
         PermissionDecision decision = permissionManager.decide(new PermissionCheckRequest(session.getAgentId(),
                 toolName, arguments, session.getPermissionMode(), session.getSessionId()));
         if (decision.isDenied()) {
-            return "权限拒绝：" + messageOf(decision.getReason());
+            return new ToolCallResult(toolName, "权限拒绝：" + messageOf(decision.getReason()));
         }
         ExtensionHandler<ToolCallRequest, ToolCallResult> handler;
         try {
             handler = extensions.handler(ToolCallRequest.class, toolName);
         } catch (ExtensionException e) {
             if (e.getCode() == ExtensionException.Code.NO_HANDLER) {
-                return "未知工具：" + toolName;
+                return new ToolCallResult(toolName, "未知工具：" + toolName);
             }
-            return "工具注册冲突：" + toolName;
+            return new ToolCallResult(toolName, "工具注册冲突：" + toolName);
         }
-        ToolCallResult result = extensions.invoke(handler,
+        return extensions.invoke(handler,
                 new ToolCallRequest(toolName, arguments, session.getSessionId(), turn, sink));
-        return result == null ? null : result.getOutput();
     }
 
     /**

@@ -90,6 +90,6 @@ class ExtensionRequestTest {
         // Then
         assertSame("calculator", result.getToolName());
         assertEquals(42, result.getOutput());
-        assertEquals("ToolCallResult{toolName=calculator, output=42}", result.toString());
+        assertEquals("ToolCallResult{toolName=calculator, output=42, metadata={}}", result.toString());
     }
 }

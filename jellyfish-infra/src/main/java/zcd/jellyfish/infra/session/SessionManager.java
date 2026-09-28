@@ -338,6 +338,20 @@ public class SessionManager {
     }
 
     /**
+     * 追加一条不带元数据的消息并累加 token 用量。
+     *
+     * @param sessionId 会话标识，不可为空白
+     * @param message   消息本体，不可为 {@code null}
+     * @param usage     本次模型调用的 token 用量，可为 {@code null}
+     * @param thinking  本次模型调用的思考过程，可为 {@code null}
+     * @return 追加后的会话消息
+     * @throws JellyfishException 会话不存在时抛出
+     */
+    public SessionMessage appendMessage(String sessionId, LlmMessage message, LlmUsage usage, String thinking) {
+        return appendMessage(sessionId, message, usage, thinking, null);
+    }
+
+    /**
      * 追加一条消息并累加 token 用量，随后落盘或标脏，最后广播 {@link SessionMessageAppendedEvent}。
      * <p>
      * 先落会话、再落盘、最后发通知：通知订阅者据 {@code messageId} 回查时，消息一定已经可见；
@@ -348,17 +362,24 @@ public class SessionManager {
      * 其余情形即时落盘。即时落盘失败时异常上抛（同步侧无护栏，处置是调用点的责任）：
      * 调用方应当让本次回合失败。两种情况都已入内存的这条消息都不会被回滚——落盘写的是整个会话快照，
      * 下一次成功落盘会把它一并补上。
+     * <p>
+     * <b>为什么要收一个 {@code metadata} 形参而不是另开一个「工具消息」入口</b>：消息的落盘与通知
+     * 顺序是这里唯一的复杂度，复制一份给工具消息就等于把这段顺序维护两遍。元数据本身只对工具结果
+     * 有意义，因此非工具路径一律传 {@code null}。
      *
      * @param sessionId 会话标识，不可为空白
      * @param message   消息本体，不可为 {@code null}
      * @param usage     本次模型调用的 token 用量，可为 {@code null}
      * @param thinking  本次模型调用的思考过程，可为 {@code null}
+     * @param metadata  工具结果的结构化元数据，可为 {@code null}（等价空映射）
      * @return 追加后的会话消息
      * @throws JellyfishException 会话不存在时抛出
      */
-    public SessionMessage appendMessage(String sessionId, LlmMessage message, LlmUsage usage, String thinking) {
+    public SessionMessage appendMessage(String sessionId, LlmMessage message, LlmUsage usage, String thinking,
+                                        Map<String, Object> metadata) {
         Session session = require(sessionId);
-        SessionMessage sessionMessage = SessionMessage.of(message, usage, thinking);
+        SessionMessage sessionMessage = new SessionMessage(UUID.randomUUID().toString(),
+                System.currentTimeMillis(), message, usage, thinking, metadata);
         session.append(sessionMessage);
         if (deferred.contains(sessionId)) {
             // 回合内：只标脏，由回合终结时的 flush 统一落一次

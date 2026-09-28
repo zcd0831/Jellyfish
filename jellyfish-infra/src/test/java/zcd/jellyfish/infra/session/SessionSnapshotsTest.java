@@ -4,6 +4,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.api.extension.SessionMessageSnapshot;
+import zcd.jellyfish.api.extension.ToolMetadata;
 import zcd.jellyfish.api.extension.SessionSnapshot;
 import zcd.jellyfish.api.extension.SessionToolCallSnapshot;
 import zcd.jellyfish.infra.llm.LlmMessage;
@@ -11,6 +12,7 @@ import zcd.jellyfish.infra.llm.LlmToolCall;
 import zcd.jellyfish.infra.llm.LlmUsage;
 
 import java.util.Arrays;
+import java.util.Collections;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -126,6 +128,14 @@ class SessionSnapshotsTest {
     }
 
     @Test
+    @DisplayName("工具结果元数据必须随会话落盘与回放：界面靠它渲染失败标记")
+    void restore_should_keepToolMetadata() {
+        Session restored = Session.restore(SessionSnapshots.capture(fullSession()));
+
+        assertEquals(Integer.valueOf(1), restored.getMessages().get(2).getMetadata().get("exitCode"));
+    }
+
+    @Test
     @DisplayName("未产生的思考回放后仍为空，不能变成空串")
     void restore_should_keepMissingThinkingAsNull() {
         Session restored = Session.restore(SessionSnapshots.capture(fullSession()));
@@ -181,7 +191,8 @@ class SessionSnapshotsTest {
                 LlmMessage.assistant("我来读文件", Arrays.asList(new LlmToolCall(0, "call-1", "read_file",
                         "{\"path\":\"a.txt\"}"))),
                 new LlmUsage(7, 8, 15), "先看看 a.txt"));
-        session.append(SessionMessage.of(LlmMessage.tool("call-1", "read_file", "文件内容")));
+        session.append(SessionMessage.ofTool(LlmMessage.tool("call-1", "shell", "cwd: /x · exit: 1"),
+                Collections.singletonMap(ToolMetadata.KEY_EXIT_CODE, Integer.valueOf(1))));
         session.append(SessionMessage.of(LlmMessage.assistant("读完了")));
         // 再改一次标题以确保 updatedAt 与 createdAt 不同
         session.setTitle("标题");
@@ -235,6 +246,8 @@ class SessionSnapshotsTest {
         assertEquals(expected.getToolCallId(), actual.getToolCallId());
         assertEquals(expected.getName(), actual.getName());
         assertEquals(expected.getThinking(), actual.getThinking());
+        // 元数据必须一起往返：丢了它，重启后界面就再也说不出「那条命令成没成」
+        assertEquals(expected.getMetadata(), actual.getMetadata());
         assertEquals(expected.getUsage() == null, actual.getUsage() == null);
         if (expected.getUsage() != null) {
             assertEquals(expected.getUsage().getPromptTokens(), actual.getUsage().getPromptTokens());

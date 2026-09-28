@@ -96,7 +96,7 @@ public final class SessionSnapshots {
         LlmMessage message = new LlmMessage(snapshot.getRole(), snapshot.getContent(),
                 snapshot.getToolCallId(), snapshot.getName(), toolCalls);
         return new SessionMessage(snapshot.getMessageId(), snapshot.getTimestamp(), message,
-                toUsage(snapshot.getUsage()), snapshot.getThinking());
+                toUsage(snapshot.getUsage()), snapshot.getThinking(), snapshot.getMetadata());
     }
 
     /**
@@ -128,7 +128,7 @@ public final class SessionSnapshots {
         }
         return new SessionMessageSnapshot(message.getMessageId(), message.getTimestamp(), body.getRole(),
                 body.getContent(), body.getToolCallId(), body.getName(), toolCalls,
-                captureTokenUsage(message.getUsage()), message.getThinking());
+                captureTokenUsage(message.getUsage()), message.getThinking(), message.getMetadata());
     }
 
     /**

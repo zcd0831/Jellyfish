@@ -4,7 +4,9 @@ import zcd.jellyfish.api.JellyfishException;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 会话内一条消息的快照。
@@ -46,6 +48,9 @@ public final class SessionMessageSnapshot {
     /** 本条消息的思考过程，未产生或未开启时可为 {@code null}。 */
     private final String thinking;
 
+    /** 工具结果消息的结构化元数据，非工具消息或工具未提供时为空映射。 */
+    private final Map<String, Object> metadata;
+
     /**
      * 构造消息快照。
      * <p>
@@ -65,11 +70,12 @@ public final class SessionMessageSnapshot {
      * @param toolCalls  工具调用列表，可为 {@code null}（等价空列表）
      * @param usage      token 用量，可为 {@code null}
      * @param thinking   思考过程，可为 {@code null}
+     * @param metadata   工具结果元数据，可为 {@code null}（等价空映射）
      * @throws JellyfishException 消息标识或角色为空白时抛出
      */
     public SessionMessageSnapshot(String messageId, long timestamp, String role, String content,
                                   String toolCallId, String name, List<SessionToolCallSnapshot> toolCalls,
-                                  TokenUsageSnapshot usage, String thinking) {
+                                  TokenUsageSnapshot usage, String thinking, Map<String, Object> metadata) {
         if (messageId == null || messageId.trim().isEmpty()) {
             throw new JellyfishException("message id must not be blank");
         }
@@ -85,6 +91,9 @@ public final class SessionMessageSnapshot {
         this.toolCalls = copyToolCalls(toolCalls);
         this.usage = usage;
         this.thinking = thinking;
+        this.metadata = metadata == null || metadata.isEmpty()
+                ? Collections.<String, Object>emptyMap()
+                : Collections.unmodifiableMap(new LinkedHashMap<String, Object>(metadata));
     }
 
     /**
@@ -108,7 +117,7 @@ public final class SessionMessageSnapshot {
                                             String toolCallId, String name,
                                             List<SessionToolCallSnapshot> toolCalls, TokenUsageSnapshot usage) {
         return new SessionMessageSnapshot(messageId, timestamp, role, content, toolCallId, name, toolCalls,
-                usage, null);
+                usage, null, null);
     }
 
     /**
@@ -190,6 +199,19 @@ public final class SessionMessageSnapshot {
      */
     public String getThinking() {
         return thinking;
+    }
+
+    /**
+     * 获取工具结果的结构化元数据。
+     * <p>
+     * 与 {@code content} 首行那句结论同源，但这里是可以直接读的字段：界面据此渲染警告标记
+     * （见 {@code ToolMetadata.failed}），而不必去解析那一行文案——把展示绑在文案格式上，
+     * 改一个措辞标记就会消失。
+     *
+     * @return 元数据，保证非 {@code null}，无元数据时为空映射
+     */
+    public Map<String, Object> getMetadata() {
+        return metadata;
     }
 
     @Override

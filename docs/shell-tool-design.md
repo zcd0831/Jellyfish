@@ -1,6 +1,6 @@
 # shell 命令执行工具 · 技术设计文档
 
-- 状态：已评审；**批次 1 已落地**，批次 2~4 实施中（见 §8）
+- 状态：已评审；**批次 1、2 已落地**，批次 3~4 实施中（见 §8）
 - 版本：0.0.1-SNAPSHOT 对应
 - 范围：内核（`jellyfish-api` / `jellyfish-infra` / `jellyfish-core` / `jellyfish-tui` / `jellyfish-cli`）与新增插件 `jellyfish-plugin-shell`
 
@@ -150,6 +150,8 @@ public interface ToolOutputSink {
     /**
      * 追加一段输出。
      * <p><b>必须线程安全</b>：commons-exec 分别泵 stdout 与 stderr，两条线程会并发调用。
+     * <p><b>必须持续接受写入</b>：实现不得把自己写成「写一次就以为了事」——超时、取消、异常
+     * 三条路径都靠已捕获内容拼出回灌文本。
      */
     void write(String chunk);
 
@@ -171,6 +173,8 @@ public interface ToolOutputSink {
 **为什么 sink 由内核实现而不是工具自己写文件**：插件只依赖 `jellyfish-api`，拿不到 `ToolOutputStore`。若让插件自己落盘，就会出现第二套目录、命名、清理与提示格式——直接违反「禁止两处各写一遍键名」。sink 由内核实现后，**插件看不到路径、目录、命名、清理、信封格式**，它只知道「往里写」。
 
 **为什么落盘只在溢出时发生**：小输出（`ls`、`git status`）全程在内存里结束，不产生任何文件。这一点与 Claude Code 不同——它总是写工作文件，因为它要支持「运行中读回」；我们不需要那个能力，因此省掉每次调用一次文件系统写入。
+
+**实时输出不是这个接口的一部分**：`ToolOutputSink` 上没有「实时」相关的方法，因为 tee 发生在内核自己实现的那个 sink 里（插件拿到的只是一个接口，它无从阻止也无需知道）。这条设计的后果是：**把 sink 换成别的实现，实时输出就会默默消失**，因此 §4.9 的契约要写在 `ReActListener` 上而不是 `ToolOutputSink` 上。
 
 #### 4.1.3 `ToolCallRequest` 增加两个字段
 
@@ -333,8 +337,18 @@ publishAudit(request, decision, source);
 | 层 | 改动 |
 | --- | --- |
 | core | `ReActListener` 新增 `default void onToolCallOutput(String toolCallId, String toolName, String chunk) {}`；`ReActLooper` 造 sink 时把 tee 接到监听器 |
-| TUI | `InflightTurn` 新增 `appendToolOutput(toolCallId, toolName, chunk)`：**有界环形缓冲**（末 20 行 × 每行 200 字符）；`onToolCallCompleted` 时清空（真实结果随后由会话投影渲染）；渲染为「运行中的工具轨迹」块 |
-| CLI | `CliReActListener.onToolCallOutput` 写 stderr（既有契约：stdout 严格等于最终回答）。首个 chunk 前补一行工具名前缀 |
+| TUI | `InflightTurn` 新增 `beginTool(toolName)` / `appendToolOutput(chunk)` / `clearToolOutput()`：**有界行缓冲**（末 20 行 × 每行 200 字符，另存「尚未换行的当前行」）；`onToolCallCompleted` 时清空（真实结果随后由会话投影渲染）；`TranscriptProjector` 渲染为「运行中的工具轨迹」块（`⎿ 工具名` + `│ 输出行`） |
+| CLI | `CliReActListener.onToolCallOutput` 写 stderr（既有契约：stdout 严格等于最终回答）。首个 chunk 前先写一行 `│ 工具名`，每行行首补同一个缩进 |
+| Server | **本批不做**：`SseReActListener` 用默认空实现，SSE 客户端看不到实时输出（见 §10.2） |
+
+**实现时定下的细节（都不需要配置）**：
+
+- **行缓冲分「已完整的行」与「尚未换行的当前行」两块**：命令的最后一行往往不带换行，而一个以换行结尾的片段也不该凭空多出一个空行。分开之后两种情形都不需要特判；行数上限在**取快照时**统一施加，否则「当前行」会成为上限之外的额外一行。
+- **单行超长保留行首**：行的开头通常是它的身份（JSON 的左花括号、日志的时间戳与级别），而尾部会在工具返回后的权威结果里完整出现。
+- **实时块不补表头**：行到那里时通常已在助手块内（上一轮 `assistant` 消息刚落下），无条件补会出现两个相连表头。沿用 `appendToolTrace` 的同一判断。
+- **实时块不标「已截断」**：它终将被会话投影出的正式轨迹与结果取代，而「已截断」会被读成「工具结果被截断」。
+- **控制字符在显示边界滤掉**（`ControlChars.strip`，与 `MarkdownRenderer` / `ApprovalPrompt` 同一位置）：命令输出里的一段 `ESC[2J` 能清屏。
+- **渲染优先级**：正文/思考有内容 → 显示正文（模型已又开始说话）；否则有工具轨迹 → 显示工具轨迹；否则「处理中…」。
 
 **必须写进文档的两条**：
 
@@ -468,10 +482,11 @@ commons-exec 会为 stdout 与 stderr 各起一条泵线程，它们都会调 `s
 
 | 对象 | 语义 |
 | --- | --- |
-| `ToolOutputSink.write` | **必须线程安全**，可能被多条泵线程并发调用 |
-| `ReActListener.onToolCallOutput` | **打破「一次回合的全部回调都在同一个 react 线程上」的既有契约**——它会在泵线程上触发。javadoc 必须写明：可能在非 react 线程触发、实现必须线程安全、不得阻塞 |
-| `InflightTurn` | 现有方法已经是 `synchronized` + `volatile` 脏标记，**无需改造**即可承受非 react 线程写入；界面状态仍然只在渲染线程变更（既有契约不破） |
-| `CliReActListener` | 写 stderr；PrintStream 本身同步，但要避免在 chunk 回调里做额外格式化 |
+| `ToolOutputSink.write` | **必须线程安全**，可能被多条泵线程并发调用。tee 在 sink 的锁**之外**调用：显示慢不应拖住捕获（I3） |
+| `ReActListener.onToolCallOutput` | **打破「一次回合的全部回调都在同一个 react 线程上」的既有契约**——它会在泵线程上触发。javadoc 写明：可能在非 react 线程触发、可能被并发调用、实现必须快且不得阻塞；并写明它**不是权威文本** |
+| `InflightTurn` | 新增方法仍走同一把实例锁（`synchronized`）与同一个 volatile 脏标记，**界面状态仍然只在渲染线程变更**（既有契约不破）；已有方法一行未改 |
+| `CliReActListener` | 写 stderr；`onToolCallOutput` 与它读写的几个行状态加了同一把锁，不做额外格式化 |
+| tee 的异常边界 | 监听器抛错在 `SpillCapturingSink` 里被捕获并降级为 DEBUG 日志——显示通道的故障不得把一次工具调用升级成失败 |
 
 这条不是实现细节，它影响 api 的契约表述，必须在 §4.1.2 与本节两处都写明。
 
@@ -523,7 +538,11 @@ commons-exec 会为 stdout 与 stderr 各起一条泵线程，它们都会调 `s
 | `PermissionManager` | 三态合并取最严、`DENY` 短路、插件 `ASK` 汇入审批、PLAN 白名单仍然优先、插件抛错按无异议 |
 | `ReadFileTool` | 单行超长报错（消息含三条出路）、多行超预算仍分页 |
 | `ShellPlugin` | 参数校验与钳制、环境脱敏与防挂死注入、白名单默认拒绝语义、分类器三态分类（含 `find` / `git fetch` / `npm test` 必须落在 `ASK`）、两条计时器的判定（含静默计时按最后一条输出的时间戳重置、`0` 时不触发）、`stop` 杀在途进程 |
-| `ReActLooper` | 取消令牌传到请求、sink 在 `finally` 被 finish、异常路径拼上已捕获内容 |
+| `ReActLooper` | 取消令牌传到请求、sink 在 `finally` 被 finish、异常路径拼上已捕获内容、**工具写入的片段按原样转发给监听器（带 `toolCallId` / `toolName`）、监听器抛错不影响工具结果** |
+| `InflightTurn` | 工具轨迹：名字先于输出可见、按换行拆行、行数上限保留最新、单行超长保留行首、清空后不再显示、`begin` 连带重置 |
+| `TuiReActListener` | 实时输出写进暂存区并置脏标记、`onToolCallCompleted` / 回合终结时清掉 |
+| `TranscriptProjector` | 运行中工具块的前缀与层级、已在助手块内时不重复表头、正文优先于实时输出、控制字符被滤掉、空行不留竖线、清空后回到「处理中…」 |
+| `CliReActListener` | 实时输出走 stderr 而 stdout 一字不变、每行只补一次缩进、半行输出在工具结束行之前先收尾、切换工具时另起一块 |
 
 进程相关逻辑通过接缝（把"启动进程"抽象成一个接口）用假实现验证，不在单测里 fork 真进程。
 
@@ -566,8 +585,8 @@ commons-exec 会为 stdout 与 stderr 各起一条泵线程，它们都会调 `s
 
 | 批次 | 内容 | 主要文件 |
 | --- | --- | --- |
-| **1** | api 冻结 + 截断/落盘/捕获期 sink + 跨语言权限协议 + `read_file` 报错 | 新增 `api/extension/CancellationToken.java`、`api/extension/ToolOutputSink.java`、`api/extension/PermissionVerdict.java`、`infra/tooloutput/ToolOutputPreview.java`、`infra/tooloutput/SpillCapturingSink.java`；改 `api/extension/ToolCallRequest.java`、`api/extension/PermissionCheckRequest.java`、删 `api/extension/PermissionVeto.java`、`script/codec/PermissionCodec.java`、`plugin-python/.../script/jellyfish_sdk.py`、`plugin-node/.../script/jellyfish_sdk.js`、`infra/tooloutput/ToolOutputLimiter.java`、`infra/tooloutput/ToolOutputStore.java`、`infra/config/ToolOutputSettings.java`、`infra/config/ReactSettings.java`、`core/ReActLooper.java`、`plugins/jellyfish-plugin-tools/.../ReadFileTool.java`，以及对应的全部测试（含 `PermissionCodecTest` / `PermissionVetoTest` → `PermissionVerdictTest`） |
-| **2** | 权限三态编排 + 实时输出通道 | 改 `infra/permission/PermissionManager.java`、`core/ReActListener.java`、`core/ReActLooper.java`、`tui/InflightTurn.java`、`tui/TuiReActListener.java`、`tui/TranscriptProjector.java`（渲染运行中轨迹）、`cli/console/CliReActListener.java` |
+| **1** | api 冻结 + 截断/落盘/捕获期 sink + 跨语言权限协议 + `read_file` 报错 | 新增 `api/extension/CancellationToken.java`、`api/extension/ToolOutputSink.java`、`api/extension/PermissionVerdict.java`、`infra/tooloutput/ToolOutputPreview.java`、`infra/tooloutput/SpillCapturingSink.java`；改 `api/extension/ToolCallRequest.java`、`api/extension/PermissionCheckRequest.java`、删 `api/extension/PermissionVeto.java`、`script/codec/PermissionCodec.java`、`plugin-python/.../script/jellyfish_sdk.py`、`plugin-node/.../script/jellyfish_sdk.js`、`infra/tooloutput/ToolOutputLimiter.java`、`infra/tooloutput/ToolOutputStore.java`、`infra/config/ToolOutputSettings.java`、`core/ReActLooper.java`、`plugins/jellyfish-plugin-tools/.../ReadFileTool.java`，以及对应的全部测试（含 `PermissionCodecTest` / `PermissionVetoTest` → `PermissionVerdictTest`）。**已落地**：权限三态编排（原属批次 2）因类型变更不得不同批完成 |
+| **2** | 实时输出通道 | 改 `core/ReActListener.java`、`core/ReActLooper.java`、`tui/InflightTurn.java`、`tui/TuiReActListener.java`、`tui/TranscriptProjector.java`（渲染运行中轨迹）、`cli/console/CliReActListener.java`。**已落地** |
 | **3** | shell 插件全量 | 新增模块 `jellyfish-plugins/jellyfish-plugin-shell`（`plugin.properties` / `ShellPlugin` / `ShellTool` / `ShellArguments` / `ShellEnvironment` / `CommandPolicy` / `ShellProcessRunner` / `PluginConfig` + pom 的 shade 配置）；改 `jellyfish-plugins/pom.xml` |
 | **4** | 文档与端到端 | 新增 `docs/shell-tool-design.md`（本文）已存在；新增 `jellyfish-plugin-shell/src/test/.../*IT.java` 与 `shell-it` profile；改 `AGENTS.md` |
 
@@ -627,3 +646,13 @@ commons-exec 会为 stdout 与 stderr 各起一条泵线程，它们都会调 `s
 **为什么不在本期做**：它要改 `ToolCallResult`（api 面）与 shell 之外的调用点，而且需要先想清楚「元数据 schema 归内核还是归工具」。等本轮跑起来、真实看到哪些元数据值得保留，再定 schema 更稳。
 
 **与本期决策的关系**：本期的「正文首行」是它的**子集**——「位置一致」这条性质被继承下来，所以这次的选择是可加性的，不是将来需要推翻的临时方案。
+
+### 10.2 Server 的实时输出（本批未做）
+
+**现状**：`SseReActListener` 用 `ReActListener` 的默认空实现，因此 SSE 客户端看不到工具执行期的输出（`-cli` / `-tui` 已能看到）。
+
+**为什么本批没做**：它不是一个「顺手补上」的一行——SSE 是给机器读的流，需要一个新的事件类型与字段约定（增量、可丢、丢失后的对账），并且要与现有 `SseReActListener` 的无界队列单写者模式对齐。它属于外壳侧的独立小批，混进本批会让「内核与两套外壳都已对齐」这个验收点变得含糊。
+
+**要做时的形状**：新增一个可丢的 `tool_output` SSE 事件（带 `turnId` / `toolCallId` / `chunk`），并在 `SseReActListener` 里按「队列满就丢」处理——与 TUI 的有界缓冲同口径。
+
+---

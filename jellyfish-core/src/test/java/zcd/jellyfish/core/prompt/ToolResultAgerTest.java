@@ -60,6 +60,22 @@ class ToolResultAgerTest {
     }
 
     @Test
+    @DisplayName("老化后仍保留结论行：命令结果的退出码不能因为老化而消失")
+    void age_should_keepConclusionLine() {
+        // Given：shell 把结论放在正文首行，而落盘文件里只有正文
+        keepRecent(1);
+        String content = ToolOutputEnvelope.text("shell", 1000, 1, "/tmp/spill.txt", "hint",
+                "cwd: /repo · exit: 1\n构建失败").render();
+        LlmMessage oldTool = LlmMessage.tool("c1", "shell", content);
+
+        // When
+        List<LlmMessage> aged = ager.age(Arrays.asList(oldTool, LlmMessage.user("hi")));
+
+        // Then
+        assertTrue(aged.get(0).getContent().contains("exit: 1"), aged.get(0).getContent());
+    }
+
+    @Test
     @DisplayName("落在保留窗口内的信封应保持完整")
     void age_should_keepRecentEnvelope() {
         keepRecent(1);

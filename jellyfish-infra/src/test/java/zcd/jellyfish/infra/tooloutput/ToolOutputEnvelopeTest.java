@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import zcd.jellyfish.infra.support.ObjectMapperWrapper;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -111,5 +112,66 @@ class ToolOutputEnvelopeTest {
         String stub = envelope.stub();
 
         assertTrue(stub.contains("不可恢复"), stub);
+    }
+
+    @Test
+    @DisplayName("stub 应保留预览首行：结论行只存在于正文里，落盘文件没有它")
+    void stub_should_keepFirstPreviewLine_when_previewIsText() {
+        // Given：shell 的结论行是正文首行，而落盘文件里只有正文之后的输出
+        ToolOutputEnvelope envelope = ToolOutputEnvelope.text("shell", 5000, 10, "/tmp/spill.txt", "hint",
+                "cwd: /repo · exit: 1 · 耗时: 42.3s\n正文第一行\n正文第二行");
+
+        // When
+        String stub = envelope.stub();
+
+        // Then：老化之后仍要能回答「这条命令成没成」
+        assertTrue(stub.contains("cwd: /repo · exit: 1"), stub);
+        assertFalse(stub.contains("正文第一行"), stub);
+    }
+
+    @Test
+    @DisplayName("结构化预览没有「结论行」这个概念，stub 不取首行")
+    void stub_should_notKeepFirstLine_when_previewIsStructured() {
+        // Given
+        ToolOutputEnvelope envelope = ToolOutputEnvelope.structured("jira", 5000, "/tmp/spill.json", "hint",
+                ObjectMapperWrapper.readTree("[1,2,3]"), false);
+
+        // When
+        String stub = envelope.stub();
+
+        // Then
+        assertFalse(stub.contains("首行"), stub);
+    }
+
+    @Test
+    @DisplayName("首行过长时 stub 必须截断：否则老化省下来的上下文又还回去了")
+    void stub_should_capFirstLine_when_lineTooLong() {
+        // Given：一行十万字符的输出（例如单行 JSON）
+        StringBuilder line = new StringBuilder();
+        for (int i = 0; i < 100000; i++) {
+            line.append('x');
+        }
+        ToolOutputEnvelope envelope = ToolOutputEnvelope.text("read_file", 100000, 1, "/tmp/spill.txt",
+                "hint", line.toString());
+
+        // When
+        String stub = envelope.stub();
+
+        // Then
+        assertTrue(stub.length() < 1000, "stub 长度 " + stub.length());
+        assertTrue(stub.contains("…"), stub);
+    }
+
+    @Test
+    @DisplayName("预览首行为空时不添油加醋")
+    void stub_should_notAddLine_when_firstLineEmpty() {
+        // Given：没有元数据行的工具（结构化结果或首行就是空行）
+        ToolOutputEnvelope text = ToolOutputEnvelope.text("read_file", 1000, 1, "/tmp/a.txt", "hint", "");
+        ToolOutputEnvelope structured = ToolOutputEnvelope.structured("jira", 1000, "/tmp/a.json", "hint",
+                ObjectMapperWrapper.readTree("{}"));
+
+        // Then
+        assertFalse(text.stub().contains("首行"), text.stub());
+        assertFalse(structured.stub().contains("首行"), structured.stub());
     }
 }

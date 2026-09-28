@@ -72,6 +72,14 @@ public final class ToolOutputEnvelope {
     static final int FIT_SLACK = 64;
 
     /**
+     * stub 里保留的首行长度上限。
+     * <p>
+     * 首行本身可能是巨长的一行（单行 JSON、压缩过的日志），原样搬进 stub 等于把老化省下来的
+     * 上下文又还回去了——stub 存在的理由就是它足够短。
+     */
+    static final int MAX_STUB_LINE_CHARS = 400;
+
+    /**
      * 计算预览可用的字符预算：总上限扣掉信封骨架、工具名、落盘路径与恢复指引。
      * <p>
      * 放在本类而不是两条调用路径各自算：算「本信封自己有多长」属于信封的语义，
@@ -302,12 +310,20 @@ public final class ToolOutputEnvelope {
      * <p>
      * <b>保留路径是重点</b>：模型只要知道完整内容在哪，就仍能按需回查；把路径也省掉，
      * 一条旧结果就真的只剩「曾经有个结果」这一句话了。
+     * <p>
+     * <b>还要保留预览首行</b>：工具把结论（退出码、终止原因、cwd）放在正文首行，而落盘文件里
+     * 只有正文之后的输出——丢了这一行，一条老化后的命令结果就再也回答不了「它成没成」，
+     * 而这正是模型最常需要的那一个答案。
      *
      * @return 一行 stub 文本
      */
     public String stub() {
         StringBuilder text = new StringBuilder("[工具结果已省略] tool=").append(toolName)
                 .append(" 原始 ").append(totalChars).append(" 字符");
+        String head = previewFirstLine();
+        if (!head.isEmpty()) {
+            text.append(" · 首行：").append(head);
+        }
         if (path == null) {
             text.append("，且落盘失败，内容已不可恢复");
         } else if (partial) {
@@ -316,6 +332,32 @@ public final class ToolOutputEnvelope {
             text.append("，完整内容：").append(path).append("（需细节用 read_file 或 grep_files 回查该文件）");
         }
         return text.toString();
+    }
+
+    /**
+     * 取预览首行。
+     * <p>
+     * <b>只在文本预览上取</b>：结构化预览是截断后的子树，它的「首行」是右花括号或方括号，
+     * 没有结论的含义，写进 stub 只会让模型以为那是一条信息。
+     * <p>
+     * 超过 {@link #MAX_STUB_LINE_CHARS} 时从尾部截断：首行在长度上失控时，它的开头仍是
+     * 辨识度最高的部分（文件名、cwd、日志时间戳）。
+     *
+     * @return 首行文本；没有可用的首行时返回空串
+     */
+    private String previewFirstLine() {
+        if (preview == null || !preview.isTextual()) {
+            return "";
+        }
+        String value = preview.asText("");
+        int newline = value.indexOf('\n');
+        String line = (newline < 0 ? value : value.substring(0, newline)).trim();
+        if (line.isEmpty()) {
+            return "";
+        }
+        return line.length() <= MAX_STUB_LINE_CHARS
+                ? line
+                : line.substring(0, MAX_STUB_LINE_CHARS) + "…";
     }
 
     /**

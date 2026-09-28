@@ -382,8 +382,9 @@ public class ReActLooper implements AutoCloseable {
         long start = System.currentTimeMillis();
         // 捕获通道与取消令牌都随请求交给工具：无界输出的工具（命令行）靠前者不必物化整份输出，
         // 靠后者才能在用户按下 Esc 时被打断——同步派发不会中断正在执行的工具。
-        // 实时输出旁路（tee）暂不接线，由实时输出通道那一批接上。
-        ToolOutputSink sink = outputLimiter.sink(session.getSessionId(), toolCallId, toolName, null);
+        // tee 把捕获到的片段同时转给外壳：它只是旁路（可丢、抛错被隔离），既不参与回灌也不落盘
+        ToolOutputSink sink = outputLimiter.sink(session.getSessionId(), toolCallId, toolName,
+                chunk -> listener.onToolCallOutput(toolCallId, toolName, chunk));
         Object raw;
         boolean success = true;
         try {

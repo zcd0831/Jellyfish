@@ -3,9 +3,13 @@ package zcd.jellyfish.core;
 /**
  * ReAct 回合的流式回调。
  * <p>
- * <b>线程语义</b>：一次回合的全部回调都在同一个 {@code react} 线程上触发，因此实现方不需要自己加锁，
- * 也不会出现「文本增量与工具事件乱序」。代价是回调中做耗时操作会拖住整条循环，需要异步处理的调用方
- * 应在实现里自行转投队列。
+ * <b>线程语义</b>：除 {@link #onToolCallOutput(String, String, String)} 以外，全部回调都在同一个
+ * {@code react} 线程上触发，因此实现方不需要自己加锁，也不会出现「文本增量与工具事件乱序」。代价是回调中
+ * 做耗时操作会拖住整条循环，需要异步处理的调用方应在实现里自行转投队列。
+ * <p>
+ * {@code onToolCallOutput} 是刻意的例外：它由工具自己的输出泵线程触发（见该方法的注释），
+ * 因为命令行的输出是在「工具还没返回」的过程中产生的，而 {@code react} 线程此刻正阻塞在工具里。
+ * 把实时输出排在 {@code react} 线程上就等于把它变成「工具返回后一次性补发」，也就不再是实时输出。
  * <p>
  * 所有方法都是默认空实现：只想拿最终结果的调用方可以只覆盖 {@link #onComplete(ReActResult)}，
  * 或者直接用 {@link #NOOP} 配合 {@link ReActTurn#await()}。
@@ -41,6 +45,27 @@ public interface ReActListener {
      * @param toolName   工具名
      */
     default void onToolCallStarted(String toolCallId, String toolName) {
+    }
+
+    /**
+     * 收到一段工具执行期的输出（可选实现）。
+     * <p>
+     * <b>线程语义与其它回调不同</b>：它由工具自己的输出泵线程触发（命令行的 stdout 与 stderr 各一条），
+     * 因此不在 {@code react} 线程上，且同一时刻可能有多次调用。实现必须线程安全，
+     * 并且必须快——它挡在工具与内核之间。
+     * <p>
+     * <b>这条通道可丢，也必须允许被丢</b>：它只服务于「让用户看到进展」。缓冲满了就丢、
+     * 实现抛错会被隔离，都不影响工具结果；但反过来，实现一旦阻塞，子进程的输出会因为管道写满而停住。
+     * 因此这里绝不能做落盘、网络请求或等待锁的动作。
+     * <p>
+     * <b>它不是权威文本</b>：最终落会话与回灌模型的是工具返回的那份结果（经截断中间件处理），
+     * 两者可能不一致——这里只是过程。不要把它当作工具结果使用。
+     *
+     * @param toolCallId 工具调用标识
+     * @param toolName   工具名
+     * @param chunk      本次新增的输出片段，可能不含换行、可能不是一个完整的行
+     */
+    default void onToolCallOutput(String toolCallId, String toolName, String chunk) {
     }
 
     /**

@@ -49,6 +49,7 @@ import zcd.jellyfish.infra.tooloutput.ToolOutputLimiter;
 import zcd.jellyfish.infra.tooloutput.ToolOutputStore;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -306,6 +307,51 @@ class ReActLooperTest {
     }
 
     @Test
+    void chat_should_teeToolOutputToListener() {
+        // Given：工具一边跑一边把输出写进 sink
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        when(permissionManager.decide(any(PermissionCheckRequest.class)))
+                .thenReturn(PermissionDecision.allow(null));
+        registerTool("read", request -> {
+            request.getOutputSink().write("第一段\n");
+            request.getOutputSink().write("第二段");
+            return new ToolCallResult("read", "ok");
+        });
+        stubResponses(toolCallResponse("call_1", "read"), LlmResponse.text("好"));
+        Session session = sessionManager.createDefault();
+        RecordingListener listener = new RecordingListener();
+
+        // When
+        newLooper().chat(session.getSessionId(), "读文件", listener).await();
+
+        // Then：片段按原样、按顺序到达外壳，并且带上工具调用标识与工具名
+        assertEquals(Arrays.asList("第一段\n", "第二段"), listener.toolOutput);
+        assertEquals("call_1|read", listener.toolOutputMeta.get(0));
+    }
+
+    @Test
+    void chat_should_notFailToolCall_when_listenerThrowsOnOutput() {
+        // Given：外壳的实时渲染抛错（终端断了、缓冲满了）
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        when(permissionManager.decide(any(PermissionCheckRequest.class)))
+                .thenReturn(PermissionDecision.allow(null));
+        registerTool("read", request -> {
+            request.getOutputSink().write("输出");
+            return new ToolCallResult("read", "ok");
+        });
+        stubResponses(toolCallResponse("call_1", "read"), LlmResponse.text("好"));
+        Session session = sessionManager.createDefault();
+
+        // When：显示通道可丢，它的故障不得把一次工具调用升级成失败
+        ReActResult result = newLooper()
+                .chat(session.getSessionId(), "读文件", new ThrowingOutputListener()).await();
+
+        // Then
+        assertFalse(result.isTruncated());
+        assertEquals("好", result.getContent());
+    }
+
+    @Test
     void chat_should_fire_cancel_callback_registered_by_running_tool() throws InterruptedException {
         // Given：工具阻塞在自持的闸门上，并在开始后注册取消回调
         when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
@@ -533,7 +579,7 @@ class ReActLooperTest {
      *
      * @author zcd
      */
-    private static final class RecordingListener implements ReActListener {
+    private static class RecordingListener implements ReActListener {
 
         /** 完成结果。 */
         private final List<ReActResult> completed = new ArrayList<ReActResult>();
@@ -547,12 +593,24 @@ class ReActLooperTest {
         /** 工具结束（名称:成功）记录。 */
         private final List<String> toolCompleted = new ArrayList<String>();
 
+        /** 工具执行期输出片段。 */
+        private final List<String> toolOutput = new ArrayList<String>();
+
+        /** 工具执行期输出携带的工具调用标识与工具名。 */
+        private final List<String> toolOutputMeta = new ArrayList<String>();
+
         /** 取消次数。 */
         private int cancelledCount;
 
         @Override
         public void onToolCallStarted(String toolCallId, String toolName) {
             toolStarted.add(toolName);
+        }
+
+        @Override
+        public void onToolCallOutput(String toolCallId, String toolName, String chunk) {
+            toolOutput.add(chunk);
+            toolOutputMeta.add(toolCallId + "|" + toolName);
         }
 
         @Override
@@ -573,6 +631,19 @@ class ReActLooperTest {
         @Override
         public void onError(Throwable error) {
             errors.add(error);
+        }
+    }
+
+    /**
+     * 实时输出回调必抛错的监听器，用于验证显示通道的故障不会传递给工具调用。
+     *
+     * @author zcd
+     */
+    private static final class ThrowingOutputListener extends RecordingListener {
+
+        @Override
+        public void onToolCallOutput(String toolCallId, String toolName, String chunk) {
+            throw new IllegalStateException("终端已断开");
         }
     }
 }

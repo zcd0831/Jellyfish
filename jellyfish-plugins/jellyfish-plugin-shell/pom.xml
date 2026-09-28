@@ -1,0 +1,133 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+         http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>zcd</groupId>
+        <artifactId>jellyfish-plugins</artifactId>
+        <version>0.0.1-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>jellyfish-plugin-shell</artifactId>
+    <name>Jellyfish Plugin Shell</name>
+    <description>官方命令行插件：以受控方式执行 shell 命令，输出交给内核捕获与落盘。</description>
+
+    <dependencies>
+        <!-- 内核契约：必须是 provided —— PF4J 的插件类加载器是子优先，
+             插件自带 zcd/jellyfish/api 会遮蔽父加载器的同名类，破坏类型同一性；
+             内核的 PluginClasspathGuard 会在加载期直接拒绝这种插件包。 -->
+        <dependency>
+            <groupId>zcd</groupId>
+            <artifactId>jellyfish-api</artifactId>
+            <version>${project.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- 日志：与内核同源（宿主已有 slf4j），同样走 provided 由父加载器提供。 -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- 进程启动与流泵：插件自己无法只靠 JDK 拿到「合并两条流且能分级终止」的行为。
+             它不在父加载器上（内核不依赖它），因此必须 shade 进插件包。 -->
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-exec</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- 仅测试期使用：插件加载链路的端到端验证需要真实的 PF4J 管理器与注册表。
+             插件本身只依赖 jellyfish-api 与 commons-exec，绝不可把这一条升为 compile。 -->
+        <dependency>
+            <groupId>zcd</groupId>
+            <artifactId>jellyfish-infra</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>shade-commons-exec</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>shade</goal>
+                        </goals>
+                        <configuration>
+                            <createDependencyReducedPom>true</createDependencyReducedPom>
+                            <artifactSet>
+                                <!-- 只打进程库；jellyfish-api / pf4j / slf4j 由父加载器提供 -->
+                                <includes>
+                                    <include>org.apache.commons:commons-exec</include>
+                                </includes>
+                            </artifactSet>
+                            <filters>
+                                <filter>
+                                    <artifact>*:*</artifact>
+                                    <excludes>
+                                        <exclude>META-INF/*.SF</exclude>
+                                        <exclude>META-INF/*.DSA</exclude>
+                                        <exclude>META-INF/*.RSA</exclude>
+                                        <exclude>module-info.class</exclude>
+                                    </excludes>
+                                </filter>
+                            </filters>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+
+    <profiles>
+        <profile>
+            <!--
+                真实 shell 的端到端测试。
+
+                它会真的 fork 进程（echo、sleep、exit），因此不进 `mvn test`
+                （AGENTS.md 规定单测不访问外部资源）。这里用 profile 而不是另建模块：
+                被测对象就是本模块的插件与它的工具。
+            -->
+            <id>shell-it</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <configuration>
+                            <!-- 覆盖默认包含规则：本 profile 只跑 *IT，普通单测由 mvn test 负责 -->
+                            <includes>
+                                <include>**/*IT.java</include>
+                            </includes>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+</project>

@@ -24,6 +24,8 @@
         <module>jellyfish-plugin-todo</module>
         <module>jellyfish-plugin-project</module>
         <module>jellyfish-plugin-compact</module>
+        <!-- 命令行插件：自带 commons-exec（shade 进插件包），内核 classpath 上不出现它 -->
+        <module>jellyfish-plugin-shell</module>
         <!-- 跨语言桥接插件：脚本进程由它承载，机制层（jellyfish-script）被 shade 进它的插件包 -->
         <module>jellyfish-plugin-python</module>
         <module>jellyfish-plugin-node</module>

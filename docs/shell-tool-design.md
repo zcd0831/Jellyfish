@@ -1,6 +1,6 @@
 # shell 命令执行工具 · 技术设计文档
 
-- 状态：已评审；**批次 1、2 已落地**，批次 3~4 实施中（见 §8）
+- 状态：已评审；**批次 1、2、3 已落地**，批次 4（文档与 README 同步）实施中（见 §8）
 - 版本：0.0.1-SNAPSHOT 对应
 - 范围：内核（`jellyfish-api` / `jellyfish-infra` / `jellyfish-core` / `jellyfish-tui` / `jellyfish-cli`）与新增插件 `jellyfish-plugin-shell`
 
@@ -386,7 +386,11 @@ publishAudit(request, decision, source);
 | `command` | string | 是 | 要执行的命令行原文 |
 | `cwd` | string | 否 | 工作目录，相对路径按进程工作目录解析（`ToolPaths` 口径）；缺省进程工作目录 |
 | `timeout_seconds` | integer | 否 | 覆盖缺省超时，受 `maxTimeoutSeconds` 钳制 |
-| `max_bytes` | integer | 否 | 本次预览预算覆盖（上限为内核 `maxToolOutputChars`） |
+
+> **原设计里的 `max_bytes` 已去掉**：预览预算由内核在造 sink 时固定（`react.toolOutput` 那一段），
+> 插件拿到的只是一个 `ToolOutputSink` 接口，没有任何地方能覆盖它。要支持「本次调用多要一点预览」
+> 得往 api 加一个带预算的 sink 工厂（可加性改动，但属于 api 变更），因此记在 §10.3 里等定，
+> 而不是先声明一个做不到的参数。
 
 描述文本要向模型交代三件事：① `cd` **不跨调用持久**（每次都是新 shell），需要切换目录就用 `cd X && cmd` 或传 `cwd`；② 读文件/搜索应优先用 `read_file` / `grep_files` / `list_dir`；③ 不要用它执行交互式命令（stdin 已重定向到 `/dev/null`，会立刻失败）。
 
@@ -476,6 +480,55 @@ publishAudit(request, decision, source);
 - **`find` 不在只读列表里**（`find -delete`、`find -exec rm` 都是写操作），`git fetch` / `git push` 不在（会改远端与本地 ref），`npm test` / `mvn test` 不在（**执行仓库里的任意代码**，写不写文件由仓库决定）。这些都是「看起来无害」的典型误判点。
 - **分类器不是安全边界**。它按命令原文的前缀匹配，`FOO=bar cmd`、`$(...)`、别名、`sh -c` 嵌套都能绕过。它的价值是「让只读查询不再打扰人」，从而避免用户因为嫌烦而把 `shell` 从 `askTools` 里整个拿掉——那才是真正的风险。真正的边界是审批本身 + 白名单。
 
+### 4.8.10 实现时定下的细节（落地后补记）
+
+**1. stdin 用「关闭管道」而不是 ` < /dev/null` 重定向**
+
+两者对子进程是等价的（读 stdin 立刻得到 EOF），而关闭管道是库自己的机制，它不需要改写用户写的命令原文。
+
+**2. 不使用 `ExecuteWatchdog`（与 §4.8.5 表格的差异，理由如下）**
+
+三条终止来源（墙钟超时、静默超时、取消）全部在同一个等待循环里判定，循环切片 100 ms。
+把墙钟交给 `ExecuteWatchdog`、另外两条留在循环里，同一次调用就有两个发起方，事后没人能说清是谁动的手。
+而且 §4.8.5 自己写的实现方式就是「等待循环里顺手比较（最后一条输出的时间戳）」——那份描述已经蕴含了循环。
+<b>与 AGENTS.md 里「脚本插件不装 watchdog」并不矛盾</b>：那里的理由是「网关长命、硬超时会杀掉正常运行时」，这里两者的立场其实一致——不给长命进程装墙钟，一次性命令则用自己的循环收口。
+
+**3. 跨块解码要自己留残余字节**
+
+`CharsetDecoder.decode(in, out, false)` 遇到不完整的多字节序列时会返回 UNDERFLOW 并把那几个字节
+<b>留在输入缓冲里不消费</b>（指望调用方下次一起再喂进来）。每块各写各的 `ByteBuffer` 就等于丢掉
+那个半截字符——现象是「中文日志偶尔一个乱码」。因此捕获流自持一份 `pending` 残余字节，
+并在收尾时按「输入结束」把它解成替换字符。
+
+**4. 二进制两条判据**
+
+出现 NUL 字节即判定；或替换字符（U+FFFD）达 4 个且占比超过 5%。
+判定之后仍然继续读与计数（停止读取会让子进程因管道写满而卡住），只是不再进上下文。
+
+**5. 「取消」必须优先于「进程自己退出了」的判定**
+
+取消回调会直接给子进程发信号，因此等待循环下一拍会看到「进程已退出」。
+先判退出会把取消误报成正常完成（还带着一个 143 的退出码）。
+现在的顺序是：先看令牌，再看 `waitFor` 的结果，且退出后再确认一次令牌。
+这条是单测发现的（`run_should_killProcess_whenCancelled` 最初拿到 `COMPLETED`）。
+
+**6. 进程标识只能尽力取**
+
+`Process.pid()` 是 Java 9+ 的方法，Java 8 上只能读 `UNIXProcess` 的私有字段，再不行就解析
+`toString()` 里的 `pid=NNN`。三条都失败时退化为只杀直接子进程并记 DEBUG。
+`pgrep` 不存在、没权限、或进程在这中间又生了孩子，都只能放弃——<b>杀不干净是已知边界</b>。
+
+**7. 工具名在权限处理器里要再判一次**
+
+`PermissionCheckRequest` 是类型级扩展点，不判工具名就会给其它工具下结论。
+拿不到 `command` 原文时一律 `ASK`（空声明等于放行）。
+
+**8. 元数据行的两个作用点**
+
+工具把 `ShellResult.summary(...)` 交给 `sink.summary(...)`，并在 `sink.finish()` 返回空时
+（非内核调用点拿到的是 `NOOP`）把这行直接作为输出返回——否则模型看到一片空白，
+无法区分「命令没输出」与「命令没跑」。
+
 ### 4.9 线程与并发语义（本次设计的一处重要发现）
 
 commons-exec 会为 stdout 与 stderr 各起一条泵线程，它们都会调 `sink.write`。因此：
@@ -537,7 +590,15 @@ commons-exec 会为 stdout 与 stderr 各起一条泵线程，它们都会调 `s
 | `ToolOutputStore` | 增量写入 + 原子改名、`close` 后才清理、文件数与字节上限、临时文件命名与清洗 |
 | `PermissionManager` | 三态合并取最严、`DENY` 短路、插件 `ASK` 汇入审批、PLAN 白名单仍然优先、插件抛错按无异议 |
 | `ReadFileTool` | 单行超长报错（消息含三条出路）、多行超预算仍分页 |
-| `ShellPlugin` | 参数校验与钳制、环境脱敏与防挂死注入、白名单默认拒绝语义、分类器三态分类（含 `find` / `git fetch` / `npm test` 必须落在 `ASK`）、两条计时器的判定（含静默计时按最后一条输出的时间戳重置、`0` 时不触发）、`stop` 杀在途进程 |
+| `ShellTool` | 元数据行在正文首行、非零退出码回灌为结果、`cwd` 不存在时提前报错、超时缺省与钳制、静默超时只来自配置、环境叠加、`NOOP` sink 的兜底 |
+| `ShellArguments` | 命令必填与去空白、`cwd` 可选、`timeout_seconds` 支持数字与数字字符串、小于 1 报错而不是被当成「不超时」 |
+| `PluginConfig` | 缺省值、非法值与负数回退缺省不阻断启动、超硬上限钳制、数字字符串被接受、环境/两个列表的解析与非容器类型的容错 |
+| `CommandPolicy` | 三态分类（含 `find` / `git fetch` / `npm test` / `sed -i` 必须落在 `ASK`）、白名单默认拒绝且不受分类器开关影响、单/双 token 匹配粒度、两张表可追加 |
+| `ShellPermissionContribution` | 别的工具不表态、拿不到命令原文时 `ASK`、只读 `ABSTAIN`、其余 `ASK`、灾难形状 `DENY` |
+| `ShellOutputCapture` | 逐字节写入仍能正确解码、收尾冲残余、NUL 与替换字符占比两条二进制判据、少量的坏字节不误判、收尾后的写入被忽略 |
+| `ShellProcessRunner` | 非零退出码不抛异常、墙钟与静默两条计时器（含「持续有输出不误杀」与「关闭时不触发」）、取消后进程必死且结果是「已取消」、取消优先于「进程自己退出了」、不响应 TERM 的进程被强杀、命令起不来才抛异常、二进制只计数、`killAll` |
+| `ShellResult` | 四条终止路径各自的元数据行、二进制字节数、无 `cwd` 时不出现空段、小数点是点号 |
+| `ShellPlugin` 加载链 | 真实描述符启动成功、工具可路由且声明为可写、权限处理器被登记为类型级贡献、卸载后两类注册都被回收 |
 | `ReActLooper` | 取消令牌传到请求、sink 在 `finally` 被 finish、异常路径拼上已捕获内容、**工具写入的片段按原样转发给监听器（带 `toolCallId` / `toolName`）、监听器抛错不影响工具结果** |
 | `InflightTurn` | 工具轨迹：名字先于输出可见、按换行拆行、行数上限保留最新、单行超长保留行首、清空后不再显示、`begin` 连带重置 |
 | `TuiReActListener` | 实时输出写进暂存区并置脏标记、`onToolCallCompleted` / 回合终结时清掉 |
@@ -550,18 +611,21 @@ commons-exec 会为 stdout 与 stderr 各起一条泵线程，它们都会调 `s
 
 照 `script-it` 的形状：surefire 只跑 `**/*IT.java`。
 
-| 用例 | 断言 |
-| --- | --- |
-| 真 `/bin/sh` 跑一个输出小、退 0 的命令 | 无落盘文件，输出含 summary 首行 |
-| 退非零的命令 | 如实报告 exit code，`success=true` |
-| 输出数万行 | 落盘文件完整，回灌文本是头尾 + 省略标记，路径可被 `read_file` 读到 |
-| 超时命令（`sleep`） | 在墙上时钟超时点被终止，返回部分输出 + 超时说明 |
-| 静默超时（`idleTimeoutSeconds=2` 跑一个先输出再 `sleep` 的命令） | 在静默点被终止，说明文字指出是静默而非墙钟 |
-| 超时后拉起的孙进程 | 尽树被杀（`pgrep -P` 验证），无残留 |
-| 取消令牌 | 置位后命令在秒级被终止 |
-| `stdin=/dev/null` | `cat` 之类立即返回而不是挂住 |
-| 环境脱敏 | 预设一个 `FAKE_TOKEN`，命令里 `env` 看不到它 |
-| 大输出压力（`yes`） | JVM 内存不随输出体积增长；进程在超时点终止 |
+| 用例 | 断言 | 已落地 |
+| --- | --- | --- |
+| `echo 你好` | 输出与 `exit: 0` 都能取回 | ✅ |
+| `echo 正常; echo 出错 1>&2` | stderr 与 stdout 合并进同一条流 | ✅ |
+| `exit 3` | 如实报告退出码，不抛异常 | ✅ |
+| `pwd`（带 `cwd`） | 命令真的在指定目录里跑（用规范路径比较） | ✅ |
+| `seq 1 2000` | 最后一行必须还在：证明管道被持续排空 | ✅ |
+| `sleep 30` + `timeout_seconds=1` | 在墙钟超时点被终止，且 `sleep` 进程不残留 | ✅ |
+| `sleep 30` + 取消令牌 | 终止并标记为「已取消」，`sleep` 不残留 | ✅ |
+| `sleep 30` + `idleTimeoutSeconds=1` | 在静默点被终止 | ✅ |
+| 循环 `echo` + `sleep 0.4` + 静默 1 秒 | 持续有输出时**不**被静默计时器误杀 | ✅ |
+| `cat`（读 stdin） | 立刻返回而不是挂住 | ✅ |
+| `head -c 512 /dev/urandom` | 二进制不进正文，只报字节数 | ✅ |
+| 输出数万行的回灌与落盘 | 属内核截断中间件，已由批次 1 的单测覆盖，不在本批端到端里重复 | — |
+| 大输出压力（`yes`） | 内存不随输出体积增长：同一性质由批次 1 的 `SpillCapturingSinkTest` 喂 10 MiB 断言保留量有界覆盖 | — |
 
 ### 6.3 回归
 
@@ -587,7 +651,7 @@ commons-exec 会为 stdout 与 stderr 各起一条泵线程，它们都会调 `s
 | --- | --- | --- |
 | **1** | api 冻结 + 截断/落盘/捕获期 sink + 跨语言权限协议 + `read_file` 报错 | 新增 `api/extension/CancellationToken.java`、`api/extension/ToolOutputSink.java`、`api/extension/PermissionVerdict.java`、`infra/tooloutput/ToolOutputPreview.java`、`infra/tooloutput/SpillCapturingSink.java`；改 `api/extension/ToolCallRequest.java`、`api/extension/PermissionCheckRequest.java`、删 `api/extension/PermissionVeto.java`、`script/codec/PermissionCodec.java`、`plugin-python/.../script/jellyfish_sdk.py`、`plugin-node/.../script/jellyfish_sdk.js`、`infra/tooloutput/ToolOutputLimiter.java`、`infra/tooloutput/ToolOutputStore.java`、`infra/config/ToolOutputSettings.java`、`core/ReActLooper.java`、`plugins/jellyfish-plugin-tools/.../ReadFileTool.java`，以及对应的全部测试（含 `PermissionCodecTest` / `PermissionVetoTest` → `PermissionVerdictTest`）。**已落地**：权限三态编排（原属批次 2）因类型变更不得不同批完成 |
 | **2** | 实时输出通道 | 改 `core/ReActListener.java`、`core/ReActLooper.java`、`tui/InflightTurn.java`、`tui/TuiReActListener.java`、`tui/TranscriptProjector.java`（渲染运行中轨迹）、`cli/console/CliReActListener.java`。**已落地** |
-| **3** | shell 插件全量 | 新增模块 `jellyfish-plugins/jellyfish-plugin-shell`（`plugin.properties` / `ShellPlugin` / `ShellTool` / `ShellArguments` / `ShellEnvironment` / `CommandPolicy` / `ShellProcessRunner` / `PluginConfig` + pom 的 shade 配置）；改 `jellyfish-plugins/pom.xml` |
+| **3** | shell 插件全量 | 新增模块 `jellyfish-plugins/jellyfish-plugin-shell`（`plugin.properties` / `ShellPlugin` / `ShellTool` / `ShellArguments` / `ShellInvocation` / `ShellResult` / `ShellEnvironment` / `CommandPolicy` / `ShellPermissionContribution` / `ShellProcessRunner` / `ShellProcess` / `ShellProcessLauncher` / `CommonsExecShellProcessLauncher` / `ShellOutputCapture` / `ProcessTrees` / `PluginConfig` + pom 的 shade 配置）；改 `jellyfish-plugins/pom.xml`。**已落地**（99 个单测 + 11 个端到端用例） |
 | **4** | 文档与端到端 | 新增 `docs/shell-tool-design.md`（本文）已存在；新增 `jellyfish-plugin-shell/src/test/.../*IT.java` 与 `shell-it` profile；改 `AGENTS.md` |
 
 `AGENTS.md` 在批次 4 需要补的内容：新插件条目与模块表、三条不变式（I1/I2/I3）、取消令牌语义与「回调必须快」、捕获期 sink 的角色与「两个触发点一份实现」、权限三态与「插件不能放宽」的新形式（含脚本侧 `permission` 由两态升为三态）、`read_file` 单行超长报错、shell 的「无沙箱」声明与 `askTools: ["shell"]` 推荐、两条计时器（墙钟 + 静默，后者缺省关闭）的存在与分工、watchdog 与脚本插件的场景差异。
@@ -655,4 +719,25 @@ commons-exec 会为 stdout 与 stderr 各起一条泵线程，它们都会调 `s
 
 **要做时的形状**：新增一个可丢的 `tool_output` SSE 事件（带 `turnId` / `toolCallId` / `chunk`），并在 `SseReActListener` 里按「队列满就丢」处理——与 TUI 的有界缓冲同口径。
 
----
+### 10.3 每次调用的预览预算覆盖（`max_bytes`）
+
+**现状**：`shell` 工具没有 `max_bytes` 参数（原设计里有，见 §4.8.2 的说明）。
+
+**为什么做不到**：预览预算是内核在造 sink 时读 `react.toolOutput` 定下的，插件拿到的只有
+`ToolOutputSink` 接口，没有覆盖入口。
+
+**要做时的形状**：给 api 加一个带预算的 sink 工厂（例如
+`ToolOutputSink.withBudget(int maxChars)` 或 `ToolOutputLimiter.sink(..., budget)` 的变体），
+由内核钳制在全局上限之内。它是<b>可加性</b>改动，但动的是 api 面，因此单独一批做。
+
+### 10.4 只读分类对重定向与复合命令不设防
+
+**现状**：`echo x > /etc/y` 会被判为只读（首个 token 是 `echo`）而不再打扰用户；
+`ls && rm -rf x` 同理（首个 token 是 `ls`）。
+
+**为什么不改**：§4.8.9 已经写明「分类器不是安全边界」，而它存在的理由是「让只读查询不再打扰人」。
+把 `>`、`&&`、`;`、`$()` 一律判成「要审批」会把最常见的复合查询也变成打扰，
+用户最终会把 `shell` 从 `askTools` 里整个拿掉——那是更大的风险。
+
+**要做时注意**：真正的边界是审批与白名单。若确实要收紧，应当在<b>白名单那一层</b>收紧
+（默认拒绝）而不是在分类器上打补丁，因为前者是安全机制，后者是便利机制。

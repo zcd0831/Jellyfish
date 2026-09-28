@@ -28,6 +28,13 @@ import java.util.Objects;
  * <p>
  * <b>为什么只在与工具 / 思考交界处收尾思考行</b>：思考是逐块增量、不带换行地写到 stderr 的；
  * 若它还没结束就来了轨迹或工具行，两段内容会在终端里粘在同一行上。因此在「另一类输出开始」时补一个换行。
+ * <p>
+ * <b>工具执行期的输出为什么也写 stderr</b>：它是诊断而不是回答，走 stdout 会直接违反上面那条字节级契约。
+ * 它让「一条跑几分钟的命令」在 {@code -cli} 下也能看到进展（默认只按工具名给一行开始与结束，不打印内容）。
+ * <p>
+ * <b>线程语义</b>：{@link #onToolCallOutput(String, String, String)} 不在 {@code react} 线程上，
+ * 它由工具的 stdout / stderr 两条泵线程<b>并发</b>调用，因此本类里只有它需要加锁
+ * （其余回调都发生在同一条 {@code react} 线程上，且工具执行期间那条线程正阻塞在工具里）。
  *
  * @author zcd
  */
@@ -45,6 +52,9 @@ public final class CliReActListener implements ReActListener {
     /** 工具结束标记。 */
     private static final String TOOL_END_PREFIX = "← ";
 
+    /** 工具执行期输出的行首缩进：与工具行区分开，同时不太宽。 */
+    private static final String TOOL_OUTPUT_INDENT = "  │ ";
+
     /** 输出面板。 */
     private final ConsoleIO console;
 
@@ -59,6 +69,12 @@ public final class CliReActListener implements ReActListener {
 
     /** 本回合是否已经报过错，用于避免调用点重复打印同一条错误。 */
     private boolean failed;
+
+    /** 已打过「实时输出正在前面」的缩进的工具调用标识，未开始时为 {@code null}。 */
+    private String toolOutputCallId;
+
+    /** 工具实时输出当前是否停在一行的行首（下一段需要先补缩进）。 */
+    private boolean toolOutputAtLineStart;
 
     /**
      * 构造监听器。
@@ -99,14 +115,50 @@ public final class CliReActListener implements ReActListener {
     @Override
     public void onToolCallStarted(String toolCallId, String toolName) {
         closeThinkingLine();
+        closeToolOutputLine();
         // 走到这里说明本轮以工具调用收尾，缓冲的文本是过程轨迹而非最终回答，转写 stderr 后清空
         flushTrace();
         console.writeErrLine(TOOL_START_PREFIX + toolName);
     }
 
+    /**
+     * 把工具执行期的输出写到 stderr。
+     * <p>
+     * <b>为什么加锁</b>：这个方法由工具的 stdout 与 stderr 两条泵线程并发调用（见类注释）。
+     * 锁只保护本类自己的几个行状态，不做任何耗时动作。
+     * <p>
+     * <b>为什么只在行首补缩进</b>：一段 chunk 里可能含多个换行（工具按块给输出），逐行插入缩进
+     * 需要扫描每个字符并重新拼字符串，而这是子进程与内核之间的路径——不值得为了好看付这个代价。
+     * 缩进的作用只是「一眼看出这几行属于工具输出」，块首有了就够了。
+     *
+     * @param toolCallId 工具调用标识
+     * @param toolName   工具名
+     * @param chunk      输出片段
+     */
+    @Override
+    public synchronized void onToolCallOutput(String toolCallId, String toolName, String chunk) {
+        if (chunk == null || chunk.isEmpty()) {
+            return;
+        }
+        closeThinkingLine();
+        if (!Objects.equals(toolCallId, toolOutputCallId)) {
+            // 换了一个工具调用：先给上一个收尾，再写工具名，避免两段输出在终端里连成一片
+            closeToolOutputLine();
+            console.writeErr(TOOL_OUTPUT_INDENT + toolName + "\n");
+            toolOutputCallId = toolCallId;
+            toolOutputAtLineStart = true;
+        }
+        if (toolOutputAtLineStart) {
+            console.writeErr(TOOL_OUTPUT_INDENT);
+        }
+        console.writeErr(chunk);
+        toolOutputAtLineStart = chunk.endsWith("\n");
+    }
+
     @Override
     public void onToolCallCompleted(String toolCallId, String toolName, boolean success, String output) {
         closeThinkingLine();
+        closeToolOutputLine();
         console.writeErrLine(TOOL_END_PREFIX + toolName + (success ? " 完成" : " 失败")
                 + "（" + lengthOf(output) + " 字符）");
     }
@@ -114,6 +166,7 @@ public final class CliReActListener implements ReActListener {
     @Override
     public void onComplete(ReActResult result) {
         closeThinkingLine();
+        closeToolOutputLine();
         writeAnswer(result);
         if (result != null && result.isTruncated()) {
             console.writeErrLine("回合未收敛：已达最大轮次，上面的回答可能不完整。");
@@ -123,6 +176,7 @@ public final class CliReActListener implements ReActListener {
     @Override
     public void onCancelled() {
         closeThinkingLine();
+        closeToolOutputLine();
         // 已取消的回合没有最终回答，残片留在缓冲里会丢，转写 stderr 让用户至少看得到已生成的部分
         flushTrace();
         console.writeErrLine("已取消。");
@@ -131,6 +185,7 @@ public final class CliReActListener implements ReActListener {
     @Override
     public void onError(Throwable error) {
         closeThinkingLine();
+        closeToolOutputLine();
         flushTrace();
         failed = true;
         console.writeErrLine("回合失败：" + messageOf(error));
@@ -202,6 +257,20 @@ public final class CliReActListener implements ReActListener {
             console.writeErr("\n");
             thinkingLineOpen = false;
         }
+    }
+
+    /**
+     * 结束进行中的工具输出行：补一个换行，避免与后续的结束行粘在同一行。
+     * <p>
+     * 加锁的原因与 {@link #onToolCallOutput(String, String, String)} 相同：它读写的行状态
+     * 可能正被泵线程改动。只在「已经半行未收尾」时才写一个换行，因此不会把终端输出切开。
+     */
+    private synchronized void closeToolOutputLine() {
+        if (toolOutputCallId != null && !toolOutputAtLineStart) {
+            console.writeErr("\n");
+        }
+        toolOutputCallId = null;
+        toolOutputAtLineStart = false;
     }
 
     /**

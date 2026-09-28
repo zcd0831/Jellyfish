@@ -290,6 +290,71 @@ class CliReActListenerTest {
     }
 
     @Test
+    void onToolCallOutput_should_write_live_output_to_stderr() {
+        RecordingConsoleIO console = new RecordingConsoleIO(null);
+        CliReActListener listener = new CliReActListener(console, false);
+
+        listener.onToolCallStarted("call-1", "bash");
+        listener.onToolCallOutput("call-1", "bash", "hello\n");
+        listener.onToolCallOutput("call-1", "bash", "world\n");
+
+        // 工具名先出现一次，之后每行带同一个缩进；回答通道一根字节都没动
+        assertTrue(console.err().contains("→ bash\n"), console.err());
+        assertTrue(console.err().contains("  │ bash\n"), console.err());
+        assertTrue(console.err().contains("  │ hello\n"), console.err());
+        assertTrue(console.err().contains("  │ world\n"), console.err());
+        assertEquals("", console.out());
+    }
+
+    @Test
+    void onToolCallOutput_should_indent_only_once_per_line() {
+        RecordingConsoleIO console = new RecordingConsoleIO(null);
+        CliReActListener listener = new CliReActListener(console, false);
+
+        // 同一行的两段（工具往往把一行拆成好几块写）只应得到一个缩进
+        listener.onToolCallOutput("call-1", "bash", "a");
+        listener.onToolCallOutput("call-1", "bash", "b\n");
+
+        assertTrue(console.err().endsWith("  │ ab\n"), console.err());
+        assertFalse(console.err().contains("  │ a  │ b"), console.err());
+    }
+
+    @Test
+    void onToolCallOutput_should_close_half_line_before_tool_end() {
+        RecordingConsoleIO console = new RecordingConsoleIO(null);
+        CliReActListener listener = new CliReActListener(console, false);
+
+        // 输出停在半行（命令的最后一行往往不带换行）：结束行不能紧贴在它后面
+        listener.onToolCallOutput("call-1", "bash", "没有换行的尾巴");
+        listener.onToolCallCompleted("call-1", "bash", true, "ok");
+
+        assertTrue(console.err().contains("  │ 没有换行的尾巴\n← bash 完成"), console.err());
+    }
+
+    @Test
+    void onToolCallOutput_should_ignore_null_and_empty_chunk() {
+        RecordingConsoleIO console = new RecordingConsoleIO(null);
+        CliReActListener listener = new CliReActListener(console, false);
+
+        listener.onToolCallOutput("call-1", "bash", null);
+        listener.onToolCallOutput("call-1", "bash", "");
+
+        assertEquals("", console.err());
+    }
+
+    @Test
+    void onToolCallOutput_should_start_new_block_when_tool_changes() {
+        RecordingConsoleIO console = new RecordingConsoleIO(null);
+        CliReActListener listener = new CliReActListener(console, false);
+
+        listener.onToolCallOutput("call-1", "bash", "a\n");
+        listener.onToolCallOutput("call-2", "curl", "b\n");
+
+        assertTrue(console.err().contains("  │ bash\n  │ a\n"), console.err());
+        assertTrue(console.err().contains("  │ curl\n  │ b\n"), console.err());
+    }
+
+    @Test
     void constructor_should_reject_null_console() {
         assertThrows(NullPointerException.class, () -> new CliReActListener(null, false));
     }

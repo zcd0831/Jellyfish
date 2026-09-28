@@ -7,6 +7,7 @@ import zcd.jellyfish.server.dto.TurnErrorEvent;
 import zcd.jellyfish.server.dto.TurnTextEvent;
 import zcd.jellyfish.server.dto.TurnThinkingEvent;
 import zcd.jellyfish.server.dto.TurnToolDoneEvent;
+import zcd.jellyfish.server.dto.TurnToolOutputEvent;
 import zcd.jellyfish.server.dto.TurnToolStartEvent;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -76,6 +77,70 @@ class SseReActListenerTest {
         TurnToolStartEvent payload = (TurnToolStartEvent) event.getPayload();
         assertEquals("c1", payload.getToolCallId());
         assertEquals("read_file", payload.getToolName());
+    }
+
+    @Test
+    void onToolCallOutput_should_enqueue_tool_output_event() {
+        SseReActListener listener = listener();
+
+        listener.onToolCallOutput("c1", "shell", "building...\n");
+
+        SseEvent event = listener.pollNow();
+        assertEquals("tool_output", event.getName());
+        assertFalse(event.isTerminal());
+        TurnToolOutputEvent payload = (TurnToolOutputEvent) event.getPayload();
+        assertEquals("t1", payload.getTurnId());
+        assertEquals("c1", payload.getToolCallId());
+        assertEquals("shell", payload.getToolName());
+        assertEquals("building...\n", payload.getChunk());
+    }
+
+    @Test
+    void onToolCallOutput_should_skip_when_chunk_empty() {
+        SseReActListener listener = listener();
+
+        listener.onToolCallOutput("c1", "shell", "");
+        listener.onToolCallOutput("c1", "shell", null);
+
+        assertNull(listener.pollNow());
+    }
+
+    @Test
+    void onToolCallOutput_should_dropAndCount_when_pendingOverLimit() {
+        // Given：待发上限是 64，而子进程能一直吐（消费端慢）
+        SseReActListener listener = listener();
+
+        // When：推 100 条但一条也不取
+        for (int i = 0; i < 100; i++) {
+            listener.onToolCallOutput("c1", "shell", "chunk-" + i);
+        }
+
+        // Then：队列里有 64 条，其余 36 条丢弃并计数（权威文本随后由 tool_done 给出）
+        assertEquals(36, listener.getDroppedToolOutput());
+        int queued = 0;
+        while (listener.pollNow() != null) {
+            queued++;
+        }
+        assertEquals(64, queued);
+    }
+
+    @Test
+    void onToolCallOutput_should_allowMore_when_pendingDrained() {
+        // Given：上限按「未取走的条数」算，而不是按累计条数
+        SseReActListener listener = listener();
+        for (int i = 0; i < 100; i++) {
+            listener.onToolCallOutput("c1", "shell", "chunk-" + i);
+        }
+
+        // When：取走全部之后继续推
+        while (listener.pollNow() != null) {
+            continue;
+        }
+        listener.onToolCallOutput("c1", "shell", "later");
+
+        // Then：丢弃计数不再增长，新片段照常入队
+        assertEquals(36, listener.getDroppedToolOutput());
+        assertNotNull(listener.pollNow());
     }
 
     @Test

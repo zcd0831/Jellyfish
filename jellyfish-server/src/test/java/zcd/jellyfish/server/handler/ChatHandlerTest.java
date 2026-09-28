@@ -124,6 +124,7 @@ class ChatHandlerTest {
             ReActListener listener = invocation.getArgument(2);
             listener.onText("hello");
             listener.onToolCallStarted("c1", "read_file");
+            listener.onToolCallOutput("c1", "shell", "building...");
             listener.onToolCallCompleted("c1", "read_file", true, "ok");
             listener.onComplete(ReActResult.completed("s1", "hello", 1));
             return new FakeTurn("t1");
@@ -136,6 +137,8 @@ class ChatHandlerTest {
         assertTrue(body.contains("event: turn_start"), body);
         assertTrue(body.contains("event: text"), body);
         assertTrue(body.contains("event: tool_start"), body);
+        assertTrue(body.contains("event: tool_output"), body);
+        assertTrue(body.contains("\"chunk\":\"building...\""), body);
         assertTrue(body.contains("event: tool_done"), body);
         assertTrue(body.contains("event: done\ndata: {\"turnId\":"), body);
         assertTrue(body.contains("\"content\":\"hello\",\"rounds\":1,\"truncated\":false}"), body);

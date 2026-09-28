@@ -2,6 +2,7 @@ package zcd.jellyfish.cli;
 
 import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.extension.PermissionMode;
+import zcd.jellyfish.server.ServerConfig;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -68,6 +69,9 @@ public final class StartupOptionsParser {
     /** 绑定地址旗标。 */
     private static final String FLAG_HOST = "--host";
 
+    /** API key 旗标。 */
+    private static final String FLAG_API_KEY = "--api-key";
+
     /** 思考过程旗标。 */
     private static final String FLAG_SHOW_THINKING = "--show-thinking";
 
@@ -103,6 +107,8 @@ public final class StartupOptionsParser {
             + "                          新会话的权限模式（仅 -cli；TUI 用 /mode）\n"
             + "      --port <端口>       服务器端口（仅 -server，等价于 -server 的位置参数）\n"
             + "      --host <地址>       服务器绑定地址（仅 -server），缺省 " + StartupOptions.DEFAULT_HOST + "\n"
+            + "      --api-key <密钥>    服务器 API key（仅 -server）；不配则不鉴权，也可用环境变量\n"
+            + "                          " + ServerConfig.ENV_API_KEY + "（推荐：argv 会出现在 ps 输出里）\n"
             + "      --show-thinking     展示思考过程（-cli：打到 stderr；-tui：启动时展开）\n"
             + "      --verbose           日志级别降到 DEBUG\n"
             + "  -h, --help              显示本帮助\n"
@@ -144,6 +150,7 @@ public final class StartupOptionsParser {
         PermissionMode permissionMode = null;
         Integer portOption = null;
         String hostOption = null;
+        String apiKeyOption = null;
         boolean showThinking = false;
         boolean verbose = false;
         boolean help = false;
@@ -180,6 +187,8 @@ public final class StartupOptionsParser {
                 portOption = parsePort(FLAG_PORT, cursor.requireValue(arg));
             } else if (FLAG_HOST.equals(arg)) {
                 hostOption = requireNonBlank(arg, cursor.requireValue(arg));
+            } else if (FLAG_API_KEY.equals(arg)) {
+                apiKeyOption = requireNonBlank(arg, cursor.requireValue(arg));
             } else if (arg.startsWith("--") && arg.indexOf('=') > 0) {
                 throw new JellyfishException("不支持 --key=value 写法：" + arg + "（请写成 --key value）");
             } else if (arg.startsWith("-") && !"-".equals(arg)) {
@@ -189,7 +198,7 @@ public final class StartupOptionsParser {
             }
         }
         return build(mode, prompt, sessionId, agentId, provider, model, permissionMode, portOption, hostOption,
-                showThinking, verbose, help, version, positionals);
+                apiKeyOption, showThinking, verbose, help, version, positionals);
     }
 
     /**
@@ -214,7 +223,8 @@ public final class StartupOptionsParser {
      */
     private static StartupOptions build(StartupOptions.Mode mode, String prompt, String sessionId, String agentId,
                                         String provider, String model, PermissionMode permissionMode,
-                                        Integer portOption, String hostOption, boolean showThinking, boolean verbose,
+                                        Integer portOption, String hostOption, String apiKeyOption,
+                                        boolean showThinking, boolean verbose,
                                         boolean help, boolean version, List<String> positionals) {
         if (help || version) {
             // 帮助与版本不执行任何模式：模式只用于填一个合法值，避免为一个纯展示请求纠结「模式没给」
@@ -222,7 +232,8 @@ public final class StartupOptionsParser {
             return StartupOptions.builder(displayMode)
                     .prompt(prompt).sessionId(sessionId).agentId(agentId).model(provider, model)
                     .permissionMode(permissionMode).port(StartupOptions.DEFAULT_PORT).host(hostOption)
-                    .showThinking(showThinking).verbose(verbose).help(help).version(version).build();
+                    .apiKey(apiKeyOption).showThinking(showThinking).verbose(verbose).help(help).version(version)
+                    .build();
         }
         if (mode == null) {
             throw new JellyfishException("请指定启动模式：-cli / -tui / -server（用 -h 查看用法）");
@@ -239,8 +250,8 @@ public final class StartupOptionsParser {
             throw new JellyfishException("--show-thinking 只在 -cli / -tui 下被接受：-server 没有终端界面");
         }
         if (mode != StartupOptions.Mode.SERVER && (!positionals.isEmpty() || portOption != null
-                || hostOption != null)) {
-            throw new JellyfishException("只有 -server 支持端口与绑定地址");
+                || hostOption != null || apiKeyOption != null)) {
+            throw new JellyfishException("只有 -server 支持端口、绑定地址与 --api-key");
         }
         if (mode == StartupOptions.Mode.SERVER && sessionId != null) {
             // Server 的会话由 HTTP path 显式寻址，启动参数指向单个会话没有意义；
@@ -263,7 +274,7 @@ public final class StartupOptionsParser {
         }
         return StartupOptions.builder(mode)
                 .prompt(prompt).sessionId(sessionId).agentId(agentId).model(provider, model)
-                .permissionMode(permissionMode).port(port).host(hostOption)
+                .permissionMode(permissionMode).port(port).host(hostOption).apiKey(apiKeyOption)
                 .showThinking(showThinking).verbose(verbose).help(help).version(version).build();
     }
 

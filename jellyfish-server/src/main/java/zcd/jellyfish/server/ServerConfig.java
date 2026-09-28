@@ -30,6 +30,26 @@ public final class ServerConfig {
     /** keepalive 注释帧缺省间隔（秒）。 */
     public static final int DEFAULT_KEEPALIVE_SECONDS = 15;
 
+    /**
+     * 提供 API key 的环境变量名。
+     * <p>
+     * <b>为什么把环境变量名定义在这里</b>：它是「这个服务的密钥从哪来」的一部分，而不是某一侧的私事——
+     * 启动参数解析（显示用法）与启动模式（真正读取）都要用它，两处各写一遍字面量迟早漂移成
+     * 「帮助里写的变量名不是实际读的那个」。
+     * <p>
+     * <b>为什么推荐环境变量而不是命令行参数</b>：argv 会出现在 {@code ps} 输出里，同机器上的其他用户
+     * 能直接看到密钥；命令行参数仍然支持，只是相对更差的那一档。
+     */
+    public static final String ENV_API_KEY = "JELLYFISH_SERVER_API_KEY";
+
+    /**
+     * 建议的最短 API key 长度。
+     * <p>
+     * 低于它不拒绝启动、只告警：密钥长度是用户自己的安全权衡，而这个服务默认只绑回环——
+     * 把它做成硬校验，只会让「在局域网里试一下」变成一件要读文档才能做的事。
+     */
+    public static final int MIN_RECOMMENDED_API_KEY_LENGTH = 16;
+
     /** 绑定地址。 */
     private final String host;
 
@@ -48,6 +68,9 @@ public final class ServerConfig {
     /** Undertow 工作线程数。 */
     private final int workerThreads;
 
+    /** API key；{@code null} 表示不启用鉴权。 */
+    private final String apiKey;
+
     /**
      * 由构建器构造。
      *
@@ -60,6 +83,7 @@ public final class ServerConfig {
         this.maxStreams = builder.maxStreams;
         this.keepaliveSeconds = builder.keepaliveSeconds;
         this.workerThreads = builder.workerThreads;
+        this.apiKey = blankToNull(builder.apiKey);
     }
 
     /**
@@ -128,6 +152,36 @@ public final class ServerConfig {
     }
 
     /**
+     * 获取 API key。
+     * <p>
+     * {@code null} 表示**不鉴权**（任何能访问该端口的人都能建会话、跑命令、读全部会话正文）。
+     * 这是刻意的缺省：本服务默认只绑 {@code 127.0.0.1}，而对回环还要求先配密钥，
+     * 只会把「本地跑一次」变成一件要读文档才能做的事。对外开放必须显式配密钥。
+     *
+     * @return API key；未启用鉴权时返回 {@code null}
+     */
+    public String getApiKey() {
+        return apiKey;
+    }
+
+    /**
+     * 把空白归一成 {@code null}。
+     * <p>
+     * 空串与 {@code null} 必须同义：否则「配了个空密钥」会变成「鉴权开着但谁都过不了」，
+     * 而现场表现是「服务起来了但客户端全 401」——那是本类里最难看的一种失败形态。
+     *
+     * @param value 原值，可为 {@code null}
+     * @return 去空白后的值；空白时返回 {@code null}
+     */
+    private static String blankToNull(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    /**
      * 运行参数构建器。
      *
      * @author zcd
@@ -152,6 +206,9 @@ public final class ServerConfig {
         /** 工作线程数。 */
         private int workerThreads = defaultWorkerThreads();
 
+        /** API key；{@code null} 表示不鉴权。 */
+        private String apiKey;
+
         /**
          * 构造构建器。
          *
@@ -171,6 +228,17 @@ public final class ServerConfig {
          */
         public Builder maxBodyBytes(int maxBodyBytes) {
             this.maxBodyBytes = maxBodyBytes;
+            return this;
+        }
+
+        /**
+         * 设置 API key。
+         *
+         * @param apiKey API key；{@code null} 或空白表示不鉴权
+         * @return 本构建器
+         */
+        public Builder apiKey(String apiKey) {
+            this.apiKey = apiKey;
             return this;
         }
 

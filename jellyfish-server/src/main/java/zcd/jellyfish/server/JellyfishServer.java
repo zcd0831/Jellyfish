@@ -17,6 +17,7 @@ import zcd.jellyfish.server.handler.ChatHandler;
 import zcd.jellyfish.server.handler.CommandHandlers;
 import zcd.jellyfish.server.handler.HealthHandler;
 import zcd.jellyfish.server.handler.SessionHandlers;
+import zcd.jellyfish.server.http.ApiKeyGuard;
 import zcd.jellyfish.server.http.Router;
 
 import java.net.InetSocketAddress;
@@ -121,6 +122,10 @@ public final class JellyfishServer {
     public void start() {
         approvals.attach();
         HttpHandler router = buildRouter();
+        if (config.getApiKey() != null) {
+            // 包在路由外面：新接口默认就被保护，例外只能是显式声明的（探活）
+            router = new ApiKeyGuard(config.getApiKey(), router);
+        }
         try {
             server = Undertow.builder()
                     .addHttpListener(config.getPort(), config.getHost())
@@ -133,10 +138,32 @@ public final class JellyfishServer {
             throw new JellyfishException("启动 HTTP 服务失败（" + config.getHost() + ":" + config.getPort()
                     + "）：" + e.getMessage(), e);
         }
-        LOG.info("已监听 http://{}:{}（无鉴权，默认仅回环；对外开放请显式 --host）",
-                config.getHost(), boundPort());
+        logReady();
         hook = new Thread(this::stop, "jellyfish-server-shutdown");
         Runtime.getRuntime().addShutdownHook(hook);
+    }
+
+    /**
+     * 打印启动后的监听信息与鉴权状态。
+     * <p>
+     * <b>为什么把鉴权状态放在这里明说</b>：少了这一行，「以为配了密钥」与「其实没配」在现象上都是
+     * 「能访问」——而那正是最危险的一种安静。
+     * <p>
+     * <b>没配密钥时用 WARN 级</b>：默认日志级别就是 WARN（正常一次对话不该有噪音），因此这是
+     * 「一定会被看见」的那一档；而配好了密钥是正常状态，用 INFO，不该在默认级别下报警。
+     */
+    private void logReady() {
+        if (config.getApiKey() == null) {
+            LOG.warn("已监听 http://{}:{}（**无鉴权**：任何能访问该端口的人都能建会话、跑命令、读全部会话正文；"
+                    + "默认仅回环，对外开放请显式配 API key 并限定 --host）", config.getHost(), boundPort());
+            return;
+        }
+        LOG.info("已监听 http://{}:{}（已启用 API key 鉴权；GET /health 不校验）",
+                config.getHost(), boundPort());
+        if (config.getApiKey().length() < ServerConfig.MIN_RECOMMENDED_API_KEY_LENGTH) {
+            LOG.warn("API key 只有 {} 个字符，建议至少 {} 位的随机串",
+                    config.getApiKey().length(), ServerConfig.MIN_RECOMMENDED_API_KEY_LENGTH);
+        }
     }
 
     /**

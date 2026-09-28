@@ -113,6 +113,37 @@ class ServerEndToEndIT {
         }
     }
 
+    @Test
+    void server_should_require_api_key_when_configured() throws IOException {
+        JellyfishComponent component = DaggerJellyfishComponent.create();
+        AgentHarness harness = component.agentHarness();
+        harness.bootstrap();
+        JellyfishServer server = new JellyfishServer(
+                ServerConfig.builder("127.0.0.1", 0).apiKey("s3cret-api-key").build(),
+                harness, component.sessionManager(), component.commandManager(), component.agentManager(),
+                component.modelManager(), component.approvalChannel(), component.healthCheck());
+        server.start();
+        String base = "http://127.0.0.1:" + server.boundPort();
+        try {
+            // 探活不需要密钥：它是编排器与「起服务后的第一条 curl」唯一能用的接口
+            assertEquals(200, get(base + "/health").status);
+
+            // 其余接口：没带、带错、方案不对一律 401
+            assertEquals(401, get(base + "/commands").status);
+            assertEquals(401, call(base + "/commands", "GET", null, "Bearer wrong").status);
+            assertEquals(401, call(base + "/commands", "GET", null, "s3cret-api-key").status);
+
+            // 带上正确密钥才通
+            assertEquals(200, call(base + "/commands", "GET", null, "Bearer s3cret-api-key").status);
+            // 写接口同样受保护：不能只保护读的那几个
+            assertEquals(401, post(base + "/sessions", "{}").status);
+            assertEquals(201, callPost(base + "/sessions", "{}", "Bearer s3cret-api-key").status);
+        } finally {
+            server.stop();
+            harness.shutdown();
+        }
+    }
+
     /**
      * 发一次 GET。
      *
@@ -137,6 +168,19 @@ class ServerEndToEndIT {
     }
 
     /**
+     * 发一次带鉴权头的 POST。
+     *
+     * @param url         完整地址
+     * @param body        请求体
+     * @param apiKeyValue {@code Authorization} 头的值
+     * @return 响应
+     * @throws IOException 连接失败
+     */
+    private static Response callPost(String url, String body, String apiKeyValue) throws IOException {
+        return call(url, "POST", body, apiKeyValue);
+    }
+
+    /**
      * 发一次 DELETE。
      *
      * @param url 完整地址
@@ -157,10 +201,27 @@ class ServerEndToEndIT {
      * @throws IOException 连接失败
      */
     private static Response call(String url, String method, String body) throws IOException {
+        return call(url, method, body, null);
+    }
+
+    /**
+     * 发一次带鉴权头的 GET。
+     *
+     * @param url         完整地址
+     * @param method      HTTP 方法
+     * @param body        请求体，可为 {@code null}
+     * @param apiKeyValue {@code Authorization} 头的值，可为 {@code null}
+     * @return 响应
+     * @throws IOException 连接失败
+     */
+    private static Response call(String url, String method, String body, String apiKeyValue) throws IOException {
         HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
         connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
         connection.setReadTimeout(READ_TIMEOUT_MS);
         connection.setRequestMethod(method);
+        if (apiKeyValue != null) {
+            connection.setRequestProperty("Authorization", apiKeyValue);
+        }
         if (body != null) {
             connection.setDoOutput(true);
             connection.setRequestProperty("Content-Type", "application/json");

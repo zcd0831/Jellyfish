@@ -36,6 +36,9 @@ public final class Responses {
     /** 成功：无响应体。 */
     public static final int NO_CONTENT = 204;
 
+    /** 未通过鉴权（缺少或错误的 API key）。 */
+    public static final int UNAUTHORIZED = 401;
+
     /** 请求体或参数不合法。 */
     public static final int BAD_REQUEST = 400;
 
@@ -62,6 +65,9 @@ public final class Responses {
 
     /** 内部错误码常量。 */
     public static final String CODE_INTERNAL_ERROR = "INTERNAL_ERROR";
+
+    /** 鉴权失败错误码常量。 */
+    public static final String CODE_UNAUTHORIZED = "UNAUTHORIZED";
 
     /** JSON 内容类型。 */
     private static final String JSON_CONTENT_TYPE = "application/json; charset=utf-8";

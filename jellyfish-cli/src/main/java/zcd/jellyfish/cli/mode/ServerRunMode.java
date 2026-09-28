@@ -16,6 +16,7 @@ import zcd.jellyfish.infra.session.SessionManager;
 import zcd.jellyfish.server.JellyfishServer;
 import zcd.jellyfish.server.ServerConfig;
 
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -93,7 +94,9 @@ public final class ServerRunMode implements RunMode {
 
     @Override
     public int run(StartupOptions options) {
-        ServerConfig config = ServerConfig.builder(options.getHost(), options.getPort()).build();
+        ServerConfig config = ServerConfig.builder(options.getHost(), options.getPort())
+                .apiKey(resolveApiKey(options, System.getenv()))
+                .build();
         JellyfishServer server = new JellyfishServer(config, harness, sessions, commands, agents, models,
                 approvals, healthCheck);
         try {
@@ -113,5 +116,30 @@ public final class ServerRunMode implements RunMode {
         } finally {
             server.stop();
         }
+    }
+
+    /**
+     * 解析 API key：命令行参数优先，其次环境变量。
+     * <p>
+     * <b>为什么参数优先</b>：显式给的应当生效。若反过来让环境变量盖掉参数，用户会遇到「我明明传了」
+     * 却查不出原因的 401，而排查方向（一个进程级的环境变量）恰恰是最不容易想到的那个。
+     * <p>
+     * <b>为什么用环境变量提一句 INFO</b>：环境变量是推荐做法（不进 {@code ps}、不进 shell history），
+     * 而用户看不到「它被读到了」这件事；日志里说一句，才谈得上「推荐」。
+     *
+     * @param options 启动参数，不可为 {@code null}
+     * @param env     环境变量表，可为 {@code null}（无环境变量）
+     * @return API key；未提供时返回 {@code null}
+     */
+    static String resolveApiKey(StartupOptions options, Map<String, String> env) {
+        if (options.getApiKey() != null && !options.getApiKey().trim().isEmpty()) {
+            return options.getApiKey().trim();
+        }
+        String fromEnv = env == null ? null : env.get(ServerConfig.ENV_API_KEY);
+        if (fromEnv == null || fromEnv.trim().isEmpty()) {
+            return null;
+        }
+        LOG.info("API key 取自环境变量 {}", ServerConfig.ENV_API_KEY);
+        return fromEnv.trim();
     }
 }

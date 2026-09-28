@@ -6,6 +6,7 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.extension.PermissionMode;
+import zcd.jellyfish.server.ServerConfig;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -126,13 +127,49 @@ class StartupOptionsParserTest {
         JellyfishException error = assertThrows(JellyfishException.class,
                 () -> StartupOptionsParser.parse(new String[] {"-cli", "9096"}));
 
-        assertTrue(error.getMessage().contains("只有 -server 支持端口与绑定地址"));
+        assertTrue(error.getMessage().contains("只有 -server 支持端口、绑定地址与 --api-key"));
     }
 
     @Test
     void parse_should_fail_when_host_given_to_tui() {
         assertThrows(JellyfishException.class,
                 () -> StartupOptionsParser.parse(new String[] {"-tui", "--host", "0.0.0.0"}));
+    }
+
+    @Test
+    void parse_should_keep_api_key_when_server_given_api_key() {
+        StartupOptions options = StartupOptionsParser.parse(
+                new String[] {"-server", "--api-key", "s3cret"});
+
+        assertEquals("s3cret", options.getApiKey());
+    }
+
+    @Test
+    void parse_should_leave_api_key_null_when_not_given() {
+        assertNull(StartupOptionsParser.parse(new String[] {"-server"}).getApiKey());
+    }
+
+    @Test
+    void parse_should_fail_when_api_key_given_to_cli() {
+        JellyfishException error = assertThrows(JellyfishException.class,
+                () -> StartupOptionsParser.parse(new String[] {"-cli", "--api-key", "s3cret"}));
+
+        assertTrue(error.getMessage().contains("只有 -server 支持端口、绑定地址与 --api-key"));
+    }
+
+    @Test
+    void parse_should_fail_when_api_key_blank() {
+        JellyfishException error = assertThrows(JellyfishException.class,
+                () -> StartupOptionsParser.parse(new String[] {"-server", "--api-key", "   "}));
+
+        assertTrue(error.getMessage().contains("不能为空白"));
+    }
+
+    @Test
+    void parse_should_mention_environment_variable_in_usage() {
+        // 帮助里写的变量名必须就是实际读的那个：两处各写一遍字面量迟早漂移
+        assertTrue(StartupOptionsParser.usage().contains(ServerConfig.ENV_API_KEY),
+                StartupOptionsParser.usage());
     }
 
     @Test

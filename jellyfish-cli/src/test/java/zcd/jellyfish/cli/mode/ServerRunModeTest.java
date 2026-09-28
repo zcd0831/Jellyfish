@@ -11,10 +11,12 @@ import zcd.jellyfish.infra.metrics.HealthCheck;
 import zcd.jellyfish.infra.model.ModelManager;
 import zcd.jellyfish.infra.permission.ApprovalChannel;
 import zcd.jellyfish.infra.session.SessionManager;
+import zcd.jellyfish.server.ServerConfig;
 
 import java.util.Collections;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
@@ -69,6 +71,36 @@ class ServerRunModeTest {
                 () -> new ServerRunMode(harness, null, sessions, models, agents, approvals, healthCheck, console));
         assertThrows(NullPointerException.class,
                 () -> new ServerRunMode(harness, commands, sessions, models, agents, approvals, healthCheck, null));
+    }
+
+    @Test
+    void resolveApiKey_should_prefer_cli_argument_over_environment() {
+        // 显式给的必须生效：反过来会让「我明明传了」变成一个查不出原因的 401
+        StartupOptions options = StartupOptions.builder(StartupOptions.Mode.SERVER).apiKey("from-flag").build();
+
+        String key = ServerRunMode.resolveApiKey(options, Collections.singletonMap(
+                ServerConfig.ENV_API_KEY, "from-env"));
+
+        assertEquals("from-flag", key);
+    }
+
+    @Test
+    void resolveApiKey_should_fallBackToEnvironment() {
+        StartupOptions options = StartupOptions.builder(StartupOptions.Mode.SERVER).build();
+
+        String key = ServerRunMode.resolveApiKey(options, Collections.singletonMap(
+                ServerConfig.ENV_API_KEY, "  from-env  "));
+
+        assertEquals("from-env", key);
+    }
+
+    @Test
+    void resolveApiKey_should_return_null_when_neitherGiven() {
+        StartupOptions options = StartupOptions.builder(StartupOptions.Mode.SERVER).build();
+
+        assertNull(ServerRunMode.resolveApiKey(options, Collections.<String, String>emptyMap()));
+        assertNull(ServerRunMode.resolveApiKey(options, null));
+        assertNull(ServerRunMode.resolveApiKey(options, Collections.singletonMap(ServerConfig.ENV_API_KEY, "   ")));
     }
 
     @Test

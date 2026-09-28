@@ -88,6 +88,9 @@ public final class StartupOptions {
     /** 服务器模式绑定地址。 */
     private final String host;
 
+    /** 服务器模式 API key；{@code null} 表示不鉴权。 */
+    private final String apiKey;
+
     /** 是否展示思考过程（cli 模式打到 stderr，tui 模式决定启动时的展开状态）。 */
     private final boolean showThinking;
 
@@ -115,6 +118,7 @@ public final class StartupOptions {
         this.permissionMode = builder.permissionMode;
         this.port = builder.port;
         this.host = builder.host;
+        this.apiKey = builder.apiKey;
         this.showThinking = builder.showThinking;
         this.verbose = builder.verbose;
         this.help = builder.help;
@@ -213,6 +217,15 @@ public final class StartupOptions {
     }
 
     /**
+     * 获取服务器模式 API key。
+     *
+     * @return API key；未指定时返回 {@code null}
+     */
+    public String getApiKey() {
+        return apiKey;
+    }
+
+    /**
      * 判断是否需要展示思考过程。
      *
      * @return 需要显示返回 {@code true}
@@ -283,6 +296,9 @@ public final class StartupOptions {
 
         /** 服务器模式绑定地址。 */
         private String host = DEFAULT_HOST;
+
+        /** API key；{@code null} 表示不鉴权。 */
+        private String apiKey;
 
         /** 是否展示思考过程。 */
         private boolean showThinking;
@@ -381,6 +397,17 @@ public final class StartupOptions {
          */
         public Builder host(String host) {
             this.host = host == null ? DEFAULT_HOST : host;
+            return this;
+        }
+
+        /**
+         * 设置服务器模式的 API key。
+         *
+         * @param apiKey API key；{@code null} 或空白表示不鉴权
+         * @return 本构建器
+         */
+        public Builder apiKey(String apiKey) {
+            this.apiKey = apiKey;
             return this;
         }
 

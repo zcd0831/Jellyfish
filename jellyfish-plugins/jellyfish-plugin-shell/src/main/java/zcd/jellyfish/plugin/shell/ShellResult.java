@@ -1,6 +1,10 @@
 package zcd.jellyfish.plugin.shell;
 
+import zcd.jellyfish.api.extension.ToolMetadata;
+
+import java.util.LinkedHashMap;
 import java.util.Locale;
+import java.util.Map;
 
 /**
  * 一次命令执行的结论：退出码、终止原因、耗时，以及输出是不是二进制。
@@ -110,6 +114,31 @@ final class ShellResult {
      * @param workingDirectory 工作目录文本，可为 {@code null}
      * @return 元数据行，保证非 {@code null}
      */
+    /**
+     * 构造结构化元数据：与 {@link #summary(String)} 同一份事实的机器可读版本。
+     * <p>
+     * <b>只有两个键是内核约定认识的</b>（退出码、终止原因），其余是本工具自己的（耗时、二进制字节数）。
+     * 内核只透传不解释，界面按 {@code ToolMetadata#failed} 判「值不值得警示」。
+     * <p>
+     * <b>没正常跑完时不填退出码</b>：那时进程的退出码只反映我们发的信号（143 / 137），
+     * 报出来会被读成「命令自己出了问题」——与 {@code summary} 不报退出码是同一条理由。
+     *
+     * @return 元数据，保证非 {@code null}
+     */
+    Map<String, Object> metadata() {
+        Map<String, Object> metadata = new LinkedHashMap<String, Object>();
+        if (termination == Termination.COMPLETED) {
+            metadata.put(ToolMetadata.KEY_EXIT_CODE, exitCode);
+        }
+        metadata.put(ToolMetadata.KEY_TERMINAL, termination.name());
+        metadata.put("durationMs", durationMillis);
+        if (binaryOutput) {
+            metadata.put("binary", Boolean.TRUE);
+            metadata.put("binaryBytes", binaryBytes);
+        }
+        return metadata;
+    }
+
     String summary(String workingDirectory) {
         StringBuilder text = new StringBuilder();
         if (workingDirectory != null && !workingDirectory.isEmpty()) {

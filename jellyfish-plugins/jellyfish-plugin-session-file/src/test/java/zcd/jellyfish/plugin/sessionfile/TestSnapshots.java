@@ -3,12 +3,14 @@ package zcd.jellyfish.plugin.sessionfile;
 import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.api.extension.SessionCompactionSnapshot;
 import zcd.jellyfish.api.extension.SessionMessageSnapshot;
+import zcd.jellyfish.api.extension.ToolMetadata;
 import zcd.jellyfish.api.extension.SessionSnapshot;
 import zcd.jellyfish.api.extension.SessionToolCallSnapshot;
 import zcd.jellyfish.api.extension.SessionUsageSnapshot;
 import zcd.jellyfish.api.extension.TokenUsageSnapshot;
 
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -36,8 +38,10 @@ final class TestSnapshots {
                 new SessionMessageSnapshot("m-2", 2L, "assistant", "我来读文件", null, null,
                         Arrays.asList(new SessionToolCallSnapshot(0, "call-1", "read_file",
                                 "{\"path\":\"a.txt\"}")),
-                        new TokenUsageSnapshot(7, 8, 15), "先读文件"),
-                SessionMessageSnapshot.of("m-3", 3L, "tool", "文件内容", "call-1", "read_file", null, null),
+                        new TokenUsageSnapshot(7, 8, 15), "先读文件", null),
+                new SessionMessageSnapshot("m-3", 3L, "tool", "cwd: /x · exit: 1\n文件内容", "call-1",
+                        "read_file", null, null, null,
+                        Collections.singletonMap(ToolMetadata.KEY_EXIT_CODE, Integer.valueOf(1))),
                 SessionMessageSnapshot.of("m-4", 4L, "assistant", "读完了", null, null, null, null));
         return new SessionSnapshot(sessionId, 100L, 200L, "标题", "coder", "openai", "gpt-4o",
                 PermissionMode.PLAN, messages, new SessionUsageSnapshot(7L, 8L, 15L, 4L),

@@ -98,7 +98,8 @@ final class ShellTool implements ExtensionHandler<ToolCallRequest, ToolCallResul
         String captured = sink.finish();
         // sink 是 NOOP 的调用点（非内核调用）拿不到任何内容，此时至少要让结论可见，
         // 否则模型看到一片空白，无法区分「命令没输出」与「命令没跑」
-        return new ToolCallResult(TOOL_NAME, captured == null ? summary : captured);
+        // 元数据与首行结论同源：模型读文本，界面与审计读字段
+        return new ToolCallResult(TOOL_NAME, captured == null ? summary : captured, result.metadata());
     }
 
     /**

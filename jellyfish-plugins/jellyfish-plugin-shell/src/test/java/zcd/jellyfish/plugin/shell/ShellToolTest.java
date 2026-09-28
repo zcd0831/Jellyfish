@@ -11,6 +11,7 @@ import zcd.jellyfish.api.extension.PermissionCheckRequest;
 import zcd.jellyfish.api.extension.PermissionVerdict;
 import zcd.jellyfish.api.extension.ToolCallRequest;
 import zcd.jellyfish.api.extension.ToolCallResult;
+import zcd.jellyfish.api.extension.ToolMetadata;
 import zcd.jellyfish.api.extension.ToolOutputSink;
 import zcd.jellyfish.api.plugin.PluginContext;
 
@@ -152,6 +153,24 @@ class ShellToolTest {
             assertTrue(!name.toLowerCase(java.util.Locale.ROOT).contains("password"), name);
         }
         assertEquals("cat", environment.get("PAGER"));
+    }
+
+    @Test
+    @DisplayName("结果要带上元数据：界面与审计靠字段判断「命令成没成」，不解析首行文案")
+    void handle_should_carryMetadata() throws Exception {
+        ShellTestSupport.FakeProcess process = new ShellTestSupport.FakeProcess();
+        process.exitNow(3);
+        ShellTool tool = new ShellTool(PluginConfig.from(null),
+                runner(new ShellTestSupport.FakeLauncher(process)));
+
+        ToolCallResult result = tool.handle(new ToolCallRequest(ShellTool.TOOL_NAME, args("command", "ls"),
+                null, CancellationToken.NONE, new ShellTestSupport.RecordingSink()));
+
+        assertEquals(Integer.valueOf(3), result.getMetadata().get(ToolMetadata.KEY_EXIT_CODE));
+        assertEquals("COMPLETED", result.getMetadata().get(ToolMetadata.KEY_TERMINAL));
+        assertTrue(ToolMetadata.failed(result.getMetadata()));
+        // 首行结论与字段同源：模型那条路一个字不变
+        assertTrue(String.valueOf(result.getOutput()).startsWith("cwd: "), String.valueOf(result.getOutput()));
     }
 
     @Test

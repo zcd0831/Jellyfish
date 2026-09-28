@@ -3,6 +3,11 @@ package zcd.jellyfish.plugin.shell;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import zcd.jellyfish.api.extension.ToolMetadata;
+
+import java.util.Map;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -78,6 +83,46 @@ class ShellResultTest {
                 true, 4096L);
 
         assertTrue(result.summary("/work").contains("4096 字节已省略"), result.summary("/work"));
+    }
+
+    @Test
+    @DisplayName("元数据与首行结论同源：正常结束时带退出码与终止原因")
+    void metadata_should_carryExitCodeAndTerminal_when_completed() {
+        ShellResult result = ShellResult.of(ShellResult.Termination.COMPLETED, Integer.valueOf(1), 1234L,
+                false, 0L);
+
+        Map<String, Object> metadata = result.metadata();
+
+        assertEquals(Integer.valueOf(1), metadata.get(ToolMetadata.KEY_EXIT_CODE));
+        assertEquals("COMPLETED", metadata.get(ToolMetadata.KEY_TERMINAL));
+        assertEquals(Long.valueOf(1234L), metadata.get("durationMs"));
+        // 判据由内核约定统一给出，界面不必自己解释「1 算不算失败」
+        assertTrue(ToolMetadata.failed(metadata));
+    }
+
+    @Test
+    @DisplayName("被终止时不填退出码：那一档的退出码只反映我们发的信号")
+    void metadata_should_omitExitCode_when_terminated() {
+        ShellResult result = ShellResult.of(ShellResult.Termination.TIMEOUT, null, 120_000L, false, 0L);
+
+        Map<String, Object> metadata = result.metadata();
+
+        assertFalse(metadata.containsKey(ToolMetadata.KEY_EXIT_CODE));
+        assertEquals("TIMEOUT", metadata.get(ToolMetadata.KEY_TERMINAL));
+        assertTrue(ToolMetadata.failed(metadata), "超时必须被界面标出来");
+    }
+
+    @Test
+    @DisplayName("二进制输出把「省略了多少字节」也变成字段")
+    void metadata_should_carryBinaryBytes_when_binaryOutput() {
+        ShellResult result = ShellResult.of(ShellResult.Termination.COMPLETED, Integer.valueOf(0), 5L,
+                true, 512L);
+
+        Map<String, Object> metadata = result.metadata();
+
+        assertEquals(Boolean.TRUE, metadata.get("binary"));
+        assertEquals(Long.valueOf(512L), metadata.get("binaryBytes"));
+        assertFalse(ToolMetadata.failed(metadata), "二进制输出不等于命令失败");
     }
 
     @Test

@@ -51,6 +51,8 @@ class SnapshotJsonTest {
         assertEquals("call-1", restored.getMessages().get(1).getToolCalls().get(0).getId());
         assertEquals("{\"path\":\"a.txt\"}", restored.getMessages().get(1).getToolCalls().get(0).getArguments());
         assertEquals(15, restored.getMessages().get(1).getUsage().getTotalTokens());
+        // 工具元数据漏了会静默失真：重启后界面再也说不出「那条命令成没成」
+        assertEquals(Integer.valueOf(1), restored.getMessages().get(2).getMetadata().get("exitCode"));
         assertEquals(4L, restored.getUsage().getLlmCalls());
         // 压缩摘要三个字段成组出现，缺一个都会让重启后的请求带上不该带的远古历史
         assertEquals("早前对话的摘要", restored.getCompaction().getSummary());

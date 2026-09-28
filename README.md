@@ -187,11 +187,25 @@ HTTP 服务（Undertow），对外暴露 REST + SSE 接口，供第三方 Web �
 java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -server 9096
 ```
 
-**默认只绑 `127.0.0.1`**，对外开放必须显式 `--host 0.0.0.0`。
+**默认只绑 `127.0.0.1`**。对外开放必须显式 `--host 0.0.0.0` 并配上 API key：
 
-> ⚠️ **当前无鉴权**：任何能访问该端口的人都能建会话、跑命令（含文件工具）、读全部会话正文。
-> 鉴权（API key / token）尚未落地，**不要把端口暴露到公网或他人可达网段**。命令域与对话域同权，
-> `POST /sessions/{id}/commands` 能执行 `/reload` 等系统命令。
+```bash
+# 推荐：密钥走环境变量（不会出现在 ps 输出里）
+JELLYFISH_SERVER_API_KEY=$(openssl rand -hex 32) java -jar ...jar -server --host 0.0.0.0
+# 也可以：命令行参数（argv 会出现在 ps 里，同机其他用户看得见）
+java -jar ...jar -server --host 0.0.0.0 --api-key <密钥>
+```
+
+| 情形 | 行为 |
+| --- | --- |
+| 没配密钥（缺省） | **不鉴权**：任何能访问该端口的人都能建会话、跑命令、读全部会话正文。对只绑回环的本地场景够用 |
+| 配了密钥 | 除 `GET /health` 外**所有接口**都要 `Authorization: Bearer <密钥>`，否则 `401` |
+
+- **为什么缺省不鉴权**：本服务默认只绑 `127.0.0.1`，对回环还要先配密钥只会把「本地跑一次」变成一件要读文档才能做的事；而 **对外开放是显式动作**，那一步必须同时配密钥——**没配密钥时启动日志会给一条 WARN**（默认日志级别就是 WARN，因此这条一定看得见）——少了它，「以为配了」与「其实没配」在现象上都是「能访问」；配好了则是常规 INFO。
+- **`GET /health` 不校验**：探活必须能在「还没有密钥」的场景下工作（容器编排的 liveness probe、起服务后的第一条 curl）。它只返回 UP/WARN/DOWN 与检查项名字，不含会话正文、路径与密钥。
+- **不接受用 query 参数传密钥**：URL 会进访问日志、浏览器历史与 Referer。而本服务的对话入口是 `POST`，浏览器的 `EventSource` 本来就用不了（它只能发 GET），客户端无论如何都要用 `fetch` 流式读取，而它能带请求头。
+- **密钥比较是常时比较**（`MessageDigest.isEqual`）：避免用短路语义把密钥逐字节泄露给能反复试探的调用方。密钥短于 16 位会在启动日志里告警，但不拒绝启动。
+- **命令域与对话域同权**：`POST /sessions/{id}/commands` 能执行 `/reload` 等系统命令，因此密钥泄露等于整机权限泄露。
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
@@ -206,7 +220,7 @@ java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -server 9096
 | `GET` | `/commands/{name}/options?sessionId=` | 命令候选值 |
 | `GET` | `/approvals` | 当前待审批项（无则 204） |
 | `POST` | `/approvals/{requestId}` | 裁决审批（`{"approved":true|false}`） |
-| `GET` | `/health` | 健康报告（UP / WARN / DOWN） |
+| `GET` | `/health` | 健康报告（UP / WARN / DOWN）；**配了 API key 时只有它不校验**，探活无需凭据 |
 
 **SSE 事件**：`turn_start` / `text` / `thinking` / `tool_start` / `tool_output` / `tool_done` /
 `approval_required` / `approval_resolved` / `done` / `cancelled` / `error`；空闲超时写 `: keepalive` 注释帧。
@@ -226,7 +240,8 @@ java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -server 9096
   `POST /approvals/{requestId}`。`ApprovalChannel` 是**全局单槽位**，因此任一时刻最多只有一条待审批项，
   多会话并发时后面的会排队。
 - **错误体**统一为 `{"error":"CODE","message":"…"}`；命令执行的三态在 `kind` 字段里
-  （`UNKNOWN` 同时回 404）。
+  （`UNKNOWN` 同时回 404）；鉴权失败是 `401` + `{"error":"UNAUTHORIZED"}`，并带
+  `WWW-Authenticate: Bearer realm="jellyfish"`。
 
 ## 压缩上下文（`/compact`）
 

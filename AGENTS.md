@@ -502,6 +502,9 @@ jellyfish-script/src/main/java/zcd/jellyfish/script/
 - **会话一律按 path 里的 id 寻址，不读 `SessionManager.current()`**：那是进程级单指针，多客户端下不成立。残留的只有 `/model` `/agent` `/mode` 的「选中标记」——那些只读 `current()`，Server 下退化为无标记（外观问题）。
 - **启动期不建会话**：`SessionBootstrap.deferCreation` 就是「不是 CLI」——TUI 先进首页、Server 按 id 寻址，两者启动期都没有「当前会话」这个概念。`--agent` / `--model` / `--mode` **只归 CLI**：CLI 不能交互，新会话的初始值只能靠参数给；TUI 用 `/agent` `/model` `/mode` 命令，Server 用 `POST /sessions` 的请求体（不再有「服务级默认值」这一层，模型默认值归 `models.json`）。其余模式带上这些参数一律判用法错误退 2，`-p` / `--show-thinking` 同理——**拒绝而不是静默忽略**。
 - **一会话一在途回合**：`SessionTurns` 用非重入的 `Semaphore(1)` 占位，且**占位早于 `AgentHarness.chat`**（回合任务一提交就 append 用户消息，事后判断冲突已经污染历史）；冲突回 409，`POST /sessions/{id}/cancel` 取消。
+- **API key 鉴权包在路由外面**（`ApiKeyGuard` 是外层 handler）：逐个处理器里加校验等于「漏一个就是一条攻击面」，而「新加接口忘了校验」没有任何测试能可靠拦住；包在外面则新接口默认就被保护，例外只能是显式声明的——**目前只有 `GET /health`**（探活必须能在没有密钥时工作，且它不含会话正文与路径）。它自己先 `dispatch` 到工作线程再写 401，理由与 `Router` 同（阻塞 I/O 不允许在 IO 线程上）；密钥比较用 `MessageDigest.isEqual` 做常时比较。
+- **缺省不鉴权是刻意的，但没配密钥时必须留下一条 WARN**：本服务默认只绑 `127.0.0.1`，对外开放是显式动作（`--host` 那一步）。默认日志级别是 WARN，因此这一档一定看得见；配好了走 INFO——少了这条，「以为配了密钥」与「其实没配」在现象上都是「能访问」。
+- **不接受用 query 参数传密钥**：URL 会进访问日志、浏览器历史与 Referer；而本服务的对话入口是 `POST`，`EventSource` 本来就用不了，客户端无论如何都要用 `fetch` 流式读取，而它能带请求头。密钥的来源是 `--api-key` 或环境变量 `ServerConfig.ENV_API_KEY`（后者优先推荐：argv 会出现在 `ps` 里）。
 - **SSE 单写者**：socket 写全在 Undertow 工作线程上循环完成，`react` 线程只把事件投进无界队列（`SseReActListener`）；写失败即客户端断连，据此取消回合。并发流用 `maxStreams` 封顶（超限 503），保住 `/health` 这类短请求。
 - **turnId 由外壳生成**，不用 `ReActTurn.getTurnId()`：后者要等 `chat` 返回才拿得到，而监听器必须先交出去，否则早期回调会带 `null`。
 - **审批走 HTTP，但复用 `ApprovalChannel` 不改内核**：SSE 内嵌 `approval_required` / `approval_resolved`（只发属于本会话的头槽位）、`GET /approvals` 给晚到的客户端、`POST /approvals/{id}` 裁决；断连时主动拒绝仍待审的那条，否则 react 线程要阻塞到审批超时。
@@ -536,7 +539,7 @@ jellyfish-script/src/main/java/zcd/jellyfish/script/
 三种外壳（`-cli` / `-tui` / `-server`）与跨语言桥接（Python / Node）均已端到端落地；以下是**尚未做**或**明确不做**的部分，不要当成待办之外的现存 API。
 
 - **跨语言**：`prctl(PR_SET_PDEATHSIG)` 已实现，但只在 Linux 生效、本机（macOS）无法验证——**正确性不依赖它**（孤儿检测靠定时器）。`status` 协议方法经决策**不做**，进程侧状态改随 `worker_state` 推送。真实解释器的端到端测试在 `mvn -Pscript-it test`，不进 `mvn test`。
-- **`-server`**：**已落地**（`jellyfish-server`，Undertow 2.2.39.Final）——REST + SSE 接口面、会话按 id 寻址、一会话一在途回合、HTTP 化人工审批、`GET /health` 都在。**后续项**：鉴权（API key / token）。**明确不做**：自带 Web 前端、TLS、审批的多槽位（全局单槽位是既有内核语义，只如实暴露）。
+- **`-server`**：**已落地**（`jellyfish-server`，Undertow 2.2.39.Final）——REST + SSE 接口面、会话按 id 寻址、一会话一在途回合、HTTP 化人工审批、`GET /health` 都在。**鉴权已落地**（API key：`--api-key` 或环境变量 `JELLYFISH_SERVER_API_KEY`，除 `GET /health` 外全部接口校验）。**明确不做**：自带 Web 前端、TLS、审批的多槽位（全局单槽位是既有内核语义，只如实暴露）。
 - **压缩**：只有插件提供策略才可用；不启用 `jellyfish-compact` 时压缩整体不可用且**不回退内置**（刻意如此，见「ReAct、上下文与压缩」）。
 - **`shell`**：**已落地**（`jellyfish-plugin-shell`，commons-exec shade 进插件包）。**已知边界**：Windows 映射未验证；进程树只能尽力杀（`pgrep -P` 不存在或没权限时退化为只杀直接子进程）；分类器可被 `FOO=bar cmd` / `$(...)` / `&&` 链绕过。**明确不做**：每次调用的预览预算覆盖（调大是上下文脚枪、调小不如直接在命令里写 `head -50`）；只读分类对重定向与复合命令不设防（真正的防线是审批框里那条完整命令原文，要收紧应当在白名单那一层）。
 - **实时输出**：三种外壳都有——`-cli` 写 stderr、`-tui` 渲染「运行中的工具轨迹」块、`-server` 推可丢的 `tool_output` SSE 事件。**已知边界**：`-server` 的丢弃计数只在服务端可观测，没有推给客户端（客户端以 `tool_done` 为准）。

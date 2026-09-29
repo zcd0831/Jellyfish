@@ -512,7 +512,7 @@ TUI 状态栏也会追加 `已压缩 N 条（丢弃 M 条）`；压缩期间状�
 
 ## 插件
 
-Jellyfish 通过 PF4J 插件扩展能力。**官方插件已拆分到独立仓库**（`Jellyfish-Plugins`），本仓库只保留插件机制与 SPI：`jellyfish-api`（插件契约）、`jellyfish-infra` 的插件运行时，以及 `jellyfish-script`（跨语言桥接运行时，被桥接插件 shade 进自己的包）。
+Jellyfish 通过 PF4J 插件扩展能力。**官方插件已拆分到独立仓库**（`Jellyfish-Plugins`），本仓库只保留插件机制与 SPI：`jellyfish-api`（插件契约）与 `jellyfish-infra` 的插件运行时（跨语言桥接运行时随桥接插件走独立插件仓库）。
 
 插件是**独立打包的 PF4J jar**，由内核从 `config.json` 的 `plugins.roots` 扫描加载（见「配置」一节），与内核之间**没有编译期依赖**。插件能做什么由内核的扩展点与权限模型决定：
 

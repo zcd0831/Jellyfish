@@ -17,8 +17,6 @@
         <module>jellyfish-tui</module>
         <module>jellyfish-server</module>
         <module>jellyfish-cli</module>
-        <!-- 跨语言插件运行时：语言无关的机制层，被桥接插件各自 shade，不进内核 classpath -->
-        <module>jellyfish-script</module>
     </modules>
 
     <properties>
@@ -36,7 +34,6 @@
         <okhttp.version>4.12.0</okhttp.version>
         <pf4j.version>3.14.1</pf4j.version>
         <jackson.version>2.21.6</jackson.version>
-        <commons-exec.version>1.3</commons-exec.version>
         <slf4j.version>1.7.36</slf4j.version>
         <log4j2.version>2.25.4</log4j2.version>
         <commons-lang3.version>3.18.0</commons-lang3.version>
@@ -125,13 +122,6 @@
                 <groupId>org.pf4j</groupId>
                 <artifactId>pf4j</artifactId>
                 <version>${pf4j.version}</version>
-            </dependency>
-
-            <!-- Apache Commons Exec -->
-            <dependency>
-                <groupId>org.apache.commons</groupId>
-                <artifactId>commons-exec</artifactId>
-                <version>${commons-exec.version}</version>
             </dependency>
 
             <!-- 日志: SLF4J + Log4j2 -->

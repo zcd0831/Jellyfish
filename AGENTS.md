@@ -188,14 +188,12 @@ Maven 多模块；根 `jellyfish`（`zcd:jellyfish:0.0.1-SNAPSHOT`）是 `packag
 ```mermaid
 flowchart LR
     API["jellyfish-api<br>插件 SPI + 扩展点/事件模型 + 统一异常"]
-    SCRIPT["jellyfish-script<br>跨语言插件运行时（语言无关机制层，被桥接插件 shade）"]
     INFRA["jellyfish-infra<br>【基础设施层】"]
     CORE["jellyfish-core<br>【应用层】"]
     TUI["jellyfish-tui<br>TUI 外壳：TamboUI 界面"]
     SERVER["jellyfish-server<br>HTTP 外壳：Undertow REST + SSE"]
     CLI["jellyfish-cli<br>入口 + DI 装配 + 分发"]
 
-    SCRIPT --> API
     CORE --> API
     CORE --> INFRA
     INFRA --> API
@@ -212,7 +210,7 @@ flowchart LR
     CLI --> SERVER
 ```
 
-`jellyfish-script` 是**库而不是插件**：跨语言桥接插件（在独立插件仓库）依赖它，并把该运行时连同 Jackson（**含 `jackson-module-parameter-names`**，api 快照类型靠构造器参数名反序列化）、Apache Commons Exec **shade 进自己的插件包**，因此 `jellyfish-infra` / `jellyfish-core` 的 classpath 上不出现任何跨语言代码，也不产出到 `plugins/` 目录。
+跨语言桥接运行时（原 `jellyfish-script`）也已迁往独立插件仓库：桥接插件依赖它，并把该运行时连同 Jackson（**含 `jackson-module-parameter-names`**，api 快照类型靠构造器参数名反序列化）、Apache Commons Exec **shade 进自己的插件包**，因此本仓库的 classpath 上不出现任何跨语言代码，也不产出到 `plugins/` 目录。
 
 官方插件已拆分到独立仓库，与内核之间没有编译期依赖：由 `PF4JPluginManager` 运行时从 `config.json` 的 `plugins.roots` 加载，因此不在上面的依赖链里。
 
@@ -224,7 +222,6 @@ flowchart LR
 | `jellyfish-tui` | TUI 外壳：TamboUI 界面、视图投影与滚动、TUI 版 `ReActListener` | api、infra、core |
 | `jellyfish-server` | HTTP 外壳：Undertow 上的 REST + SSE、会话按 id 寻址、HTTP 化人工审批 | api、infra、core、undertow-core |
 | `jellyfish-cli` | `main`、参数解析、模式分发、Dagger 装配、shade 可执行 jar | api、infra、core、tui、server |
-| `jellyfish-script` | 跨语言插件运行时（语言无关机制层）：JSON-RPC over Stdio、静态清单、进程生命周期、事件桥接、熔断 | api（provided） |
 
 包结构（只列包与少数枢纽类；其余类直接读代码）：
 
@@ -278,31 +275,6 @@ jellyfish-tui/src/main/java/zcd/jellyfish/tui/
 ├── TranscriptProjector / ChatState / InflightTurn   # 视图投影与状态
 ├── 其余视图 / 输入 / 插件 UI 类
 └── text/                       # DisplayWidth / LineWrapper / MarkdownRenderer / ControlChars
-
-jellyfish-script/src/main/java/zcd/jellyfish/script/
-├── ScriptLanguage.java         # 语言适配 SPI（启动命令 / 探测命令 / 环境变量白名单 / 网关资源清单）
-├── ScriptBridgePlugin.java     # 桥接插件的骨架（探测/扫描/注册/事件/熔断/<语言>命令/关闭）
-├── ScriptBridgeConfig.java     # 桥接插件配置解析（解释器键名与两个默认值由子类传）
-├── ScriptLedger.java           # 脚本台账渲染（语言名只是入参）
-├── ScriptJson.java             # 统一序列化（插件看不到 infra 的 ObjectMapperWrapper，故自带一份）
-├── ScriptManifest.java         # 静态清单的零容忍解析与校验（未知键报错并列出允许键名）
-├── ScriptPluginScanner.java    # 扫描脚本目录，逐脚本问题隔离
-├── ScriptRegistrar.java        # 清单 → 内核注册表里的转发处理器（逐条注册隔离）
-├── ScriptCaller.java           # 脚本调用入口（注册与执行之间的那道缝）
-├── codec/                      # ExtensionCodec / ExtensionCodecs / 11 个扩展点编解码 / Payloads
-├── protocol/                   # ScriptProtocol（帧 + 方法名 + 错误码）/ ScriptRpc（id 配对、超时、
-                                #   迟到响应丢弃、断连唤醒）/ 三类调用失败异常
-├── ScriptGateway.java          # 懒启动、initialize 下发清单摘要、转发、超时隔离（kill_worker）、关闭两段式
-├── CircuitBreakerSettings.java # 熔断参数（失败阈值 / 冷却 / 转永久轮数，0 分别表示关闭该项）
-├── ScriptCircuitBreaker.java   # 单脚本熔断状态机（CLOSED/OPEN/HALF_OPEN/PERMANENT，自动半开）
-├── ScriptCircuitListener.java  # 打开 / 恢复各通知一次（由装配方发成 ConfigWarningEvent）
-├── CircuitBreakingScriptCaller.java
-                                # 装饰 ScriptCaller：打开期间立即抛 -32001 且**不派发**（即不摘注册）
-├── ScriptProcess / ScriptProcessFactory / CommonsExecScriptProcess
-                                # 子进程接口 + 接缝 + Commons Exec 实现（自持 StreamPumper + 行切分流）
-├── GatewaySettings.java        # 下发给网关的超时/自毁/严格校验/事件收窄
-├── GatewayResources.java       # 网关资源按内容摘要抽取到磁盘
-└── （P6 起）EventBridge
 ```
 
 资源位置：`default-agent.json` / `jellyfish.md` 在 infra 资源根；`summary-prompt.md` 在压缩插件资源根；`config.json` / `log4j2*.xml` 在 cli 资源根。
@@ -350,7 +322,6 @@ jellyfish-script/src/main/java/zcd/jellyfish/script/
 - **ASK 由 `ApprovalChannel` 收口，只有明确批准才放行**：无审批者、超时、溢出、通道关闭、中断一律拒绝（fail-closed）；超时来自 `permission.approvalTimeoutSeconds`（缺省 120，每轮现读）。
 - **只读白名单 = `ToolDescriptor.readOnly`（提供方声明，随 handler 落表）∪ `plugins.configurations.<pluginId>.readOnlyTools`（用户只能追加）**，由 `ReadOnlyTools` 现算。
 - **`PermissionVerdict` 里没有 `ALLOW`，因此「插件不能放宽核心策略」是编译期约束**；`ASK` 只可能让调用更严——它最终仍走 `ApprovalChannel`，拿不到批准就降级为拒绝。**需要 `ASK` 的理由**：只有两态时「只读命令免打扰、写类命令要人看一眼」根本写不出来，用户只剩「全放行」与「每次都点批准」两个选择，而后者最终会退化成前者。
-- **跨语言权限协议同口径**：`PermissionCodec` 的结果载荷是 `{"verdict":"ABSTAIN|ASK|DENY","reason":...}`，脚本侧保留布尔与字符串简写（`true`/`"deny"`/`"ask"`）；未知裁定报错，不静默按无异议。
 
 ### ReAct、上下文与压缩
 
@@ -402,7 +373,7 @@ jellyfish-script/src/main/java/zcd/jellyfish/script/
 - **摘要是展示用的事实，不得参与任何逻辑分支**：要判断成没成只能读 `failed()`。一个工具可以把同一件事写两遍（首行文案给模型、摘要给人），两份受众不同、措辞可以各按各的需要写，**互不解析**；`task` 就是这么做的。
 - **信封是唯一格式**：`react.toolOutput` 定义落盘与上下文治理；超限时完整内容落盘，回灌 `{_truncated, _tool, _total_chars, _total_lines, _path, _hint, preview}`。渲染与解析共用 `ToolOutputEnvelope` 的字段常量，禁止两处各写一遍键名。
 - **落盘失败不是回合失败**：`ToolOutputStore.store` 失败只返回 `null` 并 WARN，信封记 `_path: null` 并说明不可恢复；磁盘不可写不该把「一次工具调用」升级成故障。
-- **清理只报告不阻断**：每会话按文件数 / 总字节上限从最旧删起，且永不删刚落盘的那个；写临时文件再原子改名（与 PID 文件同口径）。**因此 `_path` 只在保留窗口内有效**：被删掉的路径会让回查报「文件不存在」，这是「不做引用计数式保留」的直接代价，也是刻意接受的（引用计数会让落盘与会话历史耦合）。
+- **清理只报告不阻断**：每会话按文件数 / 总字节上限从最旧删起，且永不删刚落盘的那个；写临时文件再原子改名。**因此 `_path` 只在保留窗口内有效**：被删掉的路径会让回查报「文件不存在」，这是「不做引用计数式保留」的直接代价，也是刻意接受的（引用计数会让落盘与会话历史耦合）。
 - **不做「输出体量杀命令」**：无界输出（`yes`）由超时兜住；超出 `spillMaxBytes` 的部分继续排空并丢弃，不因为「吐得太多」去杀一个可能正在干正事的进程。
 - **上下文老化排在机械裁剪之前**：`ToolResultAger` 把「保留窗口之外」的信封换成带路径的 stub，只改本次请求、Session 一条不动；`keepRecentMessages` 写 `0` 表示关闭。`ContextWindow` 对 `tool` 消息不做逐字符截断，直接替成 stub。
 - **stub 必须保留预览首行**：工具把结论（退出码 / 终止原因 / cwd）放在正文首行，而**落盘文件里只有正文**——丢了这一行，一条老化后的命令结果就再也回答不了「它成没成」。首行长度上限 400 字符（单行 JSON 那种巨长首行不能把 stub 变回原样），结构化预览不取首行（它的首行没有结论的含义）。
@@ -415,52 +386,13 @@ jellyfish-script/src/main/java/zcd/jellyfish/script/
 - **`ReActTurnImpl` 兼作令牌**：回调**恰好执行一次**（注册时已取消则立即执行）、单个回调抛错不影响其余；回调可能在渲染线程上执行，**因此只能是「发个信号、置个标志」这类快动作**。
 - **`ToolOutputSink` 是内核实现、插件只往里写**：插件因此不知道落盘路径、目录、命名与信封格式。它必须线程安全（stdout / stderr 两条泵线程并发调用）且必须持续接受写入。
 
-### 故障模型与熔断
-
-- **三级故障**：L1 单次调用超时/脚本回报错误、L2 worker 崩溃 → 都只影响该脚本；L3 网关进程挂掉 → 整门语言不可用。
-- **计入熔断的只有「脚本没能答复」**：超时与脚本回报的错误计入；**连接层失败（L3）不计**（网关是懒启动的，一次短暂故障不该让所有脚本再等一个冷却），**`-32001`（熔断自己的拒绝）不计**（否则冷却会被自己的拒绝无限延长）。判据只此一处：`CircuitBreakingScriptCaller.countsAsFailure`。
-- **不摘注册**：熔断期间转发闭包立即抛 `-32001` 且不派发。注册虽已不再限于 `start()` 窗口，但脚本桥接的注册来自脚本目录下的静态清单、由 `ScriptRegistrar` 统一完成，摘掉就等于恢复要另走一条「重建注册」的路径；保留注册才有**自动半开恢复**。打开与恢复各 `emit` 一次 `ConfigWarningEvent`。
-- **状态是既成事实**：`HALF_OPEN` 表示「已放行过一次探测」而非「冷却已到期」；读状态不推进状态，只有 `admit()` / `recordSuccess()` / `recordFailure()` 能转移。半开期不限制并发探测数（限制它要挂住调用线程，代价比多几次失败大）。
-- **超时处置链**：宿主 `invoke` 超时 → 发 `kill_worker`（**kill 的执行方是网关**，它是父进程、持有 PID 表与回收）→ 网关杀 worker 回 `killed` → 宿主抛「已等待 N ms，已隔离该脚本的 worker」。网关自己也有同一个截止时间兜底，两边都动手是正常的，因此 `killWorker` 把「没杀到」当正常返回值。
-- **超时之后有一段「正在换 worker」的窗口**：卡在不响应信号的系统调用里的 worker 只能等强杀，这期间同一脚本的调用仍会失败（已实现行为，非抖动）。熔断冷却应明显长于这个窗口。
-- **迟到响应按 id 丢弃、不做补偿**：`ScriptRpc` 在超时时已摘掉等待位；`ScriptGateway.describe()` 与 `/<lang>` 台账都会给出计数。
-- **worker 必须能被「立刻杀死」，两条都不能靠主线程配合**：① SIGTERM/SIGINT 处理器直接 `os._exit`（只置标志位是无效的——CPython 在处理器返回后会**恢复**被中断的系统调用，卡在用户代码里的脚本永远轮不到事件循环）；② `getppid()==1` 的孤儿检查由 `setitimer(ITIMER_REAL)` + `SIGALRM` 定时驱动，而不是放在事件循环顶部。两者都是实测出来的：以前网关被 `kill -9` 后会留下卡在 `time.sleep` 里的 worker，日志里没有任何一条指向它。
-- **`invokeTimeoutSeconds: 0` 必须显式表示「没有截止时间」**：拿 0 当截止时间会让 `now > deadline` 恒真，每次调用都在派发的下一拍被秒杀，而配置的字面意思是「不超时」。
-
-### 进程生命周期与 PID 文件
-
-- **清单生成器的打印结果必须是内核认得的清单原文**：为比较而补齐缺省值的形状是另一份数据，把那份打印出来会让用户抄回一份内核拒收的清单。
-- **「发一条事件然后立刻查状态」的用例必须让出时间**：事件异步到达且只推给**空闲** worker，而查询动作本身就把 worker 占住——两者相遇时事件被按设计丢掉，且丢掉就是永久丢掉（不排队、不重试）。这不是网关的 bug，是「不排队」的直接代价。
-- **fork 出来的 worker 必须摘下继承的信号唤醒管道**（`signal.set_wakeup_fd(-1)`，在 `_child_setup` 里）：网关的唤醒管道 fd 随即被关掉，不摘的话 worker 每收到一个信号都往已关闭的 fd 写一次，往 stderr 吐四行 `Bad file descriptor` 的 traceback——**每两秒一条**，正好把真正有用的日志淹没。
-- **四层防泄漏**：Java 三段式关闭 + `ShutdownHook`（**不装 `ExecuteWatchdog`**：它按墙上时钟强杀，而网关是设计成可空闲十分钟的长命进程）→ 网关作为父进程杀全部 worker → worker 自己两秒内发现「父进程没了」并退出（Linux 上另有 `prctl(PR_SET_PDEATHSIG)` 让内核代杀；设完必须自查一次 `getppid()`——父进程可能死在「fork 之后、prctl 之前」。**本机是 macOS，这条无法验证，且正确性不依赖它**）→ PID 文件供事后排查。
-- **PID 文件是快照，不是锁**：不参与任何互斥判断，也没有任何代码会根据它做处置。文件里那个 PID 完全可能属于另一个 JVM（上一个 JVM 被 `kill -9`、遗留网关还没自毁、新 JVM 又起来了），未经确认就杀，代价是杀掉无辜进程。
-- **路径由 Java 侧算好下发**（`ScriptPidFiles` → `GatewaySettings.pidFile`），与其它网关设置同理：让每种语言的网关自己取主目录、拼目录，三份实现里必然有两份漂移。
-- **默认与网关资源目录同级**（`~/.jellyfish/pids`）：资源目录名带内容摘要，改一个字节就换目录，而 PID 文件的全部价值就在「被下一次启动看见」。
-- **写的人必须是「PID 属于谁」的权威**：网关自己写 `os.getpid()`；宿主即使能拿到子进程 PID 也不写。
-- **先写临时文件再 `os.replace`**：读到一个只写了一半的数字比没有文件更糟——它会被当成真的。
-- **干净退出时删掉，但仅当文件里仍是自己的 PID**：先走的那一个不许删掉「后来者还活着」这份唯一证据；被 `kill -9` 时它留着（这正是它存在的理由）。
-- **发现陈旧内容一律只报告**：存活判定用 `os.kill(pid, 0)`（不发信号；僵尸也算「在」，排查时这是更保守的方向），结论走 `initialize` 应答 → 宿主 WARN + `/<lang>` 台账。**写不成也不拦住启动**：PID 文件是排查线索而非运行前提，为它拒绝服务会把「没有线索」升级成「脚本全不可用」。
-- **进程侧状态靠推送，没有 `status` 协议方法**：worker 的 PID、在途、排队只有网关知道，而 `/<lang>` 是渲染路径——在那里发阻塞 RPC 会把展示变成可能挂住的路径，还会让「看一眼状态」成为启动网关的理由。因此 `worker_state` 携带 `pid`/`queued`/`inflight`，并由网关循环里的**一次对账**推变化（不是每个改动队列的地方各推一次：漏一处就是永久陈旧的数字）；宿主只记录、并在生命周期状态真正变化时才 INFO。
-
-### 事件桥接
-
-- **两侧共用同一份白名单，且都硬编码在 `jellyfish-script` 里**：可订阅 = `ScriptEventCatalog` 的 15 个通知事件（白名单而非黑名单，内核新增事件不会自动对脚本开放）；可发布 = `ScriptEventFactory` 的 `PluginNotificationEvent` / `ConfigWarningEvent` 两类自由载荷事件。**脚本不能伪造内核语义事件**——那类事件是内核事实的转述，指标与审计按「它是真的」消费。
-- **投影只下发标量**：不下发嵌套快照，否则内核内部结构就成了脚本的对外契约。字段缺失不写成 JSON `null`，集合排序，枚举下发枚举名；载荷必带 `event` / `eventId` / `occurredAt`，无会话上下文时**没有** `sessionId` 键。
-- **事件名的拒绝在清单期**（`ScriptManifest.parseEvents` 查目录白名单）：运行期那条路是静默的（处理器永不执行），报错里带上全部可订阅名字。
-- **推送必须有队列 + 独立线程**：事件由 `EventChannel` 通知线程投递，而写子进程 stdin 会阻塞——钉死通知线程等于让指标、界面、审计一起停摆。丢弃三种情形（网关未运行、队列满、发送失败）都计数。
-- **事件不拉起任何进程**：网关没在运行 / 该脚本 worker 没起过 / worker 正忙，一律丢弃并计数。让一条通知去 fork 解释器，等于把「事件到了」变成一次重操作，而且它在通知线程上。
-- **网关只推给「闲着的」worker**：worker 单线程，卡在一次长调用里时 socket 缓冲区会被事件填满，而网关是单线程事件循环——一次阻塞写就停摆。
-- **发布是端到端单向的**：worker 发不带 id 的 `emit_event` 通知；网关把它转成**带 id 的调用**只为拿到应答里的 `eventId`，据此记住「这条事件是哪个脚本刚发的」并在扇出时跳过它（有界 256 条，按条数过期）。**回声记忆放网关**是因为扇出点在网关，Java 侧过滤只能整条不推。
-- **拒绝发布只记 WARN，不补发告警事件**：告警本身也是可订阅事件，脚本收到告警后再发一次非法事件就是跨进程的环。跨脚本的相互触发也没有全局检测（只消了直系回声），两侧都有计数可见。
-- **推送路径的异常捕获面必须开大**：事件是旁路，一次 `TypeError` 就曾把整个网关带走——把「少收一条通知」升级成「所有脚本不可用」。
-
 ### 命令域
 
 - **`CommandManager` 不注册处理器、不持有会话、不缓存索引**：命令名即路由键，别名与用法来自 `CommandDescriptor`；原文入口与结构化入口共用同一条分发路径，对外壳中立。
 - **系统命令由 `core/command/SystemCommands` 以 owner=core 注册**，`/todo` 由插件注册，`/exit` `/ui` `/thinking` 归外壳；候选查询（`CommandOptionRequest` → `CommandOptions`）是与执行平行的只读路径，不执行命令。
 - **工具同理：`task` 由 `core/subagent/SubAgentTools` 以 owner=core 注册**，必须在插件启动之前完成（否则插件要覆盖它会反过来以 `DUPLICATE_HANDLER` 暴露给用户）；插件显式声明 `override` 即可替换。
 - **命令审计每个出口经 `finish()` 收口，任何结果下恰好广播一次 `CommandExecutedEvent`**（原文、命令名、三态、owner、耗时，不带输出）；发布失败只记 WARN。
-- **「需不需要会话」是命令自己声明的事实，不是外壳的名单**：`CommandDescriptor.sessionRequired` 缺省 **`true`（保守）**，`ScriptManifest` 的同名字段同口径。外壳据此推导：TUI 首页不列它、手敲它当对话；CLI 启动期必建会话所以不受影响；Server 的会话由请求路径提供。因此「`/new` `/resume` `/delete` 在首页不建会话」这类知识归命令，插件新注册的命令也能被同一规则处理。判定入口是 `CommandManager.shouldRunAsCommand(input, hasSession)`。**未注册的名字与语法错误仍返回 `true`**（交给命令域报错）——否则用户打错命令名会被静默当成提示词发给模型。
+- **「需不需要会话」是命令自己声明的事实，不是外壳的名单**：`CommandDescriptor.sessionRequired` 缺省 **`true`（保守）**。外壳据此推导：TUI 首页不列它、手敲它当对话；CLI 启动期必建会话所以不受影响；Server 的会话由请求路径提供。因此「`/new` `/resume` `/delete` 在首页不建会话」这类知识归命令，插件新注册的命令也能被同一规则处理。判定入口是 `CommandManager.shouldRunAsCommand(input, hasSession)`。**未注册的名字与语法错误仍返回 `true`**（交给命令域报错）——否则用户打错命令名会被静默当成提示词发给模型。
 - **`sessionRequired=false` 的命令分两类，别把它们混为一谈**：一类本来就不碰会话（`/help` `/new` `/session` `/resume` `/delete` `/reload`），另一类（`/model` `/agent` `/mode`）是**降级**——有会话时改当前会话，没会话时改「下次建会话的默认值」（`SessionDefaults`），两种情形都不报错、都不建会话。降级那一类必须保证「无会话时也真的能执行完」，否则标志就在说谎。
 
 ### 配置
@@ -548,7 +480,6 @@ jellyfish-script/src/main/java/zcd/jellyfish/script/
 
 三种外壳（`-cli` / `-tui` / `-server`）均已端到端落地，跨语言桥接的 Python / Node 实现与端到端测试随官方插件仓库走；以下是**尚未做**或**明确不做**的部分，不要当成待办之外的现存 API。
 
-- **跨语言**：`prctl(PR_SET_PDEATHSIG)` 已实现，但只在 Linux 生效、本机（macOS）无法验证——**正确性不依赖它**（孤儿检测靠定时器）。`status` 协议方法经决策**不做**，进程侧状态改随 `worker_state` 推送。真实解释器的端到端测试随官方插件仓库走（`mvn -Pscript-it test`），不进本仓库的 `mvn test`。
 - **`-server`**：**已落地**（`jellyfish-server`，Undertow 2.2.39.Final）——REST + SSE 接口面、会话按 id 寻址、一会话一在途回合、HTTP 化人工审批、`GET /health` 都在。**鉴权已落地**（API key：`--api-key` 或环境变量 `JELLYFISH_SERVER_API_KEY`，除 `GET /health` 外全部接口校验）。**明确不做**：自带 Web 前端、TLS、审批的多槽位（全局单槽位是既有内核语义，只如实暴露）。
 - **压缩**：只有插件提供策略才可用；不启用 `jellyfish-compact` 时压缩整体不可用且**不回退内置**（刻意如此，见「ReAct、上下文与压缩」）。
 - **实时输出**：三种外壳都有——`-cli` 写 stderr、`-tui` 渲染「运行中的工具轨迹」块、`-server` 推可丢的 `tool_output` SSE 事件。**已知边界**：`-server` 的丢弃计数只在服务端可观测，没有推给客户端（客户端以 `tool_done` 为准）。

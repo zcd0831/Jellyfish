@@ -626,35 +626,44 @@ class TranscriptProjectorTest {
     }
 
     @Test
-    @DisplayName("首页投影：字标按视口高度垂直居中，不带消息表头")
+    @DisplayName("首页投影：字标与引导提示按视口高度垂直居中，不带消息表头")
     void home_should_centerLogoVertically() {
         int viewportRows = 21;
         List<String> body = texts(TranscriptProjector.home(
                 Collections.<ShellNotice>emptyList(), WIDE, viewportRows));
 
-        // 5 行图案 + 上下各 8 行留白：留白只补在上方，下方那半由视口剩余空间担任
-        int blankAbove = 0;
-        while (blankAbove < body.size() && body.get(blankAbove).isEmpty()) {
-            blankAbove++;
-        }
-        assertEquals(5, body.size() - blankAbove, "图案是 5 行，实际：" + body);
-        assertEquals(viewportRows - 5 - blankAbove, blankAbove, "上下留白必须对称，实际：" + body);
-        assertTrue(body.get(blankAbove).startsWith(" "), "字标必须居中，实际：" + body);
+        int contentRows = 5 + HomeHints.LEADING_BLANK_ROWS + HomeHints.HINTS.length;
+        int blankAbove = blankRowsAbove(body);
+        assertEquals(contentRows, body.size() - blankAbove, "内容行数（图案 + 空行 + 提示），实际：" + body);
+        // 留白只补在上方，下方那半由视口剩余空间担任；可用空间为奇数行时上少下多
+        assertTrue(Math.abs(blankAbove - (viewportRows - contentRows - blankAbove)) <= 1,
+                "上下留白必须对称，实际：" + body);
         assertTrue(body.get(blankAbove).indexOf('\u2588') >= 0, "字标必须画出来，实际：" + body);
+        assertTrue(hasLineContaining(body, HomeHints.HINTS[0]), "引导提示必须在字标下方，实际：" + body);
     }
 
     @Test
-    @DisplayName("首页投影：图案放不下时退回单行文本，仍然居中")
+    @DisplayName("首页投影：图案放不下时退回单行文本，提示照旧")
     void home_should_fallBackToSingleLine_when_narrow() {
         List<String> body = texts(TranscriptProjector.home(
                 Collections.<ShellNotice>emptyList(), 40, 21));
 
-        int blankAbove = 0;
-        while (blankAbove < body.size() && body.get(blankAbove).isEmpty()) {
-            blankAbove++;
-        }
-        assertEquals(1, body.size() - blankAbove, "退回形态只有一行，实际：" + body);
+        int blankAbove = blankRowsAbove(body);
+        assertEquals(HomeSplash.LOGO, body.get(blankAbove).trim(), "实际：" + body);
+        assertFalse(body.get(blankAbove).contains("\u2588"), "40 列放不下 53 列图案：" + body);
+        assertTrue(hasLineContaining(body, HomeHints.HINTS[0]), "提示放得下就该显示，实际：" + body);
+    }
+
+    @Test
+    @DisplayName("首页投影：窄到提示也放不下时只剩字标，不吐半截提示")
+    void home_should_dropHints_when_extremelyNarrow() {
+        List<String> body = texts(TranscriptProjector.home(
+                Collections.<ShellNotice>emptyList(), 30, 21));
+
+        int blankAbove = blankRowsAbove(body);
+        assertEquals(1, body.size() - blankAbove, "只剩一行字标，实际：" + body);
         assertEquals(HomeSplash.LOGO, body.get(blankAbove).trim());
+        assertFalse(hasLineContaining(body, HomeHints.HINTS[0]), "提示放不下就该整行丢弃：" + body);
     }
 
     @Test
@@ -678,6 +687,38 @@ class TranscriptProjectorTest {
         List<String> body = texts(TranscriptProjector.home(Collections.singletonList(notice), WIDE, 21));
 
         assertTrue(body.contains("    \u2717 会话不存在：missing"), "首页上必须能看到错误提示，实际：" + body);
+    }
+
+    /**
+     * 数出顶部连续空行的数量。
+     *
+     * @param body 投影结果
+     * @return 顶部空行数
+     */
+    private static int blankRowsAbove(List<String> body) {
+        int blank = 0;
+        while (blank < body.size() && body.get(blank).isEmpty()) {
+            blank++;
+        }
+        return blank;
+    }
+
+    /**
+     * 判断是否有某一行包含指定片段。
+     * <p>
+     * 不能用 {@code List.contains}：居中后的行带前导空格，那是整行精确匹配。
+     *
+     * @param body     投影结果
+     * @param fragment 片段
+     * @return 命中返回 {@code true}
+     */
+    private static boolean hasLineContaining(List<String> body, String fragment) {
+        for (String line : body) {
+            if (line.contains(fragment)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

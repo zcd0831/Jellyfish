@@ -163,13 +163,14 @@ public final class TranscriptProjector {
     /**
      * 首页投影：没有当前会话时消息区显示的内容。
      * <p>
-     * 只有字标与外壳提示两类：首页上还没有会话，自然没有消息可投影，也没有「进行中回合」。
+     * 三类内容，自上而下：字标（{@link HomeSplash}）、引导提示（{@link HomeHints}）、外壳提示。
+     * 首页上还没有会话，自然没有消息可投影，也没有「进行中回合」。
      * 保留外壳提示是因为首页上仍可能发生「命令报错」这类反馈（例如 {@code /resume} 指向不存在的会话、
      * {@code /delete} 删不掉），它必须在首页上看得见，否则用户会以为按键没生效。
      * <p>
-     * <b>整块内容按视口高度垂直居中</b>：首页的内容天然不足一屏（字标只有几行），
-     * 全部顶在上边框会留下一大片只能算「空」的空白。留白必须在这里补而不是在
-     * {@link HomeSplash} 里补——提示也要参与排版，只按字标居中会在有提示时整体偏上。
+     * <b>整块内容按视口高度垂直居中</b>：首页的内容天然不足一屏，全部顶在上边框会留下一大片
+     * 只能算「空」的空白。留白必须在这里补而不是在 {@link HomeSplash} 里补——
+     * 提示也要参与排版，只按字标居中会在有提示时整体偏上。
      *
      * @param notices      外壳提示列表（按插入顺序，时间戳非递减），可为 {@code null}（当作空）
      * @param width        可用列数，小于 1 时按 1 处理
@@ -179,6 +180,7 @@ public final class TranscriptProjector {
     public static List<VisualLine> home(List<ShellNotice> notices, int width, int viewportRows) {
         List<VisualLine> content = new ArrayList<VisualLine>();
         content.addAll(HomeSplash.lines(width));
+        content.addAll(HomeHints.lines(width));
         if (notices != null) {
             for (ShellNotice notice : notices) {
                 content.addAll(notice(notice, width));

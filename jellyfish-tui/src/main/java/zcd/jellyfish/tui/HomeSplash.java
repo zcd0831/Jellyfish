@@ -1,7 +1,7 @@
 package zcd.jellyfish.tui;
 
 import dev.tamboui.style.Style;
-import zcd.jellyfish.tui.text.DisplayWidth;
+import zcd.jellyfish.tui.text.CenteredLine;
 import zcd.jellyfish.tui.text.StyledSegment;
 import zcd.jellyfish.tui.text.VisualLine;
 
@@ -12,7 +12,7 @@ import java.util.List;
  * 首页标识：没有当前会话时，消息区居中显示的 {@code Jellyfish} 方块字字标。
  * <p>
  * <b>为什么用方块字图案</b>：首页内容不足一屏，一行文本之外全是空白，显得单薄。方块字符
- * （U+2588 等）不属于 East Asian Wide / Fullwidth 区间，{@link DisplayWidth} 按 1 列计，
+ * （U+2588 等）不属于 East Asian Wide / Fullwidth 区间，{@code DisplayWidth} 按 1 列计，
  * 因此居中与裁切的口径与单行文本完全一致；图案本身也没有中英混排的宽度问题——
  * 当初拒绝 ASCII 图案的两条理由，对「纯半角块字符」只剩「按终端宽度自适应」这一条。
  * <p>
@@ -20,9 +20,9 @@ import java.util.List;
  * 所以按列数整块替换：够宽就画图案，不够就退回一行 {@link #LOGO}。退回的那行仍按显示宽度裁切——
  * 一行东西在任何宽度下都读得通。
  * <p>
- * <b>为什么本类不做垂直居中</b>：首页上还有外壳提示（{@link ShellNotice}）要一起排，
- * 垂直留白必须按「字标 + 提示」的合计行数算，那是 {@link TranscriptProjector#home} 的职责。
- * 本类只吐字标自己的行，不吐空白行。
+ * <b>为什么本类不做垂直居中、也不吐提示行</b>：字标下面还有引导提示（{@link HomeHints}）
+ * 与外壳提示（{@link ShellNotice}）要一起排，留白必须按三者的合计行数算，那是
+ * {@link TranscriptProjector#home} 的职责。本类只吐字标自己的行。
  * <p>
  * 纯函数，不读终端、不改状态，可单测。
  *
@@ -174,32 +174,9 @@ public final class HomeSplash {
      * @return 只含一个视觉行的列表
      */
     private static List<VisualLine> singleLine(int available) {
-        String text = truncate(LOGO, available);
-        int padding = Math.max(0, (available - DisplayWidth.of(text)) / 2);
         List<VisualLine> lines = new ArrayList<VisualLine>(1);
-        lines.add(VisualLine.of(new StyledSegment(spaces(padding) + text, LOGO_STYLE)));
+        lines.add(CenteredLine.of(LOGO, LOGO_STYLE, available));
         return lines;
-    }
-
-    /**
-     * 按显示宽度截断文本。
-     *
-     * @param text     原始文本
-     * @param maxWidth 可用列数
-     * @return 不超过 {@code maxWidth} 列的前缀
-     */
-    private static String truncate(String text, int maxWidth) {
-        int used = 0;
-        int end = 0;
-        while (end < text.length()) {
-            int charWidth = DisplayWidth.of(String.valueOf(text.charAt(end)));
-            if (used + charWidth > maxWidth) {
-                break;
-            }
-            used += charWidth;
-            end++;
-        }
-        return text.substring(0, end);
     }
 
     /**

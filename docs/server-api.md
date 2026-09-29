@@ -1,0 +1,88 @@
+# Server 模式：HTTP 接口参考
+
+面向**接入方（Web 前端 / 其他服务）**。起服务的命令、绑定地址与安全默认见 [README 的 Server 模式一节](../README.md#server-模式)；
+这里给全部接口、SSE 事件与鉴权细节。
+
+## 鉴权
+
+| 情形 | 行为 |
+| --- | --- |
+| 没配密钥（缺省） | **不鉴权**：任何能访问该端口的人都能建会话、跑命令、读全部会话正文。对只绑回环的本地场景够用 |
+| 配了密钥 | 除 `GET /health` 外**所有接口**都要 `Authorization: Bearer <密钥>`，否则 `401` |
+
+密钥的来源与优先级、`--host` 的行为见 README。以下几条是设计口径，接入方据此判断哪些做法不该依赖：
+
+- **为什么缺省不鉴权**：本服务默认只绑 `127.0.0.1`，对回环还要先配密钥只会把「本地跑一次」变成一件要读文档才能做的事；
+  而**对外开放是显式动作**，那一步必须同时配密钥——**没配密钥时启动日志会给一条 WARN**（默认日志级别就是 WARN，
+  因此这条一定看得见）——少了它，「以为配了」与「其实没配」在现象上都是「能访问」；配好了则是常规 INFO。
+- **`GET /health` 不校验**：探活必须能在「还没有密钥」的场景下工作（容器编排的 liveness probe、起服务后的第一条 curl）。
+  它只返回 UP / WARN / DOWN 与检查项名字，不含会话正文、路径与密钥。
+- **不接受用 query 参数传密钥**：URL 会进访问日志、浏览器历史与 Referer。而本服务的对话入口是 `POST`，浏览器的
+  `EventSource` 本来就用不了（它只能发 GET），客户端无论如何都要用 `fetch` 流式读取，而它能带请求头。
+- **密钥比较是常时比较**（`MessageDigest.isEqual`）：避免用短路语义把密钥逐字节泄露给能反复试探的调用方。
+  密钥短于 16 位会在启动日志里告警，但不拒绝启动。
+- **命令域与对话域同权**：`POST /sessions/{id}/commands` 能执行 `/reload` 等系统命令，因此密钥泄露等于整机权限泄露。
+
+## 接口
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `POST` | `/sessions` | 建会话（body 可选 `agentId`/`provider`/`model`/`permissionMode`，缺省取 `--agent`/`--model`/`--mode`；body 可省略） |
+| `GET` | `/sessions` | 会话摘要列表（不含消息正文），按最后变更时间倒序 |
+| `GET` | `/sessions/{id}` | 完整会话快照（含消息与用量） |
+| `DELETE` | `/sessions/{id}` | 删除会话（含插件持久化） |
+| `POST` | `/sessions/{id}/chat` | 对话，**恒为 SSE**（`text/event-stream`）；body 为 `{"message":"…"}` |
+| `POST` | `/sessions/{id}/cancel` | 取消该会话在途回合 |
+| `POST` | `/sessions/{id}/commands` | 执行命令（`input` 原文 或 `name`+`args` 结构化，二选一） |
+| `GET` | `/commands` | 结构化命令清单（前端菜单用） |
+| `GET` | `/commands/{name}/options?sessionId=` | 命令候选值 |
+| `GET` | `/approvals` | 当前待审批项（无则 204） |
+| `POST` | `/approvals/{requestId}` | 裁决审批（`{"approved":true\|false}`） |
+| `GET` | `/health` | 健康报告（UP / WARN / DOWN）；**配了 API key 时只有它不校验**，探活无需凭据 |
+
+## SSE 事件
+
+`POST /sessions/{id}/chat` 的事件类型：
+
+| 事件 | 说明 |
+| --- | --- |
+| `turn_start` | 回合开始 |
+| `text` | 助手正文增量 |
+| `thinking` | 思考过程增量 |
+| `tool_start` | 工具调用开始 |
+| `tool_output` | 工具执行期的实时输出（可丢） |
+| `tool_done` | 工具调用结束（权威结果） |
+| `approval_required` | 需要人工审批 |
+| `approval_resolved` | 审批已裁决 |
+| `done` | 终态：回合正常结束 |
+| `cancelled` | 终态：回合被取消 |
+| `error` | 终态：回合出错 |
+
+`done` / `cancelled` / `error` 是终态，写出后流结束；空闲超时写 `: keepalive` 注释帧。
+
+**`tool_output` 是可丢的过程信息**：它是工具**执行期**的实时输出（命令行跑十分钟时能看见动静），载荷
+`{turnId,toolCallId,toolName,chunk}`。服务端按待发条数封顶（超出即丢），客户端应当把它当成进度展示，
+**权威结果始终是 `tool_done` 里的 `output`**。
+
+**`tool_done`** 除了 `output` 还带 `metadata`：工具结果的结构化事实（命令行的 `exitCode` / `terminal`）。
+**前端据字段渲染失败标记，不要去解析 `output` 的首行文案**——那行措辞是给模型看的，改一个词标记就会消失。
+**工具抛异常时也带 `metadata.terminal=FAILED`**（并按条件带 `summary` 说明原因），因此前端不必再读 `success`
+就能画出失败标记。没有元数据时它是空对象 `{}`。
+
+## 会话语义
+
+- **会话一律按路径里的 id 寻址**；`-server` 不支持 `--session`（写了判用法错误退 `2`），
+  `--agent` / `--model` / `--mode` 降级为「新建会话的默认值」。启动期不预建任何会话。
+- **同会话同时只允许一个回合**：第二个请求返回 `409`（避免两个回合把消息历史交错写坏）；要打断就用
+  `POST /sessions/{id}/cancel`，或直接断开 SSE 连接（服务端据此取消回合）。
+- **人工审批走 HTTP**：`askTools` 里的工具会在流里推 `approval_required`，客户端拿 `requestId` 调
+  `POST /approvals/{requestId}`。`ApprovalChannel` 是**全局单槽位**，因此任一时刻最多只有一条待审批项，
+  多会话并发时后面的会排队。
+- **错误体统一为** `{"error":"CODE","message":"…"}`；命令执行的三态在 `kind` 字段里（`UNKNOWN` 同时回 404）；
+  鉴权失败是 `401` + `{"error":"UNAUTHORIZED"}`，并带 `WWW-Authenticate: Bearer realm="jellyfish"`。
+
+## 与另外两种模式的口径差异
+
+同一份内核在三种外壳下行为一致，但有两条与 HTTP 有关的差异值得记住：`-cli` 没有审批界面，`askTools` 一律拒绝；
+`-server` 恰好相反，审批被显式搬到 HTTP 层（见上）。另外 `-server` 是常驻进程，因此**没有** `-cli` 的单次退出码语义，
+一轮对话的结果只能从 SSE 流里读。

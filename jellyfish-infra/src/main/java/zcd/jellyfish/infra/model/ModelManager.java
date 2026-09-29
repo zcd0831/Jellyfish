@@ -188,6 +188,36 @@ public class ModelManager {
     }
 
     /**
+     * 按<b>模型引用</b>解析：{@code provider/model} 或裸 {@code model} 名。
+     * <p>
+     * 给「配置里写的是一个字符串」的调用点用：{@code /model} 命令的参数、agent 定义里的
+     * {@code model} 字段都是这个形状。它只回答「这个名字解析成了哪个 provider 与 model」，
+     * 不关心调用方接下来拿它干什么。
+     * <p>
+     * <b>裸 model 名取第一个提供它的 provider</b>：与 {@link #resolveDefault()} 只给 model 时的
+     * 规则一致。两份规则合在一处，否则「/model gpt-4o」与「defaultModel: gpt-4o」会选到不同的 provider。
+     * <p>
+     * <b>斜杠必须在中间才算分隔符</b>：{@code foo/} 与 {@code /bar} 整串按裸 model 名处理。
+     * 若把它们当成「provider 名为空」，用户会得到一条对他毫无指导价值的报错；
+     * 而按模型名找不到时，报的是「没有任何 provider 提供该模型」，并把原文回给用户。
+     *
+     * @param reference 模型引用，不可为空白
+     * @return 解析结果
+     * @throws JellyfishException 引用为空白、或解析不到时抛出
+     */
+    public ResolvedModel resolveReference(String reference) {
+        if (StringUtils.isBlank(reference)) {
+            throw new JellyfishException("model reference must not be blank");
+        }
+        String trimmed = reference.trim();
+        int slash = trimmed.indexOf('/');
+        if (slash > 0 && slash < trimmed.length() - 1) {
+            return resolve(trimmed.substring(0, slash), trimmed.substring(slash + 1));
+        }
+        return resolveByModelName(trimmed);
+    }
+
+    /**
      * 按配置的默认 provider / model 解析，供会话初始化「当前模型」时调用。
      *
      * @return 解析结果

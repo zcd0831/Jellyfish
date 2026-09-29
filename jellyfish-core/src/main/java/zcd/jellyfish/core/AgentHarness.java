@@ -6,6 +6,7 @@ import org.slf4j.LoggerFactory;
 import zcd.jellyfish.core.command.SystemCommands;
 import zcd.jellyfish.core.compact.ConversationCompactor;
 import zcd.jellyfish.core.input.InputDirectives;
+import zcd.jellyfish.core.subagent.SubAgentTools;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.config.RuntimeConfig;
 import zcd.jellyfish.infra.event.EventChannel;
@@ -73,6 +74,9 @@ public class AgentHarness {
     /** 内核系统命令注册器：{@code /help} 等。 */
     private final SystemCommands systemCommands;
 
+    /** 子代理能力注册器：{@code task} 工具与可委派类型清单。 */
+    private final SubAgentTools subAgentTools;
+
     /** 会话压缩器：{@code /compact} 的执行体，关闭时要先停掉它的线程池。 */
     private final ConversationCompactor conversationCompactor;
 
@@ -102,6 +106,7 @@ public class AgentHarness {
      * @param pluginManager        插件运行时门面
      * @param reActLooper          ReAct 循环器
      * @param systemCommands       内核系统命令注册器
+     * @param subAgentTools        子代理能力注册器
      * @param sessionManager       会话域服务
      * @param conversationCompactor 会话压缩器
      * @param inputDirectives      输入指令服务
@@ -113,9 +118,9 @@ public class AgentHarness {
     public AgentHarness(RuntimeConfig runtimeConfig, EventChannel eventChannel, ModelManager modelManager,
                         AgentManager agentManager, PluginRuntimeConfig pluginRuntimeConfig,
                         PF4JPluginManager pluginManager, ReActLooper reActLooper, SystemCommands systemCommands,
-                        SessionManager sessionManager, ConversationCompactor conversationCompactor,
-                        InputDirectives inputDirectives, MetricsSubscriber metricsSubscriber,
-                        MetricsRegistry metricsRegistry,
+                        SubAgentTools subAgentTools, SessionManager sessionManager,
+                        ConversationCompactor conversationCompactor, InputDirectives inputDirectives,
+                        MetricsSubscriber metricsSubscriber, MetricsRegistry metricsRegistry,
                         HealthCheck healthCheck) {
         this.runtimeConfig = runtimeConfig;
         this.eventChannel = eventChannel;
@@ -125,6 +130,7 @@ public class AgentHarness {
         this.pluginManager = pluginManager;
         this.reActLooper = reActLooper;
         this.systemCommands = systemCommands;
+        this.subAgentTools = subAgentTools;
         this.sessionManager = sessionManager;
         this.conversationCompactor = conversationCompactor;
         this.inputDirectives = inputDirectives;
@@ -148,6 +154,8 @@ public class AgentHarness {
         // 必须在 runtimeConfig.refresh() 之前：配置加载期发出的告警要能被计数
         metricsSubscriber.start();
         systemCommands.register();
+        // 与系统命令同理：内核先注册，插件要覆盖 {@code task} 必须显式声明 override
+        subAgentTools.register();
         runtimeConfig.refresh();
         modelManager.refresh(false);
         agentManager.refresh(false);
@@ -197,9 +205,14 @@ public class AgentHarness {
                 systemCommands.close();
             } finally {
                 try {
-                    pluginManager.close();
+                    // 内核自己的注册与命令同类：必须在插件停止之前回收，否则会留下无人认领的注册
+                    subAgentTools.close();
                 } finally {
-                    eventChannel.close();
+                    try {
+                        pluginManager.close();
+                    } finally {
+                        eventChannel.close();
+                    }
                 }
             }
         }

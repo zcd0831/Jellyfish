@@ -46,6 +46,26 @@ class SessionCreatedEventTest {
     }
 
     @Test
+    void getParentSessionId_should_return_null_when_root_session() {
+        // When
+        SessionCreatedEvent event = new SessionCreatedEvent("coder", "session-1");
+
+        // Then
+        assertNull(event.getParentSessionId());
+    }
+
+    @Test
+    void getParentSessionId_should_return_parent_when_sub_agent_session() {
+        // When
+        SessionCreatedEvent event = new SessionCreatedEvent("scout", "session-2", "session-1");
+
+        // Then
+        assertEquals("session-1", event.getParentSessionId());
+        assertEquals("scout", event.getAgentId());
+        assertEquals("session-2", event.getSessionId());
+    }
+
+    @Test
     void belongsToSession_should_return_false_when_other_session() {
         // Given
         SessionCreatedEvent event = new SessionCreatedEvent("coder", "session-1");

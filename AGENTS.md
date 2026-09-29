@@ -47,6 +47,7 @@ flowchart TB
                 ModelMgr["ModelManager<br>Provider/Model 注册与路由"]
                 LLMClient["LLMClient<br>统一 LLM 调用抽象"]
                 PermMgr["PermissionManager<br>核心策略 → PLAN 白名单 → 插件拦截"]
+                SubAgentMgr["SubAgentLauncher + task 工具<br>子代理委派 + 嵌套回合"]
             end
 
             subgraph "扩展层<br>内核与插件唯一边界；底座 infra/registry"
@@ -99,9 +100,15 @@ flowchart TB
     %% ===================== 内核内部：接口 + 构造器注入（细实线） =====================
     ReAct -->|"消息 / 上下文 / 当前态 / token"| SessionMgr
     ReAct ==>|"beginTurn / flush：回合级落盘（不可丢）"| SessionMgr
-    ReAct -->|"getCurrentLlmClient"| ModelMgr
+    ReAct -->|"解析本次模型（SessionModelResolver）"| ModelMgr
     ReAct -->|"调用 LLM"| LLMClient
     ReAct -->|"同步权限检查"| PermMgr
+    ReAct ==>|"task 工具 → 委派（内联嵌套回合）"| SubAgentMgr
+    SubAgentMgr ==>|"runNested：同线程跑完整个回合"| ReAct
+    SubAgentMgr ==>|"owner=core 注册 task 工具 + 类型清单"| ExtReg
+    SubAgentMgr -->|"瞬时会话 / 用量归集到父会话"| SessionMgr
+    SubAgentMgr -->|"工具清单过滤判据（与执行期同一份）"| PermMgr
+    SubAgentMgr -->|"取子代理的偏好模型"| ModelMgr
     SessionMgr -->|"按 currentAgentId 取定义"| AgentMgr
     ModelMgr -->|"管理/创建/路由"| LLMClient
     LLMClient -->|"HTTP/API"| LLM
@@ -165,7 +172,7 @@ flowchart TB
     classDef ext fill:#FAFAFA,stroke:#AAA,color:#444
 
     class ReAct app
-    class SessionMgr,AgentMgr,ModelMgr,LLMClient,PermMgr,CommandMgr,InputMgr kernel
+    class SessionMgr,AgentMgr,ModelMgr,LLMClient,PermMgr,SubAgentMgr,CommandMgr,InputMgr kernel
     class Registry,ExtReg,EventCh,PluginMgr,PluginCtx extlayer
     class Runtime,Reloader,Metrics support
     class LLM,Plugins,Jelly,Agents ext
@@ -217,7 +224,7 @@ flowchart LR
 | --- | --- | --- |
 | `jellyfish-api` | 插件作者唯一的稳定契约：SPI、扩展点/事件模型、统一异常 | 无 |
 | `jellyfish-infra` | 基础设施层全部实现（会话 / agent / 模型 / 权限 / 插件运行时 / 命令域 / UI / 指标 / 配置） | api |
-| `jellyfish-core` | 应用层：ReAct 循环与 `AgentHarness` 门面、提示词组装、压缩机制、系统命令 | api、infra |
+| `jellyfish-core` | 应用层：ReAct 循环与 `AgentHarness` 门面、提示词组装、压缩机制、系统命令、子代理委派 | api、infra |
 | `jellyfish-tui` | TUI 外壳：TamboUI 界面、视图投影与滚动、TUI 版 `ReActListener` | api、infra、core |
 | `jellyfish-server` | HTTP 外壳：Undertow 上的 REST + SSE、会话按 id 寻址、HTTP 化人工审批 | api、infra、core、undertow-core |
 | `jellyfish-cli` | `main`、参数解析、模式分发、Dagger 装配、shade 可执行 jar | api、infra、core、tui、server |
@@ -249,10 +256,10 @@ jellyfish-infra/src/main/java/zcd/jellyfish/infra/
 ├── session/                    # 会话运行态 Session / SessionManager / SessionDefaults / SessionSnapshots
 ├── agent/                      # Agent 定义注册表 AgentManager / AgentRegistry
 ├── command/                    # 命令域服务 CommandManager
-├── model/                      # 模型注册与路由 ModelManager
+├── model/                      # 模型注册与路由 ModelManager / SessionModelResolver（会话 → 模型的唯一解释器）
 ├── llm/                        # LLM 调用抽象与厂商实现
 ├── plugin/                     # 插件运行时 PF4JPluginManager / PluginRuntimeConfig / JellyfishPluginAdapter
-├── permission/                 # 权限判定 PermissionManager / ApprovalChannel
+├── permission/                 # 权限判定 PermissionManager / ApprovalChannel / PermissionPolicy / ReadOnlyTools
 ├── ui/                         # UI 贡献门面 UiContributions
 ├── metrics/                    # 指标与健康检查 MetricsRegistry / MetricsSubscriber / HealthCheck
 ├── config/                     # 配置加载与热更新 RuntimeConfig / ConfigReloader
@@ -261,12 +268,15 @@ jellyfish-infra/src/main/java/zcd/jellyfish/infra/
 
 jellyfish-core/src/main/java/zcd/jellyfish/core/
 ├── AgentHarness.java           # 组装门面（chat 是唯一智能入口）
-├── ReActLooper.java            # 思考 → 行动 → 观察
+├── ReActLooper.java            # 思考 → 行动 → 观察（顶层异步 + runNested 内联）
 ├── ReActTurn / ReActListener / ReActResult
-├── prompt/                     # PromptAssembler / ContextWindow / ToolCatalog / TokenEstimator / ToolResultAger
+├── RunScope / RunScopes        # 一次顶层回合的委派作用域：层数与派生预算（ThreadLocal）
+├── prompt/                     # PromptAssembler / ContextWindow / ToolCatalog / ToolFilter / TokenEstimator / ToolResultAger
 ├── compact/                    # ConversationCompactor / CompactionPlan / CompactionHealthIndicator
 ├── tool/                       # ToolExecutor（权限→路由→截断的唯一执行点）/ CancellationTokenSource
 ├── input/                      # InputDirectives / InputDirectiveRun / InputDirectiveCall / InputReferenceCompletion
+├── subagent/                   # 子代理：SubAgentLauncher / TaskTool / SubAgentTools（owner=core）
+│                               #   + SubAgentCall / SubAgentOutcome / SubAgentStatus
 └── command/                    # SystemCommands（owner=core）
 
 jellyfish-cli/src/main/java/zcd/jellyfish/cli/
@@ -359,6 +369,8 @@ jellyfish-script/src/main/java/zcd/jellyfish/script/
 - **恢复的失败语义相反**：`SessionRestoreRequest` 单个插件读不出只告警跳过；恢复必须排在 `pluginManager.bootstrap()` 之后。
 - **延迟落盘的失败语义与即时落盘相反**：`flush` 失败只记 WARN 并**保留脏标记**等下次重试（此刻回合已收敛、回答已展示，升级成回合失败既补不回来也无从补救）。`AgentHarness.shutdown` 必须在 `pluginManager.close()` **之前**调 `flushAll()`——落盘经 `ExtensionRegistry` 派发给插件，插件一停就没人接了；没有这一步，「回合级落盘」会把「Ctrl+C 丢当前回合」变成新行为。
 - **只有消息追加被挂起**：命令、`recordUsage`、`applyCompaction`、`close` 仍即时落盘。因此跑在独立线程上的自动压缩天然不受回合作用域影响——它本来就是一个独立的落盘单元。
+- **瞬时（子代理）会话是另一类不落盘的会话**：由 `createEphemeral` 创建，靠 `parentSessionId` 非空识别；它们同样在会话表里（能追消息、发事件、被回查），但不进 `all()`、不落盘，因此不会给会话目录留下一批谁也认领不了的文件。恢复路径不涉及它们（从未落盘就不会被恢复）。
+- **`recordUsage` 有两个重载，别用错**：`LlmUsage` 那个是「一次调用」，恒定只加 1 次；子代理回合的累计用量走 `SessionUsage` 那个，**把调用次数一并带过来**。子代理的用量归集到父会话（那些 token 是真花掉的），归集失败只记 WARN。
 - **跨边界载荷必须是 api 侧快照值类型**（`SessionSnapshot` 及嵌套），映射归 `infra/session/SessionSnapshots`，并用往返测试守字段。**快照类型必须恰好只有一个可见构造器**：新增字段用静态工厂，不要加兼容构造器。
 - **`-parameters` 是全局编译约定，不许去掉**：插件侧 Jackson 靠构造器参数名反序列化，丢了会「文件写得出、重启后读不回」。
 
@@ -385,6 +397,28 @@ jellyfish-script/src/main/java/zcd/jellyfish/script/
 - **摘要指令是插件自带资源** `summary-prompt.md`，用插件自己的类加载器启动期读完；占位符 `{maxSummaryChars}` 由内核替换，缺占位符只告警不失败。
 - **插件上下文只走 system prompt**：`PromptContributionRequest` 按 order 用 `\n\n` 拼接，**不追加进 messages**；单个处理器抛错只记 WARN 跳过。
 
+### 子代理（嵌套回合）
+
+- **它是内核能力，不是插件**：子代理改的是「循环可以调用自己」——**循环的结构**，而不是增加一片叶子能力；且 `task` 的类型清单要由 `AgentManager` 现算，插件拿不到。形态与系统命令一致：内核以 `owner=core` 注册（`core/subagent/SubAgentTools`），插件要替换必须显式声明 `override`。
+- **开关关掉时连工具一起摘掉，因此它必须自己听 `ConfigReloadedEvent`**：只把清单变空是不够的——模型依然看得到 `task`，却没有一个合法的 `subagent_type` 可传，于是每个会话白调一次。而注册只能在启动窗口内发生，不听重载事件的话这个开关就得等下次重启才生效（这条结构上是硬约束：`ConfigReloader` 在 infra，而 `SubAgentTools` 在 core，**infra 不可能反向知道它**）。重算是 best-effort（事件可丢），丢了的表现是外观陈旧而**不是放行**——委派本身仍会被 `SubAgentLauncher` 拒掉。
+- **清单贡献里仍要再读一次开关**：重算与「组装本轮请求」之间有一段窗口（`/reload` 刚改完配置、重算事件还在队列里），那时若只靠注册状态，清单会多宣传一个已关掉的能力。
+- **轨迹行上的标识走 `ToolMetadata.KEY_SUMMARY`，不是靠界面认工具名**：`task` 填一句 `子代理 scout · 3 轮 · 123456 tok`，TUI 与 CLI 各自接在已有格式后面（两边都只做「有没有摘要」这一个判断）。摘要里**不带状态词**（取消 / 失败 / 未开始都已经有后缀在说），轮数与 token **都只在跑过的情况下写**：`FAILED` / `REJECTED` 按构造就是 0，而前者可能已经跑了几轮才抛错，与其写不准的数字不如不说。token 写**精确值不缩写**：状态栏那份 1000 进位缩写另一个模块里、服务于每帧重画的版面，为这一个小输出把它抽到共享位置代价大于收益，而精确值另有一个好处——能与 `/usage` 里的数字直接对上。
+- **`TRUNCATED` 是唯一需要在摘要里额外说一句的状态**：它确实跑完了、只是没收敛，因此 `failed()` 为假、界面上没有任何警示后缀可用——「结论不完整」只能写在这里。
+- **嵌套回合内联在调用线程上跑，绝不进 `react` 池**：调用它的工具调用此刻正占着一条 `react` 线程，把嵌套任务再排回同一个池里，8 条线程就能被并发父回合占满并互相等死。这条是本设计最不能碰的一条——改回提交线程池会让测试**挂死**（不是断言失败），因此嵌套用例带 `@Timeout` 兜底。
+- **子代理与主会话除了传入的任务之外相互隔离**（fresh-only，**没有 fork，且不做**）：它看不到父会话的消息、工具选择与模型；拿到的只有自己那份 `AgentDefinition`（提示词 / 权限 / 偏好模型）、项目约定（`AGENTS.md`）与这段任务原文。代价是「挑战我刚才的想法」这类对话条件型用法只能靠调用方把背景写进 `task.prompt`。
+- **子会话是真实会话但不落盘、不进会话列表**：`SessionManager.createEphemeral` 建的是带 `parentSessionId` 的会话，靠那个字段判定为瞬时（一个字段两用，写在注释里）；生命周期事件照发并携带 `parentSessionId`（不发事件会让「子代理在跑」在指标与界面里彻底隐形），收尾走 `close()`（不是 `delete()`）。
+- **准入全部排在副作用之前**：开关、任务非空、回合作用域、层数、预算、类型存在且 `delegatable`、非委派给自己、模型可解析——一个被拒绝的委派不建会话、不发事件。`REJECTED`（换个参数就能修）与 `FAILED`（已经跑起来但出错）分开，否则模型会对「类型写错了」也去重试。
+- **递归两道上限 + 一道授权**：`subAgent.maxDepth` 挡「一条链多深」，`subAgent.maxSpawnsPerTurn` 挡「一层扇出多少」（两者正交，只有其中一个都不够）；「子代理能不能再委派」由它自己的 `allowedTools` 是否含 `task`（未声明 = 不限制）叠加在深度上。
+- **作用域是一回合一账，不是一次委派一账**：`RunScope`（深度 + 已派生数）由 `ReActLooper.execute` 在顶层回合开闭、`runNested` 进出；react 池线程会被复用，因此**必须**在 `finally` 里清掉。它放在 `core` 而不是 `core/subagent`：依赖方向必须是 `core.subagent → core`。
+- **子代理的工具清单按它自己的 agent 配置收窄**（`ToolFilter`），否则它会看到 `write_file`、调用、被拒，白跑一轮。**过滤只随嵌套回合传递，主会话路径传 `ToolFilter.none()`**。
+- **清单过滤的判据不重写，而是复用执行期判定**：`PermissionManager.usableTools(agentId, mode)` 内部就是 `!evaluatePolicy(...).isDenied()`。两处各写一遍「显式拒绝 > 需审批 > 允许收窄 > PLAN 白名单」，迟早会在某个边界上分叉。两个推论：**`ASK` 不算被拒**（那个工具可用，只是要点一下批准），**插件拦截不参与过滤**（它要看参数、可能问人，是「本次调用」才能回答的问题）。
+- **模型解析三级回落收在一处**：会话显式 → `agent.model` → 全局默认，由 `SessionModelResolver` 实现；`ReActLooper` 与 `ConversationCompactor` 共用它，因为压缩必须按同一个模型的窗口裁剪、花同一个模型的额度。**子代理不继承父会话的模型**（子会话的 provider / model 留空，于是自然落到第 2 级）。
+- **用量归集到父会话且在 `finally` 里只记日志**：子会话马上被关掉，那些 token 是真花掉的；但 `finally` 里的异常会顶掉已经跑出来的结果，账目不准是小事。`SessionUsage.plus(SessionUsage)` 一并带上调用次数——压成一次会让「这一轮花了多少来回」失真。
+- **进度只转「工具调用行」，不转正文增量**：写进 `ToolCallOutput` 旁路（`ToolOutputSink`），子代理刷 20 段文本会让界面变成两份交织的流；正文在结束时整段回灌。
+- **`task` 的类型清单走提示词贡献而不是工具 enum**：`ToolDescriptor` 在注册那刻就固定了，而可委派 agent 会随 `/reload` 变；贡献每轮现算，天然跟随配置。没有可委派类型时贡献为空。
+- **回灌文本首行写结论**（`[子代理 X 已完成 · N 轮]` / `[子代理未开始]`），失败与拒绝还填 `ToolMetadata.KEY_TERMINAL` 让界面渲染警示标记——那个键的约定是「缺省 = 正常跑完」，取值本身是工具自己的字符串。
+- **子代理的结果正文不进外壳**：TUI 的完成轨迹只有一行（`⎿ task · 子代理 scout · 3 轮 · 123456 tok`，CLI 是 `← task 完成（26 字符） · 子代理 scout · 3 轮 · 123456 tok`），报告正文只在回灌给模型的那条 tool 消息里。这是对所有工具的一贯设计（正文往往是一整篇报告，塞进消息区会把对话刷爆），摘要键正好补上「屏幕上少了正文之后，我刚才能看到的东西还在不在」。
+
 ### 工具结果截断与卸载
 
 - **工具输出只有一个硬截断点**：`ReActLooper.executeTool` 经 `ToolOutputLimiter.limit` 把「工具原始输出对象」变成回灌文本，回灌给模型、写入会话、通知外壳用的是同一份文本。**两个触发点（事后截断、捕获期溢出）共用同一份预览切分与信封实现**，参数各自算、格式只有一套。
@@ -394,7 +428,9 @@ jellyfish-script/src/main/java/zcd/jellyfish/script/
 - **落盘上限 `spillMaxBytes`（缺省 32 MiB，运行期钳制不超过 `maxBytes`）**：触及上限时写入截到上限为止（不是整个放弃——那会留下空文件而信封却说「文件里有前一段」），并置信封字段 `_partial`，否则「完整内容在 path」就是假话。
 - **实时输出是旁路**：`ReActListener.onToolCallOutput` 由工具的泵线程触发（**不在 react 线程上、可能被并发调用**），可丢、抛错被隔离；**它绝不能阻塞**，否则子进程会因管道写满而停住。它只用于过程展示，落会话与回灌模型的仍是同一份权威文本。**三条显示通道同口径，但缓冲策略各按自己的消费者定**：TUI 保留末 20 行、CLI 直接写 stderr、Server 按待发条数封顶（它是唯一必须封顶的——生产者是子进程、消费者可能是慢连接，无界队列会跟着涨）。
 - **区分文本与结构化，绝不按字符切**：字符串按行截断；脚本工具返回的 `Map`/`List` 先序列化再按 JSON 子树截断（数组取前缀、对象取前缀字段），回灌的一定是一段合法 JSON 信封。**不要在任何地方对可能是 JSON 的输出做 `substring`**。
-- **工具结果有结构化元数据，界面与审计读字段、模型读文本**：约定只有两个键（`ToolMetadata` 的 `exitCode` / `terminal`，判据 `failed()` 也只有一个实现——「退出码非零或非正常终止」），其余键工具自定、内核只透传不解释。它**不进 `LlmMessage`**（那是要发给厂商的请求模型），而是随工具结果消息落进会话快照（`SessionMessageSnapshot.metadata`）并给外壳（`ReActListener.onToolCallCompleted` 的第五个参数 → TUI 轨迹 / CLI 结束行 / SSE `tool_done`）。**界面绝不去解析回灌文本的首行文案**：那行措辞是给模型看的，靠它渲染标记等于把展示绑死在文案上。落进会话是刻意的——不落的话，重启后历史里的失败标记会消失。
+- **工具结果有结构化元数据，界面与审计读字段、模型读文本**：约定只有三个键（`ToolMetadata` 的 `exitCode` / `terminal` 回答「成没成」，判据 `failed()` 也只有一个实现——「退出码非零或非正常终止」；`summary` 回答「刚才那一行到底是什么事」），其余键工具自定、内核只透传不解释。它**不进 `LlmMessage`**（那是要发给厂商的请求模型），而是随工具结果消息落进会话快照（`SessionMessageSnapshot.metadata`）并给外壳（`ReActListener.onToolCallCompleted` 的第五个参数 → TUI 轨迹 / CLI 结束行 / SSE `tool_done`）。**界面绝不去解析回灌文本的首行文案**：那行措辞是给模型看的，靠它渲染标记等于把展示绑死在文案上。落进会话是刻意的——不落的话，重启后历史里的失败标记与摘要会消失。
+- **`summary` 为什么是「工具自己拼好的一句话」而不是一组字段**：外壳对具体工具一无所知是这套架构的前提（与「外壳不维护命令名单」同一条纪律）。拆成字段就意味着外壳得认识每个字段的含义，每多支持一个工具就多一处特例；约定一个字符串之后，外壳只做「有就接在工具名后面」这一个判断。因此**外壳永远不该按工具名分支**，而是按「有没有摘要」。
+- **摘要是展示用的事实，不得参与任何逻辑分支**：要判断成没成只能读 `failed()`。一个工具可以把同一件事写两遍（首行文案给模型、摘要给人），两份受众不同、措辞可以各按各的需要写，**互不解析**；`task` 就是这么做的。
 - **信封是唯一格式**：`react.toolOutput` 定义落盘与上下文治理；超限时完整内容落盘，回灌 `{_truncated, _tool, _total_chars, _total_lines, _path, _hint, preview}`。渲染与解析共用 `ToolOutputEnvelope` 的字段常量，禁止两处各写一遍键名。
 - **落盘失败不是回合失败**：`ToolOutputStore.store` 失败只返回 `null` 并 WARN，信封记 `_path: null` 并说明不可恢复；磁盘不可写不该把「一次工具调用」升级成故障。
 - **清理只报告不阻断**：每会话按文件数 / 总字节上限从最旧删起，且永不删刚落盘的那个；写临时文件再原子改名（与 PID 文件同口径）。**因此 `_path` 只在保留窗口内有效**：被删掉的路径会让回查报「文件不存在」，这是「不做引用计数式保留」的直接代价，也是刻意接受的（引用计数会让落盘与会话历史耦合）。
@@ -471,6 +507,7 @@ jellyfish-script/src/main/java/zcd/jellyfish/script/
 
 - **`CommandManager` 不注册处理器、不持有会话、不缓存索引**：命令名即路由键，别名与用法来自 `CommandDescriptor`；原文入口与结构化入口共用同一条分发路径，对外壳中立。
 - **系统命令由 `core/command/SystemCommands` 以 owner=core 注册**，`/todo` 由插件注册，`/exit` `/ui` `/thinking` 归外壳；候选查询（`CommandOptionRequest` → `CommandOptions`）是与执行平行的只读路径，不执行命令。
+- **工具同理：`task` 由 `core/subagent/SubAgentTools` 以 owner=core 注册**，必须在插件启动之前完成（否则插件要覆盖它会反过来以 `DUPLICATE_HANDLER` 暴露给用户）；插件显式声明 `override` 即可替换。
 - **命令审计每个出口经 `finish()` 收口，任何结果下恰好广播一次 `CommandExecutedEvent`**（原文、命令名、三态、owner、耗时，不带输出）；发布失败只记 WARN。
 - **「需不需要会话」是命令自己声明的事实，不是外壳的名单**：`CommandDescriptor.sessionRequired` 缺省 **`true`（保守）**，`ScriptManifest` 的同名字段同口径。外壳据此推导：TUI 首页不列它、手敲它当对话；CLI 启动期必建会话所以不受影响；Server 的会话由请求路径提供。因此「`/new` `/resume` `/delete` 在首页不建会话」这类知识归命令，插件新注册的命令也能被同一规则处理。判定入口是 `CommandManager.shouldRunAsCommand(input, hasSession)`。**未注册的名字与语法错误仍返回 `true`**（交给命令域报错）——否则用户打错命令名会被静默当成提示词发给模型。
 - **`sessionRequired=false` 的命令分两类，别把它们混为一谈**：一类本来就不碰会话（`/help` `/new` `/session` `/resume` `/delete` `/reload`），另一类（`/model` `/agent` `/mode`）是**降级**——有会话时改当前会话，没会话时改「下次建会话的默认值」（`SessionDefaults`），两种情形都不报错、都不建会话。降级那一类必须保证「无会话时也真的能执行完」，否则标志就在说谎。
@@ -479,10 +516,12 @@ jellyfish-script/src/main/java/zcd/jellyfish/script/
 
 - **配置加载**：`AppConfig` 绑定 `classpath:config.json`，只有它声明各配置文件位置与插件扫描目录；默认全局 `~/jellyfish/`、项目 `./jellyfish/`。`SettingsBinder` 做 `${ENV_VAR}` 插值（`\${VAR}` 转义）。
 - **插件扫描目录在 `config.json` 的 `plugins.roots`**，不参与双源合并；展开行首 `~`、丢弃空白条目，空列表回退默认目录 `plugins`。
-- **四份配置对四类配置类**：config→`AppConfig`、models→`ModelSettings`、agents→`AgentSettings`、jellyfish→`JellyfishSettings`（plugins / react / permission 三段）；`classpath:default-agent.json` 是内置只读定义，不走双源。
+- **四份配置对四类配置类**：config→`AppConfig`、models→`ModelSettings`、agents→`AgentSettings`、jellyfish→`JellyfishSettings`（plugins / react / permission / subAgent 四段）；`classpath:default-agent.json` 是内置只读定义，不走双源。
 - **资源跟着读者走**：`default-agent.json` / `{agentId}.md` 归 infra，摘要指令归压缩插件，`config.json` / `log4j2*.xml` 归 cli——否则换 composition root 时会以「内置 agent 缺失」启动失败而单测全绿。
 - **agent 提示词来自同目录 `{agentId}.md`**，JSON 里的 `systemPrompt` 被忽略；默认 agent 恒为内置（启动与新建会话都绑它，只能 `/agent` 切换）。非法 `agentId` 整条丢弃并告警，用户与内置同名时保留内置。
-- **global/project 合并**：同名 provider / agent / 插件配置段以 project 整对象覆盖；列表段项目级已声明则整体替换（写 `[]` 即清空）。
+- **`AgentDefinition` 上与本功能相关的两个字段都有单一含义**：`delegatable`（缺省 `false`）只回答「能不能被 `task` 当作目标」，**不**回答「它自己能不能再往下委派」（后者由深度上限 + 它自己的 `allowedTools` 是否含 `task` 决定）；`model` 是模型引用的最低一级回落（会话显式 → `agent.model` → 全局默认），写法与 `/model` 参数一致（`provider/model` 或裸 model 名），由 `ModelManager.resolveReference` 统一解析——`/model` 命令与它共用同一份。
+- **global/project 合并**：同名 provider / agent / 插件配置段以 project 整对象覆盖；列表段项目级已声明则整体替换（写 `[]` 即清空）。`subAgent` 段同口径——四个参数互相牵制（关掉开关时其余三项无意义），「一半来自全局、一半来自项目」会让「这个项目到底允许多深的委派」无法从任何单份文件看出来。
+- **`jellyfish.json` 的 `subAgent` 段只有四个量**：`enabled`（缺省 `true`）、`maxDepth`（缺省 `2`，`0` 表示禁止委派，**允许显式 0**）、`maxSpawnsPerTurn`（缺省 `32`）、`maxRounds`（缺省 `8`）。`maxRounds` **不**跟随 `react.maxRounds`：子代理被设计来干一件窄活。全局开关关掉后被拒绝的理由指向配置，而不是让模型去猜为什么调不动；而且它**连工具注册一起摘掉**（模型看不到 `task`），靠 `ConfigReloadedEvent` 重算因此不需要重启。
 - **首页设的「待生效默认值」是运行态，不是配置**：`SessionDefaults` 纯内存、进程退出即失效，**绝不写回任何配置文件**。写配置文件是另一整层能力（写全局还是项目级？项目级覆盖时写全局等于无效；格式保真；与 `/reload` 的顺序），而 `-cli --model x` 今天也是进程级的，语义保持一致、不制造第二套「默认」。它只盖在配置默认值上面（字段为 `null` 表示「这一项继续跟随更下层」），并由 `SessionManager.create` 在建会话那一刻消费。
 - **「字段缺失」≠「显式空数组」**：`allowedTools` / `plugins.enabled` 缺失（null）表示不限制，`[]` 表示一个都不放行 / 不启用；归一成空集合会让 `[]` 退化成 fail-open。`plugins.roots` 不适用。
 - **配置驱动的索引在启动期建立**：构造期只建空索引，`AgentHarness.bootstrap()` 里 `runtimeConfig.refresh()` 之后才装载；`PluginRuntimeConfig` 必须在 `pluginManager.bootstrap()` 之前刷新。
@@ -563,8 +602,9 @@ jellyfish-script/src/main/java/zcd/jellyfish/script/
 - **压缩**：只有插件提供策略才可用；不启用 `jellyfish-compact` 时压缩整体不可用且**不回退内置**（刻意如此，见「ReAct、上下文与压缩」）。
 - **`shell`**：**已落地**（`jellyfish-plugin-shell`，commons-exec shade 进插件包）。**已知边界**：Windows 映射未验证；进程树只能尽力杀（`pgrep -P` 不存在或没权限时退化为只杀直接子进程）；分类器可被 `FOO=bar cmd` / `$(...)` / `&&` 链绕过。**明确不做**：每次调用的预览预算覆盖（调大是上下文脚枪、调小不如直接在命令里写 `head -50`）；只读分类对重定向与复合命令不设防（真正的防线是审批框里那条完整命令原文，要收紧应当在白名单那一层）。
 - **实时输出**：三种外壳都有——`-cli` 写 stderr、`-tui` 渲染「运行中的工具轨迹」块、`-server` 推可丢的 `tool_output` SSE 事件。**已知边界**：`-server` 的丢弃计数只在服务端可观测，没有推给客户端（客户端以 `tool_done` 为准）。
-- **工具结果元数据已结构化**（`exitCode` / `terminal` 两个约定键 + 工具自定键）：TUI 轨迹、CLI 结束行、SSE `tool_done`、会话快照四处都拿到了。**仍需注意**：`metadata` 只在会话快照里（进不了 `LlmMessage`），因此它也不参与上下文裁剪——这正是想要的（模型不需要它，界面需要）。
+- **工具结果元数据已结构化**（`exitCode` / `terminal` / `summary` 三个约定键 + 工具自定键）：TUI 轨迹、CLI 结束行、SSE `tool_done`、会话快照四处都拿到了。**仍需注意**：`metadata` 只在会话快照里（进不了 `LlmMessage`），因此它也不参与上下文裁剪——这正是想要的（模型不需要它，界面需要）。
 - **`shell` 明确不做**（需要时另开一期）：沙箱 / 权限降级 / 容器内执行（要硬隔离就把 jellyfish 整个跑进容器，那是唯一的硬边界）、命令黑名单与「解析式安全」、目录围栏、后台进程 / 常驻服务 / `shell_kill`（需要会话级进程注册表 + 输出重定向 API + 会话关闭清理）、**会话级工作目录**（牵动 `Session` 快照、持久化、恢复兼容与所有工具的路径解析，v1 用 `cwd` 参数）、落盘文件的引用计数式保留、TUI 审批的「本次会话记住该决定」。
+- **子代理**：**已落地**（内核原生，`core/subagent`）——`task` 工具、瞬时会话、内联嵌套回合、深度与预算上限、工具清单过滤、用量归集、事件带 `parentSessionId`。**明确不做**：**上下文 fork（永久不做，不是推后）**——「挑战我刚说的方案」这类对话条件型委派只能靠调用方把背景写进 `task.prompt`；**后台子代理**（会像 pi 那样需要 spawn 自身进程，而本项目 shade 成单 jar、连自己的入口都找不到）；**给插件的委派能力面**（`ToolCallRequest` 上没有 `SubAgentRunner` 之类的设施，因此插件无法自己编排并行/链式委派——真要做得先想清楚那个能力面要给谁、怎么收窄）；**子代理类型的运行时注册**（只能来自 `agents.json`）；**并行/链式/工作流编排**（内核不因此长出一个 workflow 引擎）。**已知边界**：嵌套审批仍走全局单槽位（与 Server 同）；子代理看不到主会话的模型（刻意）；递归靠 `maxDepth` + `maxSpawnsPerTurn` 两道，没有全局并发上限。
 
 ## 编码约定
 

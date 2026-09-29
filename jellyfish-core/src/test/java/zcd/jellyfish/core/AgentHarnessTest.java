@@ -7,6 +7,7 @@ import org.mockito.Mock;
 import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
 import zcd.jellyfish.core.command.SystemCommands;
+import zcd.jellyfish.core.subagent.SubAgentTools;
 import zcd.jellyfish.core.compact.ConversationCompactor;
 import zcd.jellyfish.core.input.InputDirectives;
 import zcd.jellyfish.infra.agent.AgentManager;
@@ -77,6 +78,10 @@ class AgentHarnessTest {
     @Mock
     private SystemCommands systemCommands;
 
+    /** 子代理能力注册器。 */
+    @Mock
+    private SubAgentTools subAgentTools;
+
     /** 会话压缩器。 */
     @Mock
     private ConversationCompactor conversationCompactor;
@@ -110,12 +115,14 @@ class AgentHarnessTest {
         harness.bootstrap();
 
         // Then：事件订阅者就绪 → 注册指标 → 注册核心命令 → 配置 → 各索引 → 插件配置 → 插件启动 → 会话恢复
-        InOrder order = inOrder(eventChannel, metricsSubscriber, systemCommands, runtimeConfig, modelManager,
-                agentManager, pluginRuntimeConfig, pluginManager, sessionManager);
+        InOrder order = inOrder(eventChannel, metricsSubscriber, systemCommands, subAgentTools, runtimeConfig,
+                modelManager, agentManager, pluginRuntimeConfig, pluginManager, sessionManager);
         order.verify(eventChannel).start();
         // 必须在 runtimeConfig.refresh() 之前：配置加载期的告警要能被计数
         order.verify(metricsSubscriber).start();
         order.verify(systemCommands).register();
+        // 与系统命令同理：内核先注册，插件要覆盖 task 必须显式声明 override
+        order.verify(subAgentTools).register();
         order.verify(runtimeConfig).refresh();
         order.verify(modelManager).refresh(false);
         order.verify(agentManager).refresh(false);
@@ -149,10 +156,12 @@ class AgentHarnessTest {
         harness.shutdown();
 
         // Then：先停 ReAct 与输入指令，再回收核心命令，再插件，最后通道
-        InOrder order = Mockito.inOrder(reActLooper, inputDirectives, systemCommands, pluginManager, eventChannel);
+        InOrder order = Mockito.inOrder(reActLooper, inputDirectives, systemCommands, subAgentTools, pluginManager,
+                eventChannel);
         order.verify(reActLooper).close();
         order.verify(inputDirectives).close();
         order.verify(systemCommands).close();
+        order.verify(subAgentTools).close();
         order.verify(pluginManager).close();
         order.verify(eventChannel).close();
         // 收尾：指标退订
@@ -183,7 +192,7 @@ class AgentHarnessTest {
      */
     private AgentHarness newHarness() {
         return new AgentHarness(runtimeConfig, eventChannel, modelManager, agentManager, pluginRuntimeConfig,
-                pluginManager, reActLooper, systemCommands, sessionManager, conversationCompactor,
+                pluginManager, reActLooper, systemCommands, subAgentTools, sessionManager, conversationCompactor,
                 inputDirectives, metricsSubscriber, metricsRegistry, healthCheck);
     }
 }

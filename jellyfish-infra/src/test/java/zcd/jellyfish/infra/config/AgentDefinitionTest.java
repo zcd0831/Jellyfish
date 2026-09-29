@@ -6,6 +6,7 @@ import zcd.jellyfish.infra.support.ObjectMapperWrapper;
 import java.util.Collections;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -118,5 +119,58 @@ class AgentDefinitionTest {
         assertEquals("jellyfish", definition.getAgentId());
         assertEquals("系统默认 agent", definition.getDescription());
         assertNull(definition.getSystemPrompt());
+    }
+
+    @Test
+    void isDelegatable_should_default_to_false() {
+        // When
+        AgentDefinition definition = new AgentDefinition("coder", null, null);
+
+        // Then
+        assertFalse(definition.isDelegatable());
+        assertNull(definition.getModel());
+    }
+
+    @Test
+    void deserialization_should_bind_delegatable_and_model() {
+        // Given
+        String json = "{\"delegatable\":true,\"model\":\"openai/gpt-4o-mini\"}";
+
+        // When
+        AgentDefinition definition = ObjectMapperWrapper.readValue(json, AgentDefinition.class);
+
+        // Then
+        assertTrue(definition.isDelegatable());
+        assertEquals("openai/gpt-4o-mini", definition.getModel());
+    }
+
+    @Test
+    void withAgentId_should_preserve_delegatable_and_model() {
+        // Given：回填 key 不能丢掉委派声明与偏好模型
+        AgentDefinition original = ObjectMapperWrapper.readValue(
+                "{\"delegatable\":true,\"model\":\"openai/gpt-4o-mini\"}", AgentDefinition.class);
+
+        // When
+        AgentDefinition filled = original.withAgentId("scout");
+
+        // Then
+        assertEquals("scout", filled.getAgentId());
+        assertTrue(filled.isDelegatable());
+        assertEquals("openai/gpt-4o-mini", filled.getModel());
+    }
+
+    @Test
+    void withSystemPrompt_should_preserve_delegatable_and_model() {
+        // Given
+        AgentDefinition original = ObjectMapperWrapper.readValue(
+                "{\"delegatable\":true,\"model\":\"openai/gpt-4o-mini\"}", AgentDefinition.class);
+
+        // When
+        AgentDefinition withPrompt = original.withSystemPrompt("You are a scout.");
+
+        // Then
+        assertEquals("You are a scout.", withPrompt.getSystemPrompt());
+        assertTrue(withPrompt.isDelegatable());
+        assertEquals("openai/gpt-4o-mini", withPrompt.getModel());
     }
 }

@@ -81,5 +81,47 @@ class ToolMetadataTest {
         assertFalse(ToolMetadata.failed(Collections.<String, Object>singletonMap("anything", "value")));
         assertEquals("exitCode", ToolMetadata.KEY_EXIT_CODE);
         assertEquals("terminal", ToolMetadata.KEY_TERMINAL);
+        assertEquals("summary", ToolMetadata.KEY_SUMMARY);
+    }
+
+    @Test
+    @DisplayName("摘要原样取回（包括首尾空白之外的内容），去掉首尾空白")
+    void summaryOf_should_returnTrimmedText() {
+        assertEquals("子代理 scout · 3 轮", ToolMetadata.summaryOf(Collections.<String, Object>singletonMap(
+                ToolMetadata.KEY_SUMMARY, "  子代理 scout · 3 轮  ")));
+        // 不截断长度：摘要能写多长由工具自己决定，外壳负责换行
+        StringBuilder longSummary = new StringBuilder();
+        for (int i = 0; i < 50; i++) {
+            longSummary.append("很长的摘要");
+        }
+        assertEquals(longSummary.toString(), ToolMetadata.summaryOf(Collections.<String, Object>singletonMap(
+                ToolMetadata.KEY_SUMMARY, longSummary.toString())));
+    }
+
+    @Test
+    @DisplayName("没有摘要时返回空串而不是 null：外壳据此决定要不要接逗号")
+    void summaryOf_should_returnEmptyString_whenAbsent() {
+        assertEquals("", ToolMetadata.summaryOf(null));
+        assertEquals("", ToolMetadata.summaryOf(Collections.<String, Object>emptyMap()));
+        assertEquals("", ToolMetadata.summaryOf(Collections.<String, Object>singletonMap(
+                ToolMetadata.KEY_SUMMARY, "   ")));
+    }
+
+    @Test
+    @DisplayName("摘要写坏了一律当作「无此信息」：与 failed 同一套宽容原则")
+    void summaryOf_should_tolerateMalformedValues() {
+        assertEquals("", ToolMetadata.summaryOf(Collections.<String, Object>singletonMap(
+                ToolMetadata.KEY_SUMMARY, Integer.valueOf(7))));
+        assertEquals("", ToolMetadata.summaryOf(Collections.<String, Object>singletonMap(
+                ToolMetadata.KEY_SUMMARY, null)));
+    }
+
+    @Test
+    @DisplayName("摘要是展示用的事实，不参与成败判据")
+    void summary_should_notAffectFailureVerdict() {
+        Map<String, Object> metadata = new LinkedHashMap<String, Object>();
+        metadata.put(ToolMetadata.KEY_SUMMARY, "子代理 scout · 3 轮 · 结论不完整");
+
+        assertFalse(ToolMetadata.failed(metadata));
     }
 }

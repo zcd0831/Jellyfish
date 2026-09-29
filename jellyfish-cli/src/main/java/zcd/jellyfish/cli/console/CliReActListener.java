@@ -165,7 +165,28 @@ public final class CliReActListener implements ReActListener {
         closeToolOutputLine();
         // 只读工具（read_file 之类）没有元数据，这一行因此保持原样；命令类工具带上退出码时补在末尾
         console.writeErrLine(TOOL_END_PREFIX + toolName + (success ? " 完成" : " 失败")
-                + "（" + lengthOf(output) + " 字符）" + outcomeSuffix(metadata));
+                + "（" + lengthOf(output) + " 字符）" + summarySuffix(metadata) + outcomeSuffix(metadata));
+    }
+
+    /**
+     * 把元数据里的单行摘要拼成后缀。
+     * <p>
+     * <b>为什么命令行这边也要它</b>：子代理的轨迹行在 TUI 上是 {@code ⎿ task · 子代理 scout · 3 轮}，
+     * 命令行不能只给一个 {@code ← task 完成}——那是同一件事在两个外壳下长得不一样，
+     * 而“刚才那一步到底是什么”是两边都需要回答的问题。
+     * <p>
+     * <b>为什么读元数据而不读结果正文的首行</b>：与 TUI 同一个理由——首行是给模型读的措辞，
+     * 展示若依赖它，改一个句子标记就会消失。
+     * <p>
+     * 分隔符用 {@code ·} 而退出码后缀用 {@code ，}：摘要是「它是什么」的注解，
+     * 退出码是「它怎么了」的补充，两者不是同一类东西。
+     *
+     * @param metadata 工具结果元数据，可为 {@code null}
+     * @return 后缀文本，无摘要时返回空串
+     */
+    private static String summarySuffix(Map<String, Object> metadata) {
+        String summary = ToolMetadata.summaryOf(metadata);
+        return summary.isEmpty() ? "" : " · " + summary;
     }
 
     /**

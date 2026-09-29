@@ -22,6 +22,7 @@ import zcd.jellyfish.infra.event.EventChannel;
 import zcd.jellyfish.infra.event.EventChannelOptions;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.model.ModelManager;
+import zcd.jellyfish.infra.model.SessionModelResolver;
 import zcd.jellyfish.core.compact.ConversationCompactor;
 import zcd.jellyfish.core.input.InputDirectives;
 import zcd.jellyfish.infra.config.RuntimeConfig;
@@ -129,7 +130,7 @@ class LauncherTest {
         session = sessions.createDefault();
         sessions.switchTo(session.getSessionId());
 conversationCompactor = new ConversationCompactor(sessions, models, runtimeConfig,
-                new ExtensionRegistry(new TypeRegistry()), events);
+                new ExtensionRegistry(new TypeRegistry()), events, new SessionModelResolver(models, agents));
         launcher = new Launcher(component, console);
     }
 

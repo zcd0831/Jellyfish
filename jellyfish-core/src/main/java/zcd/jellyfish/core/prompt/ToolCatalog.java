@@ -44,10 +44,28 @@ public class ToolCatalog {
      * @return 不可修改的 {@link LlmTool} 列表，无工具时为空列表
      */
     public List<LlmTool> tools() {
+        return tools(ToolFilter.none());
+    }
+
+    /**
+     * 列出经过过滤的工具定义。
+     * <p>
+     * <b>过滤只作用于清单</b>：被滤掉的工具仍然可以在执行期被调用（只是模型看不到它，
+     * 不会主动去调）；执行期的准入仍然由权限判定把关。这条分工是刻意的——
+     * 清单是「建议」，权限是「约束」。
+     *
+     * @param filter 过滤器，不可为 {@code null}
+     * @return 不可修改的 {@link LlmTool} 列表，无命中时为空列表
+     */
+    public List<LlmTool> tools(ToolFilter filter) {
+        Objects.requireNonNull(filter, "filter must not be null");
         List<ToolDescriptor> descriptors =
                 extensions.descriptors(ToolCallRequest.class, ToolDescriptor.class);
         List<LlmTool> tools = new ArrayList<LlmTool>(descriptors.size());
         for (ToolDescriptor descriptor : descriptors) {
+            if (!filter.accepts(descriptor.getName())) {
+                continue;
+            }
             tools.add(new LlmTool(descriptor.getName(), descriptor.getDescription(),
                     descriptor.getParameters(), descriptor.getRequired()));
         }

@@ -19,6 +19,9 @@ import java.util.concurrent.atomic.AtomicReference;
  * 取消是协作式的——置标志只能阻止「下一轮 / 下一个工具」，正在进行的 LLM 流由句柄直接掐断，
  * 而正在进行的工具（命令行长调用）靠 {@link CancellationToken} 的回调被打断。
  * <p>
+ * <b>两种创建方式</b>：{@code submit} 造异步回合（顶层，跑在 {@code react} 池上），
+ * {@link #inline(CancellationToken)} 造内联回合（嵌套，由调用线程直接跑完）。两者共用同一套取消语义。
+ * <p>
  * <b>它同时是取消令牌本体</b>：不另外造一个对象，是因为「回合被取消」只有一份事实，
  * 两个对象会让「谁先谁后」变成一个需要同步的问题。
  *
@@ -40,8 +43,35 @@ final class ReActTurnImpl implements ReActTurn, CancellationToken {
     /** 当前进行中的 LLM 流句柄；未开始流或流已结束时为 {@code null}。 */
     private final AtomicReference<LlmStreamHandle> streamHandle = new AtomicReference<LlmStreamHandle>();
 
-    /** 异步任务句柄，由 {@link #submit} 注入。 */
+    /**
+     * 异步任务句柄，由 {@link #submit} 注入。
+     * <p>
+     * 内联回合（见 {@link #inline(CancellationToken)}）不提交任何任务，因此恒为 {@code null}，
+     * 对它调 {@link #await()} 会以「尚未提交」失败——调用方本来就不应该等一个同步返回的对象。
+     */
     private volatile Future<ReActResult> future;
+
+    /**
+     * 构造一个内联回合：不提交执行器，由调用方在自己的线程上跑循环。
+     * <p>
+     * <b>为什么需要它</b>：子代理的嵌套回合必须在调用线程上同步跑完（见
+     * {@code ReActLooper.runNested}），但它同样需要「取消」与「掐断进行中的流」两件事——
+     * 那正好就是本类已经拥有的一切。新造一个同形状的对象只会让取消语义多一份实现。
+     * <p>
+     * <b>父取消直接接管本回合</b>：把父令牌的回调接到 {@link #cancel()} 上，因此用户按下 Esc 之后，
+     * 正在跑的嵌套回合与父回合同时收敛。父令牌已经取消时，注册会立即执行回调，
+     * 于是嵌套回合在第一个检查点上就会退出。
+     *
+     * @param parentCancellation 父回合的取消令牌，可为 {@code null}（表示本次嵌套不接受外部取消）
+     * @return 内联回合句柄
+     */
+    static ReActTurnImpl inline(CancellationToken parentCancellation) {
+        ReActTurnImpl turn = new ReActTurnImpl();
+        if (parentCancellation != null) {
+            parentCancellation.onCancel(turn::cancel);
+        }
+        return turn;
+    }
 
     @Override
     public String getTurnId() {

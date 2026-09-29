@@ -290,6 +290,17 @@ public class RuntimeConfig {
     }
 
     /**
+     * 获取子代理委派段。
+     * <p>
+     * 与审批超时同口径：四个参数每轮现读而不缓存，关掉开关或改上限后无需重启即可生效。
+     *
+     * @return 子代理委派段，保证非 {@code null}
+     */
+    public SubAgentSettings getSubAgentSettings() {
+        return snapshot.getJellyfishSettings().getSubAgent();
+    }
+
+    /**
      * 获取合并后的插件段。
      * <p>
      * 不重复存放：插件段随 {@link JellyfishSettings} 一起进快照，这里只是转发。
@@ -422,7 +433,34 @@ public class RuntimeConfig {
         return new JellyfishSettings(
                 mergePluginsSettings(pluginsOf(global), pluginsOf(project)),
                 mergeReactSettings(reactOf(global), reactOf(project)),
-                mergePermissionSettings(permissionOf(global), permissionOf(project)));
+                mergePermissionSettings(permissionOf(global), permissionOf(project)),
+                mergeSubAgentSettings(subAgentOf(global), subAgentOf(project)));
+    }
+
+    /**
+     * 取一份运行期设置里的子代理段，缺省时返回 {@code null}，交给合并函数按缺省处理。
+     *
+     * @param settings 运行期设置，可为 {@code null}
+     * @return 子代理段，未配置时为 {@code null}
+     */
+    private static SubAgentSettings subAgentOf(JellyfishSettings settings) {
+        return settings == null ? null : settings.getSubAgent();
+    }
+
+    /**
+     * 合并全局级与项目级子代理段。
+     * <p>
+     * 与 provider / agent / react / permission 同口径的「整对象覆盖」：项目级非空则整体替换全局级，
+     * 否则回退全局级，两者都缺省时由 {@link JellyfishSettings} 的构造器落到缺省值。
+     * 不做逐字段合并：四个参数互相牵制（关掉开关时其余三项无意义），
+     * 「一半来自全局、一半来自项目」会让「这个项目到底允许多深的委派」无法从任何单份文件看出来。
+     *
+     * @param global  全局级子代理段，可为 {@code null}
+     * @param project 项目级子代理段，可为 {@code null}
+     * @return 合并结果，可能为 {@code null}（表示用缺省值）
+     */
+    private static SubAgentSettings mergeSubAgentSettings(SubAgentSettings global, SubAgentSettings project) {
+        return project != null ? project : global;
     }
 
     /**

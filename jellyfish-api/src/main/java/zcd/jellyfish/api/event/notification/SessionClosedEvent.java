@@ -8,6 +8,9 @@ import zcd.jellyfish.api.event.AbstractJellyfishEvent;
  * 携带关闭时的快照字段（{@code agentId} / {@code messageCount}）而不是让订阅者回查会话：
  * 事件发出时会话已不在表里，回查必然落空。
  * <p>
+ * <b>{@code parentSessionId} 非 {@code null} 即子代理会话</b>：子代理会话关闭时事件照发，
+ * 订阅者靠这个字段把它归到父会话而不是当成一个根会话消失了。
+ * <p>
  * 与其他通知一样走异步、可丢弃通道；「会话已关闭」的可靠语义不建立在本事件上。
  *
  * @author zcd
@@ -20,17 +23,33 @@ public final class SessionClosedEvent extends AbstractJellyfishEvent {
     /** 关闭时的消息条数。 */
     private final int messageCount;
 
+    /** 派生该会话的父会话标识，{@code null} 表示不是子代理会话（根会话）。 */
+    private final String parentSessionId;
+
     /**
-     * 构造会话关闭事件。
+     * 构造根会话的关闭事件。
      *
      * @param sessionId    会话标识
      * @param agentId      关闭时的 agentId，可为 {@code null}
      * @param messageCount 关闭时的消息条数
      */
     public SessionClosedEvent(String sessionId, String agentId, int messageCount) {
+        this(sessionId, agentId, messageCount, null);
+    }
+
+    /**
+     * 构造会话关闭事件。
+     *
+     * @param sessionId       会话标识
+     * @param agentId         关闭时的 agentId，可为 {@code null}
+     * @param messageCount    关闭时的消息条数
+     * @param parentSessionId 派生该会话的父会话标识，{@code null} 表示根会话
+     */
+    public SessionClosedEvent(String sessionId, String agentId, int messageCount, String parentSessionId) {
         super(sessionId);
         this.agentId = agentId;
         this.messageCount = messageCount;
+        this.parentSessionId = parentSessionId;
     }
 
     /**
@@ -49,5 +68,14 @@ public final class SessionClosedEvent extends AbstractJellyfishEvent {
      */
     public int getMessageCount() {
         return messageCount;
+    }
+
+    /**
+     * 获取派生该会话的父会话标识。
+     *
+     * @return 父会话标识；非子代理会话时为 {@code null}
+     */
+    public String getParentSessionId() {
+        return parentSessionId;
     }
 }

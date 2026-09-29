@@ -63,6 +63,11 @@ import java.util.concurrent.atomic.AtomicReference;
  *     崩潰时最多丢「正在进行的那一个回合」，而<b>已经收敛的回合一定已经落盘</b>。</li>
  * </ol>
  * <p>
+ * <b>子代理会话是另一类不落盘的会话</b>：由 {@link #createEphemeral} 创建，靠「父会话标识非空」
+ * 识别。它们同样是会话表里的真实会话（能追加消息、发事件、被回查），只是不进 {@link #all()}、
+ * 不落盘；收尾走 {@link #close(String)}，与普通会话同一条路径——「事件照发」是刻意的：
+ * 把子代理从指标与界面里藏起来，恰恰让人看不见最需要被看见的那一段。
+ * <p>
  * <b>延迟落盘的失败语义与即时落盘相反</b>：即时落盘失败上抛（回合随之中止），而 {@link #flush(String)}
  * 失败只记 WARN 并<b>保留脏标记</b>等下一次重试——那时回合已经收敛、回答已经展示给用户，
  * 把它升级成「回合失败」既补不回来也无从补救，{@link #flushAll()} 在关停时还有一次机会。
@@ -190,6 +195,41 @@ public class SessionManager {
     }
 
     /**
+     * 创建一个子代理会话：与 {@link #create} 的差别只有两处，都写在方法名里。
+     * <p>
+     * <b>不读待生效默认值</b>：{@link SessionDefaults} 表达的是「我接下来这次对话要用它」，
+     * 而子代理的身份（agentId）、模型与权限模式完全由委派方给定，跟首页上那个选择无关；
+     * 传 {@code null} 的项直接落到更下层默认（模型走全局默认，权限走 NORMAL）。
+     * <p>
+     * <b>会话仍是真实会话</b>：进会话表、能追加消息、生命周期事件照发（携带父会话标识）。
+     * 它不进 {@link #all()}、不落盘：前者因为「子代理不是用户可切换的会话」，
+     * 后者因为「一次委派的对话不值得留下一份文件与一条 git 提交」。
+     * <p>
+     * <b>谁负责收尾</b>：调用方必须在 {@code finally} 里调 {@link #close(String)}——
+     * 与普通会话不同，子代理会话没有「用户下次回来接着聊」这回事，留着只会泄内存。
+     *
+     * @param parentSessionId 派生该会话的父会话标识，不可为空白
+     * @param agentId         agent 标识，可为空白（按默认 agent 绑定）
+     * @param provider        provider 名，可为 {@code null}（跟随全局默认）
+     * @param model           model 名，可为 {@code null}（跟随全局默认）
+     * @param permissionMode  权限模式，可为 {@code null}（按 {@link PermissionMode#NORMAL} 处理）
+     * @return 新建的子代理会话运行态
+     * @throws JellyfishException 父会话标识为空白时抛出
+     */
+    public Session createEphemeral(String parentSessionId, String agentId, String provider, String model,
+                                   PermissionMode permissionMode) {
+        if (StringUtils.isBlank(parentSessionId)) {
+            throw new JellyfishException("parentSessionId must not be blank");
+        }
+        String boundAgentId = StringUtils.isBlank(agentId) ? resolveDefaultAgentId() : agentId;
+        Session session = new Session(UUID.randomUUID().toString(), boundAgentId, provider, model,
+                permissionMode, System.currentTimeMillis(), parentSessionId);
+        sessions.put(session.getSessionId(), session);
+        publish(new SessionCreatedEvent(boundAgentId, session.getSessionId(), parentSessionId));
+        return session;
+    }
+
+    /**
      * 取当前会话。
      *
      * @return 当前会话，没有当前会话时返回 {@code null}
@@ -256,7 +296,8 @@ public class SessionManager {
         deferred.remove(sessionId);
         dirty.remove(sessionId);
         currentSessionId.compareAndSet(sessionId, null);
-        publish(new SessionClosedEvent(sessionId, session.getAgentId(), session.size()));
+        publish(new SessionClosedEvent(sessionId, session.getAgentId(), session.size(),
+                session.getParentSessionId()));
         return session;
     }
 
@@ -293,7 +334,8 @@ public class SessionManager {
         deferred.remove(sessionId);
         dirty.remove(sessionId);
         currentSessionId.compareAndSet(sessionId, null);
-        publish(new SessionClosedEvent(sessionId, session.getAgentId(), session.size()));
+        publish(new SessionClosedEvent(sessionId, session.getAgentId(), session.size(),
+                session.getParentSessionId()));
         return session;
     }
 
@@ -333,8 +375,23 @@ public class SessionManager {
      *
      * @return 不可修改集合，可能为空但不会为 {@code null}
      */
+    /**
+     * 取全部「用户可切换的」会话。
+     * <p>
+     * <b>子代理会话不在其中</b>：它们同样在会话表里（否则消息追加、事件广播、回查都做不了），
+     * 但它们是某次委派的中间产物，不属于「我的会话列表」：列出来既选不中（它随时会被关掉），
+     * 又让人分不清哪个是自己在用的。需要观察子代理的订阅者走事件（带父会话标识）。
+     *
+     * @return 不可修改集合，可能为空但不会为 {@code null}
+     */
     public Collection<Session> all() {
-        return Collections.unmodifiableCollection(new ArrayList<Session>(sessions.values()));
+        List<Session> visible = new ArrayList<Session>(sessions.size());
+        for (Session session : sessions.values()) {
+            if (!session.isEphemeral()) {
+                visible.add(session);
+            }
+        }
+        return Collections.unmodifiableCollection(visible);
     }
 
     /**
@@ -527,6 +584,25 @@ public class SessionManager {
     }
 
     /**
+     * 把一次<b>嵌套回合</b>的累计用量并入会话，并同步落盘。
+     * <p>
+     * <b>为什么不让调用方把总量包成一个 {@link LlmUsage} 再走上面那个入口</b>：那个入口恒定只
+     * 加一次调用，而子代理的一个回合可能调了很多次模型。会话的「调用次数」是判断
+     * 「这一轮到底花了多少来回」的依据，把它压成 1 会让统计失真。
+     *
+     * @param sessionId 会话标识，不可为空白
+     * @param usage     嵌套回合的累计用量，可为 {@code null}（按无变化处理）
+     * @return 变更后的会话运行态
+     * @throws JellyfishException 会话不存在时抛出
+     */
+    public Session recordUsage(String sessionId, SessionUsage usage) {
+        Session session = require(sessionId);
+        session.recordUsage(usage);
+        persist(session);
+        return session;
+    }
+
+    /**
      * 设置会话标题。
      *
      * @param sessionId 会话标识，不可为空白
@@ -695,6 +771,11 @@ public class SessionManager {
      * @param session 待落盘的会话运行态
      */
     private void doPersist(Session session) {
+        // 子代理会话不落盘：它是一次委派的中间产物，没有「下次回来接着用」这回事；
+        // 写入只会给会话目录留下一批谁也认领不了的文件（会话已从表里移除，_path 也无从对应）
+        if (session.isEphemeral()) {
+            return;
+        }
         List<HandlerBinding<SessionPersistRequest, Void>> bindings =
                 extensions.bindings(SessionPersistRequest.class, null);
         if (bindings.isEmpty()) {

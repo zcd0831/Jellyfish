@@ -110,8 +110,24 @@ public class PromptAssembler {
      * @return 请求与用量
      */
     public PromptAssembly assemble(Session session, ResolvedModel resolvedModel) {
+        return assemble(session, resolvedModel, ToolFilter.none());
+    }
+
+    /**
+     * 构建一次 LLM 请求，带上工具清单过滤。
+     * <p>
+     * <b>只有嵌套回合会传非空过滤</b>（见 {@link ToolFilter}）：主会话路径始终走两参重载，
+     * 行为与引入本重载之前完全一致。
+     *
+     * @param session       会话运行态，不可为 {@code null}
+     * @param resolvedModel 已解析的模型，不可为 {@code null}
+     * @param toolFilter    工具清单过滤器，不可为 {@code null}
+     * @return 请求与用量
+     */
+    public PromptAssembly assemble(Session session, ResolvedModel resolvedModel, ToolFilter toolFilter) {
         Objects.requireNonNull(session, "session must not be null");
         Objects.requireNonNull(resolvedModel, "resolvedModel must not be null");
+        Objects.requireNonNull(toolFilter, "toolFilter must not be null");
         int boundary = effectiveBoundary(session);
         String systemPrompt = systemPromptOf(session, boundary);
         // 老化排在裁剪之前：先把较早的大结果换成 stub，再让裁剪看到它真实的体积；
@@ -121,7 +137,7 @@ public class PromptAssembler {
         LlmRequest.Builder builder = LlmRequest.builder(resolvedModel.getModel().getId())
                 .systemPrompt(systemPrompt)
                 .messages(cropResult.getMessages())
-                .tools(toolCatalog.tools());
+                .tools(toolCatalog.tools(toolFilter));
         int maxOutputTokens = resolvedModel.getModel().getMaxOutputTokens();
         if (maxOutputTokens > 0) {
             builder.maxTokens(maxOutputTokens);

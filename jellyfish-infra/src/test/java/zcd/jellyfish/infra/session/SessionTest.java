@@ -9,6 +9,7 @@ import zcd.jellyfish.infra.llm.LlmUsage;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -54,6 +55,26 @@ class SessionTest {
         assertEquals("openai", session.getProvider());
         assertEquals("gpt-4o", session.getModel());
         assertEquals(PermissionMode.PLAN, session.getPermissionMode());
+    }
+
+    @Test
+    void getParentSessionId_should_return_null_when_root_session() {
+        // When
+        Session session = new Session("session-1", null, null, null, null, CREATED_AT);
+
+        // Then
+        assertNull(session.getParentSessionId());
+        assertFalse(session.isEphemeral());
+    }
+
+    @Test
+    void isEphemeral_should_return_true_when_parent_session_given() {
+        // When
+        Session session = new Session("session-2", "scout", null, null, null, CREATED_AT, "session-1");
+
+        // Then
+        assertEquals("session-1", session.getParentSessionId());
+        assertTrue(session.isEphemeral());
     }
 
     @Test

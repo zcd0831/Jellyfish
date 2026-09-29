@@ -109,6 +109,41 @@ class JellyfishSettingsTest {
     }
 
     @Test
+    void getSubAgent_should_return_default_when_null() {
+        // When
+        JellyfishSettings settings = new JellyfishSettings(null, null, null);
+
+        // Then
+        assertTrue(settings.getSubAgent().isDefault());
+    }
+
+    @Test
+    void getSubAgent_should_return_same_instance_when_given() {
+        // Given
+        SubAgentSettings subAgent = new SubAgentSettings(true, 1, null, null);
+
+        // When
+        JellyfishSettings settings = new JellyfishSettings(null, null, null, subAgent);
+
+        // Then
+        assertSame(subAgent, settings.getSubAgent());
+        assertTrue(!settings.isEmpty());
+    }
+
+    @Test
+    void deserialization_should_bind_sub_agent_section() {
+        // Given
+        String json = "{\"subAgent\":{\"enabled\":false,\"maxDepth\":1}}";
+
+        // When
+        JellyfishSettings settings = ObjectMapperWrapper.readValue(json, JellyfishSettings.class);
+
+        // Then
+        assertTrue(!settings.getSubAgent().isEnabled());
+        assertEquals(1, settings.getSubAgent().getMaxDepth());
+    }
+
+    @Test
     void deserialization_should_ignore_unknown_sections() {
         // Given：模型段已迁到 models.json，jellyfish.json 里出现它属于历史残留，应被忽略而不是报错
         String json = "{\"defaultProvider\":\"openai\",\"plugins\":{\"disabled\":[\"plugin-b\"]}}";

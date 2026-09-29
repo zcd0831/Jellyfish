@@ -33,6 +33,7 @@ import zcd.jellyfish.infra.llm.LlmResponse;
 import zcd.jellyfish.infra.llm.LlmToolCall;
 import zcd.jellyfish.infra.llm.LlmUsage;
 import zcd.jellyfish.infra.model.ModelManager;
+import zcd.jellyfish.infra.model.SessionModelResolver;
 import zcd.jellyfish.infra.model.ResolvedModel;
 import zcd.jellyfish.infra.registry.TypeRegistry;
 import zcd.jellyfish.infra.session.Session;
@@ -140,7 +141,8 @@ class ConversationCompactorTest {
         givenModel(128_000, 4_000);
         // 换一个干净注册表：模拟「一个压缩插件都没装」
         ConversationCompactor bare = new ConversationCompactor(sessionManager, modelManager, runtimeConfig,
-                new ExtensionRegistry(new TypeRegistry()), events, executor);
+                new ExtensionRegistry(new TypeRegistry()), events,
+                new SessionModelResolver(modelManager, agentManager), executor);
 
         assertFalse(bare.isAvailable());
         CompactionUnavailableException error = assertThrows(CompactionUnavailableException.class,
@@ -157,7 +159,7 @@ class ConversationCompactorTest {
         silent.contribute("silent", CompactionStrategyRequest.class, null,
                 request -> CompactionStrategy.none(), RegisterOptions.DEFAULT);
         ConversationCompactor bare = new ConversationCompactor(sessionManager, modelManager, runtimeConfig,
-                silent, events, executor);
+                silent, events, new SessionModelResolver(modelManager, agentManager), executor);
 
         assertTrue(bare.isAvailable());
         CompactionUnavailableException error = assertThrows(CompactionUnavailableException.class,
@@ -172,7 +174,8 @@ class ConversationCompactorTest {
         // 自动那一路只在「真该压了」之后才看可用性，因此 react 段必须有值
         lenient().when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
         ConversationCompactor bare = new ConversationCompactor(sessionManager, modelManager, runtimeConfig,
-                new ExtensionRegistry(new TypeRegistry()), events, executor);
+                new ExtensionRegistry(new TypeRegistry()), events,
+                new SessionModelResolver(modelManager, agentManager), executor);
         ContextUsage usage = new ContextUsage(900, 1000, false);
 
         assertFalse(bare.autoCompactIfNeeded(createdSessionId, usage));
@@ -728,7 +731,7 @@ class ConversationCompactorTest {
      */
     private ConversationCompactor newCompactor(ExecutorService taskExecutor) {
         return new ConversationCompactor(sessionManager, modelManager, runtimeConfig, extensions,
-                events, taskExecutor);
+                events, new SessionModelResolver(modelManager, agentManager), taskExecutor);
     }
 
     /**

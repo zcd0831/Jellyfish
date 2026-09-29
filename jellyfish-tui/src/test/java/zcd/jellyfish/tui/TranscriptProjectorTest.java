@@ -162,6 +162,60 @@ class TranscriptProjectorTest {
     }
 
     @Test
+    @DisplayName("单行摘要接在工具名之后：否则一层 `⎿ task` 什么也回答不了")
+    void project_should_show_summary_from_metadata() {
+        // Given：子代理的结论正文不进消息区（那是回灌给模型的长文本），
+        // 因此「刚才那一行到底是什么事」只能靠摘要
+        Map<String, Object> metadata = new HashMap<String, Object>();
+        metadata.put(ToolMetadata.KEY_SUMMARY, "子代理 scout · 3 轮");
+        List<SessionMessage> messages = Collections.singletonList(
+                SessionMessage.ofTool(LlmMessage.tool("c1", "task", "[子代理 scout 已完成 · 3 轮]\n报告正文"),
+                        metadata));
+
+        // When
+        List<VisualLine> lines = project(messages, completed());
+
+        // Then
+        assertEquals(Arrays.asList(
+                "",
+                "  \u23fa jellyfish",
+                "      \u23bf task \u00b7 子代理 scout \u00b7 3 轮"), texts(lines));
+    }
+
+    @Test
+    @DisplayName("摘要与警示后缀共存：先读「是什么事」，再读「成没成」")
+    void project_should_show_summary_before_failure_suffix() {
+        Map<String, Object> metadata = new HashMap<String, Object>();
+        metadata.put(ToolMetadata.KEY_SUMMARY, "子代理 scout");
+        metadata.put(ToolMetadata.KEY_TERMINAL, "REJECTED");
+        List<SessionMessage> messages = Collections.singletonList(
+                SessionMessage.ofTool(LlmMessage.tool("c1", "task", "[子代理未开始] 未知类型"), metadata));
+
+        List<VisualLine> lines = project(messages, completed());
+
+        assertEquals(Arrays.asList(
+                "",
+                "  \u23fa jellyfish",
+                "      \u23bf task \u00b7 子代理 scout \u26a0 REJECTED"), texts(lines));
+    }
+
+    @Test
+    @DisplayName("没有摘要时轨迹行与以前一模一样：不给普通工具多出一个空尾巴")
+    void project_should_omit_summary_when_absent() {
+        Map<String, Object> metadata = new HashMap<String, Object>();
+        metadata.put("durationMs", 12L);
+        List<SessionMessage> messages = Collections.singletonList(
+                SessionMessage.ofTool(LlmMessage.tool("c1", "read_file", "内容"), metadata));
+
+        List<VisualLine> lines = project(messages, completed());
+
+        assertEquals(Arrays.asList(
+                "",
+                "  \u23fa jellyfish",
+                "      \u23bf read_file"), texts(lines));
+    }
+
+    @Test
     @DisplayName("工具轨迹不受 markdown 渲染影响：它是轨迹，不是回答")
     void project_should_keep_tool_trace_untouched() {
         List<SessionMessage> messages = Arrays.asList(

@@ -37,7 +37,7 @@ import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.llm.LlmMessage;
 import zcd.jellyfish.infra.llm.LlmUsage;
 import zcd.jellyfish.infra.model.ModelManager;
-import zcd.jellyfish.infra.model.ResolvedModel;
+import zcd.jellyfish.infra.model.SessionModelResolver;
 import zcd.jellyfish.infra.registry.TypeRegistry;
 import zcd.jellyfish.infra.session.Session;
 import zcd.jellyfish.infra.session.SessionManager;
@@ -118,7 +118,7 @@ class SystemCommandsTest {
                 request -> new CompactionStrategy("压成摘要，不超过 {maxSummaryChars} 字", null, null),
                 RegisterOptions.DEFAULT);
         compactor = new ConversationCompactor(sessionManager, modelManager, runtimeConfig,
-                strategyRegistry, events);
+                strategyRegistry, events, new SessionModelResolver(modelManager, agentManager));
         systemCommands = new SystemCommands(extensions, commandManager, sessionManager, modelManager, agentManager,
                 events, compactor, runtimeConfig, configReloader, sessionDefaults);
         systemCommands.register();
@@ -280,7 +280,7 @@ class SystemCommandsTest {
     void model_with_argument_should_switch_session_model() {
         // Given
         commandManager.execute("/new");
-        when(modelManager.resolve("openai", "gpt-4o")).thenReturn(resolvedModel("openai", "gpt-4o"));
+        when(modelManager.resolveReference("openai/gpt-4o")).thenReturn(resolvedModel("openai", "gpt-4o"));
 
         // When
         CommandResult result = commandManager.execute("/model openai/gpt-4o");
@@ -294,7 +294,7 @@ class SystemCommandsTest {
     @Test
     void model_with_argument_should_set_pending_default_when_session_missing() {
         // Given：首页（没有当前会话），模型存在
-        when(modelManager.resolve("openai", "gpt-4o")).thenReturn(resolvedModel("openai", "gpt-4o"));
+        when(modelManager.resolveReference("openai/gpt-4o")).thenReturn(resolvedModel("openai", "gpt-4o"));
         assertNull(sessionManager.current());
 
         // When
@@ -315,7 +315,7 @@ class SystemCommandsTest {
     @Test
     void model_with_argument_should_reject_unknown_model_without_touchingDefaults() {
         // Given
-        when(modelManager.resolve("openai", "ghost")).thenThrow(new JellyfishException("not found"));
+        when(modelManager.resolveReference("openai/ghost")).thenThrow(new JellyfishException("not found"));
 
         // When
         CommandResult result = commandManager.execute("/model openai/ghost");

@@ -27,6 +27,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Predicate;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -34,6 +35,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -447,6 +449,74 @@ class PermissionManagerTest {
                 () -> new PermissionManager(policies, readOnlyTools, extensions, events, null, runtimeConfig));
         assertThrows(NullPointerException.class,
                 () -> new PermissionManager(policies, readOnlyTools, extensions, events, channel, null));
+    }
+
+    @Test
+    void usableTools_should_narrow_to_allow_list() {
+        // Given
+        when(policies.policyOf("agent-a")).thenReturn(PermissionPolicy.of(null, null, toolSet("read_file")));
+        Predicate<String> usable = manager.usableTools("agent-a", PermissionMode.NORMAL);
+
+        // When / Then：与执行期同一个判据——清单里出现、执行时却被拒会让模型白跑一轮
+        assertTrue(usable.test("read_file"));
+        assertFalse(usable.test("bash"));
+    }
+
+    @Test
+    void usableTools_should_drop_denied_tool() {
+        // Given
+        when(policies.policyOf("agent-a")).thenReturn(PermissionPolicy.of(toolSet("bash"), null, null));
+        Predicate<String> usable = manager.usableTools("agent-a", PermissionMode.NORMAL);
+
+        // When / Then
+        assertFalse(usable.test("bash"));
+        assertTrue(usable.test("read_file"));
+    }
+
+    @Test
+    void usableTools_should_keep_tool_that_only_requires_approval() {
+        // Given：ASK 说明工具是可用的，只是要人点一下批准；从清单里拿掉会让
+        // 「只读免打扰、写类要审批」这套配置直接失效
+        when(policies.policyOf("agent-a")).thenReturn(PermissionPolicy.of(null, toolSet("bash"), null));
+        Predicate<String> usable = manager.usableTools("agent-a", PermissionMode.NORMAL);
+
+        // When / Then
+        assertTrue(usable.test("bash"));
+    }
+
+    @Test
+    void usableTools_should_narrow_to_read_only_in_plan_mode() {
+        // Given
+        useReadOnlyTools("read_file");
+        when(policies.policyOf("agent-a")).thenReturn(PermissionPolicy.unrestricted());
+        Predicate<String> usable = manager.usableTools("agent-a", PermissionMode.PLAN);
+
+        // When / Then
+        assertTrue(usable.test("read_file"));
+        assertFalse(usable.test("write_file"));
+    }
+
+    @Test
+    void usableTools_should_be_pure_without_audit_or_approval() {
+        // Given：一个要求审批的工具
+        when(policies.policyOf("agent-a")).thenReturn(PermissionPolicy.of(null, toolSet("bash"), null));
+        Predicate<String> usable = manager.usableTools("agent-a", PermissionMode.NORMAL);
+
+        // When：清单过滤是每轮组装都会跑的路径，绝不能弹审批框或刷审计事件
+        usable.test("bash");
+        usable.test("bash");
+
+        // Then
+        verify(events, never()).publish(any());
+    }
+
+    @Test
+    void usableTools_should_allow_when_no_policy() {
+        // Given：未绑定 agent 时取不到策略，按 fail-open 全放行
+        when(policies.policyOf(null)).thenReturn(PermissionPolicy.unrestricted());
+
+        // When / Then
+        assertTrue(manager.usableTools(null, PermissionMode.NORMAL).test("anything"));
     }
 
     /**

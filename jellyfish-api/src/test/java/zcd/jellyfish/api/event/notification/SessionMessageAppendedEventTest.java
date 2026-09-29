@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -33,5 +34,25 @@ class SessionMessageAppendedEventTest {
         assertNotNull(event.getEventId());
         assertTrue(event.getOccurredAt() > 0L);
         assertTrue(event.belongsToSession("session-1"));
+    }
+
+    @Test
+    void getParentSessionId_should_return_null_when_root_session() {
+        // When
+        SessionMessageAppendedEvent event = new SessionMessageAppendedEvent("session-1", "message-1", "user");
+
+        // Then
+        assertNull(event.getParentSessionId());
+    }
+
+    @Test
+    void getParentSessionId_should_return_parent_when_sub_agent_session() {
+        // When
+        SessionMessageAppendedEvent event =
+                new SessionMessageAppendedEvent("session-2", "message-1", "user", "session-1");
+
+        // Then
+        assertEquals("session-1", event.getParentSessionId());
+        assertEquals("session-2", event.getSessionId());
     }
 }

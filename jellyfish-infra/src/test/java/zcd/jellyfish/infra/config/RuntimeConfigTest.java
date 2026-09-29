@@ -520,6 +520,48 @@ class RuntimeConfigTest {
     }
 
     @Test
+    void refresh_should_merge_sub_agent_with_project_override() throws IOException {
+        // Given：项目级只配了 maxDepth，其余字段应按缺省而不是按全局级（整对象覆盖）
+        Path global = writeFile("jellyfish-global.json",
+                "{\"subAgent\":{\"enabled\":false,\"maxDepth\":5,\"maxRounds\":3}}");
+        Path project = writeFile("jellyfish-project.json", "{\"subAgent\":{\"maxDepth\":0}}");
+
+        // When
+        RuntimeConfig runtimeConfig = newRuntimeConfig(pathsTo(null, null), pathsTo(null, null),
+                pathsTo(global, project));
+
+        // Then
+        SubAgentSettings subAgent = runtimeConfig.getSubAgentSettings();
+        assertEquals(0, subAgent.getMaxDepth());
+        assertTrue(subAgent.isEnabled());
+        assertEquals(SubAgentSettings.DEFAULT_MAX_ROUNDS, subAgent.getMaxRounds());
+    }
+
+    @Test
+    void refresh_should_fall_back_to_global_sub_agent_when_project_absent() throws IOException {
+        // Given
+        Path global = writeFile("jellyfish-global.json", "{\"subAgent\":{\"maxSpawnsPerTurn\":4}}");
+
+        // When
+        RuntimeConfig runtimeConfig = newRuntimeConfig(pathsTo(null, null), pathsTo(null, null),
+                pathsTo(global, null));
+
+        // Then
+        assertEquals(4, runtimeConfig.getSubAgentSettings().getMaxSpawnsPerTurn());
+    }
+
+    @Test
+    void refresh_should_use_default_sub_agent_when_not_configured() {
+        // When
+        RuntimeConfig runtimeConfig = newRuntimeConfig(pathsTo(null, null), pathsTo(null, null),
+                pathsTo(null, null));
+
+        // Then
+        assertTrue(runtimeConfig.getSubAgentSettings().isDefault());
+        assertEquals(SubAgentSettings.DEFAULT_MAX_DEPTH, runtimeConfig.getSubAgentSettings().getMaxDepth());
+    }
+
+    @Test
     void refresh_should_warn_when_plugin_enabled_and_disabled_at_once() throws IOException {
         // Given
         Path jellyfish = writeFile("jellyfish.json",

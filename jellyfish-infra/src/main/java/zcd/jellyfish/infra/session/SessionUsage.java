@@ -64,6 +64,28 @@ public final class SessionUsage {
     }
 
     /**
+     * 累加另一份累计快照（含调用次数）。
+     * <p>
+     * <b>为什么需要它而不是把总量包成一个 {@link LlmUsage} 再调 {@link #plus(LlmUsage)}</b>：
+     * 后者恒定只加一次调用。子代理的一个回合可能调了三次模型，用那个入口归集会得到
+     * 「token 对、调用次数少两次」的账，而调用次数正是判断「一次任务到底花了多少来回」的依据。
+     * <p>
+     * 子代理的用量并入父会话时走这条路径：对它而言那些调用确实发生了，也该算在这个对话头上。
+     *
+     * @param other 另一份累计快照，可为 {@code null}（按无变化处理）
+     * @return 累加后的新快照
+     */
+    public SessionUsage plus(SessionUsage other) {
+        if (other == null || other == EMPTY) {
+            return this;
+        }
+        return new SessionUsage(promptTokens + other.promptTokens,
+                completionTokens + other.completionTokens,
+                totalTokens + other.totalTokens,
+                llmCalls + other.llmCalls);
+    }
+
+    /**
      * 获取累计输入 token 数。
      *
      * @return 累计输入 token 数

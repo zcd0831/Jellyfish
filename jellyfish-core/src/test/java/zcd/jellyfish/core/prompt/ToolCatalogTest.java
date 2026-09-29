@@ -82,6 +82,41 @@ class ToolCatalogTest {
                 () -> tools.add(new LlmTool("x", "y", null, null)));
     }
 
+    @Test
+    void tools_should_drop_entries_rejected_by_filter() {
+        // Given
+        ExtensionRegistry extensions = newRegistry();
+        register(extensions, "read_file", new ToolDescriptor("read_file", "读文件"));
+        register(extensions, "write_file", new ToolDescriptor("write_file", "写文件"));
+
+        // When
+        List<LlmTool> tools = new ToolCatalog(extensions).tools(ToolFilter.of("read_file"::equals));
+
+        // Then
+        assertEquals(1, tools.size());
+        assertEquals("read_file", tools.get(0).getName());
+    }
+
+    @Test
+    void tools_should_return_all_when_filter_is_none() {
+        // Given
+        ExtensionRegistry extensions = newRegistry();
+        register(extensions, "read_file", new ToolDescriptor("read_file", "读文件"));
+        register(extensions, "write_file", new ToolDescriptor("write_file", "写文件"));
+
+        // When
+        List<LlmTool> tools = new ToolCatalog(extensions).tools(ToolFilter.none());
+
+        // Then：主会话走的就是这条路径，必须与引入过滤器之前完全一致
+        assertEquals(2, tools.size());
+    }
+
+    @Test
+    void tools_should_reject_null_filter() {
+        // When / Then：传 null 是编程错误，静默当成全放行会把过滤变成可选项
+        assertThrows(NullPointerException.class, () -> new ToolCatalog(newRegistry()).tools(null));
+    }
+
     /**
      * 注册一个工具处理器。
      *

@@ -23,6 +23,7 @@ import zcd.jellyfish.infra.llm.LlmResponse;
 import zcd.jellyfish.infra.llm.LlmToolCall;
 import zcd.jellyfish.infra.model.ModelManager;
 import zcd.jellyfish.infra.model.ResolvedModel;
+import zcd.jellyfish.infra.model.SessionModelResolver;
 import zcd.jellyfish.infra.session.Session;
 import zcd.jellyfish.infra.session.SessionCompaction;
 import zcd.jellyfish.infra.session.SessionManager;
@@ -103,8 +104,11 @@ public class ConversationCompactor implements AutoCloseable {
     /** 会话域服务：读会话、写回压缩结果与用量。 */
     private final SessionManager sessionManager;
 
-    /** 模型门面：解析会话当前模型并给出客户端。 */
+    /** 模型门面：给出客户端。 */
     private final ModelManager modelManager;
+
+    /** 会话模型解析器：与对话共用同一套三级回落。 */
+    private final SessionModelResolver sessionModelResolver;
 
     /** 运行时配置门面：读取压缩参数与上下文预留。 */
     private final RuntimeConfig runtimeConfig;
@@ -132,12 +136,13 @@ public class ConversationCompactor implements AutoCloseable {
      * @param runtimeConfig  运行时配置门面
      * @param extensions     同步扩展点策略
      * @param events         通知发布入口
+     * @param sessionModelResolver 会话模型解析器
      */
     @Inject
     public ConversationCompactor(SessionManager sessionManager, ModelManager modelManager,
                                  RuntimeConfig runtimeConfig, ExtensionRegistry extensions,
-                                 EventPublisher events) {
-        this(sessionManager, modelManager, runtimeConfig, extensions, events, createExecutor());
+                                 EventPublisher events, SessionModelResolver sessionModelResolver) {
+        this(sessionManager, modelManager, runtimeConfig, extensions, events, sessionModelResolver, createExecutor());
     }
 
     /**
@@ -148,15 +153,19 @@ public class ConversationCompactor implements AutoCloseable {
      * @param runtimeConfig  运行时配置门面
      * @param extensions     同步扩展点策略
      * @param events         通知发布入口
+     * @param sessionModelResolver 会话模型解析器
      * @param executor       专用执行器
      */
     ConversationCompactor(SessionManager sessionManager, ModelManager modelManager, RuntimeConfig runtimeConfig,
-                          ExtensionRegistry extensions, EventPublisher events, ExecutorService executor) {
+                          ExtensionRegistry extensions, EventPublisher events,
+                          SessionModelResolver sessionModelResolver, ExecutorService executor) {
         this.sessionManager = Objects.requireNonNull(sessionManager, "sessionManager must not be null");
         this.modelManager = Objects.requireNonNull(modelManager, "modelManager must not be null");
         this.runtimeConfig = Objects.requireNonNull(runtimeConfig, "runtimeConfig must not be null");
         this.extensions = Objects.requireNonNull(extensions, "extensions must not be null");
         this.events = Objects.requireNonNull(events, "events must not be null");
+        this.sessionModelResolver = Objects.requireNonNull(sessionModelResolver,
+                "sessionModelResolver must not be null");
         this.executor = Objects.requireNonNull(executor, "executor must not be null");
     }
 
@@ -365,7 +374,7 @@ public class ConversationCompactor implements AutoCloseable {
             return null;
         }
         // 走到这里非压不可，模型解析失败才是真的失败
-        resolvedModel = resolvedModel == null ? requireModel(session) : resolvedModel;
+        resolvedModel = resolvedModel == null ? resolveModel(session) : resolvedModel;
         int maxSummaryChars = maxSummaryCharsOf(strategy);
         // 指令与表头也要占预算：它们和待压正文挤在同一个窗口里
         String instructions = renderInstructions(strategy.getSummaryPrompt(), maxSummaryChars);
@@ -731,22 +740,17 @@ public class ConversationCompactor implements AutoCloseable {
     }
 
     /**
-     * 解析会话当前模型：显式配置了就精确解析，否则跟随默认。
+     * 解析会话当前模型。
      * <p>
-     * 与 {@code ReActLooper} 同一套判据（{@code null} 表示跟随默认），刻意保持镜像：
-     * 压缩与对话必须落在同一个模型上，否则摘要会按另一个模型的窗口裁剪、用另一个模型的额度。
+     * 三级回落（会话显式 → agent 偏好 → 全局默认）与对话路径共用 {@link SessionModelResolver}：
+     * 压缩必须按同一个模型的窗口裁剪、花同一个模型的额度，两边各写一遍就一定会漂移。
      *
      * @param session 会话运行态
      * @return 解析结果
      * @throws JellyfishException 解析不到模型时抛出
      */
     private ResolvedModel resolveModel(Session session) {
-        String provider = session.getProvider();
-        String model = session.getModel();
-        if (StringUtils.isAnyBlank(provider, model)) {
-            return modelManager.resolveDefault();
-        }
-        return modelManager.resolve(provider, model);
+        return sessionModelResolver.resolve(session);
     }
 
     /**
@@ -767,21 +771,6 @@ public class ConversationCompactor implements AutoCloseable {
                     session.getSessionId(), messageOf(e));
             return null;
         }
-    }
-
-    /**
-     * 解析会话当前模型，解析不出来时抛异常。
-     *
-     * @param session 会话运行态
-     * @return 解析结果，保证非 {@code null}
-     * @throws JellyfishException 解析不到模型时抛出
-     */
-    private ResolvedModel requireModel(Session session) {
-        ResolvedModel resolvedModel = resolveModel(session);
-        if (resolvedModel == null) {
-            throw new JellyfishException("没有可用的模型，无法压缩");
-        }
-        return resolvedModel;
     }
 
     /**

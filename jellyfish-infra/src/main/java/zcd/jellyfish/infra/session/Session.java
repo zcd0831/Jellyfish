@@ -24,6 +24,10 @@ import java.util.List;
  * 派发都挂在那一个入口上；本类只保证「单会话内的原子性与快照安全」，因此它<b>不感知</b>事件通道、
  * 扩展层与配置。
  * <p>
+ * <b>子代理会话靠 {@link #getParentSessionId()} 识别</b>：它同样是一个真实会话（有标识、有消息、
+ * 有事件），只是不落盘、不进会话列表；「临时的」这个性质完全由「谁生的它」推导而来，
+ * 因此不需要第二个布尔字段——两个字段就有两套真相。
+ * <p>
  * 线程安全策略：所有读写都在实例锁内（方法级 {@code synchronized}），读方法返回防御性快照——
  * 调用方拿到的列表不会被后续追加改动，遍历时也不会出现并发修改。会话之间互不影响，跨会话隔离由
  * {@link SessionManager} 的并发映射提供。
@@ -37,6 +41,14 @@ public final class Session {
 
     /** 会话创建时间戳（epoch millis），创建后不可变。 */
     private final long createdAt;
+
+    /**
+     * 派生该会话的父会话标识，创建后不可变。
+     * <p>
+     * {@code null} 表示根会话（用户开的对话）；非 {@code null} 表示这是某个根会话派出去的
+     * 子代理会话，因此<b>不落盘、不进会话列表</b>，但生命周期事件照发（携带本字段供订阅者归位）。
+     */
+    private final String parentSessionId;
 
     /** 消息列表，按追加顺序排列。 */
     private final List<SessionMessage> messages = new ArrayList<SessionMessage>();
@@ -97,6 +109,22 @@ public final class Session {
      */
     Session(String sessionId, String agentId, String provider, String model,
             PermissionMode permissionMode, long createdAt) {
+        this(sessionId, agentId, provider, model, permissionMode, createdAt, null);
+    }
+
+    /**
+     * 构造会话运行态（含父会话标识），仅供 {@link SessionManager} 调用。
+     *
+     * @param sessionId       会话唯一标识
+     * @param agentId         初始 agentId，可为 {@code null}
+     * @param provider        初始 provider，可为 {@code null}
+     * @param model           初始 model，可为 {@code null}
+     * @param permissionMode  初始权限模式，{@code null} 按 {@link PermissionMode#NORMAL} 处理
+     * @param createdAt       创建时间戳（epoch millis）
+     * @param parentSessionId 派生该会话的父会话标识，{@code null} 表示根会话
+     */
+    Session(String sessionId, String agentId, String provider, String model,
+            PermissionMode permissionMode, long createdAt, String parentSessionId) {
         this.sessionId = sessionId;
         this.agentId = agentId;
         this.provider = provider;
@@ -104,6 +132,7 @@ public final class Session {
         this.permissionMode = permissionMode == null ? PermissionMode.NORMAL : permissionMode;
         this.createdAt = createdAt;
         this.updatedAt = createdAt;
+        this.parentSessionId = parentSessionId;
     }
 
     /**
@@ -136,6 +165,28 @@ public final class Session {
      */
     public String getSessionId() {
         return sessionId;
+    }
+
+    /**
+     * 获取派生该会话的父会话标识。
+     *
+     * @return 父会话标识；根会话返回 {@code null}
+     */
+    public String getParentSessionId() {
+        return parentSessionId;
+    }
+
+    /**
+     * 判断是否为子代理会话。
+     * <p>
+     * 包级可见：只有 {@link SessionManager} 需要据此决定「落不落盘、进不进列表」，
+     * 外部一律读 {@link #getParentSessionId()}——那是同一个事实，但不会让调用方误以为
+     * 它只是一条参考信息。
+     *
+     * @return 子代理会话返回 {@code true}
+     */
+    boolean isEphemeral() {
+        return parentSessionId != null;
     }
 
     /**
@@ -300,6 +351,19 @@ public final class Session {
      */
     synchronized void recordUsage(LlmUsage callUsage) {
         usage = usage.plus(callUsage);
+        updatedAt = System.currentTimeMillis();
+    }
+
+    /**
+     * 并入另一份累计用量（不追加消息），用于把子代理回合的花费算到父会话头上。
+     * <p>
+     * 与 {@link #recordUsage(LlmUsage)} 的差别是「几次调用」：子代理的一个回合可能调了多次模型，
+     * 这里把次数一并带过来，而不是把总量当成一次。
+     *
+     * @param otherUsage 另一份累计用量，可为 {@code null}（按无变化处理）
+     */
+    synchronized void recordUsage(SessionUsage otherUsage) {
+        usage = usage.plus(otherUsage);
         updatedAt = System.currentTimeMillis();
     }
 

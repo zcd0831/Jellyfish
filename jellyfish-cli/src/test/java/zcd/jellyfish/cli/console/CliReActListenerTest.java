@@ -142,6 +142,53 @@ class CliReActListenerTest {
     }
 
     @Test
+    void onToolCallCompleted_should_append_summary_from_metadata() {
+        // Given：子代理的结果正文不进屏幕（那是一整篇报告，而且已经回灌给模型了），
+        // 命令行这边只靠这一句摘要回答「刚才那一步到底是什么」
+        RecordingConsoleIO console = new RecordingConsoleIO(null);
+        CliReActListener listener = new CliReActListener(console, false);
+        Map<String, Object> metadata = new LinkedHashMap<String, Object>();
+        metadata.put(ToolMetadata.KEY_SUMMARY, "子代理 scout · 3 轮 · 123456 tok");
+
+        // When
+        listener.onToolCallCompleted("call-1", "task", true, "[子代理 scout 已完成 · 3 轮]\n报告正文", metadata);
+
+        // Then
+        assertEquals("← task 完成（26 字符） · 子代理 scout · 3 轮 · 123456 tok\n", console.err());
+    }
+
+    @Test
+    void onToolCallCompleted_should_append_summary_before_outcome_suffix() {
+        // Given
+        RecordingConsoleIO console = new RecordingConsoleIO(null);
+        CliReActListener listener = new CliReActListener(console, false);
+        Map<String, Object> metadata = new LinkedHashMap<String, Object>();
+        metadata.put(ToolMetadata.KEY_SUMMARY, "子代理 scout");
+        metadata.put(ToolMetadata.KEY_TERMINAL, "REJECTED");
+
+        // When
+        listener.onToolCallCompleted("call-1", "task", true, "[子代理未开始]", metadata);
+
+        // Then：摘要是「它是什么」的注解，终止原因是「它怎么了」的补充，各占各的位置
+        assertEquals("← task 完成（8 字符） · 子代理 scout，REJECTED\n", console.err());
+    }
+
+    @Test
+    void onToolCallCompleted_should_keep_line_unchanged_when_no_summary() {
+        // Given：普通工具不带摘要键
+        RecordingConsoleIO console = new RecordingConsoleIO(null);
+        CliReActListener listener = new CliReActListener(console, false);
+        Map<String, Object> metadata = new LinkedHashMap<String, Object>();
+        metadata.put("durationMs", 12L);
+
+        // When
+        listener.onToolCallCompleted("call-1", "read_file", true, "内容", metadata);
+
+        // Then：不给普通工具多出一个空尾巴
+        assertEquals("← read_file 完成（2 字符）\n", console.err());
+    }
+
+    @Test
     void onToolCallCompleted_should_append_terminal_when_terminated() {
         RecordingConsoleIO console = new RecordingConsoleIO(null);
         CliReActListener listener = new CliReActListener(console, false);

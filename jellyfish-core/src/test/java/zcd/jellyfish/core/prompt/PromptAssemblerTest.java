@@ -37,7 +37,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -171,7 +173,7 @@ class PromptAssemblerTest {
     void buildRequest_should_assemble_model_prompt_messages_tools_and_max_tokens() {
         // Given
         when(agentManager.systemPromptOf(null)).thenReturn("你是助手");
-        when(toolCatalog.tools()).thenReturn(
+        when(toolCatalog.tools(any(ToolFilter.class))).thenReturn(
                 Collections.singletonList(new LlmTool("read", "读文件", null, null)));
         SessionManager manager = new SessionManager(agentManager, events, new ExtensionRegistry(new TypeRegistry()), new SessionDefaults());
         Session session = manager.createDefault();
@@ -193,7 +195,7 @@ class PromptAssemblerTest {
     void buildRequest_should_leave_max_tokens_unset_when_model_does_not_declare() {
         // Given
         when(agentManager.systemPromptOf(null)).thenReturn(null);
-        when(toolCatalog.tools()).thenReturn(Collections.<LlmTool>emptyList());
+        when(toolCatalog.tools(any(ToolFilter.class))).thenReturn(Collections.<LlmTool>emptyList());
         when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
         Session session = newSession();
 
@@ -203,6 +205,35 @@ class PromptAssemblerTest {
         // Then
         assertNull(request.getMaxTokens());
         assertNull(request.getSystemPrompt());
+    }
+
+    @Test
+    void assemble_should_pass_tool_filter_to_catalog() {
+        // Given
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        when(toolCatalog.tools(any(ToolFilter.class))).thenReturn(Collections.<LlmTool>emptyList());
+        ToolFilter filter = ToolFilter.of("read_file"::equals);
+        Session session = newSession();
+
+        // When
+        assembler.assemble(session, resolvedModel(128000, 0), filter);
+
+        // Then：过滤必须一路传到目录，否则子代理依旧会看到全部工具
+        verify(toolCatalog).tools(filter);
+    }
+
+    @Test
+    void assemble_should_use_none_filter_when_not_given() {
+        // Given
+        when(toolCatalog.tools(any(ToolFilter.class))).thenReturn(Collections.<LlmTool>emptyList());
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        Session session = newSession();
+
+        // When
+        assembler.assemble(session, resolvedModel(128000, 0));
+
+        // Then：两参重载（主会话路径）必须传全放行，不能把 null 漏下去
+        verify(toolCatalog).tools(ToolFilter.none());
     }
 
     /**

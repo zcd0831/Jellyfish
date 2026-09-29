@@ -467,11 +467,36 @@ public final class TranscriptProjector {
         String label = name == null || name.isEmpty() ? "工具" : name;
         List<StyledSegment> body = new ArrayList<StyledSegment>();
         body.addAll(wrapBody(label, TRACE_STYLE));
+        // 摘要用与工具名相同的样式：它是「刚才那一行到底是什么事」的说明，不是一条警示。
+        // 放在失败后缀之前，于是「哪个工具 · 它在干什么 · 成没成」从左到右顺着读下来
+        body.addAll(wrapBody(summarySuffix(message), TRACE_STYLE));
         // 错误用红色后缀而不是把整行变红：工具名与结论要能一起读，整行染色会让
         // 「哪个工具失败了」这条信息淹没在颜色里。判据来自元数据字段，不去解析首行文案
         body.addAll(wrapBody(failureSuffix(message), ERROR_STYLE));
         out.addAll(LineWrapper.wrap(new StyledSegment(TRACE_PREFIX, TRACE_STYLE), body, width));
         return true;
+    }
+
+    /**
+     * 取工具轨迹的单行摘要后缀。
+     * <p>
+     * <b>为什么读元数据而不是读结果正文的首行</b>：首行那句「子代理 scout · 3 轮」是给<b>模型</b>
+     * 读的措辞，展示若依赖它，改一个句子标记就会消失。元数据里的摘要键是同一件事的另一个版本，
+     * 它由工具自己声明「这是给人看的」，因此措辞怎么改都不会影响渲染。
+     * <p>
+     * <b>为什么外壳不自己去拼这句话</b>：外壳认识的是「有没有摘要」，而不是具体是哪个工具、
+     * 该带哪几个数字——一旦外壳开始按工具名分支，每多一个工具就多一处特例。
+     * <p>
+     * <b>为什么结果正文不显示而摘要显示</b>：正文往往是一整篇报告，塞进消息区会把对话刷爆
+     * （它本来就是回灌给模型的长文本），而一行摘要回答的正好是「屏幕上少了正文之后，
+     * 我刚才能看到的东西还在不在」。
+     *
+     * @param message 工具消息，不可为 {@code null}
+     * @return 后缀文本；没有摘要时返回空串
+     */
+    private static String summarySuffix(SessionMessage message) {
+        String summary = ToolMetadata.summaryOf(message.getMetadata());
+        return summary.isEmpty() ? "" : " \u00b7 " + summary;
     }
 
     /**

@@ -45,4 +45,23 @@ class SessionClosedEventTest {
         assertTrue(event.getOccurredAt() > 0L);
         assertTrue(event.belongsToSession("session-1"));
     }
+
+    @Test
+    void getParentSessionId_should_return_null_when_root_session() {
+        // When
+        SessionClosedEvent event = new SessionClosedEvent("session-1", "coder", 3);
+
+        // Then
+        assertNull(event.getParentSessionId());
+    }
+
+    @Test
+    void getParentSessionId_should_return_parent_when_sub_agent_session() {
+        // When
+        SessionClosedEvent event = new SessionClosedEvent("session-2", "scout", 4, "session-1");
+
+        // Then
+        assertEquals("session-1", event.getParentSessionId());
+        assertEquals(4, event.getMessageCount());
+    }
 }

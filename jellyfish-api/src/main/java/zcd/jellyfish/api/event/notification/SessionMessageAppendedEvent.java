@@ -8,6 +8,9 @@ import zcd.jellyfish.api.event.AbstractJellyfishEvent;
  * <b>不携带消息正文</b>：这是异步、可丢弃的 best-effort 通道，把对话内容塞进去既放大体积
  * 又扩大隐私面；需要正文的订阅者用 {@code sessionId} + {@code messageId} 回查会话。
  * 会话持久化（架构图 {@code SessionMgr ==> ExtReg}）走的是同步扩展点，不依赖本事件。
+ * <p>
+ * <b>{@code parentSessionId} 非 {@code null} 即子代理会话</b>：它让订阅者不必自己维护
+ * 「sessionId → 父会话」的映射（那会在错过创建事件时永久失真）。
  *
  * @author zcd
  */
@@ -19,17 +22,33 @@ public final class SessionMessageAppendedEvent extends AbstractJellyfishEvent {
     /** 追加的消息角色。 */
     private final String role;
 
+    /** 派生该会话的父会话标识，{@code null} 表示不是子代理会话（根会话）。 */
+    private final String parentSessionId;
+
     /**
-     * 构造消息追加事件。
+     * 构造根会话的消息追加事件。
      *
      * @param sessionId 会话标识
      * @param messageId 消息标识
      * @param role      消息角色
      */
     public SessionMessageAppendedEvent(String sessionId, String messageId, String role) {
+        this(sessionId, messageId, role, null);
+    }
+
+    /**
+     * 构造消息追加事件。
+     *
+     * @param sessionId       会话标识
+     * @param messageId       消息标识
+     * @param role            消息角色
+     * @param parentSessionId 派生该会话的父会话标识，{@code null} 表示根会话
+     */
+    public SessionMessageAppendedEvent(String sessionId, String messageId, String role, String parentSessionId) {
         super(sessionId);
         this.messageId = messageId;
         this.role = role;
+        this.parentSessionId = parentSessionId;
     }
 
     /**
@@ -48,5 +67,14 @@ public final class SessionMessageAppendedEvent extends AbstractJellyfishEvent {
      */
     public String getRole() {
         return role;
+    }
+
+    /**
+     * 获取派生该会话的父会话标识。
+     *
+     * @return 父会话标识；非子代理会话时为 {@code null}
+     */
+    public String getParentSessionId() {
+        return parentSessionId;
     }
 }

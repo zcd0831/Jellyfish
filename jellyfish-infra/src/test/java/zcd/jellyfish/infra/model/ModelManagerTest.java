@@ -448,6 +448,67 @@ class ModelManagerTest {
         assertSame(model, manager.findModel(PROVIDER, MODEL));
     }
 
+    @Test
+    void resolveReference_should_split_when_provider_and_model_given() {
+        // Given
+        Provider provider = provider();
+        Model model = provider.getModels().get(0);
+        when(modelRegistry.findProvider(PROVIDER)).thenReturn(provider);
+        when(modelRegistry.findModel(PROVIDER, MODEL)).thenReturn(model);
+        ModelManager manager = newModelManager();
+
+        // When
+        ResolvedModel resolved = manager.resolveReference("openai/gpt-4o");
+
+        // Then
+        assertSame(provider, resolved.getProvider());
+        assertSame(model, resolved.getModel());
+    }
+
+    @Test
+    void resolveReference_should_pick_first_provider_when_bare_model_given() {
+        // Given
+        Provider provider = provider();
+        Model model = provider.getModels().get(0);
+        Map<String, Model> matches = new LinkedHashMap<String, Model>();
+        matches.put(PROVIDER, model);
+        when(modelRegistry.findProvidersByModelName(MODEL)).thenReturn(matches);
+        when(modelRegistry.findProvider(PROVIDER)).thenReturn(provider);
+        ModelManager manager = newModelManager();
+
+        // When
+        ResolvedModel resolved = manager.resolveReference(MODEL);
+
+        // Then
+        assertSame(model, resolved.getModel());
+    }
+
+    @Test
+    void resolveReference_should_treat_trailing_slash_as_model_name_and_fail() {
+        // Given：斜杠必须在中间才算分隔符，"gpt-4o/" 整串被当成模型名
+        when(modelRegistry.findProvidersByModelName(MODEL + "/"))
+                .thenReturn(Collections.<String, Model>emptyMap());
+        ModelManager manager = newModelManager();
+
+        // When / Then：报「模型不存在」而不是「provider 名为空」——后者对用户毫无指导价值
+        assertThrows(JellyfishException.class, () -> manager.resolveReference(MODEL + "/"));
+    }
+
+    @Test
+    void resolveReference_should_throw_when_blank() {
+        // When / Then
+        assertThrows(JellyfishException.class, () -> newModelManager().resolveReference("  "));
+    }
+
+    @Test
+    void resolveReference_should_throw_when_model_unknown() {
+        // Given
+        when(modelRegistry.findProvidersByModelName("ghost")).thenReturn(Collections.<String, Model>emptyMap());
+
+        // When / Then
+        assertThrows(JellyfishException.class, () -> newModelManager().resolveReference("ghost"));
+    }
+
     /**
      * 构造被测实例，构造器会先执行一次索引刷新（不广播事件）。
      *

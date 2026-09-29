@@ -5,12 +5,16 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.event.EventPublisher;
+import zcd.jellyfish.api.extension.CancellationToken;
 import zcd.jellyfish.api.extension.ToolCallResult;
 import zcd.jellyfish.core.compact.ConversationCompactor;
 import zcd.jellyfish.core.prompt.PromptAssembler;
 import zcd.jellyfish.core.prompt.PromptAssembly;
+import zcd.jellyfish.core.prompt.ToolFilter;
 import zcd.jellyfish.core.tool.ToolExecutor;
+import zcd.jellyfish.infra.config.ReactSettings;
 import zcd.jellyfish.infra.config.RuntimeConfig;
+import zcd.jellyfish.infra.config.SubAgentSettings;
 import zcd.jellyfish.infra.llm.LlmClient;
 import zcd.jellyfish.infra.llm.LlmMessage;
 import zcd.jellyfish.infra.llm.LlmRequest;
@@ -20,6 +24,7 @@ import zcd.jellyfish.infra.llm.LlmStreamListener;
 import zcd.jellyfish.infra.llm.LlmToolCall;
 import zcd.jellyfish.infra.model.ModelManager;
 import zcd.jellyfish.infra.model.ResolvedModel;
+import zcd.jellyfish.infra.model.SessionModelResolver;
 import zcd.jellyfish.infra.session.Session;
 import zcd.jellyfish.infra.session.SessionManager;
 
@@ -49,6 +54,11 @@ import java.util.concurrent.atomic.AtomicReference;
  * 因此本类在调用点自己兜底——权限拒绝、未知工具、工具抛错一律转成工具结果消息回灌给模型，让模型自适应，
  * 而不是把整条循环打断。只有「调用模型本身失败」才上抛。
  * <p>
+ * <b>两种回合形态共用同一个循环</b>：{@link #chat} 是异步的顶层回合（跑在自持的 {@code react} 池上），
+ * {@link #runNested} 是同步的嵌套回合（<b>在调用线程上内联跑完</b>，供子代理委派）。
+ * 后者刻意不提交执行器：调用它的工具调用此刻正占着一条 {@code react} 线程，
+ * 把嵌套回合再排回同一个池里，几条并发父回合就能把池占满并互相等死。
+ * <p>
  * <b>取消</b>：{@link ReActTurn#cancel()} 置标志并掐断当前 LLM 流；循环在每轮开始与每个工具执行前检查标志。
  *
  * @author zcd
@@ -77,6 +87,9 @@ public class ReActLooper implements AutoCloseable {
     /** 模型门面：解析会话当前模型并给出客户端。 */
     private final ModelManager modelManager;
 
+    /** 会话模型解析器：会话显式 → agent 偏好 → 全局默认。 */
+    private final SessionModelResolver sessionModelResolver;
+
     /** 工具执行器：权限判定 → 路由 → 截断落盘，全仓库只此一处。 */
     private final ToolExecutor toolExecutor;
 
@@ -92,6 +105,9 @@ public class ReActLooper implements AutoCloseable {
     /** 运行时配置门面：读取 ReAct 段。 */
     private final RuntimeConfig runtimeConfig;
 
+    /** 委派作用域持有者：顶层回合开闭，嵌套回合进出。 */
+    private final RunScopes runScopes;
+
     /** 专用执行器。 */
     private final ExecutorService executor;
 
@@ -105,13 +121,16 @@ public class ReActLooper implements AutoCloseable {
      * @param promptAssembler   提示词组装器
      * @param runtimeConfig     运行时配置门面
      * @param conversationCompactor 会话压缩器
+     * @param runScopes         委派作用域持有者
+     * @param sessionModelResolver 会话模型解析器
      */
     @Inject
     public ReActLooper(SessionManager sessionManager, ModelManager modelManager, ToolExecutor toolExecutor,
                        EventPublisher events, PromptAssembler promptAssembler, RuntimeConfig runtimeConfig,
-                       ConversationCompactor conversationCompactor) {
+                       ConversationCompactor conversationCompactor, RunScopes runScopes,
+                       SessionModelResolver sessionModelResolver) {
         this(sessionManager, modelManager, toolExecutor, events, promptAssembler,
-                runtimeConfig, conversationCompactor, createExecutor());
+                runtimeConfig, conversationCompactor, runScopes, sessionModelResolver, createExecutor());
     }
 
     /**
@@ -124,12 +143,14 @@ public class ReActLooper implements AutoCloseable {
      * @param promptAssembler   提示词组装器
      * @param runtimeConfig     运行时配置门面
      * @param conversationCompactor 会话压缩器
+     * @param runScopes         委派作用域持有者
+     * @param sessionModelResolver 会话模型解析器
      * @param executor          专用执行器
      */
     ReActLooper(SessionManager sessionManager, ModelManager modelManager, ToolExecutor toolExecutor,
                 EventPublisher events, PromptAssembler promptAssembler,
                 RuntimeConfig runtimeConfig, ConversationCompactor conversationCompactor,
-                ExecutorService executor) {
+                RunScopes runScopes, SessionModelResolver sessionModelResolver, ExecutorService executor) {
         this.sessionManager = Objects.requireNonNull(sessionManager, "sessionManager must not be null");
         this.modelManager = Objects.requireNonNull(modelManager, "modelManager must not be null");
         this.toolExecutor = Objects.requireNonNull(toolExecutor, "toolExecutor must not be null");
@@ -138,6 +159,9 @@ public class ReActLooper implements AutoCloseable {
         this.runtimeConfig = Objects.requireNonNull(runtimeConfig, "runtimeConfig must not be null");
         this.conversationCompactor = Objects.requireNonNull(conversationCompactor,
                 "conversationCompactor must not be null");
+        this.runScopes = Objects.requireNonNull(runScopes, "runScopes must not be null");
+        this.sessionModelResolver = Objects.requireNonNull(sessionModelResolver,
+                "sessionModelResolver must not be null");
         this.executor = Objects.requireNonNull(executor, "executor must not be null");
     }
 
@@ -162,12 +186,10 @@ public class ReActLooper implements AutoCloseable {
     }
 
     /**
-     * 回合入口：追加用户消息后进入循环，异常统一收敛成 {@link ReActListener#onError}。
+     * 顶层回合入口：开一个委派作用域，跑完必关。
      * <p>
-     * <b>回合的首尾就是延迟落盘的开头与结尾</b>：{@code beginTurn} 之后，回合内的消息追加只标脏，
-     * {@code finally} 里的 {@code flush} 把整个回合一次性落盘。放在 {@code finally} 是为了盖住全部
-     * 四条终结路径——正常收敛、取消、达到最大轮次、异常；放在这里而不是外壳，是因为外壳有三份
-     * （CLI / TUI / Server），而回合只有这一处。
+     * <b>作用域归属顶层回合而不是单次委派</b>：同一个回合里模型可以连着委派好几次，
+     * 也可能某个子代理再往下委派；「本回合已经派出多少」这笔账只能挂在回合上。
      *
      * @param turn      回合句柄
      * @param sessionId 会话标识
@@ -176,11 +198,89 @@ public class ReActLooper implements AutoCloseable {
      * @return 回合结果
      */
     private ReActResult execute(ReActTurnImpl turn, String sessionId, String userInput, ReActListener listener) {
+        SubAgentSettings subAgent = runtimeConfig.getSubAgentSettings();
+        runScopes.open(subAgent.getMaxDepth(), subAgent.getMaxSpawnsPerTurn());
+        try {
+            Session session;
+            try {
+                // 先解析会话：不存在的会话是调用方的问题，也要经 onError 告诉它（与其余失败同口径）
+                session = sessionManager.require(sessionId);
+            } catch (JellyfishException e) {
+                listener.onError(e);
+                throw e;
+            }
+            return runTurn(turn, session, userInput, listener,
+                    runtimeConfig.getReactSettings().getMaxRounds(), ToolFilter.none());
+        } finally {
+            // react 池线程会被复用：不关的话下一个回合会继承本回合的深度与计数
+            runScopes.close();
+        }
+    }
+
+    /**
+     * 启动一次嵌套回合，<b>在调用线程上同步跑完</b>并直接返回结果。
+     * <p>
+     * <b>为什么不提交执行器</b>：调用方（工具处理器）此刻正阻塞在一条 {@code react} 线程上等它返回，
+     * 把任务再排回同一个池里，几条并发父回合就能把池占满并互相等死——只有 8 条线程，而队列里的
+     * 嵌套回合永远不会被谁让出位置。内联执行顺带得到两个好处：不需要新线程，取消与调用栈天然串联。
+     * <p>
+     * <b>不在回合作用域内时直接拒绝</b>：嵌套回合不单独开作用域（那就是在绕过深度与预算），
+     * 拿不到父作用域说明它不是从某个顶层回合里派生出来的——那属于编程错误。
+     * <p>
+     * <b>取消由父令牌接管</b>：父回合被取消时，本回合的 LLM 流同时在同一个信号里被搞断。
+     *
+     * @param session           子代理会话，不可为 {@code null}
+     * @param prompt            给子代理的任务原文，可为 {@code null}
+     * @param listener          流式回调，可为 {@code null}（等价于 {@link ReActListener#NOOP}）
+     * @param cancellationToken 父回合的取消令牌，可为 {@code null}（不接受外部取消）
+     * @param maxRounds  本回合最大轮数，由调用方给出（子代理的轮数上限与主会话不同）
+     * @param toolFilter 工具清单过滤器，不可为 {@code null}
+     * @return 回合结果，保证非 {@code null}
+     * @throws JellyfishException 不在顶层回合作用域内时抛出
+     */
+    public ReActResult runNested(Session session, String prompt, ReActListener listener,
+                                 CancellationToken cancellationToken, int maxRounds, ToolFilter toolFilter) {
+        Objects.requireNonNull(session, "session must not be null");
+        Objects.requireNonNull(toolFilter, "toolFilter must not be null");
+        RunScope scope = runScopes.current();
+        if (scope == null) {
+            throw new JellyfishException("nested turn requires an active run scope");
+        }
+        ReActListener effective = listener == null ? ReActListener.NOOP : listener;
+        ReActTurnImpl turn = ReActTurnImpl.inline(cancellationToken);
+        scope.enter();
+        try {
+            return runTurn(turn, session, prompt, effective, maxRounds, toolFilter);
+        } finally {
+            scope.leave();
+        }
+    }
+
+    /**
+     * 回合主体：追加输入消息后进入循环，异常统一收敛成 {@link ReActListener#onError}。
+     * <p>
+     * <b>回合的首尾就是延迟落盘的开头与结尾</b>：{@code beginTurn} 之后，回合内的消息追加只标脏，
+     * {@code finally} 里的 {@code flush} 把整个回合一次性落盘。放在 {@code finally} 是为了盖住全部
+     * 四条终结路径——正常收敛、取消、达到最大轮次、异常；放在这里而不是外壳，是因为外壳有三份
+     * （CLI / TUI / Server），而回合只有这一处。
+     * <p>
+     * 顶层与嵌套共用它：两者的差别只有「回合从哪里来、轮数从哪读」，落盘与异常收敛同口径。
+     *
+     * @param turn      回合句柄
+     * @param session   会话运行态
+     * @param userInput 输入消息
+     * @param listener  监听器
+     * @param maxRounds  最大循环轮数
+     * @param toolFilter 工具清单过滤器
+     * @return 回合结果
+     */
+    private ReActResult runTurn(ReActTurnImpl turn, Session session, String userInput, ReActListener listener,
+                                int maxRounds, ToolFilter toolFilter) {
+        String sessionId = session.getSessionId();
         sessionManager.beginTurn(sessionId);
         try {
-            Session session = sessionManager.require(sessionId);
             sessionManager.appendMessage(sessionId, LlmMessage.user(userInput), null);
-            return loop(turn, session, listener);
+            return loop(turn, session, listener, maxRounds, toolFilter);
         } catch (JellyfishException e) {
             listener.onError(e);
             throw e;
@@ -196,20 +296,22 @@ public class ReActLooper implements AutoCloseable {
     /**
      * 循环主体：每轮一次模型调用，带工具调用则执行后继续，否则收敛。
      *
-     * @param turn     回合句柄
-     * @param session  会话运行态
-     * @param listener 监听器
+     * @param turn       回合句柄
+     * @param session    会话运行态
+     * @param listener   监听器
+     * @param maxRounds  最大循环轮数，由调用方给出
+     * @param toolFilter 工具清单过滤器
      * @return 回合结果
      */
-    private ReActResult loop(ReActTurnImpl turn, Session session, ReActListener listener) {
+    private ReActResult loop(ReActTurnImpl turn, Session session, ReActListener listener, int maxRounds,
+                             ToolFilter toolFilter) {
         String sessionId = session.getSessionId();
-        int maxRounds = runtimeConfig.getReactSettings().getMaxRounds();
         for (int round = 1; round <= maxRounds; round++) {
             if (turn.isCancelled()) {
                 return cancel(sessionId, listener, round - 1);
             }
-            ResolvedModel resolvedModel = resolveModel(session);
-            PromptAssembly assembly = promptAssembler.assemble(session, resolvedModel);
+            ResolvedModel resolvedModel = sessionModelResolver.resolve(session);
+            PromptAssembly assembly = promptAssembler.assemble(session, resolvedModel, toolFilter);
             // 压缩与这一轮的模型调用并发：请求已经组装好了，它不会拖慢这一轮；
             // 结果在下一轮组装时才生效（那时边界已经推进）
             conversationCompactor.autoCompactIfNeeded(sessionId, assembly.getUsage());
@@ -242,22 +344,6 @@ public class ReActLooper implements AutoCloseable {
         ReActResult result = ReActResult.truncated(sessionId, MAX_ROUNDS_MESSAGE, maxRounds);
         listener.onComplete(result);
         return result;
-    }
-
-    /**
-     * 解析会话当前模型：显式配置了 provider 与 model 就精确解析，否则跟随默认。
-     *
-     * @param session 会话运行态
-     * @return 解析结果
-     * @throws JellyfishException 解析不到模型时抛出
-     */
-    private ResolvedModel resolveModel(Session session) {
-        String provider = session.getProvider();
-        String model = session.getModel();
-        if (StringUtils.isAnyBlank(provider, model)) {
-            return modelManager.resolveDefault();
-        }
-        return modelManager.resolve(provider, model);
     }
 
     /**

@@ -8,10 +8,13 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.event.EventPublisher;
 import zcd.jellyfish.api.event.JellyfishEvent;
+import zcd.jellyfish.api.event.RegisterOptions;
 import zcd.jellyfish.api.event.notification.SessionClosedEvent;
 import zcd.jellyfish.api.event.notification.SessionCreatedEvent;
 import zcd.jellyfish.api.event.notification.SessionMessageAppendedEvent;
+import zcd.jellyfish.api.extension.ExtensionHandler;
 import zcd.jellyfish.api.extension.PermissionMode;
+import zcd.jellyfish.api.extension.SessionPersistRequest;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.config.AgentDefinition;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
@@ -20,6 +23,7 @@ import zcd.jellyfish.infra.llm.LlmUsage;
 import zcd.jellyfish.infra.registry.TypeRegistry;
 
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
@@ -100,6 +104,138 @@ class SessionManagerTest {
 
         // Then
         assertEquals("writer", session.getAgentId());
+    }
+
+    @Test
+    void createEphemeral_should_throw_when_parent_blank() {
+        // When / Then
+        assertThrows(JellyfishException.class,
+                () -> manager().createEphemeral("  ", CODER, null, null, null));
+    }
+
+    @Test
+    void createEphemeral_should_keep_parent_link_and_explicit_selections() {
+        // When
+        Session session = manager()
+                .createEphemeral("parent-1", "scout", "openai", "gpt-4o", PermissionMode.PLAN);
+
+        // Then
+        assertEquals("parent-1", session.getParentSessionId());
+        assertEquals("scout", session.getAgentId());
+        assertEquals("openai", session.getProvider());
+        assertEquals("gpt-4o", session.getModel());
+        assertEquals(PermissionMode.PLAN, session.getPermissionMode());
+    }
+
+    @Test
+    void createEphemeral_should_fall_back_to_default_agent_when_agent_blank() {
+        // Given
+        when(agentManager.resolveDefault()).thenReturn(definition(CODER));
+
+        // When
+        Session session = manager().createEphemeral("parent-1", "  ", null, null, null);
+
+        // Then
+        assertEquals(CODER, session.getAgentId());
+    }
+
+    @Test
+    void createEphemeral_should_ignore_pending_defaults() {
+        // Given：待生效默认值是「我接下来这次对话要用它」，与子代理的一次委派无关
+        when(agentManager.resolveDefault()).thenReturn(definition(CODER));
+        SessionDefaults defaults = new SessionDefaults();
+        defaults.setAgentId("pending-agent");
+        defaults.setModel("openai", "pending-model");
+        SessionManager manager = new SessionManager(agentManager, events, extensions, defaults);
+
+        // When
+        Session session = manager.createEphemeral("parent-1", null, null, null, null);
+
+        // Then
+        assertEquals(CODER, session.getAgentId());
+        assertNull(session.getModel());
+    }
+
+    @Test
+    void createEphemeral_should_publish_created_event_with_parent() {
+        // When
+        manager().createEphemeral("parent-1", CODER, null, null, null);
+
+        // Then
+        SessionCreatedEvent event = publishedEvent(SessionCreatedEvent.class);
+        assertEquals("parent-1", event.getParentSessionId());
+    }
+
+    @Test
+    void createEphemeral_should_not_appear_in_all() {
+        // Given
+        SessionManager manager = manager();
+        manager.create(CODER, null, null, null);
+
+        // When
+        manager.createEphemeral("parent-1", CODER, null, null, null);
+
+        // Then
+        assertEquals(1, manager.all().size());
+        assertEquals(CODER, manager.all().iterator().next().getAgentId());
+    }
+
+    @Test
+    void appendMessage_should_not_persist_when_session_ephemeral() {
+        // Given
+        AtomicInteger persists = countingPersistHandler();
+        SessionManager manager = manager();
+        Session session = manager.createEphemeral("parent-1", CODER, null, null, null);
+
+        // When
+        manager.appendMessage(session.getSessionId(), LlmMessage.user("hello"), null);
+
+        // Then
+        assertEquals(0, persists.get());
+    }
+
+    @Test
+    void appendMessage_should_persist_when_session_root() {
+        // Given：同一处理器下普通会话仍然即时落盘，证明计数手段本身有效
+        AtomicInteger persists = countingPersistHandler();
+        SessionManager manager = manager();
+        Session session = manager.create(CODER, null, null, null);
+
+        // When
+        manager.appendMessage(session.getSessionId(), LlmMessage.user("hello"), null);
+
+        // Then
+        assertEquals(1, persists.get());
+    }
+
+    @Test
+    void recordUsage_should_merge_session_usage_with_call_count() {
+        // Given：一次嵌套回合的累计用量（多次调用）
+        SessionManager manager = manager();
+        Session session = manager.create(CODER, null, null, null);
+        SessionUsage nested = new SessionUsage(5L, 7L, 12L, 3L);
+
+        // When
+        manager.recordUsage(session.getSessionId(), nested);
+
+        // Then：父会话的账要把子代理的调用次数一并算上
+        assertEquals(12L, session.getUsage().getTotalTokens());
+        assertEquals(3L, session.getUsage().getLlmCalls());
+    }
+
+    @Test
+    void close_should_publish_closed_event_with_parent_when_ephemeral() {
+        // Given
+        SessionManager manager = manager();
+        Session session = manager.createEphemeral("parent-1", CODER, null, null, null);
+
+        // When
+        manager.close(session.getSessionId());
+
+        // Then
+        SessionClosedEvent event = publishedEvent(SessionClosedEvent.class);
+        assertEquals("parent-1", event.getParentSessionId());
+        assertThrows(JellyfishException.class, () -> manager.require(session.getSessionId()));
     }
 
     @Test
@@ -500,6 +636,24 @@ class SessionManagerTest {
 
         // When / Then
         assertThrows(UnsupportedOperationException.class, () -> manager.all().clear());
+    }
+
+    /**
+     * 注册一个只计数、不写盘的会话持久化处理器。
+     * <p>
+     * 「子代理会话不落盘」这条不变式只能这样验证：真实注册表里没有处理器时，普通会话也不会落盘，
+     * 两者观察不到差异。
+     *
+     * @return 记录调用次数的计数器
+     */
+    private AtomicInteger countingPersistHandler() {
+        AtomicInteger persists = new AtomicInteger();
+        extensions.contribute("test", SessionPersistRequest.class, null,
+                (ExtensionHandler<SessionPersistRequest, Void>) request -> {
+                    persists.incrementAndGet();
+                    return null;
+                }, RegisterOptions.DEFAULT);
+        return persists;
     }
 
     /**

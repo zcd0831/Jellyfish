@@ -31,6 +31,7 @@ import zcd.jellyfish.infra.config.ReloadOutcome;
 import zcd.jellyfish.infra.config.RuntimeConfig;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.model.ModelManager;
+import zcd.jellyfish.infra.model.ResolvedModel;
 import zcd.jellyfish.infra.plugin.PluginReloadReport;
 import zcd.jellyfish.infra.session.Session;
 import zcd.jellyfish.infra.session.SessionCompaction;
@@ -464,21 +465,16 @@ public class SystemCommands {
             return CommandResult.error("用法：/model [provider/model]");
         }
         String token = request.getArguments().getTokens().get(0);
-        String providerName = null;
-        String modelName = token;
-        int slash = token.indexOf('/');
-        if (slash > 0 && slash < token.length() - 1) {
-            providerName = token.substring(0, slash);
-            modelName = token.substring(slash + 1);
-        }
+        ResolvedModel resolved;
         try {
-            if (providerName == null) {
-                providerName = requireProviderForModel(modelName);
-            }
-            modelManager.resolve(providerName, modelName);
+            // 与 agent 偏好模型、会话默认值共用同一份「引用 → provider/model」解析，
+            // 否则「/model gpt-4o」与「model: gpt-4o」可能选到不同的 provider
+            resolved = modelManager.resolveReference(token);
         } catch (JellyfishException e) {
             return CommandResult.error("模型不存在：" + token);
         }
+        String providerName = resolved.getProvider().getName();
+        String modelName = resolved.getModel().getName();
         String sessionId = sessionIdOf(request);
         if (sessionId == null) {
             // 首页：改的是「下次建会话时用什么」，不建会话、留在首页
@@ -995,24 +991,6 @@ public class SystemCommands {
             return "默认";
         }
         return session.getProvider() + "/" + session.getModel();
-    }
-
-    /**
-     * 查找提供指定模型名的第一个 provider。
-     *
-     * @param modelName 模型名
-     * @return provider 名
-     * @throws JellyfishException 没有任何 provider 提供该模型时抛出
-     */
-    private String requireProviderForModel(String modelName) {
-        for (Provider provider : modelManager.getProviders()) {
-            for (Model model : provider.getModels()) {
-                if (modelName.equals(model.getName())) {
-                    return provider.getName();
-                }
-            }
-        }
-        throw new JellyfishException("no provider provides model: " + modelName);
     }
 
     /**

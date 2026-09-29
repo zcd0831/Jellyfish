@@ -17,6 +17,7 @@ import javax.inject.Inject;
 import javax.inject.Singleton;
 import java.time.Duration;
 import java.util.Objects;
+import java.util.function.Predicate;
 
 /**
  * 权限管理器：内核侧唯一的同步判定入口，回答「这次工具调用能不能执行」。
@@ -135,6 +136,30 @@ public class PermissionManager {
         }
         publishAudit(request, decision, source);
         return decision;
+    }
+
+    /**
+     * 造一个「这个 agent 在当前模式下能用哪些工具」的判据，供工具清单过滤使用。
+     * <p>
+     * <b>为什么复用 {@link #evaluatePolicy}</b>：清单过滤与执行期判定必须给出同一个答案——
+     * 清单里出现了、执行时却被拒，模型会白跑一轮；反过来，清单里没有、执行时其实可用，
+     * 模型就永远用不上它。两处各写一遍规则，迟早会在某个边界上分叉
+     * （PLAN 与允许名单的先后、ASK 算不算可用……），因此这里直接问同一个判定函数。
+     * <p>
+     * <b>纯判定</b>：只走核心策略，<b>不</b>询问审批、<b>不</b>派发插件拦截、<b>不</b>发审计事件。
+     * 插件拦截与审批都是「本次调用」才能回答的问题（要看参数、要问人），无法在清单阶段预判；
+     * 它们只会让调用更严，因此「清单里留着、执行时被拦下」是它们本就该有的表现。
+     * <p>
+     * 注意 {@code ASK} <b>不算被拒</b>：那个工具是可用的（只是要人点一下批准），
+     * 从清单里拿掉会让「只读命令免打扰、写类命令要审批」这套配置直接失效。
+     *
+     * @param agentId agent 标识，可为 {@code null}（无策略，按 fail-open 全放行）
+     * @param mode    会话权限模式，可为 {@code null}（按 {@link PermissionMode#NORMAL} 处理）
+     * @return 判据，保证非 {@code null}
+     */
+    public Predicate<String> usableTools(String agentId, PermissionMode mode) {
+        return toolName -> !evaluatePolicy(
+                new PermissionCheckRequest(agentId, toolName, null, mode, null)).isDenied();
     }
 
     /**

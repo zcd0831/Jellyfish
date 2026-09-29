@@ -3,6 +3,7 @@ package zcd.jellyfish.core;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
@@ -25,13 +26,16 @@ import zcd.jellyfish.core.compact.ConversationCompactor;
 import zcd.jellyfish.core.prompt.ContextUsage;
 import zcd.jellyfish.core.prompt.PromptAssembler;
 import zcd.jellyfish.core.prompt.ToolCatalog;
+import zcd.jellyfish.core.prompt.ToolFilter;
 import zcd.jellyfish.core.prompt.ToolResultAger;
+import zcd.jellyfish.core.tool.CancellationTokenSource;
 import zcd.jellyfish.core.tool.ToolExecutor;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.config.Model;
 import zcd.jellyfish.infra.config.Provider;
 import zcd.jellyfish.infra.config.ReactSettings;
 import zcd.jellyfish.infra.config.RuntimeConfig;
+import zcd.jellyfish.infra.config.SubAgentSettings;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.llm.LlmClient;
 import zcd.jellyfish.infra.llm.LlmRequest;
@@ -41,6 +45,7 @@ import zcd.jellyfish.infra.llm.LlmStreamListener;
 import zcd.jellyfish.infra.llm.LlmToolCall;
 import zcd.jellyfish.infra.llm.LlmUsage;
 import zcd.jellyfish.infra.model.ModelManager;
+import zcd.jellyfish.infra.model.SessionModelResolver;
 import zcd.jellyfish.infra.model.ResolvedModel;
 import zcd.jellyfish.infra.permission.PermissionManager;
 import zcd.jellyfish.infra.registry.TypeRegistry;
@@ -129,6 +134,9 @@ class ReActLooperTest {
     /** 工具输出中间件：用真实实现，用例里的输出都很小，不会真的落盘。 */
     private ToolOutputLimiter outputLimiter;
 
+    /** 委派作用域持有者：用真实实现，嵌套回合依赖它。 */
+    private RunScopes runScopes;
+
     @BeforeEach
     void setUp() {
         executor = Executors.newSingleThreadExecutor();
@@ -137,9 +145,11 @@ class ReActLooperTest {
         promptAssembler = new PromptAssembler(agentManager, new ToolCatalog(extensions), runtimeConfig, extensions,
                 new ToolResultAger(runtimeConfig));
         outputLimiter = new ToolOutputLimiter(runtimeConfig, new ToolOutputStore(runtimeConfig));
+        runScopes = new RunScopes();
         // 这两个桩是共享前置条件：个别用例（会话不存在 / 提前取消）走不到这两步，用 lenient 避免误报
         lenient().when(modelManager.resolveDefault()).thenReturn(resolvedModel());
         lenient().when(modelManager.getClient(any(ResolvedModel.class))).thenReturn(client);
+        lenient().when(runtimeConfig.getSubAgentSettings()).thenReturn(new SubAgentSettings());
     }
 
     @AfterEach
@@ -544,6 +554,176 @@ class ReActLooperTest {
         assertTrue(turn.isDone());
     }
 
+    @Test
+    void chat_should_expose_run_scope_to_tools() {
+        // Given：委派方只能在工具处理器里读到作用域（顶层回合边界只有循环器知道）
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        when(permissionManager.decide(any(PermissionCheckRequest.class)))
+                .thenReturn(PermissionDecision.allow(null));
+        List<RunScope> scopes = new ArrayList<>();
+        registerTool("read", request -> {
+            scopes.add(runScopes.current());
+            return new ToolCallResult("read", "ok");
+        });
+        stubResponses(toolCallResponse("call_1", "read"), LlmResponse.text("好"));
+        Session session = sessionManager.createDefault();
+
+        // When
+        newLooper().chat(session.getSessionId(), "读文件", new RecordingListener()).await();
+
+        // Then：作用域已开启、深度为 0、上限来自配置
+        assertEquals(1, scopes.size());
+        assertNotNull(scopes.get(0));
+        assertEquals(0, scopes.get(0).getDepth());
+        assertEquals(SubAgentSettings.DEFAULT_MAX_DEPTH, scopes.get(0).getMaxDepth());
+    }
+
+    @Test
+    @Timeout(30)
+    void runNested_should_run_inline_on_calling_thread() {
+        // Given：父回合的工具里发起一次嵌套回合
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        when(permissionManager.decide(any(PermissionCheckRequest.class)))
+                .thenReturn(PermissionDecision.allow(null));
+        ReActLooper looper = newLooper();
+        Session child = sessionManager.createEphemeral("parent-1", "scout", null, null, null);
+        List<String> nestedThreads = new ArrayList<String>();
+        List<String> parentThreads = new ArrayList<String>();
+        ReActListener nestedListener = new ReActListener() {
+            @Override
+            public void onComplete(ReActResult result) {
+                nestedThreads.add(Thread.currentThread().getName());
+            }
+        };
+        registerTool("delegate", request -> {
+            parentThreads.add(Thread.currentThread().getName());
+            ReActResult nested = looper.runNested(child, "子任务", nestedListener,
+                    request.getCancellationToken(), 4, ToolFilter.none());
+            parentThreads.add(Thread.currentThread().getName());
+            return new ToolCallResult("delegate", nested.getContent());
+        });
+        stubResponses(toolCallResponse("call_1", "delegate"), LlmResponse.text("子代理答复"),
+                LlmResponse.text("父回合结束"));
+        Session parent = sessionManager.createDefault();
+
+        // When
+        ReActResult result = looper.chat(parent.getSessionId(), "委派一下", new RecordingListener()).await();
+
+        // Then：嵌套回合在父回合同一条线程上跑完。
+        // 若它改成提交 react 池，工具会堵着唯一那条线程等一个永远排不上的任务，本用例的 @Timeout 就是那个哨兵。
+        assertEquals("父回合结束", result.getContent());
+        assertEquals(1, nestedThreads.size());
+        assertEquals(2, parentThreads.size());
+        assertEquals(parentThreads.get(0), nestedThreads.get(0));
+        assertEquals(parentThreads.get(0), parentThreads.get(1));
+        // 子代理的对话落在子会话里，父会话只拿到一行工具结果
+        assertEquals(2, child.size());
+        assertEquals("子任务", child.getMessages().get(0).getMessage().getContent());
+        assertEquals(4, parent.size());
+        assertEquals("子代理答复", parent.getMessages().get(2).getMessage().getContent());
+    }
+
+    @Test
+    @Timeout(30)
+    void runNested_should_raise_depth_only_inside_nested_turn() {
+        // Given
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        when(permissionManager.decide(any(PermissionCheckRequest.class)))
+                .thenReturn(PermissionDecision.allow(null));
+        ReActLooper looper = newLooper();
+        Session child = sessionManager.createEphemeral("parent-1", "scout", null, null, null);
+        List<Integer> depthInside = new ArrayList<Integer>();
+        List<Integer> depthAfter = new ArrayList<Integer>();
+        ReActListener nestedListener = new ReActListener() {
+            @Override
+            public void onComplete(ReActResult result) {
+                depthInside.add(runScopes.current().getDepth());
+            }
+        };
+        registerTool("delegate", request -> {
+            looper.runNested(child, "子任务", nestedListener, request.getCancellationToken(), 4,
+                    ToolFilter.none());
+            depthAfter.add(runScopes.current().getDepth());
+            return new ToolCallResult("delegate", "done");
+        });
+        stubResponses(toolCallResponse("call_1", "delegate"), LlmResponse.text("子代理答复"),
+                LlmResponse.text("父回合结束"));
+        Session parent = sessionManager.createDefault();
+
+        // When
+        looper.chat(parent.getSessionId(), "委派一下", new RecordingListener()).await();
+
+        // Then：回合内深度为 1，返回后回到 0（leave 必须在 finally 里）
+        assertEquals(Collections.singletonList(1), depthInside);
+        assertEquals(Collections.singletonList(0), depthAfter);
+    }
+
+    @Test
+    @Timeout(30)
+    void runNested_should_use_given_max_rounds_instead_of_react_settings() {
+        // Given：主会话允许 5 轮，但嵌套回合只给 1 轮，且子代理每轮都请求工具
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings(5, 0, 20000, null, null, null));
+        when(permissionManager.decide(any(PermissionCheckRequest.class)))
+                .thenReturn(PermissionDecision.allow(null));
+        ReActLooper looper = newLooper();
+        Session child = sessionManager.createEphemeral("parent-1", "scout", null, null, null);
+        List<ReActResult> nestedResults = new ArrayList<ReActResult>();
+        registerTool("read", request -> new ToolCallResult("read", "ok"));
+        registerTool("delegate", request -> {
+            nestedResults.add(looper.runNested(child, "子任务", null, request.getCancellationToken(), 1, ToolFilter.none()));
+            return new ToolCallResult("delegate", "done");
+        });
+        stubResponses(toolCallResponse("call_1", "delegate"), toolCallResponse("call_2", "read"),
+                LlmResponse.text("父回合结束"));
+        Session parent = sessionManager.createDefault();
+
+        // When
+        looper.chat(parent.getSessionId(), "委派一下", new RecordingListener()).await();
+
+        // Then：子代理的轮数上限不跟随 react.maxRounds
+        assertEquals(1, nestedResults.size());
+        assertTrue(nestedResults.get(0).isTruncated());
+        assertEquals(1, nestedResults.get(0).getRounds());
+    }
+
+    @Test
+    @Timeout(30)
+    void runNested_should_be_cancelled_when_parent_token_already_cancelled() {
+        // Given：父令牌已取消（模拟「按 Esc」与「发起委派」撞在一起）
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        when(permissionManager.decide(any(PermissionCheckRequest.class)))
+                .thenReturn(PermissionDecision.allow(null));
+        ReActLooper looper = newLooper();
+        Session child = sessionManager.createEphemeral("parent-1", "scout", null, null, null);
+        CancellationTokenSource cancelled = new CancellationTokenSource();
+        cancelled.cancel();
+        List<ReActResult> nestedResults = new ArrayList<ReActResult>();
+        registerTool("delegate", request -> {
+            nestedResults.add(looper.runNested(child, "子任务", null, cancelled, 4, ToolFilter.none()));
+            return new ToolCallResult("delegate", "done");
+        });
+        stubResponses(toolCallResponse("call_1", "delegate"), LlmResponse.text("父回合结束"));
+        Session parent = sessionManager.createDefault();
+
+        // When
+        looper.chat(parent.getSessionId(), "委派一下", new RecordingListener()).await();
+
+        // Then：嵌套回合在第一个检查点就退出，一次模型调用都没发起（响应序列里没有为它预留的那一段）
+        assertEquals(1, nestedResults.size());
+        assertTrue(nestedResults.get(0).isCancelled());
+        assertEquals(1, child.size());
+    }
+
+    @Test
+    void runNested_should_throw_when_no_active_scope() {
+        // Given：没有任何顶层回合在跑，因此没有作用域
+        Session child = sessionManager.createEphemeral("parent-1", "scout", null, null, null);
+
+        // When / Then：不在回合作用域内的嵌套回合不受深度与预算约束，因此必须当场报错
+        assertThrows(JellyfishException.class,
+                () -> newLooper().runNested(child, "子任务", null, null, 4, ToolFilter.none()));
+    }
+
     /**
      * 构造被测对象。
      *
@@ -552,7 +732,8 @@ class ReActLooperTest {
     private ReActLooper newLooper() {
         return new ReActLooper(sessionManager, modelManager,
                 new ToolExecutor(permissionManager, extensions, events, outputLimiter),
-                events, promptAssembler, runtimeConfig, conversationCompactor, executor);
+                events, promptAssembler, runtimeConfig, conversationCompactor, runScopes,
+                new SessionModelResolver(modelManager, agentManager), executor);
     }
 
     /**

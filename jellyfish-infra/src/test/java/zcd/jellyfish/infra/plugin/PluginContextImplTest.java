@@ -225,4 +225,89 @@ class PluginContextImplTest {
         assertTrue(latch.await(5, TimeUnit.SECONDS));
         assertEquals(1, received.size());
     }
+
+    @Test
+    void handle_should_fail_when_context_already_closed() {
+        // Given：注册窗口是插件存活期，停止之后一律拒绝——否则会留下幽灵注册
+        ContextLifecycle lifecycle = new ContextLifecycle();
+        PluginContextImpl closable = new PluginContextImpl(
+                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle);
+        lifecycle.close();
+
+        // When / Then
+        assertThrows(JellyfishException.class, () -> closable.handle(ToolCallRequest.class, "calc",
+                request -> new ToolCallResult("calc", "ok")));
+        assertTrue(extensions.handlers(ToolCallRequest.class, "calc").isEmpty());
+    }
+
+    @Test
+    void contribute_should_fail_when_context_already_closed() {
+        // Given
+        ContextLifecycle lifecycle = new ContextLifecycle();
+        PluginContextImpl closable = new PluginContextImpl(
+                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle);
+        lifecycle.close();
+
+        // When / Then
+        assertThrows(JellyfishException.class, () -> closable.contribute(CommandRequest.class,
+                request -> CommandResult.ok("ok")));
+        assertTrue(extensions.handlers(CommandRequest.class, null).isEmpty());
+    }
+
+    @Test
+    void observe_should_fail_when_context_already_closed() {
+        // Given
+        ContextLifecycle lifecycle = new ContextLifecycle();
+        PluginContextImpl closable = new PluginContextImpl(
+                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle);
+        lifecycle.close();
+
+        // When / Then
+        assertThrows(JellyfishException.class,
+                () -> closable.observe(ConfigWarningEvent.class, event -> {
+                    // 仅用于产生一条订阅意图
+                }));
+    }
+
+    @Test
+    void emit_should_fail_when_context_already_closed() {
+        // Given
+        ContextLifecycle lifecycle = new ContextLifecycle();
+        PluginContextImpl closable = new PluginContextImpl(
+                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle);
+        lifecycle.close();
+
+        // When / Then：停止之后的发布同样属于幽灵行为，不能静默丢掉了事
+        assertThrows(JellyfishException.class, () -> closable.emit(new ConfigWarningEvent("source", "message")));
+    }
+
+    @Test
+    void subContext_should_share_lifecycle_with_parent() {
+        // Given：子上下文也握着注册能力，若它们各有一份标记，回收根上下文就管不住它们
+        ContextLifecycle lifecycle = new ContextLifecycle();
+        PluginContextImpl parent = new PluginContextImpl(
+                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle);
+        PluginContextImpl child = (PluginContextImpl) parent.subContext("jira");
+
+        // When
+        lifecycle.close();
+
+        // Then
+        assertThrows(JellyfishException.class, () -> child.handle(ToolCallRequest.class, "jira_issue",
+                request -> new ToolCallResult("jira_issue", "ok")));
+    }
+
+    @Test
+    void handle_should_still_work_before_context_closed() {
+        // Given：上一条的反面 —— 失效只在关闭之后生效，关闭之前照常注册
+        ContextLifecycle lifecycle = new ContextLifecycle();
+        PluginContextImpl closable = new PluginContextImpl(
+                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle);
+
+        // When
+        closable.handle(ToolCallRequest.class, "calc", request -> new ToolCallResult("calc", "ok"));
+
+        // Then
+        assertEquals(1, extensions.handlers(ToolCallRequest.class, "calc").size());
+    }
 }

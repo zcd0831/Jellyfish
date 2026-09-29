@@ -1,6 +1,7 @@
 package zcd.jellyfish.infra.plugin;
 
 import org.junit.jupiter.api.Test;
+import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.event.RegisterOptions;
 import zcd.jellyfish.api.event.Subscription;
 import zcd.jellyfish.api.event.notification.ConfigWarningEvent;
@@ -171,5 +172,64 @@ class PluginContextFactoryTest {
         assertThrows(NullPointerException.class, () -> new PluginContextFactory(null, events, registry));
         assertThrows(NullPointerException.class, () -> new PluginContextFactory(extensions, null, registry));
         assertThrows(NullPointerException.class, () -> new PluginContextFactory(extensions, events, null));
+    }
+
+    @Test
+    void release_should_close_context_so_late_registration_fails() {
+        // Given：注册窗口是插件存活期，因此停止后仍在跑的注册路径必须当场失败，
+        // 而不是落表成一个谁也回收不到（已经回收过了）的幽灵注册
+        PluginContext context = factory.create(PluginDeclaration.of("plugin-a"));
+
+        // When
+        factory.release("plugin-a");
+
+        // Then
+        assertThrows(JellyfishException.class, () -> context.handle(CommandRequest.class, "late",
+                request -> CommandResult.ok("ok")));
+        assertTrue(registry.snapshot().isEmpty());
+    }
+
+    @Test
+    void release_should_close_sub_context_registrations_too() {
+        // Given：子上下文的注册挂在 plugin-a::child 下，但存活标记跟的是插件，因此一并失效
+        PluginContext child = factory.create(PluginDeclaration.of("plugin-a")).subContext("child");
+
+        // When
+        factory.release("plugin-a");
+
+        // Then
+        assertThrows(JellyfishException.class, () -> child.handle(ToolCallRequest.class, "echo",
+                request -> null));
+    }
+
+    @Test
+    void release_should_not_affect_other_plugin_contexts() {
+        // Given
+        PluginContext kept = factory.create(PluginDeclaration.of("plugin-b"));
+        PluginContext doomed = factory.create(PluginDeclaration.of("plugin-a"));
+
+        // When
+        factory.release("plugin-a");
+
+        // Then：回收一个插件不能顺手让别的插件的上下文失效
+        kept.handle(CommandRequest.class, "calc", request -> CommandResult.ok("ok"));
+        assertEquals(1, extensions.handlers(CommandRequest.class, "calc").size());
+        assertThrows(JellyfishException.class, () -> doomed.handle(CommandRequest.class, "late",
+                request -> CommandResult.ok("ok")));
+    }
+
+    @Test
+    void create_should_invalidate_previous_context_when_same_plugin_created_twice() {
+        // Given：同一 pluginId 未经 release 又被创建，只可能来自装配错误；方向是 fail-closed
+        PluginContext stale = factory.create(PluginDeclaration.of("plugin-a"));
+
+        // When
+        PluginContext fresh = factory.create(PluginDeclaration.of("plugin-a"));
+
+        // Then：旧上下文失效，新上下文可用
+        assertThrows(JellyfishException.class, () -> stale.handle(CommandRequest.class, "stale",
+                request -> CommandResult.ok("ok")));
+        fresh.handle(CommandRequest.class, "fresh", request -> CommandResult.ok("ok"));
+        assertEquals(1, extensions.handlers(CommandRequest.class, "fresh").size());
     }
 }

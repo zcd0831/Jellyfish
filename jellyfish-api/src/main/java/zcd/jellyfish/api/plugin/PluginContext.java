@@ -28,7 +28,10 @@ import java.util.function.Predicate;
  * {@code ToolDescriptor} 作为 {@code descriptor} 传入，内核在需要时按类型取回，
  * 因此不存在第二份「工具清单」需要插件额外维护。
  * <p>
- * 插件不需要、也不应自行反注册：卸载时由框架按 {@code pluginId} 批量回收注册。
+ * <b>注册与注销</b>：存活期内的任意时刻都可调 {@link #handle} / {@link #contribute} /
+ * {@link #observe} / {@link #emit}（<b>不限于 </b>{@code start()} 之内），{@link #stop()} 之后则一律失败。
+ * 需要主动解除某条注册时，用注册时拿到的 {@link Subscription#close()}；
+ * 插件停止时框架仍会按 {@code pluginId} 一次性把剩下的收干净，因此注销是可选优化而不是必须动作。
  *
  * @author zcd
  */
@@ -61,8 +64,8 @@ public interface PluginContext {
      * <b>可以继续派生</b>（形状为 {@code a::b::c}）：层级回收天然支持，因此不特意禁止，
      * 但一层通常就够——每多一层，诊断输出就多一份推导成本。
      * <p>
-     * <b>何时调、调几次都不限</b>：它只是个轻量对象，不产生任何注册。但注册本身仍只能在
-     * {@code start()} 窗口内发生（见 {@link JellyfishPlugin}），派生得再早也不改变这一点。
+     * <b>何时调、调几次都不限</b>：它只是个轻量对象，不产生任何注册，因此不做存活检查；
+     * 真正会被拦住的是通过它注册的那一刻——若宿主上下文已失效，注册会当场报错。
      *
      * @param childId 子标识，不可为空白，且不得含空白字符、路径分隔符与命名空间分隔符
      * @return 子上下文，保证非 {@code null}
@@ -93,6 +96,7 @@ public interface PluginContext {
      * @param <C>         请求类型
      * @param <R>         结果类型
      * @return 注册句柄，插件卸载时可用于提前解除
+     * @throws zcd.jellyfish.api.JellyfishException 插件上下文已失效（已停止）时抛出
      */
     <C extends ExtensionRequest<R>, R> Subscription handle(Class<C> requestType, String routeKey, Object descriptor,
                                                            ExtensionHandler<C, R> handler, RegisterOptions options);
@@ -159,6 +163,7 @@ public interface PluginContext {
      * @param <C>         请求类型
      * @param <R>         结果类型
      * @return 注册句柄，插件卸载时可用于提前解除
+     * @throws zcd.jellyfish.api.JellyfishException 插件上下文已失效（已停止）时抛出
      */
     <C extends ExtensionRequest<R>, R> Subscription contribute(Class<C> requestType, Object descriptor,
                                                                ExtensionHandler<C, R> handler,
@@ -217,6 +222,7 @@ public interface PluginContext {
      * @param listener  监听器，不可为 {@code null}
      * @param <E>       通知类型
      * @return 订阅句柄，插件卸载时可用于提前解除
+     * @throws zcd.jellyfish.api.JellyfishException 插件上下文已失效（已停止）时抛出
      */
     <E extends JellyfishEvent> Subscription observe(Class<E> eventType, Predicate<E> filter, Consumer<E> listener);
 
@@ -238,6 +244,7 @@ public interface PluginContext {
      * 方向与注册相反：注册是内核回头找插件，发布是插件单向观察内核；发布不产生返回值，失败只记账。
      *
      * @param event 通知事件，不可为 {@code null}
+     * @throws zcd.jellyfish.api.JellyfishException 插件上下文已失效（已停止）时抛出
      */
     void emit(JellyfishEvent event);
 }

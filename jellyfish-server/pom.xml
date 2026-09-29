@@ -55,7 +55,6 @@
         <dependency>
             <groupId>org.mockito</groupId>
             <artifactId>mockito-inline</artifactId>
-            <version>${mockito.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -65,10 +64,6 @@
         </dependency>
     </dependencies>
 
-    <build>
-        <plugins>
-            <!-- 默认为空：`mvn test` 跑 *Test（纯单测，不碰 socket）；真 Undertow 的端到端用例命名为 *IT，
-                 在 jellyfish-cli 的 server-it profile 下运行（那里拿得到 Dagger 装配）。 -->
-        </plugins>
-    </build>
+    <!-- 本模块不带 build 配置：`mvn test` 跑 *Test（纯单测，不碰 socket）；真 Undertow 的端到端用例命名为 *IT，
+         在 jellyfish-cli 的 server-it profile 下运行（那里拿得到 Dagger 装配）。 -->
 </project>

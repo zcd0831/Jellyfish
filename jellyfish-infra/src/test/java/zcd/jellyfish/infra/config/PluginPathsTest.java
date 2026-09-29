@@ -53,13 +53,13 @@ class PluginPathsTest {
     @Test
     void deserialization_should_bind_roots_in_order() {
         // Given
-        String json = "{\"roots\":[\"plugins\",\"~/jellyfish/plugins\"]}";
+        String json = "{\"roots\":[\"plugins\",\"~/.jellyfish/plugins\"]}";
 
         // When
         PluginPaths paths = ObjectMapperWrapper.readValue(json, PluginPaths.class);
 
         // Then
-        assertEquals(Arrays.asList("plugins", "~/jellyfish/plugins"), paths.getRoots());
+        assertEquals(Arrays.asList("plugins", "~/.jellyfish/plugins"), paths.getRoots());
     }
 
     @Test

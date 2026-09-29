@@ -37,7 +37,7 @@ public final class ScriptPidFiles {
     }
 
     /**
-     * 计算默认目录（{@code ~/jellyfish/pids}）。
+     * 计算默认目录（{@code ~/.jellyfish/pids}）。
      * <p>
      * 从 {@link GatewayResources#defaultBaseDirectory()} 的父目录派生，而不是自己再拼一遍
      * {@code user.home}：两处各写一遍，改动一处就会出现「网关抽到 A、PID 写在 B」这种

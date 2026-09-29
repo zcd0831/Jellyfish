@@ -14,7 +14,7 @@ import java.util.Map;
  * <p>
  * 两件由内核完成、这里<b>不再重复做</b>的事：项目级覆盖全局级、字符串值里的 {@code ${ENV}} 替换——
  * 拿到的就是最终值。但 {@code ~} <b>没有</b>被替换（内核只在配置文件的路径段上做展开），
- * 因此这里自己展开一次，否则默认值 {@code ~/jellyfish/sessions} 会被当成名为 {@code ~} 的目录。
+ * 因此这里自己展开一次，否则默认值 {@code ~/.jellyfish/sessions} 会被当成名为 {@code ~} 的目录。
  * <p>
  * 不可变，可安全跨线程传递。
  *
@@ -32,7 +32,7 @@ final class PluginConfig {
     static final String KEY_GIT_ENABLED = "gitEnabled";
 
     /** 默认会话目录：与内核「全局级配置目录」同一处，会话是跨项目的运行态数据。 */
-    static final String DEFAULT_SESSION_DIR = "~/jellyfish/sessions";
+    static final String DEFAULT_SESSION_DIR = "~/.jellyfish/sessions";
 
     /** 会话文件目录。 */
     private final Path sessionDirectory;

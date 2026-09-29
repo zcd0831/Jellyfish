@@ -168,7 +168,7 @@ class ScriptBridgeConfigTest {
         ScriptBridgeConfig config = parse(null);
 
         assertEquals(ScriptPidFiles.defaultDirectory(), config.pidDirectory());
-        assertEquals(Paths.get(System.getProperty("user.home"), "jellyfish", "pids")
+        assertEquals(Paths.get(System.getProperty("user.home"), ".jellyfish", "pids")
                 .toAbsolutePath().normalize(), config.pidDirectory());
         // 与网关资源目录同级：后者按内容摘要分目录，改一个字节就换目录，
         // 而 PID 文件必须“下一次启动还看得见”才有价值

@@ -33,7 +33,7 @@ class PluginConfigTest {
     void from_should_useDefaults_when_configurationAbsent() {
         PluginConfig config = PluginConfig.from(null);
 
-        assertEquals(Paths.get(HOME, "jellyfish", "sessions"), config.sessionDirectory());
+        assertEquals(Paths.get(HOME, ".jellyfish", "sessions"), config.sessionDirectory());
         assertTrue(config.gitEnabled());
     }
 

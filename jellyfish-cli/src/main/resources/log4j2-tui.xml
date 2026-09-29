@@ -15,7 +15,7 @@
 <Configuration>
     <Properties>
         <Property name="logLevel">${sys:jellyfish.log.level:-WARN}</Property>
-        <Property name="logFile">${sys:jellyfish.log.file:-${sys:user.home}/jellyfish/jellyfish-tui.log}</Property>
+        <Property name="logFile">${sys:jellyfish.log.file:-${sys:user.home}/.jellyfish/jellyfish-tui.log}</Property>
     </Properties>
     <Appenders>
         <File name="TuiFile" fileName="${logFile}" append="true">

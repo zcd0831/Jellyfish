@@ -12,7 +12,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * <p>
  * 四项的含义：
  * <ul>
- *     <li>{@code dir}：被截断工具结果的落盘根目录，缺省 {@code ~/jellyfish/tool-outputs}。
+ *     <li>{@code dir}：被截断工具结果的落盘根目录，缺省 {@code ~/.jellyfish/tool-outputs}。
  *     放在用户主目录而不是项目目录，是因为它是运行产物、不是项目内容，写进项目会污染工作区；</li>
  *     <li>{@code keepFiles}：每个会话在该目录下最多保留多少个结果文件，写 {@code 0} 关闭清理；</li>
  *     <li>{@code maxBytes}：每个会话在该目录下最多占用多少字节，写 {@code 0} 关闭清理；</li>
@@ -32,7 +32,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 public class ToolOutputSettings {
 
     /** 落盘根目录缺省值。 */
-    public static final String DEFAULT_DIR = "~/jellyfish/tool-outputs";
+    public static final String DEFAULT_DIR = "~/.jellyfish/tool-outputs";
 
     /** 每会话最多保留的结果文件数缺省值。 */
     public static final int DEFAULT_KEEP_FILES = 200;

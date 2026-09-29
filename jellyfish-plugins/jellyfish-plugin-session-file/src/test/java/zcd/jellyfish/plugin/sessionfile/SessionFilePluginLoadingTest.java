@@ -131,7 +131,7 @@ class SessionFilePluginLoadingTest {
     /**
      * 构造插件管理器：配置段把会话目录指到临时目录并关掉 git。
      * <p>
-     * <b>必须注入配置段</b>：不注入就会走默认目录 {@code ~/jellyfish/sessions} 并默认开启 git，
+     * <b>必须注入配置段</b>：不注入就会走默认目录 {@code ~/.jellyfish/sessions} 并默认开启 git，
      * 测试会跑到用户主目录里去建仓库。
      *
      * @return 插件管理器

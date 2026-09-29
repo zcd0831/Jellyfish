@@ -26,9 +26,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class ScriptPidFilesTest {
 
     @Test
-    @DisplayName("默认目录应是用户主目录下的 jellyfish/pids")
+    @DisplayName("默认目录应是用户主目录下的 .jellyfish/pids")
     void defaultDirectory_should_beUnderJellyfishHome() {
-        assertEquals(Paths.get(System.getProperty("user.home"), "jellyfish", "pids")
+        assertEquals(Paths.get(System.getProperty("user.home"), ".jellyfish", "pids")
                 .toAbsolutePath().normalize(), ScriptPidFiles.defaultDirectory());
     }
 

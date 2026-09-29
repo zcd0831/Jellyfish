@@ -27,7 +27,7 @@ class PluginConfigTest {
         PluginConfig config = PluginConfig.from(null);
         PluginConfig empty = PluginConfig.from(Collections.<String, Object>emptyMap());
 
-        Path expected = Paths.get(System.getProperty("user.home"), "jellyfish", "todos")
+        Path expected = Paths.get(System.getProperty("user.home"), ".jellyfish", "todos")
                 .toAbsolutePath().normalize();
         assertEquals(expected, config.todoDirectory());
         assertEquals(expected, empty.todoDirectory());

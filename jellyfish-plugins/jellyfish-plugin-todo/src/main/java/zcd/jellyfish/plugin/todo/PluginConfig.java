@@ -15,7 +15,7 @@ import java.util.Map;
  * <p>
  * 项目级覆盖全局级、字符串值里的 {@code ${ENV}} 替换都由内核完成，这里拿到的就是最终值；
  * 但 {@code ~} <b>没有</b>被展开（内核只在配置文件的路径段上做这件事），因此这里自己展开一次，
- * 否则默认值 {@code ~/jellyfish/todos} 会被当成名为 {@code ~} 的目录。
+ * 否则默认值 {@code ~/.jellyfish/todos} 会被当成名为 {@code ~} 的目录。
  * <p>
  * 不可变，可安全跨线程传递。
  *
@@ -30,7 +30,7 @@ final class PluginConfig {
     static final String KEY_TODO_DIR = "todoDir";
 
     /** 默认待办目录：与内核「全局级配置目录」同一处，待办是跨项目的运行态数据。 */
-    static final String DEFAULT_TODO_DIR = "~/jellyfish/todos";
+    static final String DEFAULT_TODO_DIR = "~/.jellyfish/todos";
 
     /** 待办文件目录。 */
     private final Path todoDirectory;

@@ -78,7 +78,7 @@ public final class GatewayResources {
     }
 
     /**
-     * 计算默认抽取根目录（{@code ~/jellyfish/gateway}）。
+     * 计算默认抽取根目录（{@code ~/.jellyfish/gateway}）。
      * <p>
      * 选用户主目录而不是临时目录：临时目录会被系统或用户清理，
      * 清理掉正在运行的网关文件在 POSIX 上无害（文件已打开）但在别的平台上会变成「脚本中途消失」；
@@ -87,7 +87,7 @@ public final class GatewayResources {
      * @return 默认抽取根目录
      */
     public static Path defaultBaseDirectory() {
-        return Paths.get(System.getProperty("user.home"), "jellyfish", "gateway");
+        return Paths.get(System.getProperty("user.home"), ".jellyfish", "gateway");
     }
 
     /**

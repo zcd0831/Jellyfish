@@ -14,7 +14,7 @@ import org.apache.commons.lang3.StringUtils;
  *   "model":     { "globalPath": "/etc/jellyfish/models.json",   "projectPath": "./models.json" },
  *   "agent":     { "globalPath": "/etc/jellyfish/agents.json",   "projectPath": "./agents.json" },
  *   "jellyfish": { "globalPath": "/etc/jellyfish/jellyfish.json", "projectPath": "./jellyfish.json" },
- *   "plugins":   { "roots": ["plugins", "~/jellyfish/plugins"] }
+ *   "plugins":   { "roots": ["plugins", "~/.jellyfish/plugins"] }
  * }
  * </pre>
  * 标量配置声明为普通字段；需要「全局级 + 项目级」双源合并的配置段落声明为

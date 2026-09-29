@@ -1,18 +1,18 @@
 {
   "processName": "Jellyfish",
   "model": {
-    "globalPath": "~/jellyfish/models.json",
-    "projectPath": "./jellyfish/models.json"
+    "globalPath": "~/.jellyfish/models.json",
+    "projectPath": "./.jellyfish/models.json"
   },
   "agent": {
-    "globalPath": "~/jellyfish/agents.json",
-    "projectPath": "./jellyfish/agents.json"
+    "globalPath": "~/.jellyfish/agents.json",
+    "projectPath": "./.jellyfish/agents.json"
   },
   "jellyfish": {
-    "globalPath": "~/jellyfish/jellyfish.json",
-    "projectPath": "./jellyfish/jellyfish.json"
+    "globalPath": "~/.jellyfish/jellyfish.json",
+    "projectPath": "./.jellyfish/jellyfish.json"
   },
   "plugins": {
-    "roots": ["~/jellyfish/plugins/"]
+    "roots": ["~/.jellyfish/plugins/"]
   }
 }

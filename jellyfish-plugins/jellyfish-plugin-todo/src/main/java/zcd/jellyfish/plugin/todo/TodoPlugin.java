@@ -37,7 +37,7 @@ import java.nio.file.Path;
  * 存储由插件自己的文件负责，内核既不用新增会话字段，也不必为它保留任何调用点。反过来，待办也因此
  * 不可能「做不成插件」——它不属于需要碰会话内部结构的类型。
  * <p>
- * 配置见 {@link PluginConfig}：{@code todoDir}，默认 {@code ~/jellyfish/todos}。
+ * 配置见 {@link PluginConfig}：{@code todoDir}，默认 {@code ~/.jellyfish/todos}。
  *
  * @author zcd
  */

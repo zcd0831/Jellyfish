@@ -1,0 +1,134 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>zcd</groupId>
+        <artifactId>jellyfish-plugins</artifactId>
+        <version>0.0.1-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>jellyfish-plugin-mcp</artifactId>
+    <name>Jellyfish Plugin MCP</name>
+    <description>官方 MCP 客户端插件：连上 stdio MCP server，把它的工具以 mcp__&lt;server&gt;__&lt;tool&gt; 接入内核。</description>
+
+    <dependencies>
+        <!-- 内核契约：必须 provided —— PF4J 的插件类加载器是子优先，
+             插件自带 zcd/jellyfish/api 会遮蔽父加载器的同名类，破坏类型同一性；
+             内核的 PluginClasspathGuard 会在加载期直接拒绝这种插件包。 -->
+        <dependency>
+            <groupId>zcd</groupId>
+            <artifactId>jellyfish-api</artifactId>
+            <version>${project.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- 日志：与内核同源（宿主已有 slf4j），同样走 provided 由父加载器提供。 -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- 协议是 JSON-RPC over stdio，离不开一个可靠的 JSON 解析器。
+             插件看不到内核的 ObjectMapperWrapper（那在 jellyfish-infra 里），因此自带 Jackson
+             并 shade 进插件包（护栏只禁止自带内核契约与 PF4J）。
+             刻意不用 jackson-module-parameter-names：本插件只解析成 JsonNode，
+             没有「全字段构造器 + 无 setter」的 DTO 要反序列化。 -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+        </dependency>
+
+        <!-- 单测 -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- 仅测试期使用：加载链路的端到端验证需要真实的 PF4J 管理器与注册表。 -->
+        <dependency>
+            <groupId>zcd</groupId>
+            <artifactId>jellyfish-infra</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>shade-plugin-dependencies</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>shade</goal>
+                        </goals>
+                        <configuration>
+                            <createDependencyReducedPom>true</createDependencyReducedPom>
+                            <artifactSet>
+                                <!-- 只打自己的依赖：jellyfish-api / pf4j / slf4j 由父加载器提供 -->
+                                <includes>
+                                    <include>com.fasterxml.jackson.core:*</include>
+                                </includes>
+                            </artifactSet>
+                            <filters>
+                                <filter>
+                                    <artifact>*:*</artifact>
+                                    <excludes>
+                                        <exclude>META-INF/*.SF</exclude>
+                                        <exclude>META-INF/*.DSA</exclude>
+                                        <exclude>META-INF/*.RSA</exclude>
+                                        <exclude>module-info.class</exclude>
+                                    </excludes>
+                                </filter>
+                            </filters>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+
+    <profiles>
+        <profile>
+            <!--
+                MCP 客户端与一个真实 server 进程的端到端测试。
+
+                它会 fork 一个子进程（用例自带的极简 MCP server），因此不进 `mvn test`
+                （AGENTS.md 规定单测不访问外部资源）。用 profile 而不是另建模块：
+                被测对象就是本模块的插件与它的连接管理。
+            -->
+            <id>mcp-it</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <configuration>
+                            <includes>
+                                <include>**/*IT.java</include>
+                            </includes>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+</project>

@@ -263,6 +263,35 @@ class ChatStateTest {
     }
 
     @Test
+    @DisplayName("首页投影：字标按视口高度垂直居中")
+    void view_should_centerHomeSplashVertically() {
+        ChatState.View view = state.view(null, messages(), 80, 21, MAX_MESSAGES);
+
+        List<String> body = texts(view);
+        int blankAbove = 0;
+        while (blankAbove < body.size() && body.get(blankAbove).isEmpty()) {
+            blankAbove++;
+        }
+
+        // 5 行图案 + 上下各 8 行（21 - 5 = 16，对半分），下方那半由视口剩余空间担任
+        assertEquals(8, blankAbove, "上半留白，实际：" + body);
+        assertEquals(13, body.size(), "留白 + 图案，实际：" + body);
+        assertEquals(0, view.getHiddenBelowRows(), "居中时内容不超过一屏，不该有下方隐藏");
+        assertEquals(0, state.getOffset(), "居中时不该出现「上方有内容」的偏移");
+    }
+
+    @Test
+    @DisplayName("终端变高后首页留白重算：视口行数也是投影的输入")
+    void view_should_reprojectHomeWhenViewportGrows() {
+        state.view(null, messages(), 80, 11, MAX_MESSAGES);
+        assertEquals(8, state.getTotalRows(), "11 - 5 = 6，顶部留 3 行 + 5 行图案");
+
+        state.view(null, messages(), 80, 21, MAX_MESSAGES);
+
+        assertEquals(13, state.getTotalRows(), "只比列数缓存的话，这里会留在旧高度的行数上");
+    }
+
+    @Test
     @DisplayName("会话切换后立即反映新会话内容，证明视图确实是会话的投影")
     void view_should_reflect_new_session_when_session_changed() {
         view(messages("旧会话"), 20);

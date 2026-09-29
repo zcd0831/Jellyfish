@@ -626,21 +626,56 @@ class TranscriptProjectorTest {
     }
 
     @Test
-    @DisplayName("首页投影：居中字标，不带消息表头")
-    void home_should_renderCenteredLogo() {
-        List<String> body = texts(TranscriptProjector.home(Collections.<ShellNotice>emptyList(), WIDE));
+    @DisplayName("首页投影：字标按视口高度垂直居中，不带消息表头")
+    void home_should_centerLogoVertically() {
+        int viewportRows = 21;
+        List<String> body = texts(TranscriptProjector.home(
+                Collections.<ShellNotice>emptyList(), WIDE, viewportRows));
 
-        assertEquals(2, body.size(), "空行 + 字标，实际：" + body);
-        assertEquals("", body.get(0));
-        assertEquals(HomeSplash.LOGO, body.get(1).trim());
-        assertTrue(body.get(1).startsWith(" "), "必须居中，实际：" + body);
+        // 5 行图案 + 上下各 8 行留白：留白只补在上方，下方那半由视口剩余空间担任
+        int blankAbove = 0;
+        while (blankAbove < body.size() && body.get(blankAbove).isEmpty()) {
+            blankAbove++;
+        }
+        assertEquals(5, body.size() - blankAbove, "图案是 5 行，实际：" + body);
+        assertEquals(viewportRows - 5 - blankAbove, blankAbove, "上下留白必须对称，实际：" + body);
+        assertTrue(body.get(blankAbove).startsWith(" "), "字标必须居中，实际：" + body);
+        assertTrue(body.get(blankAbove).indexOf('\u2588') >= 0, "字标必须画出来，实际：" + body);
+    }
+
+    @Test
+    @DisplayName("首页投影：图案放不下时退回单行文本，仍然居中")
+    void home_should_fallBackToSingleLine_when_narrow() {
+        List<String> body = texts(TranscriptProjector.home(
+                Collections.<ShellNotice>emptyList(), 40, 21));
+
+        int blankAbove = 0;
+        while (blankAbove < body.size() && body.get(blankAbove).isEmpty()) {
+            blankAbove++;
+        }
+        assertEquals(1, body.size() - blankAbove, "退回形态只有一行，实际：" + body);
+        assertEquals(HomeSplash.LOGO, body.get(blankAbove).trim());
+    }
+
+    @Test
+    @DisplayName("首页投影：内容比视口高时只留一行顶距，不居中")
+    void home_should_keepSingleBlankRow_when_contentTallerThanViewport() {
+        List<ShellNotice> notices = new ArrayList<ShellNotice>();
+        for (int i = 0; i < 10; i++) {
+            notices.add(new ShellNotice(i, "/resume missing", "会话不存在：" + i, ShellNotice.Kind.ERROR));
+        }
+
+        List<String> body = texts(TranscriptProjector.home(notices, WIDE, 4));
+
+        assertEquals("", body.get(0), "字标不能贴着上边框，实际：" + body);
+        assertTrue(body.size() > 5, "10 条提示不可能被压进 4 行，实际：" + body);
     }
 
     @Test
     @DisplayName("首页投影：外壳提示仍然可见（如 /resume 报错）")
     void home_should_renderNotices() {
         ShellNotice notice = new ShellNotice(1L, "/resume missing", "会话不存在：missing", ShellNotice.Kind.ERROR);
-        List<String> body = texts(TranscriptProjector.home(Collections.singletonList(notice), WIDE));
+        List<String> body = texts(TranscriptProjector.home(Collections.singletonList(notice), WIDE, 21));
 
         assertTrue(body.contains("    \u2717 会话不存在：missing"), "首页上必须能看到错误提示，实际：" + body);
     }

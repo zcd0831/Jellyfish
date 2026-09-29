@@ -69,6 +69,14 @@ public final class ChatState {
     /** 最近一次投影的列数，-1 表示尚未投影过。 */
     private int lastWidth = -1;
 
+    /**
+     * 最近一次投影时的视口行数，-1 表示尚未投影过。
+     * <p>
+     * <b>它也是投影的输入</b>：首页内容要按视口高度垂直居中（{@link TranscriptProjector#home}），
+     * 因此终端高度变化后必须重算——只比列数的话，纵向拉伸终端会留下按旧高度算出来的留白。
+     */
+    private int lastViewportRows = -1;
+
     /** 最近一次投影使用的消息上限。 */
     private int lastMaxMessages = -1;
 
@@ -283,7 +291,7 @@ public final class ChatState {
      * @return 本帧窗口，保证非 {@code null}
      */
     public View view(String sessionId, List<SessionMessage> messages, int width, int viewportRows, int maxMessages) {
-        refreshProjection(sessionId, messages, width, maxMessages);
+        refreshProjection(sessionId, messages, width, viewportRows, maxMessages);
         int rows = Math.max(1, viewportRows);
         int maxOffset = Math.max(0, totalRows - rows);
         this.viewportRows = rows;
@@ -386,15 +394,18 @@ public final class ChatState {
     /**
      * 按需重算投影结果。
      *
-     * @param sessionId   会话标识
-     * @param messages    消息列表
-     * @param width       可用列数
-     * @param maxMessages 消息条数上限
+     * @param sessionId    会话标识
+     * @param messages     消息列表
+     * @param width        可用列数
+     * @param viewportRows 消息区可用行数
+     * @param maxMessages  消息条数上限
      */
-    private void refreshProjection(String sessionId, List<SessionMessage> messages, int width, int maxMessages) {
+    private void refreshProjection(String sessionId, List<SessionMessage> messages, int width,
+                                   int viewportRows, int maxMessages) {
         List<SessionMessage> source = messages == null ? Collections.<SessionMessage>emptyList() : messages;
         String lastId = source.isEmpty() ? null : source.get(source.size() - 1).getMessageId();
         boolean unchanged = lastWidth == width
+                && lastViewportRows == viewportRows
                 && lastMaxMessages == maxMessages
                 && lastThinkingExpanded == thinkingExpanded
                 && lastMessageCount == source.size()
@@ -412,12 +423,13 @@ public final class ChatState {
         InflightTurn.Snapshot snapshot = inflight.snapshot();
         if (sessionId == null) {
             // 无当前会话 = 首页：投影字标与外壳提示（见 TranscriptProjector.home）
-            projected = TranscriptProjector.home(notices, width);
+            projected = TranscriptProjector.home(notices, width, viewportRows);
         } else {
             projected = TranscriptProjector.project(source, notices, snapshot, width, maxMessages,
                     thinkingExpanded);
         }
         lastWidth = width;
+        lastViewportRows = viewportRows;
         lastMaxMessages = maxMessages;
         lastThinkingExpanded = thinkingExpanded;
         lastMessageCount = source.size();

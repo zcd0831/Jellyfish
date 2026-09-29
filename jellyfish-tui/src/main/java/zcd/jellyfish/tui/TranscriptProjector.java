@@ -113,6 +113,9 @@ public final class TranscriptProjector {
     /** 默认投影的消息条数上限（T8.8）。每帧投影是 O(总行数)，必须有界。 */
     public static final int DEFAULT_MAX_MESSAGES = 500;
 
+    /** 首页垂直居中时至少留出的顶部空行数（见 {@link #centerVertically}）。 */
+    private static final int TOP_BLANK_ROWS = 1;
+
     /** 用户消息正文样式。 */
     private static final Style USER_STYLE = Style.EMPTY;
 
@@ -163,19 +166,50 @@ public final class TranscriptProjector {
      * 只有字标与外壳提示两类：首页上还没有会话，自然没有消息可投影，也没有「进行中回合」。
      * 保留外壳提示是因为首页上仍可能发生「命令报错」这类反馈（例如 {@code /resume} 指向不存在的会话、
      * {@code /delete} 删不掉），它必须在首页上看得见，否则用户会以为按键没生效。
+     * <p>
+     * <b>整块内容按视口高度垂直居中</b>：首页的内容天然不足一屏（字标只有几行），
+     * 全部顶在上边框会留下一大片只能算「空」的空白。留白必须在这里补而不是在
+     * {@link HomeSplash} 里补——提示也要参与排版，只按字标居中会在有提示时整体偏上。
      *
-     * @param notices 外壳提示列表（按插入顺序，时间戳非递减），可为 {@code null}（当作空）
-     * @param width   可用列数，小于 1 时按 1 处理
+     * @param notices      外壳提示列表（按插入顺序，时间戳非递减），可为 {@code null}（当作空）
+     * @param width        可用列数，小于 1 时按 1 处理
+     * @param viewportRows 消息区可用行数，小于 1 时按 0 处理
      * @return 视觉行列表，保证非 {@code null}
      */
-    public static List<VisualLine> home(List<ShellNotice> notices, int width) {
-        List<VisualLine> out = new ArrayList<VisualLine>();
-        out.addAll(HomeSplash.lines(width));
+    public static List<VisualLine> home(List<ShellNotice> notices, int width, int viewportRows) {
+        List<VisualLine> content = new ArrayList<VisualLine>();
+        content.addAll(HomeSplash.lines(width));
         if (notices != null) {
             for (ShellNotice notice : notices) {
-                out.addAll(notice(notice, width));
+                content.addAll(notice(notice, width));
             }
         }
+        return centerVertically(content, viewportRows);
+    }
+
+    /**
+     * 在内容上方补空行，使整块在视口内垂直居中。
+     * <p>
+     * <b>至少留一行</b>：字标贴着消息区上边框显得局促，这一行也是原来「首个为空行」的观感。
+     * 因此可用空间只剩奇数行时，多出来的那一行算在下边，整块略偏上。
+     * <p>
+     * <b>内容比视口高时只补这一行</b>：此时补了也看不见（窗口跟着末尾走），
+     * 而滚动位置与总行数的算法不必为首页开特例。
+     *
+     * @param content      内容行
+     * @param viewportRows 消息区可用行数
+     * @return 补齐留白后的行列表；内容本就够高时原样返回
+     */
+    private static List<VisualLine> centerVertically(List<VisualLine> content, int viewportRows) {
+        int padding = Math.max(TOP_BLANK_ROWS, (Math.max(0, viewportRows) - content.size()) / 2);
+        if (padding <= 0) {
+            return content;
+        }
+        List<VisualLine> out = new ArrayList<VisualLine>(content.size() + padding);
+        for (int i = 0; i < padding; i++) {
+            out.add(VisualLine.EMPTY);
+        }
+        out.addAll(content);
         return out;
     }
 

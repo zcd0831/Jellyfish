@@ -27,7 +27,8 @@
 
 ### 分流与首页
 
-- **TUI 从首页进入**：无当前会话时显示 `HomeSplash`；**分流完全交给命令域，外壳不维护名字表**——
+- **TUI 从首页进入**：无当前会话时显示 `HomeSplash`（53 列方块字字标，终端窄于 53 列时整块退回单行文本，
+  并按消息区高度垂直居中）；**分流完全交给命令域，外壳不维护名字表**——
   `sessionRequired=false` 的命令（`/help` `/new` `/session` `/resume` `/delete` `/reload`，
   以及降级的 `/model` `/agent` `/mode`）在首页直接执行且不建会话，其余命令与普通文本先建会话；
   首页手敲一条 `sessionRequired=true` 的命令（`/compact`）**按约定当作用户的话发给模型**（不额外提示）。

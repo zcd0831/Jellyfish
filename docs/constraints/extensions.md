@@ -1,0 +1,66 @@
+# 约束：扩展层与插件运行时
+
+> 本文是 [AGENTS.md](../../AGENTS.md) 的 L1 分域约束：**改扩展层、插件运行时、事件通道前必读**。
+> 面向使用者的说明见 [README.md](../../README.md)，设计决策的背景见 [architecture.md](../architecture.md)。
+> 只写规则与事实；推导与实测数据在对应类的注释里。
+
+## 一份注册表 + 两种派发策略
+
+- **两个能力面**：`ExtensionRegistry`（同步：调用点内联、按 order 升序、取返回值、**不可丢**）与
+  `EventChannel`（异步：有界队列、无返回值、**可丢**），共用 `infra/registry` 的同一份 `TypeRegistry`。
+  **禁止引入第三方事件总线**（如 Guava EventBus）。
+- **选择能力面的判据是「能否丢弃」，不是「有没有返回值」**：工具、提示词注入、权限拦截、会话持久化走同步侧
+  （即使无返回值也不能丢）；轮次通知、指标、审计走异步侧。
+- **类型即地址**：请求类型本身就是身份，注册表按「类型 + 路由键」找 handler；插件拿不到的类型就注册不了。
+- **同步侧只提供有序查找与单处理器执行，注册表不做编排**：`handler` 同键唯一（0 个 `NO_HANDLER`、
+  多个 `AMBIGUOUS_HANDLER`），`descriptorBindings` 取描述符清单（描述符为空的注册也返回）。
+  调用顺序与结果合并由调用方决定。
+- **同步派发没有超时、白名单、异常隔离**：调用方需要确定结果，若不能容忍插件阻塞或抛错，
+  必须自己在调用点设超时或捕获。
+
+## 插件生命周期
+
+- **Java 插件与跨语言桥接插件在 `PF4JPluginManager` 眼里同构**，都只经 `PluginContext`
+  （handle / contribute / observe / emit）与内核交互。
+- **注册窗口是插件的整个存活期，不是 `start()` 之内**：`start()` 返回到 `stop()` 之前，插件可在任意时刻注册、
+  订阅、发布——运行期才发现自己能提供哪些能力的插件（MCP 客户端在握手后才知道工具集）必须如此。回收仍只按
+  owner 一次收干净，因此运行期注册不会留下没人收的登记；`handle` / `contribute` / `observe` 返回的
+  `Subscription.close()` 是插件侧主动注销的正式手段（**注销是可选优化，不是必须动作**）。
+- **`stop()` 之后注册一律当场抛 `JellyfishException`（fail-closed）**：窗口放宽之后「停止期与注册期重叠」从文档约定
+  变成真实竞态，因此 `PluginContextImpl` 持有一个与全部子上下文**共享**的 `ContextLifecycle`，
+  `PluginContextFactory.release` 时**先关闭标记再回收注册**（顺序不能反，否则「先注册、再回收」会留下谁也回收不到的
+  幽灵注册）。
+  - 推论一：**产生注册的后台线程必须在 `stop()` 返回前停下来**。
+  - 推论二：子上下文也必须复用父上下文的标记，否则回收根上下文管不住子上下文。
+  - 推导见 `PluginContextImpl` / `ContextLifecycle` 的注释。
+- **插件碰不到会话、也拿不到工作目录**：`PluginContext` 只有身份与四个方法，工具相对路径按进程工作目录解析
+  （`ToolPaths`）。状态只要按 `sessionId` 归属，插件就能自己持有。
+
+## owner 与命名空间
+
+- **owner 可以是命名空间**：插件可给内部子单元分独立 owner
+  （`pluginId` + `api.PluginOwnerNamespace.SEPARATOR` + 子标识），`PluginContextFactory.release` 按命名空间回收
+  （`pluginId` 自身与 `pluginId::*` 一起清），因此子单元的注册不会在插件停止后残留成幽灵注册。
+- **分隔符常量在 `api`**：这是跨边界契约——插件拼来源、内核做前缀回收，必须同一个真源。
+- 插件侧用 `PluginContext.subContext(childId)` 派生子上下文来注册到子命名空间（**子身份恒从当前身份派生，无法越界**）；
+  子标识规则由 `PluginOwnerNamespace.requireChildId` 一处承担，插件侧与框架侧共用。
+- **`plugin.id` 含分隔符的插件在描述符体检阶段被拒**：否则一个叫 `x::y` 的插件会把自己的注册挂进命名空间 `x`，
+  `x` 停止时就会越界抹掉它的注册。
+- **`EventChannel.unsubscribeAll` 仍是精确匹配**（它服务于内核内部来源，不参与命名空间前缀回收）。
+
+## 插件扫描与配置
+
+- **新增 / 删除插件 jar 需要重启进程**（扫描目录与插件集合只在启动期确定）；
+  `jellyfish.json` 里插件配置段的变化由 `/reload` 按差异重启对应插件。
+- **插件启用 / 禁用名单与逐插件配置段**在 `jellyfish.json` 的 `plugins` 段；字段语义与合并规则见
+  [configuration.md](../configuration.md) 的 `plugins` 一节。
+- **只读白名单**：插件只能声明工具描述符，用户只能追加；语义见 [permissions.md](permissions.md)。
+
+## 改动检查清单
+
+改这一域时逐条确认：
+
+1. 新能力面是否必须同步（有返回值或不可丢）？若是，是否在调用点自己设了超时与异常捕获？
+2. 新的注册是否会在 `stop()` 之后发生？若是，先看 `stop()` 前能不能停掉产生它的线程。
+3. 新注册的 owner 是否需要命名空间隔离？用了 `::` 就要确认回收按前缀走。
+4. 是否新增了跨边界常量？放 `api` 侧，别在 infra 与插件各写一份。

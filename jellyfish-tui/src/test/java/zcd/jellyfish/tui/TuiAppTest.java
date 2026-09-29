@@ -89,6 +89,20 @@ class TuiAppTest {
     }
 
     @Test
+    @DisplayName("以逃生门启动后又运行期收回鼠标：退出前必须自己关掉上报，否则终端会带着鼠标模式回到 shell")
+    void mouseCaptureNeedsRestore_should_beTrue_when_capturedButConfiguredOff() {
+        assertTrue(TuiApp.mouseCaptureNeedsRestore(true, false));
+    }
+
+    @Test
+    @DisplayName("其余三种组合都不需要自己动手：框架按启动配置关一次即可")
+    void mouseCaptureNeedsRestore_should_beFalse_otherwise() {
+        assertFalse(TuiApp.mouseCaptureNeedsRestore(true, true));
+        assertFalse(TuiApp.mouseCaptureNeedsRestore(false, true));
+        assertFalse(TuiApp.mouseCaptureNeedsRestore(false, false));
+    }
+
+    @Test
     @DisplayName("只有无参 /help（含别名）才算「查键位」的那次帮助")
     void isBareHelp_should_matchOnlyBareHelp() {
         assertTrue(TuiApp.isBareHelp("/help"));

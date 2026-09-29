@@ -69,8 +69,11 @@
 - **TUI 启动前必须做终端前置检查**（`System.console() == null` 判据，挂在 `RunMode.checkEnvironment`，
   由 `Launcher` 在启动内核前调用，**不满足退 3**），否则 TamboUI 会永久挂住；逃生门
   `-Djellyfish.tui.skipTerminalCheck=true`。
-- **鼠标捕获默认开**：滚轮属于鼠标捕获，关着到不了应用；非滚轮鼠标事件一律吞掉以保住焦点。
-  代价是终端选择需按修饰键，逃生门 `-Djellyfish.tui.mouseCapture=false`。
+- **鼠标捕获默认开，且可在运行期交还终端**：滚轮属于鼠标捕获，关着到不了应用；非滚轮鼠标事件一律吞掉以保住焦点。
+  代价是终端选择需按修饰键（macOS 的 Option，而 Terminal.app 上是矩形选择，等于没有），因此有两条退路：
+  运行期 `Ctrl+O` / `/mouse` 把鼠标交还终端（拖选与 ⌘C 立刻可用，期间滚轮停用，状态栏留标记，
+  **退回前若与启动配置不一致必须自己关掉上报，否则终端会带着鼠标模式回到 shell**），
+  或整体逃生门 `-Djellyfish.tui.mouseCapture=false`。
   **括号粘贴必须保持打开**，否则多行粘贴被拆成多次提交。
 
 ## Server

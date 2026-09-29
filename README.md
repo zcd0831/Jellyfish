@@ -168,12 +168,14 @@ java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -tui
 | `Enter` | 换行（可写多行，输入框 1～6 行自适应） |
 | `Ctrl+C` | 退出 |
 | `Ctrl+T` | 展开 / 折叠思考过程（与 `/thinking` 等价） |
+| `Ctrl+O` | 交还 / 收回鼠标（与 `/mouse` 等价）：交还后可直接拖选并复制 |
 | `Esc` | 中断当前回合（输入框内容保留） |
 | `PageUp` / `PageDown` | 消息区翻页 |
 | `End` | 跳到底部并恢复跟随 |
 | `/exit` | 退出（由外壳处理，不在 `/help` 列表里） |
 | `/ui` | 查看与切换插件的界面贡献（同样由外壳处理） |
 | `/thinking` | 展开 / 折叠思考过程（同样由外壳处理） |
+| `/mouse` | 交还 / 收回鼠标（同样由外壳处理；`/mouse on` / `/mouse off` 显式指定） |
 
 **为什么发送不是 `Enter`**：终端 raw 模式下所有「带修饰的 Enter」都无法与普通 `Enter` 区分，因此「`Enter` 发送 +
 修饰键换行」在任何终端上都不可实现。反转之后 `Enter` 稳定换行、`Ctrl+S` 稳定发送。
@@ -185,9 +187,11 @@ java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -tui
 **表格降级为代码块**（终端里按列对齐中英混排要赌终端的字宽表，算错了比不对齐更误导）。**用户消息保持纯文本**，
 工具轨迹不变；图片与 HTML 原样显示源码。
 
-**滚轮可用，代价是终端选择需按住修饰键**：滚轮要求应用捕获鼠标（默认开启），而捕获后终端的鼠标选择会被应用截走，
-复制屏幕文本需按住修饰键（macOS 为 Option）。若不能接受这个代价，用 `-Djellyfish.tui.mouseCapture=false` 退回：
-代价是滚轮在多数终端下**根本到不了应用**，消息区滚动改用 `PageUp` / `PageDown` / `End`。
+**滚轮可用，代价是终端选择被应用截走**：滚轮要求应用捕获鼠标（默认开启），而捕获后终端的鼠标选择归应用，
+复制屏幕文本需按住修饰键（macOS 为 Option，而 Terminal.app 上的 Option 拖动是矩形选择，实际等于没有）。
+想复制时按 `Ctrl+O`（或敲 `/mouse`）把鼠标交还终端：拖选 + `⌘C` 立刻可用，期间滚轮停用
+（消息区滚动改用 `PageUp` / `PageDown` / `End`），复制完再按一下收回。若整体不要鼠标捕获，
+用 `-Djellyfish.tui.mouseCapture=false` 退回：代价是滚轮在多数终端下**根本到不了应用**。
 
 **TUI 没有 stdout 契约**：它独占备用屏，因此 `> answer.txt` 不适用，退出后也不回显会话内容。日志改写到文件
 `<用户主目录>/.jellyfish/jellyfish-tui.log`（可用 `-Djellyfish.log.file=...` 改路径），绝不写 stderr——否则会撕坏画面。
@@ -283,7 +287,7 @@ java -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=5005 \
 | `/compact [preview]` | | 把更早的对话压成摘要（需压缩策略插件） |
 | `/reload` | | 重新加载配置（模型 / agent / 插件） |
 
-`-tui` 另有三个由外壳处理的命令，不在 `/help` 列表里：`/exit`、`/ui`、`/thinking`。
+`-tui` 另有四个由外壳处理的命令，不在 `/help` 列表里：`/exit`、`/ui`、`/thinking`、`/mouse`。
 **插件会带来更多命令**（例如待办插件的 `/todo`），装了就出现在 `/help` 里。
 
 **离线可用**：`/help` `/session` `/status` `/model` `/compact preview` 这些命令**不需要模型配置**，可以拿来验证安装是否正常。
@@ -450,8 +454,10 @@ curl -sN -X POST localhost:9096/sessions/$SID/chat \
 落盘目录有清理上限（缺省每会话 200 个文件 / 50 MiB），从最旧开始删，所以 `_path` 只在保留窗口内有效。
 要长期留用的内容请在它还在时另存一份。
 
-**滚动看着不对 / 复制文本要按 Option？**
-滚轮依赖鼠标捕获（默认开），复制需按住修饰键。用 `-Djellyfish.tui.mouseCapture=false` 退回滚轮换取原生选择。
+**滚动看着不对 / 复制文本选不中？**
+滚轮依赖鼠标捕获（默认开），而捕获后终端本地的鼠标选择归应用：想复制时按 `Ctrl+O`（或敲 `/mouse`）把鼠标交还终端，
+拖选 + `⌘C` 即可，期间滚轮停用、消息区滚动改用 `PageUp` / `PageDown` / `End`，复制完再按一下收回。
+若整体不要鼠标捕获，用 `-Djellyfish.tui.mouseCapture=false` 退回滚轮换取原生选择。
 
 **改了配置不生效？**
 三个配置文件敲 `/reload`；`config.json`、新增 / 删除插件 jar 需要重启进程。

@@ -53,6 +53,19 @@ class InputKeyMapperTest {
     }
 
     @Test
+    @DisplayName("Ctrl+O 应判定为鼠标开关（交还 / 收回终端）")
+    void map_should_returnToggleMouse_when_ctrlO() {
+        assertEquals(InputAction.TOGGLE_MOUSE, InputKeyMapper.map(ctrl('o')));
+        assertEquals(InputAction.TOGGLE_MOUSE, InputKeyMapper.map(ctrl('O')));
+    }
+
+    @Test
+    @DisplayName("无修饰的 o 不得被当成鼠标开关：它是正文里的普通字符")
+    void map_should_notReturnToggleMouse_when_plainO() {
+        assertEquals(InputAction.EDIT, InputKeyMapper.map(KeyEvent.ofChar('o')));
+    }
+
+    @Test
     @DisplayName("无修饰的 t 不得被当成折叠开关：它是正文里的普通字符")
     void map_should_notReturnToggleThinking_when_plainT() {
         assertEquals(InputAction.EDIT, InputKeyMapper.map(KeyEvent.ofChar('t')));

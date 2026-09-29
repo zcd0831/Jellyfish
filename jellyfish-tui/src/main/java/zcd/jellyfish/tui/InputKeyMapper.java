@@ -51,6 +51,9 @@ final class InputKeyMapper {
         if (isCtrl(key, 't')) {
             return InputAction.TOGGLE_THINKING;
         }
+        if (isCtrl(key, 'o')) {
+            return InputAction.TOGGLE_MOUSE;
+        }
         if (key.isKey(KeyCode.PAGE_UP)) {
             return InputAction.PAGE_UP;
         }

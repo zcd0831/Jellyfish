@@ -24,6 +24,8 @@ class ShellCommandTest {
         assertEquals("/ui", UiCommand.PREFIX);
         assertEquals("thinking", ShellCommand.THINKING_NAME);
         assertEquals("/thinking", ShellCommand.THINKING);
+        assertEquals("mouse", MouseCommand.NAME);
+        assertEquals("/mouse", MouseCommand.PREFIX);
     }
 
     @Test
@@ -67,6 +69,15 @@ class ShellCommandTest {
         assertTrue(ShellCommand.isShellCommand("/ui"));
         assertTrue(ShellCommand.isShellCommand("/ui dock off"));
         assertTrue(ShellCommand.isShellCommand("/thinking"));
+        assertTrue(ShellCommand.isShellCommand("/mouse"));
+        assertTrue(ShellCommand.isShellCommand("/mouse off"));
+    }
+
+    @Test
+    @DisplayName("/mouse 不是退出命令：否则敲 /mouse 会直接退出界面")
+    void isExitCommand_should_notMatchMouse() {
+        assertFalse(ShellCommand.isExitCommand("/mouse"));
+        assertFalse(ShellCommand.isExitCommand("/mouse off"));
     }
 
     @Test
@@ -77,5 +88,6 @@ class ShellCommandTest {
         assertFalse(ShellCommand.isShellCommand("/exiting"));
         assertFalse(ShellCommand.isShellCommand(null));
         assertFalse(ShellCommand.isShellCommand("/uix"));
+        assertFalse(ShellCommand.isShellCommand("/mousex"));
     }
 }

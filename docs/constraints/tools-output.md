@@ -121,7 +121,7 @@
 - **`CommandManager` 不注册处理器、不持有会话、不缓存索引**：命令名即路由键，别名与用法来自
   `CommandDescriptor`；原文入口与结构化入口共用同一条分发路径，**对外壳中立**。
 - **系统命令由 `core/command/SystemCommands` 以 `owner=core` 注册**，插件命令由插件注册，
-  `/exit` `/ui` `/thinking` 归外壳；候选查询（`CommandOptionRequest` → `CommandOptions`）是与执行**平行**的
+  `/exit` `/ui` `/thinking` `/mouse` 归外壳；候选查询（`CommandOptionRequest` → `CommandOptions`）是与执行**平行**的
   只读路径，**不执行命令**。
 - **工具同理：`task` 由 `core/subagent/SubAgentTools` 以 `owner=core` 注册**，必须在插件启动之前完成
   （否则插件要覆盖它会反过来以 `DUPLICATE_HANDLER` 暴露给用户）；插件显式声明 `override` 即可替换。

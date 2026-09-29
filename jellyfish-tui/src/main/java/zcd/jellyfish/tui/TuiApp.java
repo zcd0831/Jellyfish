@@ -40,6 +40,7 @@ import zcd.jellyfish.infra.ui.OwnedPanel;
 import zcd.jellyfish.infra.ui.UiContributions;
 import zcd.jellyfish.infra.ui.UiSnapshot;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -191,6 +192,10 @@ public final class TuiApp extends ToolkitApp {
     private static final CommandInfo THINKING_INFO = new CommandInfo(ShellCommand.THINKING_NAME,
             new CommandDescriptor("展开 / 折叠思考过程", null, null));
 
+    /** {@code /mouse} 在补全清单里的条目。 */
+    private static final CommandInfo MOUSE_INFO = new CommandInfo(MouseCommand.NAME,
+            new CommandDescriptor("交还 / 收回鼠标（Ctrl+O 同效）", null, null));
+
     /**
      * 插件 UI 的逃生门系统属性。
      * <p>
@@ -207,8 +212,28 @@ public final class TuiApp extends ToolkitApp {
      * <p>
      * 置为 {@code false} 时退回「不捕获鼠标」的旧行为：滚轮不再能滚消息区，
      * 但终端本地的鼠标选中/复制不再被打断（见 {@link #configure()}）。
+     * 运行期做同一件事用 {@code /mouse} 或 {@code Ctrl+O}，不必重启进程。
      */
     static final String MOUSE_CAPTURE_PROPERTY = "jellyfish.tui.mouseCapture";
+
+    /**
+     * 恢复鼠标捕获时附带的「移动事件」开关。
+     * <p>
+     * 与 {@link #configure()} 用同一个取值：本项目没有任何悬停 / 拖动语义，开启只会让终端把每一次
+     * 指针移动都发过来。抽成常量是为了让「启动」与「运行期收回」两条路径共用一个事实来源，
+     * 不会出现一边开一边不开。
+     */
+    private static final boolean MOUSE_MOTION = false;
+
+    /**
+     * 当前是否处于鼠标捕获态。
+     * <p>
+     * 初值取自启动配置（{@link #mouseCaptureEnabled()}），由 {@code /mouse} 与 {@code Ctrl+O} 在运行期改写。
+     * 框架只在<b>启动与关闭</b>两处按 {@code TuiConfig} 设置终端模式，不感知运行期的改动，
+     * 因此这个偏移只能由本类自己记住——退出时若它与启动配置不一致，终端会带着鼠标上报模式回到 shell
+     * （见 {@link #exitShell()}）。
+     */
+    private boolean mouseCaptured = mouseCaptureEnabled();
 
     /** 输入区视图。 */
     private final ChatInputView input;
@@ -289,9 +314,11 @@ public final class TuiApp extends ToolkitApp {
      * 面板没弹时落回输入框，在单行输入上表现为「滚轮毫无反应」）。开启后滚轮由
      * {@link MouseScrollMapper} 认领，点击 / 拖动等其它鼠标事件原样放行。
      * <p>
-     * <b>代价与逃生门</b>：捕获开启后终端把鼠标交给应用，屏幕文本的本地选中/复制必须按住修饰键
-     * （macOS 为 Option）。不能接受这个代价时用 {@code -D}{@link #MOUSE_CAPTURE_PROPERTY}{@code =false}
-     * 退回旧行为，消息区滚动仍可用 {@code PageUp} / {@code PageDown} / {@code End}。
+     * <b>代价与两个逃生门</b>：捕获开启后终端把鼠标交给应用，屏幕文本的本地选中/复制必须按住修饰键
+     * （macOS 为 Option，而 Terminal.app 上那是矩形选择，等于没有）。两种应对方式：运行期按
+     * {@code Ctrl+O} 或 {@code /mouse} 把鼠标交还终端（见 {@link #setMouseCapture(boolean)}，
+     * 用完再收回，滚轮只在这期间停用），或者用 {@code -D}{@link #MOUSE_CAPTURE_PROPERTY}{@code =false}
+     * 整体退回旧行为（消息区滚动改用 {@code PageUp} / {@code PageDown} / {@code End}）。
      * <p>
      * <b>为什么 {@code mouseMotion} 仍为 {@code false}</b>：本轮没有任何「悬停 / 拖动」语义，
      * 开启只会让终端把每一次指针移动都发过来；滚轮与按键事件不依赖它。
@@ -303,6 +330,7 @@ public final class TuiApp extends ToolkitApp {
         return TuiConfig.builder()
                 .bracketedPaste(true)
                 .mouseCapture(mouseCaptureEnabled())
+                .mouseMotion(MOUSE_MOTION)
                 .build();
     }
 
@@ -369,6 +397,8 @@ public final class TuiApp extends ToolkitApp {
         String status = StatusBarView.render(statusInfoOf(session, contextTokensOf(messages)));
         // 压缩状态是「正在进行 / 已经压过一部分」的事实，模型与屏幕的差异必须有个出口
         status = status + syncCompaction(session, sessionId);
+        // 交还鼠标同样是「持续有效」的状态：滚轮看起来没反应时，屏幕上必须有一处说明原因以及怎么收回
+        status = status + MouseCommand.statusMarker(mouseCaptured);
         // 插件片段紧跟内核字段：宽度预算按终端总列数算，最后一个装不下的片段整块丢弃
         status = StatusBarView.appendFragments(status, fragments, size.width());
         String hint = view.hiddenBelowHint();
@@ -525,6 +555,7 @@ public final class TuiApp extends ToolkitApp {
             infos.add(EXIT_INFO);
             infos.add(UI_INFO);
             infos.add(THINKING_INFO);
+            infos.add(MOUSE_INFO);
             infos.sort(Comparator.comparing(CommandInfo::getName));
             return infos;
         } catch (RuntimeException e) {
@@ -598,8 +629,10 @@ public final class TuiApp extends ToolkitApp {
                 toggleThinking();
             } else if (UiCommand.isUi(text)) {
                 executeUi(text);
+            } else if (MouseCommand.isMouse(text)) {
+                executeMouse(text);
             } else {
-                quit();
+                exitShell();
             }
             return;
         }
@@ -687,6 +720,100 @@ public final class TuiApp extends ToolkitApp {
     private void toggleThinking() {
         boolean expanded = chatState.toggleThinking();
         chatState.appendNotice("思考过程：" + (expanded ? "已展开" : "已折叠"), ShellNotice.Kind.INFO);
+    }
+
+    /**
+     * 执行一条 {@code /mouse} 命令：把鼠标交还终端或收回应用。
+     * <p>
+     * 与 {@code /ui} 一样贴成外壳提示，但<b>不走 {@link CommandManager}</b>：鼠标捕获是终端能力，内核没有这个概念。
+     *
+     * @param text 命令原文
+     */
+    private void executeMouse(String text) {
+        Optional<Boolean> target = MouseCommand.targetOf(text, mouseCaptured);
+        if (!target.isPresent()) {
+            chatState.appendNotice(text, MouseCommand.usageError(), ShellNotice.Kind.ERROR);
+            return;
+        }
+        boolean applied = setMouseCapture(target.get());
+        // 提示按「实际生效的状态」给而不是按目标状态：终端写失败时状态没变，
+        // 屏幕上却写着「已交还」会让用户对着不能选中的界面找问题
+        chatState.appendNotice(text, MouseCommand.notice(mouseCaptured),
+                applied ? ShellNotice.Kind.INFO : ShellNotice.Kind.ERROR);
+    }
+
+    /**
+     * 切换鼠标捕获（{@code Ctrl+O}）。
+     * <p>
+     * <b>为什么要回一条提示</b>：两种状态在屏幕上的差别只在「鼠标归谁管」，
+     * 不按一下再拖选是看不出来的；而交还期间滚轮确实不工作，没有提示就与「界面卡住了」无法区分。
+     * 提示不进会话，因此不会污染发给模型的历史；它也不需要会话，在首页上按同样可用。
+     */
+    private void toggleMouseCapture() {
+        boolean applied = setMouseCapture(!mouseCaptured);
+        chatState.appendNotice(MouseCommand.notice(mouseCaptured),
+                applied ? ShellNotice.Kind.INFO : ShellNotice.Kind.ERROR);
+    }
+
+    /**
+     * 把运行期的鼠标捕获状态写到终端。
+     * <p>
+     * <b>为什么是「已一致就直接返回」而不是无脑写一遍</b>：{@code /mouse on} 在已捕获态上是合法的空操作，
+     * 此时再往终端写一次转义序列只会平白多一次输出（终端模式本来就是幂等的）。
+     * <p>
+     * 写失败只记日志并把状态留在原处：终端不认这些模式时界面仍应照常运行，
+     * 提示由调用方按「实际生效的状态」给出。
+     *
+     * @param captured 目标状态（{@code true} 为收回应用捕获）
+     * @return 状态已生效返回 {@code true}；写终端失败返回 {@code false}
+     */
+    private boolean setMouseCapture(boolean captured) {
+        if (captured == mouseCaptured) {
+            return true;
+        }
+        try {
+            if (captured) {
+                runner().tuiRunner().backend().enableMouseCapture(MOUSE_MOTION);
+            } else {
+                runner().tuiRunner().backend().disableMouseCapture();
+            }
+            mouseCaptured = captured;
+            return true;
+        } catch (IOException e) {
+            LOG.warn("切换鼠标捕获失败：{}", e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * 退出外壳：先把终端还原成启动配置要求的鼠标模式，再让框架收尾。
+     * <p>
+     * <b>为什么必须自己还原</b>：框架只在启动与关闭时按 {@code TuiConfig} 设置鼠标上报模式，不感知运行期的
+     * {@code /mouse}。若用户以 {@code -Djellyfish.tui.mouseCapture=false} 启动、又在界面里把鼠标收回应用，
+     * 关闭时框架认为「本来就没开」不会关掉上报，终端就会带着鼠标模式回到 shell——之后每次移动指针
+     * 都会往命令行里吐转义序列。因此只要运行期状态与启动配置不一致，退出前必须自己关掉。
+     * <p>
+     * 其余组合由框架的关闭路径负责（已捕获且配置要求捕获时它会关，已交还时配置也一定是关的）。
+     * 写失败只记日志：此刻界面正在收尾，没有可展示提示的地方。
+     */
+    private void exitShell() {
+        if (mouseCaptureNeedsRestore(mouseCaptured, mouseCaptureEnabled())) {
+            setMouseCapture(false);
+        }
+        quit();
+    }
+
+    /**
+     * 判断退出前是否需要自己关闭鼠标上报。
+     * <p>
+     * 单独抽成纯函数是为了让这条容易漏掉的规则能被断言：漏一次就是终端在退出后继续上报鼠标。
+     *
+     * @param captured   运行期是否处于捕获态
+     * @param configured 启动配置是否要求捕获
+     * @return 需要自己关闭返回 {@code true}
+     */
+    static boolean mouseCaptureNeedsRestore(boolean captured, boolean configured) {
+        return captured && !configured;
     }
 
     /**
@@ -1044,6 +1171,12 @@ public final class TuiApp extends ToolkitApp {
         @Override
         public EventResult handle(KeyEvent key) {
             InputAction action = InputKeyMapper.map(key);
+            // 交还 / 收回鼠标先行处理：它改的是终端能力而不是界面状态，因此不受「模态吞掉一切」约束
+            // ——审批浮层里那一段长命令恰恰是最想复制的东西
+            if (action == InputAction.TOGGLE_MOUSE) {
+                toggleMouseCapture();
+                return EventResult.HANDLED;
+            }
             if (approvals.pending().isPresent()) {
                 return handleApproval(action);
             }
@@ -1072,7 +1205,7 @@ public final class TuiApp extends ToolkitApp {
                     toggleThinking();
                     return EventResult.HANDLED;
                 case QUIT:
-                    quit();
+                    exitShell();
                     return EventResult.HANDLED;
                 default:
                     // EDIT：交给输入框，不在这里处理键位细节
@@ -1224,7 +1357,7 @@ public final class TuiApp extends ToolkitApp {
                     chatState.cancelTurn();
                     return EventResult.HANDLED;
                 case QUIT:
-                    quit();
+                    exitShell();
                     return EventResult.HANDLED;
                 default:
                     return EventResult.HANDLED;
@@ -1270,7 +1403,7 @@ public final class TuiApp extends ToolkitApp {
                     picker.dismiss();
                     return EventResult.HANDLED;
                 case QUIT:
-                    quit();
+                    exitShell();
                     return EventResult.HANDLED;
                 default:
                     // 其余键吞掉：选择页保持到 Esc，输入框不会在模态页面背后被改动
@@ -1289,6 +1422,10 @@ public final class TuiApp extends ToolkitApp {
      * 的处理是 {@code focusManager.clearFocus()}——点一下消息区就会丢掉输入框焦点，下一帧才被框架重新挑回。
      * 输入框是唯一的可聚焦元素，鼠标本来也做不了别的事，因此这里一律吞掉，把「焦点常驻输入框」（T8.6）
      * 变成确定性行为。将来若要支持点击元素，需要在这里放行非滚轮事件，并同时接受上述焦点语义。
+     * <p>
+     * <b>交还终端期间这里什么也收不到</b>：{@code /mouse}（{@code Ctrl+O}）关掉鼠标上报后终端不再发鼠标事件，
+     * 滚轮由终端自己处置（多数终端把它翻译成 {@code ↑}/{@code ↓}）。这不是缺陷，而是换取
+     * 「终端本地拖选可复制」的那份代价本身。
      */
     private final class ScrollFallback implements GlobalEventHandler {
 

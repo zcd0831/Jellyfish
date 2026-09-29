@@ -153,8 +153,11 @@ jellyfish-tui（TUI 外壳）  jellyfish-server（HTTP 外壳）  →  jellyfish
 **表格降级为代码块**——终端里按列对齐中英混排要赌终端的字宽表，算错了比不对齐更误导。**用户消息保持纯文本**
 （用户打的多是自然语言，渲染收益低，还可能吞掉原文空白），工具轨迹不变。图片与 HTML 原样显示源码，不请求也不解释。
 
-**滚轮可用，代价是终端选择需按住修饰键**：滚轮事件要求应用捕获鼠标（`TuiConfig.mouseCapture(true)`，**默认开启**），
-而捕获后终端的鼠标选择会被应用截走——复制屏幕文本需按住修饰键（macOS 为 Option）。逃生门 `-Djellyfish.tui.mouseCapture=false`。
+**滚轮可用，代价是终端选择被应用截走——两个出口**：滚轮事件要求应用捕获鼠标（`TuiConfig.mouseCapture(true)`，**默认开启**），
+而捕获后终端的鼠标选择归应用——复制屏幕文本需按住修饰键（macOS 为 Option，而 Terminal.app 上的 Option 拖动是矩形选择，
+实际等于没有）。想复制时按 `Ctrl+O`（或敲 `/mouse`）把鼠标交还终端：拖选与 `⌘C` 立刻可用，代价只是期间滚轮停用
+（改用 `PageUp` / `PageDown` / `End`），复制完再按一下收回。这是一个运行期开关，不必重启、也不改变默认行为；
+若整体不想要鼠标捕获，用 `-Djellyfish.tui.mouseCapture=false`。
 
 **TUI 独占备用屏，因此没有 stdout 契约**（`> answer.txt` 不适用），退出后也不回显会话内容；日志改写到文件，
 绝不写 stderr——否则会撕坏画面。启动前必须做终端前置检查（`System.console() == null` 判据），否则 TamboUI 会永久挂住；

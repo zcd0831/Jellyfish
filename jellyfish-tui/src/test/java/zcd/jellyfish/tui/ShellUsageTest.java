@@ -70,4 +70,14 @@ class ShellUsageTest {
         assertTrue(text.contains("补全"));
         assertTrue(text.contains("/ui"));
     }
+
+    @Test
+    @DisplayName("必须提示鼠标开关：复制屏幕文本的唯一办法，且交还期间滚轮停用")
+    void text_should_mentionMouseToggle() {
+        String text = ShellUsage.text();
+
+        assertTrue(text.contains("Ctrl+O"));
+        assertTrue(text.contains("/mouse"));
+        assertTrue(text.contains("复制"));
+    }
 }

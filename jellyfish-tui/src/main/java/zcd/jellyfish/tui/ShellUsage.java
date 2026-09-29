@@ -26,6 +26,7 @@ public final class ShellUsage {
     private static final String TEXT = "TUI 用法（外壳自有）：\n"
             + "  Ctrl+S 发送 · Enter 换行 · Esc 中断 · Ctrl+C 退出\n"
             + "  Ctrl+T 展开/折叠思考过程（同 /thinking）\n"
+            + "  Ctrl+O 交还/收回鼠标（同 /mouse）：交还后可直接拖选并复制，期间滚轮停用\n"
             + "  输入 / 唤起命令补全 · /ui 管理插件面板\n"
             + "  PageUp / PageDown 或滚轮滚动消息区\n"
             + "  工具需要审批时会弹出选择框：↑/↓ 选择 · Enter 确认 · Esc 拒绝并中断回合";

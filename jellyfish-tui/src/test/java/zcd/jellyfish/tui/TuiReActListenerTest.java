@@ -6,6 +6,9 @@ import org.junit.jupiter.api.Test;
 import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.core.ReActResult;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -75,6 +78,29 @@ class TuiReActListenerTest {
         InflightTurn.Snapshot snapshot = inflight.snapshot();
         assertTrue(snapshot.getText().isEmpty());
         assertTrue(snapshot.getThinking().isEmpty());
+    }
+
+    @Test
+    @DisplayName("带参数的工具开始把目标写进暂存区")
+    void onToolCallStarted_should_capture_arguments() {
+        Map<String, Object> arguments = new LinkedHashMap<String, Object>();
+        arguments.put("path", "a.txt");
+
+        listener.onToolCallStarted("c1", "read_file", arguments);
+
+        InflightTurn.Snapshot snapshot = inflight.snapshot();
+        assertEquals("read_file", snapshot.getRunningToolName());
+        assertEquals(arguments, snapshot.getRunningToolArguments());
+    }
+
+    @Test
+    @DisplayName("二参回调仍生效——它是兼容重载，不能静默变成空实现")
+    void onToolCallStarted_without_arguments_should_still_record_name() {
+        listener.onToolCallStarted("c1", "bash");
+
+        InflightTurn.Snapshot snapshot = inflight.snapshot();
+        assertEquals("bash", snapshot.getRunningToolName());
+        assertTrue(snapshot.getRunningToolArguments().isEmpty());
     }
 
     @Test

@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.event.EventPublisher;
 import zcd.jellyfish.api.event.RegisterOptions;
 import zcd.jellyfish.api.event.notification.ToolCallCompletedEvent;
@@ -13,6 +14,8 @@ import zcd.jellyfish.api.extension.PermissionCheckRequest;
 import zcd.jellyfish.api.extension.PermissionDecision;
 import zcd.jellyfish.api.extension.ToolCallRequest;
 import zcd.jellyfish.api.extension.ToolCallResult;
+import zcd.jellyfish.api.extension.ToolMetadata;
+import zcd.jellyfish.core.ReActListener;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.config.ReactSettings;
 import zcd.jellyfish.infra.config.RuntimeConfig;
@@ -34,6 +37,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -138,6 +142,68 @@ class ToolExecutorTest {
         // Then
         assertTrue(String.valueOf(result.getOutput()).contains("工具执行失败"));
         assertTrue(String.valueOf(result.getOutput()).contains("炸了"));
+    }
+
+    @Test
+    void execute_should_mark_terminal_failed_when_handler_throws() {
+        // Given：工具按约定抛 JellyfishException，消息是给人看的一句原因
+        when(permissionManager.decide(any(PermissionCheckRequest.class))).thenReturn(PermissionDecision.allow(null));
+        register("read_file", request -> {
+            throw new JellyfishException("文件不存在: /x/y");
+        });
+
+        // When
+        ToolCallResult result = executor.execute(session, null, "c1", "read_file", args("path", "/x/y"), null);
+
+        // Then：界面警示判据与原因都在元数据里
+        assertEquals("FAILED", result.getMetadata().get(ToolMetadata.KEY_TERMINAL));
+        assertTrue(ToolMetadata.failed(result.getMetadata()));
+        assertEquals("文件不存在: /x/y", result.getMetadata().get(ToolMetadata.KEY_SUMMARY));
+    }
+
+    @Test
+    void execute_should_not_include_summary_for_other_runtime_exception() {
+        // Given：非约定异常的消息是实现细节，不进界面
+        when(permissionManager.decide(any(PermissionCheckRequest.class))).thenReturn(PermissionDecision.allow(null));
+        register("shell", request -> {
+            throw new IllegalStateException("boom");
+        });
+
+        // When
+        ToolCallResult result = executor.execute(session, null, "c1", "shell", args(), null);
+
+        // Then
+        assertEquals("FAILED", result.getMetadata().get(ToolMetadata.KEY_TERMINAL));
+        assertFalse(result.getMetadata().containsKey(ToolMetadata.KEY_SUMMARY));
+    }
+
+    @Test
+    void execute_should_not_set_terminal_when_handler_succeeds() {
+        // Given
+        when(permissionManager.decide(any(PermissionCheckRequest.class))).thenReturn(PermissionDecision.allow(null));
+        register("shell", request -> new ToolCallResult("shell", "ok"));
+
+        // When
+        ToolCallResult result = executor.execute(session, null, "c1", "shell", args(), null);
+
+        // Then：成功路径不带终止原因（缺省 = 正常跑完）
+        assertFalse(result.getMetadata().containsKey(ToolMetadata.KEY_TERMINAL));
+        assertFalse(ToolMetadata.failed(result.getMetadata()));
+    }
+
+    @Test
+    void execute_should_pass_arguments_to_listener() {
+        // Given
+        when(permissionManager.decide(any(PermissionCheckRequest.class))).thenReturn(PermissionDecision.allow(null));
+        register("shell", request -> new ToolCallResult("shell", "ok"));
+        ReActListener listener = mock(ReActListener.class);
+        Map<String, Object> arguments = args("command", "echo hi");
+
+        // When
+        executor.execute(session, null, "c1", "shell", arguments, listener);
+
+        // Then：运行中目标靠这个重载传到外壳
+        verify(listener).onToolCallStarted("c1", "shell", arguments);
     }
 
     @Test

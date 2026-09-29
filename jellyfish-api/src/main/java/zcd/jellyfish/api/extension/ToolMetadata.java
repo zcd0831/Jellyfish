@@ -43,6 +43,9 @@ public final class ToolMetadata {
      * 约定「缺省 = 正常跑完」：{@code COMPLETED} 是各实现里表示正常完成的取值，
      * 因此工具要么不填这个键，要么填一个<b>不等于</b> {@code COMPLETED} 的取值来表示
      * 「它是被终止的」。这样内核不需要认识每种工具的全部终止枚举。
+     * <p>
+     * 内核在工具抛异常时也会补一个不等于 {@code COMPLETED} 的取值（{@code FAILED}），
+     * 使 {@link #failed} 成为界面唯一的警示判据。
      */
     public static final String KEY_TERMINAL = "terminal";
 
@@ -81,9 +84,9 @@ public final class ToolMetadata {
      * 两种情形：退出码非零，或终止原因不是正常完成。它是界面渲染警告标记的唯一判据——
      * 放在这里而不是各界面各写一遍，否则「超时算不算失败」迟早会有两种答案。
      * <p>
-     * <b>与「工具调用失败」不是一回事</b>：工具抛异常那条路由 {@code success=false} 承载，
-     * 而本方法管的是「工具成功地报告了一个不成功的命令」——{@code grep} 没找到、测试没通过
-     * 都属于这一类，且必须在界面上一眼看得出。
+     * <b>它也是「工具调用抛异常」的判据</b>：异常路径同样会补 {@link #KEY_TERMINAL}（取值
+     * {@code FAILED}），界面因此不必再读 {@code success}——文件读不到、{@code grep} 没找到、
+     * 测试没通过都表现为同一条警示，且重投影 / 重启后仍然存在。
      * <p>
      * 宽容处理坏数据：值不是数字、不是字符串等情形一律当作「无此信息」而不是抛异常。
      * 元数据是工具写的旁路信息，它写坏了不该炸掉一次渲染。

@@ -164,8 +164,11 @@ public final class CliReActListener implements ReActListener {
         closeThinkingLine();
         closeToolOutputLine();
         // 只读工具（read_file 之类）没有元数据，这一行因此保持原样；命令类工具带上退出码时补在末尾
+        // success == false 时不再拼 outcomeSuffix：异常路径会带上 terminal=FAILED，
+        // 与前面已经打出的「失败」是同一件事，拼出来就是「失败（N 字符），FAILED」
         console.writeErrLine(TOOL_END_PREFIX + toolName + (success ? " 完成" : " 失败")
-                + "（" + lengthOf(output) + " 字符）" + summarySuffix(metadata) + outcomeSuffix(metadata));
+                + "（" + lengthOf(output) + " 字符）" + summarySuffix(metadata)
+                + (success ? outcomeSuffix(metadata) : ""));
     }
 
     /**

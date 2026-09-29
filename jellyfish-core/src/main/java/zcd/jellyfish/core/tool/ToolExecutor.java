@@ -15,6 +15,7 @@ import zcd.jellyfish.api.extension.PermissionCheckRequest;
 import zcd.jellyfish.api.extension.PermissionDecision;
 import zcd.jellyfish.api.extension.ToolCallRequest;
 import zcd.jellyfish.api.extension.ToolCallResult;
+import zcd.jellyfish.api.extension.ToolMetadata;
 import zcd.jellyfish.api.extension.ToolOutputSink;
 import zcd.jellyfish.core.ReActListener;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
@@ -26,6 +27,7 @@ import zcd.jellyfish.infra.tooloutput.ToolOutputLimiter;
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 
@@ -131,7 +133,7 @@ public class ToolExecutor {
         ReActListener effective = listener == null ? ReActListener.NOOP : listener;
         String sessionId = session.getSessionId();
         events.publish(new ToolCallStartedEvent(toolCallId, toolName, sessionId));
-        effective.onToolCallStarted(toolCallId, toolName);
+        effective.onToolCallStarted(toolCallId, toolName, arguments);
         long start = System.currentTimeMillis();
         // 捕获通道与取消令牌都随请求交给工具：无界输出的工具（命令行）靠前者不必物化整份输出，
         // 靠后者才能在用户按下 Esc 时被打断——同步派发不会中断正在执行的工具。
@@ -143,9 +145,10 @@ public class ToolExecutor {
         try {
             invoked = invokeTool(session, cancellation, toolCallId, toolName, arguments, sink);
         } catch (RuntimeException e) {
-            // 同步侧没有护栏，异常处置是调用点（这里）的责任：记失败、回灌、继续循环
+            // 同步侧没有护栏，异常处置是调用点（这里）的责任：记失败、回灌、继续循环。
+            // 失败原因进元数据：success 不落会话，只有元数据才能在重投影 / -resume 之后仍显示标记
             LOG.warn("工具执行失败: sessionId={} tool={}", sessionId, toolName, e);
-            invoked = new ToolCallResult(toolName, failureText(sink, e));
+            invoked = new ToolCallResult(toolName, failureText(sink, e), failureMetadata(e));
             success = false;
         } finally {
             // 工具自己应当已经收尾；这里是兜底，保证落盘句柄一定释放、临时文件一定改名。
@@ -230,6 +233,49 @@ public class ToolExecutor {
             return message;
         }
         return captured + "\n[" + message + "]";
+    }
+
+    /**
+     * 组装工具抛异常时的结构化元数据。
+     * <p>
+     * 「工具抛异常」与「工具成功地报告了一个不成功的命令」是两条不同的路，但对界面而言是
+     * <b>同一件事</b>：这一行值得警示。{@code success} 不落会话，因此只有把终止原因写进元数据，
+     * 重启后的历史里标记才不会消失。
+     * <p>
+     * 失败原因只取工具按约定抛出的 {@link JellyfishException} 的首行：那条消息是<b>工具自己</b>
+     * 写给「为什么没成」的一句话（例如「文件不存在: /x/y」），内核只是转述，不算替工具编措辞；
+     * 其余 {@code RuntimeException}（NPE / 类型错）是实现细节，不该出现在界面上。
+     *
+     * @param error 工具抛出的异常，不可为 {@code null}
+     * @return 不可变元数据，保证非 {@code null}
+     */
+    private static Map<String, Object> failureMetadata(RuntimeException error) {
+        Map<String, Object> metadata = new LinkedHashMap<String, Object>();
+        // 取值与 McpToolCaller 保持一致：这是对外约定的可见字符串，不自创词
+        metadata.put(ToolMetadata.KEY_TERMINAL, "FAILED");
+        if (error instanceof JellyfishException) {
+            String reason = firstLine(messageOf(error));
+            if (!reason.isEmpty()) {
+                metadata.put(ToolMetadata.KEY_SUMMARY, reason);
+            }
+        }
+        return Collections.unmodifiableMap(metadata);
+    }
+
+    /**
+     * 取一段文本的首行并去掉首尾空白。
+     * <p>
+     * 轨迹行是单行标签，异常消息里的换行（例如带堆栈式描述的消息）不能漏进元数据。
+     *
+     * @param text 文本，可为 {@code null}
+     * @return 首行文本，保证非 {@code null}
+     */
+    private static String firstLine(String text) {
+        if (text == null) {
+            return "";
+        }
+        int newline = text.indexOf('\n');
+        return (newline < 0 ? text : text.substring(0, newline)).trim();
     }
 
     /**

@@ -7,7 +7,9 @@ import org.junit.jupiter.params.provider.EnumSource;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -122,6 +124,41 @@ class InflightTurnTest {
     }
 
     @Test
+    @DisplayName("工具开始记录参数：运行中才能看出它在动哪个目标")
+    void beginTool_should_expose_arguments_in_snapshot() {
+        InflightTurn turn = new InflightTurn();
+        Map<String, Object> arguments = new LinkedHashMap<String, Object>();
+        arguments.put("path", "a.txt");
+
+        turn.beginTool("read_file", arguments);
+
+        assertEquals(arguments, turn.snapshot().getRunningToolArguments());
+    }
+
+    @Test
+    @DisplayName("参数做防御性拷贝：调用方事后改动不影响快照")
+    void beginTool_should_copy_arguments_defensively() {
+        InflightTurn turn = new InflightTurn();
+        Map<String, Object> arguments = new LinkedHashMap<String, Object>();
+        arguments.put("path", "a.txt");
+        turn.beginTool("read_file", arguments);
+
+        arguments.put("path", "b.txt");
+
+        assertEquals("a.txt", turn.snapshot().getRunningToolArguments().get("path"));
+    }
+
+    @Test
+    @DisplayName("二参重载暴露空参数映射，不为 null")
+    void snapshot_should_expose_empty_arguments_when_absent() {
+        InflightTurn turn = new InflightTurn();
+
+        turn.beginTool("bash");
+
+        assertEquals(Collections.emptyMap(), turn.snapshot().getRunningToolArguments());
+    }
+
+    @Test
     @DisplayName("工具输出按换行拆行，同一行的多段拼接")
     void appendToolOutput_should_split_lines_and_join_partial_line() {
         InflightTurn turn = new InflightTurn();
@@ -188,6 +225,20 @@ class InflightTurnTest {
 
         assertNull(turn.snapshot().getRunningToolName());
         assertTrue(turn.snapshot().getToolOutputLines().isEmpty());
+        assertTrue(turn.snapshot().getRunningToolArguments().isEmpty());
+    }
+
+    @Test
+    @DisplayName("工具返回时即使没有输出也要清掉参数——否则下次渲染还显示旧目标")
+    void clearToolOutput_should_drop_arguments_without_output() {
+        InflightTurn turn = new InflightTurn();
+        Map<String, Object> arguments = new LinkedHashMap<String, Object>();
+        arguments.put("path", "a.txt");
+        turn.beginTool("read_file", arguments);
+
+        turn.clearToolOutput();
+
+        assertTrue(turn.snapshot().getRunningToolArguments().isEmpty());
     }
 
     @Test

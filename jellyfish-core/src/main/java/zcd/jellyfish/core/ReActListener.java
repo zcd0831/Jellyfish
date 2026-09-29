@@ -45,12 +45,36 @@ public interface ReActListener {
     }
 
     /**
-     * 一次工具调用开始。
+     * 一次工具调用开始（兼容重载，不带参数）。
+     * <p>
+     * <b>新实现请覆盖 {@link #onToolCallStarted(String, String, Map)}</b>：本方法只是旧接口的兼容入口，
+     * 它拿不到「这条工具在动哪个目标」。切到带参数的版本之后，这里通常不再需要实现。
      *
      * @param toolCallId 工具调用标识
      * @param toolName   工具名
      */
     default void onToolCallStarted(String toolCallId, String toolName) {
+    }
+
+    /**
+     * 一次工具调用开始（带参数）。
+     * <p>
+     * <b>它回答的是「这条工具此刻在动哪个目标」</b>：参数由模型生成，是本轮唯一能让界面在
+     * 工具<b>返回之前</b>就说明「它在干什么」的输入。没有它，一条要跑几十秒的
+     * {@code grep_files} 在屏幕上与「卡死」无法区分。
+     * <p>
+     * <b>参数是不可信输入</b>：实现方必须自行过滤控制字符（终端把 {@code ESC} 当控制序列引导符），
+     * 并且<b>应当</b>对看起来像密钥的键脱敏——TUI 侧直接复用 {@code ApprovalPrompt.argumentsOf}。
+     * <p>
+     * 缺省实现委托到二参版本，因此既有实现不受影响。但反过来不成立：<b>新实现必须覆盖本方法</b>——
+     * 只覆盖二参版本会静默丢掉参数。也不能改成「二参默认委托三参」，那会让未改造的既有实现收不到回调。
+     *
+     * @param toolCallId 工具调用标识
+     * @param toolName   工具名
+     * @param arguments  工具参数（可能来自模型，不可信），可为 {@code null}（等价空参数）
+     */
+    default void onToolCallStarted(String toolCallId, String toolName, Map<String, Object> arguments) {
+        onToolCallStarted(toolCallId, toolName);
     }
 
     /**

@@ -60,11 +60,17 @@ public final class TuiReActListener implements ReActListener {
 
     @Override
     public void onToolCallStarted(String toolCallId, String toolName) {
+        // 兼容重载：没有参数也要走同一条路径，否则既有调用点会落到空的默认实现上
+        onToolCallStarted(toolCallId, toolName, null);
+    }
+
+    @Override
+    public void onToolCallStarted(String toolCallId, String toolName, Map<String, Object> arguments) {
         // 走到这里说明本轮模型响应已经落库，暂存区里的正文成了重复内容，必须清掉。
         // 清空晚于落库是安全的：ReActLooper 先 appendMessage 再回调。
         inflight.clearText();
-        // 工具名先记下：一条只输出或根本不输出的命令，屏幕上也先得有个名字
-        inflight.beginTool(toolName);
+        // 工具名与参数先记下：一条只输出或根本不输出的命令，屏幕上也先得有个名字与目标
+        inflight.beginTool(toolName, arguments);
     }
 
     @Override

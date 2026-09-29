@@ -4,7 +4,9 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Deque;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -120,6 +122,15 @@ public final class InflightTurn {
     /** 正在执行的工具名，不在执行中时为 {@code null}。 */
     private String runningToolName;
 
+    /**
+     * 正在执行的工具参数，不在执行中或没有参数时为空映射。
+     * <p>
+     * 参数来自模型 / 内核，引用进来就必须做一份不可变拷贝——与 {@code ToolCallRequest} 的同一处理。
+     * 它只服务于「工具返回之前」的展示，工具一返回就随 {@link #clearToolOutput()} 一起清掉，
+     * 不留第二权威。
+     */
+    private Map<String, Object> runningToolArguments = Collections.emptyMap();
+
     /** 正文是否因超限被截断。 */
     private boolean textTruncated;
 
@@ -145,6 +156,7 @@ public final class InflightTurn {
             toolOutputLines.clear();
             toolCurrentLine.setLength(0);
             runningToolName = null;
+            runningToolArguments = Collections.emptyMap();
             textTruncated = false;
             thinkingTruncated = false;
             outcome = Outcome.RUNNING;
@@ -158,12 +170,30 @@ public final class InflightTurn {
      * <p>
      * 名字先于输出生效：一条要跑几十秒、什么都不输出的命令，屏幕上至少得先出现它的名字，
      * 否则那段时间与「卡死了」看不出区别。
+     * <p>
+     * 本重载不携带参数，等价于 {@link #beginTool(String, Map)} 传 {@code null}；
+     * 既有的二参回调调用点靠它保持行为不变。
      *
      * @param toolName 工具名，可为 {@code null}
      */
     public void beginTool(String toolName) {
+        beginTool(toolName, null);
+    }
+
+    /**
+     * 记录一个工具开始执行（带参数），并清空上一个工具的实时输出。
+     * <p>
+     * <b>参数为什么要存一份</b>：工具结果要等它返回后才落库，而「这条工具在动哪个文件 / 哪个目标」
+     * 是运行中那段窗口里用户唯一能看到的信息（命令可能跑几分钟）。参数副本只用于展示，
+     * 工具一返回即随 {@link #clearToolOutput()} 清掉。
+     *
+     * @param toolName  工具名，可为 {@code null}
+     * @param arguments 工具参数，可为 {@code null}（等价空参数）；会被防御性拷贝
+     */
+    public void beginTool(String toolName, Map<String, Object> arguments) {
         synchronized (this) {
             runningToolName = toolName;
+            runningToolArguments = copyArguments(arguments);
             toolOutputLines.clear();
             toolCurrentLine.setLength(0);
             dirty = true;
@@ -197,6 +227,8 @@ public final class InflightTurn {
     public void clearToolOutput() {
         synchronized (this) {
             runningToolName = null;
+            // 必须在提前 return 之前清：一次没有任何输出的工具调用也会走这个分支
+            runningToolArguments = Collections.emptyMap();
             if (toolOutputLines.isEmpty() && toolCurrentLine.length() == 0) {
                 return;
             }
@@ -295,7 +327,21 @@ public final class InflightTurn {
      */
     public synchronized Snapshot snapshot() {
         return new Snapshot(outcome, errorMessage, text.toString(), thinking.toString(),
-                textTruncated, thinkingTruncated, runningToolName, toolLines());
+                textTruncated, thinkingTruncated, runningToolName, runningToolArguments, toolLines());
+    }
+
+    /**
+     * 拷贝一份工具参数快照：映射来自模型 / 内核，引用进来就必须复制，
+     * 并且对外只暴露不可变视图（与 {@code ToolCallRequest} 的同一处理）。
+     *
+     * @param arguments 工具参数，可为 {@code null}
+     * @return 不可变映射，保证非 {@code null}
+     */
+    private static Map<String, Object> copyArguments(Map<String, Object> arguments) {
+        if (arguments == null || arguments.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        return Collections.unmodifiableMap(new LinkedHashMap<String, Object>(arguments));
     }
 
     /**
@@ -412,6 +458,9 @@ public final class InflightTurn {
         /** 正在执行的工具名，不在执行中时为 {@code null}。 */
         private final String runningToolName;
 
+        /** 正在执行的工具参数（不可变），没有参数时为空映射，保证非 {@code null}。 */
+        private final Map<String, Object> runningToolArguments;
+
         /** 运行中工具的输出行（保留最新的若干行），保证非 {@code null}。 */
         private final List<String> toolOutputLines;
 
@@ -429,7 +478,7 @@ public final class InflightTurn {
          */
         Snapshot(Outcome outcome, String errorMessage, String text, String thinking,
                  boolean textTruncated, boolean thinkingTruncated, String runningToolName,
-                 List<String> toolOutputLines) {
+                 Map<String, Object> runningToolArguments, List<String> toolOutputLines) {
             this.outcome = outcome;
             this.errorMessage = errorMessage;
             this.text = text;
@@ -437,6 +486,7 @@ public final class InflightTurn {
             this.textTruncated = textTruncated;
             this.thinkingTruncated = thinkingTruncated;
             this.runningToolName = runningToolName;
+            this.runningToolArguments = Collections.unmodifiableMap(new LinkedHashMap<String, Object>(runningToolArguments));
             this.toolOutputLines = Collections.unmodifiableList(toolOutputLines);
         }
 
@@ -512,6 +562,15 @@ public final class InflightTurn {
          */
         public String getRunningToolName() {
             return runningToolName;
+        }
+
+        /**
+         * 获取正在执行的工具参数。
+         *
+         * @return 不可变参数映射，没有参数时为空映射，保证非 {@code null}
+         */
+        public Map<String, Object> getRunningToolArguments() {
+            return runningToolArguments;
         }
 
         /**

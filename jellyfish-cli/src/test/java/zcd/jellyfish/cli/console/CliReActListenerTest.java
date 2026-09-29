@@ -174,6 +174,22 @@ class CliReActListenerTest {
     }
 
     @Test
+    void onToolCallCompleted_should_not_repeat_failure_word_when_success_false() {
+        // Given：异常路径：success=false 且 metadata 带 terminal=FAILED
+        RecordingConsoleIO console = new RecordingConsoleIO(null);
+        CliReActListener listener = new CliReActListener(console, false);
+        Map<String, Object> metadata = new LinkedHashMap<String, Object>();
+        metadata.put(ToolMetadata.KEY_TERMINAL, "FAILED");
+        metadata.put(ToolMetadata.KEY_SUMMARY, "文件不存在: /x/y");
+
+        // When
+        listener.onToolCallCompleted("call-1", "read_file", false, "boom", metadata);
+
+        // Then：只打一次「失败」，原因作为摘要出现，不再拼一个「，FAILED」
+        assertEquals("← read_file 失败（4 字符） · 文件不存在: /x/y\n", console.err());
+    }
+
+    @Test
     void onToolCallCompleted_should_keep_line_unchanged_when_no_summary() {
         // Given：普通工具不带摘要键
         RecordingConsoleIO console = new RecordingConsoleIO(null);

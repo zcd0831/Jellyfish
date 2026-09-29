@@ -72,6 +72,20 @@ public final class TranscriptProjector {
     /** 失败标记：与工具名同行，一眼能看出这条轨迹没跑成。 */
     static final String WARNING_MARK = "\u26a0";
 
+    /**
+     * 运行中工具目标的显示列上限。
+     * <p>
+     * <b>为什么按列不按码点</b>：全角字符每字占 2 列，用码点数当上限会让一条标签在中文参数下
+     * 折成好几行。这是「一眼扫过的信号」，不是看全文的地方。
+     * <p>
+     * 它只是上限；实际预算还要减去前缀与工具名占用的列（见 {@link #targetSuffix}），
+     * 否则一条 120 列的标签照样会在 80 列终端上折行。
+     */
+    private static final int MAX_TARGET_COLUMNS = 120;
+
+    /** 运行中目标与工具名之间的分隔符，与结果轨迹行的摘要分隔符保持一致。 */
+    private static final String TARGET_SEPARATOR = " \u00b7 ";
+
     /** 思考过程前缀。 */
     static final String THINKING_PREFIX = "      \u273b ";
 
@@ -468,11 +482,12 @@ public final class TranscriptProjector {
         List<StyledSegment> body = new ArrayList<StyledSegment>();
         body.addAll(wrapBody(label, TRACE_STYLE));
         // 摘要用与工具名相同的样式：它是「刚才那一行到底是什么事」的说明，不是一条警示。
-        // 放在失败后缀之前，于是「哪个工具 · 它在干什么 · 成没成」从左到右顺着读下来
-        body.addAll(wrapBody(summarySuffix(message), TRACE_STYLE));
+        // 放在失败后缀之前，于是「哪个工具 · 它在干什么 · 成没成」从左到右顺着读下来。
+        // 两段都可能来自不可信输入（插件 / 工具自定的 terminal 值），因此过一道控制字符过滤
+        body.addAll(wrapBody(ControlChars.strip(summarySuffix(message)), TRACE_STYLE));
         // 错误用红色后缀而不是把整行变红：工具名与结论要能一起读，整行染色会让
         // 「哪个工具失败了」这条信息淹没在颜色里。判据来自元数据字段，不去解析首行文案
-        body.addAll(wrapBody(failureSuffix(message), ERROR_STYLE));
+        body.addAll(wrapBody(ControlChars.strip(failureSuffix(message)), ERROR_STYLE));
         out.addAll(LineWrapper.wrap(new StyledSegment(TRACE_PREFIX, TRACE_STYLE), body, width));
         return true;
     }
@@ -600,7 +615,7 @@ public final class TranscriptProjector {
         }
         String label = toolName == null || toolName.isEmpty() ? "工具" : toolName;
         out.addAll(LineWrapper.wrap(new StyledSegment(TRACE_PREFIX, TRACE_STYLE),
-                wrapBody(label, TRACE_STYLE), width));
+                wrapBody(label + targetSuffix(inflight, label, width), TRACE_STYLE), width));
         for (String line : lines) {
             // 控制字符必须在显示边界上滤掉：命令输出里的一个 ESC 序列能改写屏幕。
             // 与 MarkdownRenderer / ApprovalPrompt 同一处理位置
@@ -613,6 +628,94 @@ public final class TranscriptProjector {
                     wrapBody(filtered, TRACE_STYLE), width));
         }
         return true;
+    }
+
+    /**
+     * 取运行中工具的目标后缀：把工具参数渲染成一行「它在动什么」。
+     * <p>
+     * <b>为什么显示参数而不是靠工具自报</b>：工具此刻还没返回，没有 metadata 可用；
+     * 参数是这一时刻唯一能说明目标的输入。规则本身与工具名无关（有参数就显示），
+     * 因此不破坏「外壳对工具一无所知」的前提。
+     * <p>
+     * <b>为什么按显示列硬截断而不是折行</b>：这是「一眼扫过的信号」，不是看全文的地方——
+     * 要看全文有审批浮层。折行会把一条轨迹撑成好几行，把后面的轨迹挤下去。
+     *
+     * @param inflight 暂存区快照
+     * @param label    工具名（已处理空值）
+     * @param width    可用列数
+     * @return 后缀文本；没有参数或放不下时返回空串
+     */
+    private static String targetSuffix(InflightTurn.Snapshot inflight, String label, int width) {
+        Map<String, Object> arguments = inflight.getRunningToolArguments();
+        if (arguments == null || arguments.isEmpty()) {
+            return "";
+        }
+        // argumentsOf 已经过滤控制字符并对敏感键脱敏；这里再压掉它刻意保留的换行
+        String rendered = collapseToSingleLine(ApprovalPrompt.argumentsOf(arguments));
+        // 预算要减去前缀与工具名，否则 120 列的上限在窄终端上依旧会折行
+        int used = DisplayWidth.of(TRACE_PREFIX) + DisplayWidth.of(label) + DisplayWidth.of(TARGET_SEPARATOR);
+        int budget = Math.min(MAX_TARGET_COLUMNS, width - used);
+        if (budget < 1) {
+            return "";
+        }
+        return TARGET_SEPARATOR + truncateToColumns(rendered, budget);
+    }
+
+    /**
+     * 把文本压成单行：连续的空白（含换行）折成一个空格。
+     *
+     * @param text 原始文本，可为 {@code null}
+     * @return 单行文本，保证非 {@code null}
+     */
+    private static String collapseToSingleLine(String text) {
+        if (text == null || text.isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder(text.length());
+        boolean pendingSpace = false;
+        int index = 0;
+        while (index < text.length()) {
+            int codePoint = text.codePointAt(index);
+            index += Character.charCount(codePoint);
+            if (Character.isWhitespace(codePoint)) {
+                pendingSpace = true;
+                continue;
+            }
+            if (pendingSpace && sb.length() > 0) {
+                sb.append(' ');
+            }
+            pendingSpace = false;
+            sb.appendCodePoint(codePoint);
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 按显示列数截断文本，超出部分用省略号代替。
+     *
+     * @param text       文本，保证非 {@code null}
+     * @param maxColumns 显示列上限
+     * @return 截断后的文本
+     */
+    private static String truncateToColumns(String text, int maxColumns) {
+        if (DisplayWidth.of(text) <= maxColumns) {
+            return text;
+        }
+        StringBuilder sb = new StringBuilder(text.length());
+        int width = 0;
+        int index = 0;
+        while (index < text.length()) {
+            int codePoint = text.codePointAt(index);
+            index += Character.charCount(codePoint);
+            int next = DisplayWidth.ofCodePoint(codePoint);
+            // 留一列给省略号，保证结果整体不超过 maxColumns
+            if (width + next > maxColumns - 1) {
+                break;
+            }
+            sb.appendCodePoint(codePoint);
+            width += next;
+        }
+        return sb.append('\u2026').toString();
     }
 
     /**

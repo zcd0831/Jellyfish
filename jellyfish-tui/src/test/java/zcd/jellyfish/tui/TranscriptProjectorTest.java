@@ -11,6 +11,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -145,6 +146,23 @@ class TranscriptProjectorTest {
                 "",
                 "  \u23fa jellyfish",
                 "      \u23bf shell \u26a0 TIMEOUT"), texts(lines));
+    }
+
+    @Test
+    @DisplayName("工具抛异常：metadata 带 FAILED 与原因首行时渲染出警示与原因")
+    void project_should_mark_failed_tool_with_reason() {
+        Map<String, Object> metadata = new HashMap<String, Object>();
+        metadata.put(ToolMetadata.KEY_TERMINAL, "FAILED");
+        metadata.put(ToolMetadata.KEY_SUMMARY, "文件不存在: /x/y");
+        List<SessionMessage> messages = Collections.singletonList(
+                SessionMessage.ofTool(LlmMessage.tool("c1", "read_file", "工具执行失败：文件不存在: /x/y"), metadata));
+
+        List<VisualLine> lines = project(messages, completed());
+
+        assertEquals(Arrays.asList(
+                "",
+                "  \u23fa jellyfish",
+                "      \u23bf read_file \u00b7 文件不存在: /x/y \u26a0 FAILED"), texts(lines));
     }
 
     @Test
@@ -750,6 +768,87 @@ class TranscriptProjectorTest {
         List<VisualLine> lines = project(Collections.<SessionMessage>emptyList(), turn.snapshot());
 
         assertEquals(Arrays.asList("", "  \u23fa jellyfish", "      \u23bf bash"), texts(lines));
+    }
+
+    @Test
+    @DisplayName("工具在跑时显示目标：参数来自模型，是返回前唯一能说明「在动什么」的输入")
+    void project_should_render_running_tool_target_from_arguments() {
+        InflightTurn turn = new InflightTurn();
+        turn.begin();
+        Map<String, Object> arguments = new LinkedHashMap<String, Object>();
+        arguments.put("path", "a.txt");
+        turn.beginTool("read_file", arguments);
+
+        List<VisualLine> lines = project(Collections.<SessionMessage>emptyList(), turn.snapshot());
+
+        assertEquals(Arrays.asList(
+                "",
+                "  \u23fa jellyfish",
+                "      \u23bf read_file \u00b7 {\"path\": \"a.txt\"}"), texts(lines));
+    }
+
+    @Test
+    @DisplayName("没有参数时轨迹行与以前一模一样——不给普通工具多出一个空尾巴")
+    void project_should_render_tool_name_without_target_when_arguments_empty() {
+        InflightTurn turn = new InflightTurn();
+        turn.begin();
+        turn.beginTool("read_file", Collections.<String, Object>emptyMap());
+
+        List<VisualLine> lines = project(Collections.<SessionMessage>emptyList(), turn.snapshot());
+
+        assertEquals(Arrays.asList("", "  \u23fa jellyfish", "      \u23bf read_file"), texts(lines));
+    }
+
+    @Test
+    @DisplayName("运行中目标按显示列截断并保持单行：全角字符不能当码点算")
+    void project_should_truncate_long_running_tool_target_to_single_line() {
+        InflightTurn turn = new InflightTurn();
+        turn.begin();
+        Map<String, Object> arguments = new LinkedHashMap<String, Object>();
+        arguments.put("content", repeat("中", 200));
+        turn.beginTool("write_file", arguments);
+
+        List<VisualLine> lines = project(Collections.<SessionMessage>emptyList(), turn.snapshot());
+
+        // 空行 + 表头 + 恰好一行轨迹；折行就说明没按列算
+        assertEquals(3, lines.size(), texts(lines).toString());
+        String label = texts(lines).get(2);
+        assertTrue(label.startsWith("      \u23bf write_file \u00b7 "), label);
+        assertTrue(label.endsWith("\u2026"), label);
+    }
+
+    @Test
+    @DisplayName("运行中目标里的控制字符与换行被滤掉——单行标签不能被 content 折成几百行")
+    void project_should_strip_control_chars_and_newlines_from_running_tool_target() {
+        InflightTurn turn = new InflightTurn();
+        turn.begin();
+        Map<String, Object> arguments = new LinkedHashMap<String, Object>();
+        arguments.put("content", "\u001b[2J危险\n\n下一行");
+        turn.beginTool("write_file", arguments);
+
+        List<VisualLine> lines = project(Collections.<SessionMessage>emptyList(), turn.snapshot());
+
+        assertEquals(3, lines.size(), texts(lines).toString());
+        String label = texts(lines).get(2);
+        assertFalse(label.contains("\u001b"), label);
+        assertFalse(label.contains("\n"), label);
+        assertTrue(label.contains("危险"), label);
+    }
+
+    @Test
+    @DisplayName("运行中目标对敏感参数脱敏——与审批浮层同一口径")
+    void project_should_mask_sensitive_arguments_in_running_tool_target() {
+        InflightTurn turn = new InflightTurn();
+        turn.begin();
+        Map<String, Object> arguments = new LinkedHashMap<String, Object>();
+        arguments.put("apiKey", "sk-secret");
+        turn.beginTool("call", arguments);
+
+        List<VisualLine> lines = project(Collections.<SessionMessage>emptyList(), turn.snapshot());
+
+        String label = texts(lines).get(2);
+        assertFalse(label.contains("sk-secret"), label);
+        assertTrue(label.contains("\"***\""), label);
     }
 
     @Test

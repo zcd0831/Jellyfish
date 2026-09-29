@@ -43,7 +43,7 @@ cp -r hello jira scripts/python/          # 默认位置：进程工作目录下
 cp -r hello jira scripts/node/            # Node 侧同理：scripts/node
 ```
 
-在 `<工作目录>/jellyfish/jellyfish.json` 里（或全局 `~/jellyfish/jellyfish.json`）可选地配置：
+在 `<工作目录>/.jellyfish/jellyfish.json` 里（或全局 `~/.jellyfish/jellyfish.json`）可选地配置：
 
 ```json
 {
@@ -89,12 +89,12 @@ cp -r hello jira scripts/node/            # Node 侧同理：scripts/node
 
 ```bash
 # Python
-python3 ~/jellyfish/gateway/python/<digest>/script/dump_manifest.py ./jira --write
-python3 ~/jellyfish/gateway/python/<digest>/script/dump_manifest.py ./jira --check
+python3 ~/.jellyfish/gateway/python/<digest>/script/dump_manifest.py ./jira --write
+python3 ~/.jellyfish/gateway/python/<digest>/script/dump_manifest.py ./jira --check
 
 # Node
-node ~/jellyfish/gateway/node/<digest>/script/dump_manifest.js ./jira --write
-node ~/jellyfish/gateway/node/<digest>/script/dump_manifest.js ./jira --check
+node ~/.jellyfish/gateway/node/<digest>/script/dump_manifest.js ./jira --write
+node ~/.jellyfish/gateway/node/<digest>/script/dump_manifest.js ./jira --check
 ```
 
 - `--check` 与目录里那份比对，不一致退 1，并**按名字**报差异（「清单里多出了这一项: 幽灵工具」

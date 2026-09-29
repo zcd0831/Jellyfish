@@ -21,6 +21,7 @@ mvn -q package -DskipTests
 mvn -q test                        # 全量单测（JUnit5 + Mockito + JaCoCo）
 mvn -q -Pserver-it test            # Server 模式端到端（真 Undertow + 真内核，走本机回环）
 mvn -q -Pshell-it test             # shell 插件端到端（真 /bin/sh，会真起进程再杀掉）
+mvn -q -Pmcp-it test               # MCP 插件端到端（真 fork 进程跑仓库自带的 echo server）
 mvn -q -Dtest=ChatStateTest test   # 单类单测，把类名换成目标测试类
 ```
 
@@ -87,7 +88,7 @@ flowchart TB
 
     subgraph "外部依赖·插件"
         direction LR
-        Plugins["PF4J 插件<br>tools / session-file / todo / project / compact / shell<br>+ python / node 桥接（脚本进程由它承载）"]
+        Plugins["PF4J 插件<br>tools / session-file / todo / project / compact / shell / skills / mcp<br>+ python / node 桥接（脚本进程由它承载）"]
     end
 
     %% ===================== 外壳入口：命令走用户输入，不走 LLM =====================
@@ -189,7 +190,7 @@ Maven 多模块；根 `jellyfish`（`zcd:jellyfish:0.0.1-SNAPSHOT`）是 `packag
 ```mermaid
 flowchart LR
     API["jellyfish-api<br>插件 SPI + 扩展点/事件模型 + 统一异常"]
-    PLUGINS["jellyfish-plugins<br>官方插件聚合：tools / session-file / todo / project / compact / shell<br>+ python / node 桥接"]
+    PLUGINS["jellyfish-plugins<br>官方插件聚合：tools / session-file / todo / project / compact / shell / skills / mcp<br>+ python / node 桥接"]
     SCRIPT["jellyfish-script<br>跨语言插件运行时（语言无关机制层，被桥接插件 shade）"]
     INFRA["jellyfish-infra<br>【基础设施层】"]
     CORE["jellyfish-core<br>【应用层】"]
@@ -237,6 +238,8 @@ flowchart LR
 | `jellyfish-plugin-node` | Node 桥接插件：与 python 插件同构（同一个 `ScriptBridgePlugin` 骨架），差异只有 `NodeLanguage` 与网关资源 `script/gateway.js`（Node 事件循环）、`script/worker.js`、`script/jellyfish_sdk.js`、`script/script_wire.js`、`script/dump_manifest.js`。**零第三方依赖**（只用 Node 内置模块，因此不需要 npm install） | api（provided）、jellyfish-script（shade） |
 | `jellyfish-plugin-compact` | 压缩策略：摘要指令 + 保留条数与摘要上限；不启用它压缩整体不可用 | api（provided） |
 | `jellyfish-plugin-shell` | 命令行：`shell` 工具（`/bin/sh -c` 执行命令原文）+ 命令分类器（只读不打扰 / 灾难形状拒绝 / 其余审批）。**无沙箱**，能读写本用户任意文件；自带 commons-exec（**shade 进插件包**，内核 classpath 上不出现它） | api（provided）、commons-exec（shade） |
+| `jellyfish-plugin-skills` | skills：按目录发现 `SKILL.md`，元信息进 system prompt、正文由模型按需用 `skill` 工具加载、附带文件交给已有工具读取。零第三方依赖（frontmatter 手写极简解析，不引 YAML） | api（provided） |
+| `jellyfish-plugin-mcp` | MCP 客户端：stdio 连外部 server，把它的工具以 `mcp__<server>__<tool>` 注册进内核，支持 `tools/list_changed`、`roots`，**不声明也不支持 sampling / elicitation**。自带 Jackson（**shade 进插件包**） | api（provided）、jackson-databind（shade） |
 | `jellyfish-plugin-python` | Python 桥接插件：读静态清单完成注册、自带 `/<lang>` 状态命令（含熔断与事件计数）、把每个脚本调用都经熔断装饰器转发、把内核事件推给脚本（`ScriptEventBridge`），把 Python 脚本插件以标准 PF4J 插件的形态接入内核（控制面单进程 + 每脚本一 worker 进程）。网关资源 `script/gateway.py`（单线程 select 事件循环）、`script/worker.py`、`script/jellyfish_sdk.py`（脚本作者唯一的 API）、`script/script_wire.py`（分帧）、`script/dump_manifest.py`（清单生成器，`gateway.py --dump-manifest` 转发同一入口）。示例插件见仓库顶层 `examples/scripts/python/`（`hello` 教学最小集、`jira` 真实形态），**端到端用例直接加载它们**，因此示例不会腐烂 | api（provided）、jellyfish-script（shade） |
 
 包结构（只列包与少数枢纽类；其余类直接读代码）：
@@ -400,7 +403,7 @@ jellyfish-script/src/main/java/zcd/jellyfish/script/
 ### 子代理（嵌套回合）
 
 - **它是内核能力，不是插件**：子代理改的是「循环可以调用自己」——**循环的结构**，而不是增加一片叶子能力；且 `task` 的类型清单要由 `AgentManager` 现算，插件拿不到。形态与系统命令一致：内核以 `owner=core` 注册（`core/subagent/SubAgentTools`），插件要替换必须显式声明 `override`。
-- **开关关掉时连工具一起摘掉，因此它必须自己听 `ConfigReloadedEvent`**：只把清单变空是不够的——模型依然看得到 `task`，却没有一个合法的 `subagent_type` 可传，于是每个会话白调一次。而注册只能在启动窗口内发生，不听重载事件的话这个开关就得等下次重启才生效（这条结构上是硬约束：`ConfigReloader` 在 infra，而 `SubAgentTools` 在 core，**infra 不可能反向知道它**）。重算是 best-effort（事件可丢），丢了的表现是外观陈旧而**不是放行**——委派本身仍会被 `SubAgentLauncher` 拒掉。
+- **开关关掉时连工具一起摘掉，因此它必须自己听 `ConfigReloadedEvent`**：只把清单变空是不够的——模型依然看得到 `task`，却没有一个合法的 `subagent_type` 可传，于是每个会话白调一次。而注册虽然已不再限于启动窗口（插件存活期内都可注册），但这一步仍必须在启动期完成：`task` 要在插件启动前占住名字，插件要覆盖它得先有东西可覆盖。不听重载事件的话这个开关就得等下次重启才生效（这条结构上是硬约束：`ConfigReloader` 在 infra，而 `SubAgentTools` 在 core，**infra 不可能反向知道它**）。重算是 best-effort（事件可丢），丢了的表现是外观陈旧而**不是放行**——委派本身仍会被 `SubAgentLauncher` 拒掉。
 - **清单贡献里仍要再读一次开关**：重算与「组装本轮请求」之间有一段窗口（`/reload` 刚改完配置、重算事件还在队列里），那时若只靠注册状态，清单会多宣传一个已关掉的能力。
 - **轨迹行上的标识走 `ToolMetadata.KEY_SUMMARY`，不是靠界面认工具名**：`task` 填一句 `子代理 scout · 3 轮 · 123456 tok`，TUI 与 CLI 各自接在已有格式后面（两边都只做「有没有摘要」这一个判断）。摘要里**不带状态词**（取消 / 失败 / 未开始都已经有后缀在说），轮数与 token **都只在跑过的情况下写**：`FAILED` / `REJECTED` 按构造就是 0，而前者可能已经跑了几轮才抛错，与其写不准的数字不如不说。token 写**精确值不缩写**：状态栏那份 1000 进位缩写另一个模块里、服务于每帧重画的版面，为这一个小输出把它抽到共享位置代价大于收益，而精确值另有一个好处——能与 `/usage` 里的数字直接对上。
 - **`TRUNCATED` 是唯一需要在摘要里额外说一句的状态**：它确实跑完了、只是没收敛，因此 `failed()` 为假、界面上没有任何警示后缀可用——「结论不完整」只能写在这里。
@@ -467,7 +470,7 @@ jellyfish-script/src/main/java/zcd/jellyfish/script/
 
 - **三级故障**：L1 单次调用超时/脚本回报错误、L2 worker 崩溃 → 都只影响该脚本；L3 网关进程挂掉 → 整门语言不可用。
 - **计入熔断的只有「脚本没能答复」**：超时与脚本回报的错误计入；**连接层失败（L3）不计**（网关是懒启动的，一次短暂故障不该让所有脚本再等一个冷却），**`-32001`（熔断自己的拒绝）不计**（否则冷却会被自己的拒绝无限延长）。判据只此一处：`CircuitBreakingScriptCaller.countsAsFailure`。
-- **不摘注册**：熔断期间转发闭包立即抛 `-32001` 且不派发。注册只能在 `start()` 窗口内发生，摘掉就等于恢复必须走 `/reload`；保留注册才有**自动半开恢复**。打开与恢复各 `emit` 一次 `ConfigWarningEvent`。
+- **不摘注册**：熔断期间转发闭包立即抛 `-32001` 且不派发。注册虽已不再限于 `start()` 窗口，但脚本桥接的注册来自脚本目录下的静态清单、由 `ScriptRegistrar` 统一完成，摘掉就等于恢复要另走一条「重建注册」的路径；保留注册才有**自动半开恢复**。打开与恢复各 `emit` 一次 `ConfigWarningEvent`。
 - **状态是既成事实**：`HALF_OPEN` 表示「已放行过一次探测」而非「冷却已到期」；读状态不推进状态，只有 `admit()` / `recordSuccess()` / `recordFailure()` 能转移。半开期不限制并发探测数（限制它要挂住调用线程，代价比多几次失败大）。
 - **超时处置链**：宿主 `invoke` 超时 → 发 `kill_worker`（**kill 的执行方是网关**，它是父进程、持有 PID 表与回收）→ 网关杀 worker 回 `killed` → 宿主抛「已等待 N ms，已隔离该脚本的 worker」。网关自己也有同一个截止时间兜底，两边都动手是正常的，因此 `killWorker` 把「没杀到」当正常返回值。
 - **超时之后有一段「正在换 worker」的窗口**：卡在不响应信号的系统调用里的 worker 只能等强杀，这期间同一脚本的调用仍会失败（已实现行为，非抖动）。熔断冷却应明显长于这个窗口。
@@ -484,7 +487,7 @@ jellyfish-script/src/main/java/zcd/jellyfish/script/
 - **四层防泄漏**：Java 三段式关闭 + `ShutdownHook`（**不装 `ExecuteWatchdog`**：它按墙上时钟强杀，而网关是设计成可空闲十分钟的长命进程）→ 网关作为父进程杀全部 worker → worker 自己两秒内发现「父进程没了」并退出（Linux 上另有 `prctl(PR_SET_PDEATHSIG)` 让内核代杀；设完必须自查一次 `getppid()`——父进程可能死在「fork 之后、prctl 之前」。**本机是 macOS，这条无法验证，且正确性不依赖它**）→ PID 文件供事后排查。
 - **PID 文件是快照，不是锁**：不参与任何互斥判断，也没有任何代码会根据它做处置。文件里那个 PID 完全可能属于另一个 JVM（上一个 JVM 被 `kill -9`、遗留网关还没自毁、新 JVM 又起来了），未经确认就杀，代价是杀掉无辜进程。
 - **路径由 Java 侧算好下发**（`ScriptPidFiles` → `GatewaySettings.pidFile`），与其它网关设置同理：让每种语言的网关自己取主目录、拼目录，三份实现里必然有两份漂移。
-- **默认与网关资源目录同级**（`~/jellyfish/pids`）：资源目录名带内容摘要，改一个字节就换目录，而 PID 文件的全部价值就在「被下一次启动看见」。
+- **默认与网关资源目录同级**（`~/.jellyfish/pids`）：资源目录名带内容摘要，改一个字节就换目录，而 PID 文件的全部价值就在「被下一次启动看见」。
 - **写的人必须是「PID 属于谁」的权威**：网关自己写 `os.getpid()`；宿主即使能拿到子进程 PID 也不写。
 - **先写临时文件再 `os.replace`**：读到一个只写了一半的数字比没有文件更糟——它会被当成真的。
 - **干净退出时删掉，但仅当文件里仍是自己的 PID**：先走的那一个不许删掉「后来者还活着」这份唯一证据；被 `kill -9` 时它留着（这正是它存在的理由）。
@@ -514,7 +517,7 @@ jellyfish-script/src/main/java/zcd/jellyfish/script/
 
 ### 配置
 
-- **配置加载**：`AppConfig` 绑定 `classpath:config.json`，只有它声明各配置文件位置与插件扫描目录；默认全局 `~/jellyfish/`、项目 `./jellyfish/`。`SettingsBinder` 做 `${ENV_VAR}` 插值（`\${VAR}` 转义）。
+- **配置加载**：`AppConfig` 绑定 `classpath:config.json`，只有它声明各配置文件位置与插件扫描目录；默认全局 `~/.jellyfish/`、项目 `./.jellyfish/`。`SettingsBinder` 做 `${ENV_VAR}` 插值（`\${VAR}` 转义）。
 - **插件扫描目录在 `config.json` 的 `plugins.roots`**，不参与双源合并；展开行首 `~`、丢弃空白条目，空列表回退默认目录 `plugins`。
 - **四份配置对四类配置类**：config→`AppConfig`、models→`ModelSettings`、agents→`AgentSettings`、jellyfish→`JellyfishSettings`（plugins / react / permission / subAgent 四段）；`classpath:default-agent.json` 是内置只读定义，不走双源。
 - **资源跟着读者走**：`default-agent.json` / `{agentId}.md` 归 infra，摘要指令归压缩插件，`config.json` / `log4j2*.xml` 归 cli——否则换 composition root 时会以「内置 agent 缺失」启动失败而单测全绿。
@@ -531,10 +534,36 @@ jellyfish-script/src/main/java/zcd/jellyfish/script/
 ### 插件
 
 - **Java 插件与跨语言桥接插件在 `PF4JPluginManager` 眼里同构**，都只经 `PluginContext`（handle / contribute / observe / emit）与内核交互。
+- **注册窗口是插件的整个存活期，不是 `start()` 之内**：`start()` 返回到 `stop()` 之前，插件可在任意时刻注册、订阅、发布——运行期才发现自己能提供哪些能力的插件（MCP 客户端在握手后才知道工具集）必须如此。回收仍只按 owner 一次收干净，因此运行期注册不会留下没人收的登记；`handle` / `contribute` / `observe` 返回的 `Subscription.close()` 是插件侧主动注销的正式手段（注销是可选优化，不是必须动作）。
+- **`stop()` 之后注册一律当场抛 `JellyfishException`（fail-closed）**：窗口放宽之后「停止期与注册期重叠」从文档约定变成真实竞态，因此 `PluginContextImpl` 持有一个与全部子上下文**共享**的 `ContextLifecycle`，`PluginContextFactory.release` 时先关闭标记再回收注册（顺序不能反，否则「先注册、再回收」会留下谁也回收不到的幽灵注册）。推论：**产生注册的后台线程必须在 `stop()` 返回前停下来**；子上下文也必须复用父上下文的标记，否则回收根上下文管不住子上下文。
 - **插件碰不到会话、也拿不到工作目录**：`PluginContext` 只有身份与四个方法，工具相对路径按进程工作目录解析（`ToolPaths`）。状态只要按 `sessionId` 归属，插件就能自己持有。
 - **owner 可以是命名空间**：插件可给内部子单元分独立 owner（`pluginId` + `api.PluginOwnerNamespace.SEPARATOR` + 子标识），`PluginContextFactory.release` 按命名空间回收（`pluginId` 自身与 `pluginId::*` 一起清），因此子单元的注册不会在插件停止后残留成幽灵注册。分隔符常量在 **api**（跨边界契约：插件拼来源、内核做前缀回收，必须同一个真源），插件侧用 `PluginContext.subContext(childId)` 派生子上下文来注册到子命名空间（子身份恒从当前身份派生，无法越界）；子标识规则由 `PluginOwnerNamespace.requireChildId` 一处承担，插件侧与框架侧共用。`plugin.id` 含它的插件在描述符体检阶段被拒——否则一个叫 `x::y` 的插件会把自己的注册挂进命名空间 `x`，`x` 停止时就会越界抺掉它的注册。`EventChannel.unsubscribeAll` 仍是精确匹配（它服务于内核内部来源）。
-- **官方插件**：tools 五个文件工具（三个只读）；session-file 一会话一 JSON + git（落盘失败上抛、git/坏文件只告警）；todo `todo_write` + `/todo` + 提示词/状态栏/面板贡献 + 删除清理；project 按 `maxInlineBytes`（默认 32 KiB，0=不内联）内联 `AGENTS.md` 原文或只给路径（一会话只读一次）；compact 压缩策略。
+- **官方插件**：tools 五个文件工具（三个只读）；session-file 一会话一 JSON + git（落盘失败上抛、git/坏文件只告警）；todo `todo_write` + `/todo` + 提示词/状态栏/面板贡献 + 删除清理；project 按 `maxInlineBytes`（默认 32 KiB，0=不内联）内联 `AGENTS.md` 原文或只给路径（一会话只读一次）；compact 压缩策略；skills 见下；mcp 见下。
 - **project 插件必须从仓库根目录启动**：查找基准是进程工作目录（与 `ToolPaths` 同一处），不做向上查找。
+
+### skills 插件
+
+- **三层渐进披露各有落点，且第三条不归它管**：名称+描述走 `PromptContributionRequest` 常驻 system prompt（第一层）；正文走 `skill` 工具按需取回（第二层）；正文里提到的附带文件交给已有的 `read_file` / `shell`（第三层）——本插件**不自己执行任何东西**，重复一份只会多出第二条路径解析与权限口径。
+- **清单不写进工具参数的 enum**：`ToolDescriptor` 在注册那一刻就固定，而 skill 是目录里现扫出来的。走提示词贡献则是每轮现算，新增一个 skill 下一轮模型就看得见——与子代理把「可委派类型」放贡献里是同一条理由。
+- **`skill` 工具是只读的**：读一份说明不该需要写权限，因此 PLAN 模式下它同样可用。
+- **目录默认 `~/.jellyfish/skills` 与 `./.jellyfish/skills`**：与内核的约定目录（全局 `~/.jellyfish/`、项目 `./.jellyfish/`）一致；根目录是有序的，同名 skill 先到者胜（项目级要覆盖用户级就写在前面）。
+- **缺 `description` 的 skill 整条跳过并记问题**：描述是模型选中它的唯一依据，没有它这个 skill 永远不会被加载，让它在清单里占一行废信息反而更难查。
+- **目录缓存按「文件系统签名」失效，不是定时重扫**：签名由各根目录与已发现 skill 的目录 / `SKILL.md` 的修改时间拼成，只做 `stat`。时间判据要么白扫、要么让「改了却不生效」重新出现，而 `/reload` 只重启配置段变了的插件，救不了「改了 `SKILL.md`」。
+
+### MCP 插件
+
+- **它是插件而不是内核能力**：MCP 只是「发现并转发一批外部工具」，没有碰循环的结构，也不需要内核才知道的事实。放进内核会让不用 MCP 的用户也背上这段连接管理。
+- **连接发生在启动之后，且不在启动线程上做完**：工具清单只有连上才知道，而连上要起进程、要握手。全部同步做完，等于让「某个 server 装错了」变成「内核起不来」——与脚本桥接「`start()` 期零进程」同一条纪律。折中是 `startupWaitSeconds`（缺省 5 秒）：等一等让第一轮就有工具，超时就转异步（`ToolCatalog` 每轮现取注册表，工具会自己出现）。
+- **它是注册窗口演进的第一个真实需求**：工具在运行期注册与注销，因此它依赖「注册窗口是插件存活期」那条契约；若改回「只能在 `start()` 内注册」，这个插件就无法以现在的形态存在。
+- **工具名必须带 `mcp__<server>__` 前缀并清洗字符**：名字由 server 决定，server 之间与 server 和内置工具之间都可能重名（`read_file` 就是典型）；而厂商对 function name 有共同约束，带点号的名字会让**整次请求**被拒（不是「这个工具不可用」，是「这一轮对话发不出去」）。超长时保留可读前缀并追加哈希，否则截断会把两个工具变成同一个名字。
+- **只读是「或」且缺省可写**：`annotations.readOnlyHint` 是 server 自填的建议，`readOnlyTools` 是用户声明，任一为真就算只读；但**没有声明时一律按可写**——反向推断会把一个真会改东西的工具当成只读。写类工具缺省经 `PermissionCheckRequest` 判为 `ASK`（`askWriteTools` 可关），与 shell 分类器一样是**便利机制而不是安全边界**。
+- **不声明也不支持 sampling / elicitation**：`initialize` 里只声明 `roots`（答得上来），sampling / elicitation 真被请求时回一条明确的 `-32601`。声明了却办不到比不声明更糟：server 会按「客户端支持」去规划它的行为；而不回则会让对面等到它自己的超时。
+- **`tools/list` 必须处理分页**：工具多的 server 会分页返回，只取第一页的表现是「工具少了一大半，而日志里什么异常都没有」。
+- **`tools/list_changed` 的重扫必须转到另一条线程**：通知是在**读线程**上收到的，而重扫要发一个请求并等应答——应答只能由同一条读线程投递。直接在读线程上做就是一条线程等它自己（实测会挂到超时）。
+- **`isError` 是正常结果而不是异常**：它是 server 明确答复的「工具跑了但没成」，要如实带上 `ToolMetadata.KEY_TERMINAL` 让界面出警示；超时、进程退出、JSON 非法才是调用失败（抛异常）。
+- **二进制内容落盘而不是塞 base64**：base64 体积是原文件的 4/3，一次截图就能把上下文窗口撑满。落盘目录带 PID（`<tmp>/jellyfish-mcp/<pid>`），插件停止时整棵删掉——不会误删另一个并行进程的文件。
+- **stdio 分帧就是「一行一条消息」，`stderr` 必须单独排空**：合进去会让 JSON 流里混进服务端日志（表现为「偶尔收到一帧解析不了」），而不排空则会让日志写满管道缓冲区、把 server 卡死。
+- **关停要杀进程树**：最常见的用法是 `npx -y <package>`，真正干活的是孙进程；只杀直接子进程的现场表现是「插件已经停了，server 还占着端口」。JDK 8 没有 `ProcessHandle.descendants()`，靠 `pgrep -P` 递归，**杀不干净是已知边界**（`Process.pid()` 是 Java 9+，因此 PID 取不到时就只能杀到直接子进程）。
 
 ### 可观测性
 

@@ -166,7 +166,7 @@ CSI-u 等所有「带修饰的 Enter」编码都无法被底层框架区分（�
 `-Djellyfish.tui.mouseCapture=false` 退回：代价是滚轮在多数终端下**根本到不了应用**，消息区滚动改用 `PageUp` / `PageDown` / `End`。
 
 **与 `-cli` 的口径差异**：TUI 独占备用屏，因此**没有 stdout 契约**（`> answer.txt` 不适用），
-退出后也不回显会话内容。日志在 TUI 模式下改写到文件 `<用户主目录>/jellyfish/jellyfish-tui.log`（可用 `-Djellyfish.log.file=...` 改路径），
+退出后也不回显会话内容。日志在 TUI 模式下改写到文件 `<用户主目录>/.jellyfish/jellyfish-tui.log`（可用 `-Djellyfish.log.file=...` 改路径），
 绝不写 stderr——否则会撕坏画面。
 
 **已知限制**：界面滚动到内容末尾时自动跟随；用户上翻后不再打扰，状态栏出现 `↓ N 行`（生成中则显示 `↓ 正在生成…`）。
@@ -356,14 +356,14 @@ TUI 状态栏也会追加 `已压缩 N 条（丢弃 M 条）`；压缩期间状�
 ```json
 {
   "processName": "Jellyfish",
-  "model":     { "globalPath": "~/jellyfish/models.json",    "projectPath": "./jellyfish/models.json" },
-  "agent":     { "globalPath": "~/jellyfish/agents.json",    "projectPath": "./jellyfish/agents.json" },
-  "jellyfish": { "globalPath": "~/jellyfish/jellyfish.json", "projectPath": "./jellyfish/jellyfish.json" },
-  "plugins":   { "roots": ["plugins", "~/jellyfish/plugins"] }
+  "model":     { "globalPath": "~/.jellyfish/models.json",    "projectPath": "./.jellyfish/models.json" },
+  "agent":     { "globalPath": "~/.jellyfish/agents.json",    "projectPath": "./.jellyfish/agents.json" },
+  "jellyfish": { "globalPath": "~/.jellyfish/jellyfish.json", "projectPath": "./.jellyfish/jellyfish.json" },
+  "plugins":   { "roots": ["plugins", "~/.jellyfish/plugins"] }
 }
 ```
 
-仓库里的 `config.json` 就是这份：**全局级约定目录 `~/jellyfish/`、项目级约定目录 `<工作目录>/jellyfish/`**，四类配置的文件名固定。要换位置只改 `config.json`。
+仓库里的 `config.json` 就是这份：**全局级约定目录 `~/.jellyfish/`、项目级约定目录 `<工作目录>/.jellyfish/`**，四类配置的文件名固定。要换位置只改 `config.json`。
 
 > **改完不用重启**：`models.json` / `agents.json` / `jellyfish.json` 的内容改动敲 `/reload` 即生效（重建索引 + 按差异重启受影响的插件）。
 > **`config.json` 不参与热更新**：它是「去哪个文件读配置、去哪个目录找插件」的部署事实，改它要重启进程；同理，新增 / 删除插件 jar 也仍需重启（扫描目录与插件集合只在启动期确定）。
@@ -457,7 +457,7 @@ TUI 状态栏也会追加 `已压缩 N 条（丢弃 M 条）`；压缩期间状�
     "compactMaxSummaryChars": 4000,
     "autoCompactPercent": 80,
     "toolOutput": {
-      "dir": "~/jellyfish/tool-outputs",
+      "dir": "~/.jellyfish/tool-outputs",
       "keepFiles": 200,
       "maxBytes": 52428800,
       "keepRecentMessages": 20,
@@ -478,7 +478,7 @@ TUI 状态栏也会追加 `已压缩 N 条（丢弃 M 条）`；压缩期间状�
 
 `react` 段控制 ReAct 循环：`maxRounds` 是单回合最大轮数；`contextReserveTokens` 是上下文预算里为系统提示词 / 插件注入的上下文预留的 token；`maxToolOutputChars` 是单个工具输出回灌模型前的截断长度，也是**硬上限**（工具失控时由它保命）；`compactKeepRecentMessages` 是压缩默认保留的最近消息条数（写 `0` 即「不保留原文」）；`compactMaxSummaryChars` 是摘要长度上限（提示模型别写太长，真超了按码点本地截断并留标记）；`autoCompactPercent` 是上下文用到多少百分比就自动压缩（写 `0` 关闭自动压缩，只留手动 `/compact`）。缺省值即为上表；非法值（非正数）回退到缺省值。
 
-`react.toolOutput` 段只管工具结果太长时怎么办：`dir` 是完整内容的落盘根目录（缺省 `~/jellyfish/tool-outputs`，运行产物写在这里而不是项目目录）；`keepFiles` / `maxBytes` 是每个会话在该目录下的文件数与字节数上限（缺省 200 个 / 50 MiB，写 `0` 关闭清理），超了从最旧的开始删；`keepRecentMessages` 是组装请求时最近多少条消息里的工具结果保留完整内容（缺省 20，写 `0` 关闭该裁剪）；`spillMaxBytes` 是单个工具结果的落盘上限（缺省 32 MiB，运行期钳制为不超过 `maxBytes`），触及上限时后续内容不再保存、信封会带 `_partial` 说明它不完整。
+`react.toolOutput` 段只管工具结果太长时怎么办：`dir` 是完整内容的落盘根目录（缺省 `~/.jellyfish/tool-outputs`，运行产物写在这里而不是项目目录）；`keepFiles` / `maxBytes` 是每个会话在该目录下的文件数与字节数上限（缺省 200 个 / 50 MiB，写 `0` 关闭清理），超了从最旧的开始删；`keepRecentMessages` 是组装请求时最近多少条消息里的工具结果保留完整内容（缺省 20，写 `0` 关闭该裁剪）；`spillMaxBytes` 是单个工具结果的落盘上限（缺省 32 MiB，运行期钳制为不超过 `maxBytes`），触及上限时后续内容不再保存、信封会带 `_partial` 说明它不完整。
 
 **信封里的 `_path` 只在保留窗口内有效**：上面那两个清理上限一旦被触到，就从最旧的文件开始删，因此**几十轮之前那个路径可能已经不在了**（`read_file` 会报文件不存在）。这不是缺陷——文件是运行产物，引用计数式保留会让落盘与会话历史互相耦合。要长期留用的内容请在它还在时另存一份。
 
@@ -503,11 +503,11 @@ TUI 状态栏也会追加 `已压缩 N 条（丢弃 M 条）`；压缩期间状�
 
 ### 想真跑一轮对话
 
-`config.json` 默认从 `~/jellyfish/`（全局级）与 `./jellyfish/`（项目级）读取三份配置。开箱能跑命令（如 `/help`），但没有模型配置时一发对话就会提示没有可用模型。要真跑：
+`config.json` 默认从 `~/.jellyfish/`（全局级）与 `./.jellyfish/`（项目级）读取三份配置。开箱能跑命令（如 `/help`），但没有模型配置时一发对话就会提示没有可用模型。要真跑：
 
-1. 在项目根目录建 `jellyfish/models.json`（格式见上方示例），apiKey 用环境变量注入：`"apiKey": "${OPENAI_API_KEY}"`；
-2. 按需建 `jellyfish/agents.json` 与 `jellyfish/jellyfish.json`；
-3. 想让配置对**这台机器上的所有项目**生效，把同样的文件放到 `~/jellyfish/` 即可（项目级同名条目会整对象覆盖全局级）。
+1. 在项目根目录建 `.jellyfish/models.json`（格式见上方示例），apiKey 用环境变量注入：`"apiKey": "${OPENAI_API_KEY}"`；
+2. 按需建 `.jellyfish/agents.json` 与 `.jellyfish/jellyfish.json`；
+3. 想让配置对**这台机器上的所有项目**生效，把同样的文件放到 `~/.jellyfish/` 即可（项目级同名条目会整对象覆盖全局级）。
 
 两个目录里的文件名与上方四类配置一一对应，不要改成别的名字。
 
@@ -525,6 +525,8 @@ TUI 状态栏也会追加 `已压缩 N 条（丢弃 M 条）`；压缩期间状�
 | `jellyfish-plugin-python` | `jellyfish-plugin-python` | Python 脚本插件运行时：把 `scripts/python/<id>/` 下的脚本目录变成标准插件（控制面网关 + 每脚本一 worker 进程） |
 | `jellyfish-plugin-node` | `jellyfish-plugin-node` | Node 脚本插件运行时：与 Python 同构（同一套协议与进程模型），零第三方依赖 |
 | `jellyfish-plugin-shell` | `jellyfish-shell` | 命令行：`shell` 工具（`/bin/sh -c` 执行命令原文）+ 命令分类器（只读不打扰、灾难形状拒绝、其余审批）。**没有沙箱**，见下文 |
+| `jellyfish-plugin-skills` | `jellyfish-skills` | skills：按目录发现 `SKILL.md`，元信息常驻 system prompt、正文由模型用 `skill` 工具按需加载，见下文 |
+| `jellyfish-plugin-mcp` | `jellyfish-mcp` | MCP 客户端：stdio 连外部 MCP server，把它的工具以 `mcp__<server>__<tool>` 接入，见下文 |
 
 `jellyfish-tools` 的五个工具：
 
@@ -563,11 +565,11 @@ cp jellyfish-plugins/jellyfish-plugin-shell/target/jellyfish-plugin-shell-*.jar 
         "readOnlyTools": ["read_file", "list_dir", "grep_files"]
       },
       "jellyfish-session-file": {
-        "sessionDir": "~/jellyfish/sessions",
+        "sessionDir": "~/.jellyfish/sessions",
         "gitEnabled": true
       },
       "jellyfish-todo": {
-        "todoDir": "~/jellyfish/todos",
+        "todoDir": "~/.jellyfish/todos",
         "readOnlyTools": ["todo_write"]
       },
       "jellyfish-compact": {
@@ -594,9 +596,9 @@ cp jellyfish-plugins/jellyfish-plugin-shell/target/jellyfish-plugin-shell-*.jar 
   - 配置里的声明只能**追加**，用于把提供方没标只读的工具自行纳入，不能撤销提供方的声明。
   - 两个来源取**并集**，且不依赖任何缓存：插件热部署（装上 / 卸下 / 重载）后白名单立刻跟着变。
   - PLAN 模式下不在白名单里的工具一律拒绝。
-- `sessionDir`（默认 `~/jellyfish/sessions`）：会话文件目录。会话是跨项目的运行态数据，因此默认放全局级目录。
+- `sessionDir`（默认 `~/.jellyfish/sessions`）：会话文件目录。会话是跨项目的运行态数据，因此默认放全局级目录。
 - `gitEnabled`（默认 `true`）：首次落盘时在 `sessionDir` 里 `git init`，此后**每次内容变化的落盘留一次提交**（内容没变则不写文件、也不提交）。机器上没有 git 时只告警，文件照常落盘。
-- `todoDir`（默认 `~/jellyfish/todos`）：待办文件目录，一个会话一个 JSON 文件，空表会删掉文件。
+- `todoDir`（默认 `~/.jellyfish/todos`）：待办文件目录，一个会话一个 JSON 文件，空表会删掉文件。
 - `keepRecentMessages` / `maxSummaryChars`（`jellyfish-compact`，**都可省略**）：本插件对压缩参数的覆盖值；省略时用内核 `react` 段的缺省值。省略是「不表态」，不是「用 0」。
 - `maxInlineBytes`（`jellyfish-project`，默认 `32768` 即 32 KiB）：约定文件**多大以内可以把原文放进 system prompt**。超过它只给路径指引；写 `0` 表示从不内联（彻底关掉内联的逃生门）。上限 1 MiB，超出或为负数会在启动期直接报错。约定文件名固定为 `AGENTS.md`，查找基准固定为进程工作目录——这两项不可配。
 - `timeoutSeconds`（`jellyfish-shell`，默认 `120`）：命令最多允许跑多久；单次调用可以用 `timeout_seconds` 参数覆盖，并被 `maxTimeoutSeconds`（默认 `1800`）钳制。**不支持「不超时」**——保留一个上限，避免配置写错变成无限等待。
@@ -682,6 +684,93 @@ cp jellyfish-plugins/jellyfish-plugin-shell/target/jellyfish-plugin-shell-*.jar 
 
 端到端测试会真的起进程再杀掉它们，因此单独一个 profile：`mvn -q -Pshell-it test`。
 
+### skills（jellyfish-skills）
+
+把一个目录里的说明文件变成模型可以按需取用的「技能」。约定很简单：**一个子目录一个 skill，正文写在 `SKILL.md` 里**。
+
+```markdown
+---
+name: pdf-processing
+description: 处理 PDF 时使用：拆分、合并、提取文本
+---
+
+# 用法
+
+1. 用 `scripts/merge.py` 合并……
+2. 细节见 `references/api.md`
+```
+
+- **`description` 必填**：它是模型判断「该不该用这个 skill」的唯一依据，缺了整条会被跳过并在 `/skills` 里说明原因。
+- **`name` 可省**：省略时用目录名。头部只认 `---` 围栏里的扁平 `key: value`（支持 `>` / `|` 折行与引号），**不是完整 YAML**。
+- **三层渐进披露**：名称 + 描述常驻 system prompt；模型判断相关时调 `skill` 工具把正文取回来；正文里提到的附带文件（`references/`、`scripts/`）用 `read_file` / `shell` 按需读取。
+- **`skill` 工具是只读的**，PLAN 模式下同样可用。
+- **改了 `SKILL.md` 立即生效**：目录缓存按文件修改时间失效，不需要重启，也不需要 `/reload`。
+
+配置（`jellyfish.json`）：
+
+```jsonc
+{
+  "plugins": {
+    "configurations": {
+      "jellyfish-skills": {
+        "roots": ["~/.jellyfish/skills", "./.jellyfish/skills"],
+        "maxSkills": 50,
+        "maxDescriptionChars": 200,
+        "maxBodyBytes": 65536
+      }
+    }
+  }
+}
+```
+
+根目录是**有序**的，同名 skill 先到者胜——项目级要覆盖用户级就写在前面。整段留空即用上面这两个默认根目录。
+`enabled=false` 时不注册工具与清单贡献，但 `/skills` 仍可用（那是「为什么什么都看不见」的唯一答案）。
+
+| 命令 | 说明 |
+| --- | --- |
+| `/skills` | 列出根目录、已加载清单与扫描期问题（目录写错、缺 description、名称被前面的根目录占掉） |
+
+### MCP（jellyfish-mcp）
+
+连上外部的 MCP server，把它的工具当作本机工具使用：
+
+```jsonc
+{
+  "plugins": {
+    "configurations": {
+      "jellyfish-mcp": {
+        "servers": [
+          {
+            "id": "filesystem",
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+            "env": { "SOME_TOKEN": "..." },
+            "callTimeoutSeconds": 60,
+            "readOnlyTools": ["read_file", "list_directory"]
+          }
+        ],
+        "askWriteTools": true,
+        "startupWaitSeconds": 5
+      }
+    }
+  }
+}
+```
+
+- **工具名带前缀**：`mcp__<server>__<tool>`。server 给的工具名可能与内置工具或另一个 server 重名，前缀让「谁占谁的位置」不成为事实；字符会被清洗成厂商允许的集合，超长时保留前缀并追加哈希。
+- **连接发生在启动之后**：`startupWaitSeconds`（缺省 5 秒）内先等一等，让第一轮就能看到工具；超时就转异步，连上之后工具会自己出现。**某个 server 装错了不会让内核起不来**。
+- **`tools/list_changed` 会实时跟随**：server 运行期增删工具时，模型下一轮就能看到。
+- **只读与审批**：server 声明的 `readOnlyHint` 或你在 `readOnlyTools` 里写的名字都算只读；**缺省一律按可写**。可写的工具缺省要人工审批（`askWriteTools: false` 可关）。
+- **协议能力**：声明 `roots`（把进程工作目录告诉 server）；**不声明也不支持 `sampling` / `elicitation`**——这两个是「server 反过来向客户端要东西」，本客户端办不到，因此被请求时回一条明确的错误而不是挂在那里等。
+- **二进制内容落盘**：server 返回的图片/音频写到系统临时目录下的 `jellyfish-mcp/<pid>/`，回灌给模型的只是一个路径（base64 塞进上下文会让一次截图就撑满窗口）。插件停止时整个目录会被删掉。
+- **`-cli` / `-server` 下没有审批者**：`ASK` 等于拒绝，因此这两个模式里写类 MCP 工具实际不可用（与 `shell` 同理）。
+
+| 命令 | 说明 |
+| --- | --- |
+| `/mcp` | 每个 server 的连接状态、工具数与失败原因（连不上时的唯一线索） |
+
+端到端测试会真的 fork 一个 server 子进程（仓库自带的极简实现），因此单独一个 profile：`mvn -q -Pmcp-it test`。
+
 ### 会话压缩（jellyfish-compact）
 
 压缩是**插件能力**，不是内核内置功能。内核手里只有机制——读消息、选范围、发模型调用、校验摘要、
@@ -695,7 +784,7 @@ cp jellyfish-plugins/jellyfish-plugin-shell/target/jellyfish-plugin-shell-*.jar 
 - `/status` 的压缩一行显示「不可用（没有插件提供压缩策略）」。
 
 三种状态一眼可辨：**没装插件**（不可用）、**装了但还没压过**（未压缩）、**压过了**（已压缩 N 条）。
-插件在 `~/jellyfish/plugins/` 里但没有列进 `jellyfish.json` 的 `plugins.enabled` 时，算「没装」；
+插件在 `~/.jellyfish/plugins/` 里但没有列进 `jellyfish.json` 的 `plugins.enabled` 时，算「没装」；
 启动日志里会有一条 `插件被禁用或版本不满足，未启动: pluginId=jellyfish-compact`。
 
 插件里能调的只有两个数字，**摘要措辞改不了**（它在插件 jar 里）：`keepRecentMessages` 与

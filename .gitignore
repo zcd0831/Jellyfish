@@ -39,6 +39,3 @@ target/
 
 # maven-shade-plugin 生成的构建产物（createDependencyReducedPom）
 dependency-reduced-pom.xml
-
-# 示例脚本自己写的便签（跑 hello 示例会产生）
-/examples/scripts/python/hello/notes.txt

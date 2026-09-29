@@ -372,10 +372,8 @@ mkdir -p ~/.jellyfish/plugins
 扫描目录在 `config.json` 的 `plugins.roots` 里（顺序即扫描顺序，支持 `~` 与相对路径）。启用 / 禁用名单与逐插件配置段
 写在 `jellyfish.json`，变化由 `/reload` 生效。
 
-**去哪里找插件**：官方插件已拆分到独立仓库 **`Jellyfish-Plugins`**（<https://github.com/zcd0831/Jellyfish-Plugins>），
+**去哪里找插件**：仓库 **`Jellyfish-Plugins`**（<https://github.com/zcd0831/Jellyfish-Plugins>）提供了部分常用插件，
 本仓库只保留插件机制与 SPI（`jellyfish-api` 的插件契约 + `jellyfish-infra` 的插件运行时）。
-官方插件（tools / session-file / todo / project / compact / shell / skills / mcp / python / node）的清单、安装方式、
-逐插件配置与用法，以那份文档为准。
 
 插件能做什么由内核的扩展点与权限模型决定：工具、命令、提示词贡献、权限拦截、会话持久化 / 恢复、压缩策略、UI 贡献、
 输入指令走同步扩展点；轮次与会话等通知走异步事件通道。**插件拿不到会话与工作目录**，也**不能自称某个写操作是只读的**

@@ -67,14 +67,15 @@ class HomeHintsTest {
     @Test
     @DisplayName("只丢弃放不下的那一行，其余照常显示")
     void lines_should_dropOnlyUnfittingHint() {
-        // 第一行 37 列、第二行 36 列：36 列宽时只剩第二行
-        int width = DisplayWidth.of(HomeHints.HINTS[1]);
+        // 第二行比第一行宽：按第一行的宽度给画布，只剩第一行
+        int firstWidth = DisplayWidth.of(HomeHints.HINTS[0]);
+        assertTrue(firstWidth < DisplayWidth.of(HomeHints.HINTS[1]), "这条用例的前提是第二行更宽");
 
-        List<VisualLine> lines = HomeHints.lines(width);
+        List<VisualLine> lines = HomeHints.lines(firstWidth);
 
         assertEquals(1 + 1, lines.size(), "空行 + 放得下的那一行，实际：" + lines);
         assertTrue(lines.get(0).isEmpty());
-        assertEquals(HomeHints.HINTS[1], lines.get(1).text().trim());
+        assertEquals(HomeHints.HINTS[0], lines.get(1).text().trim());
     }
 
     @Test

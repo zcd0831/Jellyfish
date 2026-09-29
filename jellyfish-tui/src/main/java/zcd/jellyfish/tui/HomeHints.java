@@ -38,7 +38,7 @@ public final class HomeHints {
     /** 提示正文：{@code /help} 与 {@code /resume} 都是首页可直接执行的命令。 */
     static final String[] HINTS = {
             "/help 查看命令 \u00b7 /resume 继续上次会话",
-            "! 执行命令 \u00b7 @ 引用文件 \u00b7 / 唤起补全"};
+            "! 执行 shell 命令 \u00b7 @ 引用文件 \u00b7 / 唤起命令补全"};
 
     /** 提示样式：dim 压一档，让它明显弱于字标，不与内容抢注意力。 */
     private static final Style HINT_STYLE = Style.EMPTY.dim();

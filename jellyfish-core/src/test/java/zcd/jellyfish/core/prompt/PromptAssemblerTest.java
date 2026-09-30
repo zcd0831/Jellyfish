@@ -36,6 +36,7 @@ import zcd.jellyfish.infra.session.SessionManager;
 import zcd.jellyfish.infra.session.SessionDefaults;
 
 import java.util.Collections;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -415,9 +416,13 @@ class PromptAssemblerTest {
         // When
         LlmRequest request = assembler.buildRequest(session, resolvedModel(128_000, 4096));
 
-        // Then：只剩边界之后的那一条；被压掉的原文不再进请求
+        // Then：被压掉的原文不再进请求，只剩边界之后的那一条；摘要并进它（而不是回到 system prompt）
         assertEquals(1, request.getMessages().size());
-        assertEquals("三", request.getMessages().get(0).getContent());
+        assertNull(request.getSystemPrompt());
+        String content = request.getMessages().get(0).getContent();
+        assertTrue(content.startsWith("[历史摘要] 更早的 2 条消息已不在上下文中"), content);
+        assertTrue(content.contains("早前对话的摘要"), content);
+        assertTrue(content.endsWith("\n\n三"), content);
     }
 
     @Test
@@ -460,12 +465,13 @@ class PromptAssemblerTest {
     }
 
     @Test
-    void buildRequest_should_putSummaryInSystemPrompt_afterPluginContributions() {
+    void buildRequest_should_putSummaryInMessages_notSystemPrompt() {
         // Given
         SessionManager sessions = newSessionManager();
         Session session = sessions.createDefault();
         String sessionId = session.getSessionId();
         sessions.appendMessage(sessionId, LlmMessage.user("一"), null);
+        sessions.appendMessage(sessionId, LlmMessage.user("二"), null);
         sessions.applyCompaction(sessionId, "早前对话的摘要", session.getMessages().get(0).getMessageId(), 0);
         when(agentManager.systemPromptOf(null)).thenReturn("agent 提示词");
         contribute("plugin-a", 0, "插件贡献");
@@ -474,13 +480,59 @@ class PromptAssemblerTest {
         // When
         LlmRequest request = assembler.buildRequest(session, resolvedModel(128_000, 4096));
 
-        // Then：agent → 插件 → 历史摘要，摘要必须在最后
-        String systemPrompt = request.getSystemPrompt();
-        assertTrue(systemPrompt.contains("agent 提示词"), systemPrompt);
-        assertTrue(systemPrompt.contains("插件贡献"), systemPrompt);
-        assertTrue(systemPrompt.contains("早前对话的摘要"), systemPrompt);
-        assertTrue(systemPrompt.indexOf("插件贡献") < systemPrompt.indexOf("早前对话的摘要"), systemPrompt);
-        assertTrue(systemPrompt.contains("更早的 1 条消息已不在上下文中"), systemPrompt);
+        // Then：system prompt 只剩 agent 与插件贡献。摘要曾经拼在它末尾，也是它让 system prompt
+        // 随压缩变化；挪到消息区之后那条「逐字节恒定」的不变量才成立
+        assertEquals("agent 提示词\n\n插件贡献", request.getSystemPrompt());
+        // 摘要在消息区，且与紧随其后的 user 消息合并——两条连续的 user 会被 Anthropic 拒掉
+        assertEquals(1, request.getMessages().size());
+        assertEquals("[历史摘要] 更早的 1 条消息已不在上下文中。摘要如下：\n早前对话的摘要\n\n二",
+                request.getMessages().get(0).getContent());
+    }
+
+    @Test
+    void systemPromptOf_should_stayByteIdentical_acrossCompactions() {
+        // Given：一个既会压缩、也会继续往下聊的会话
+        SessionManager sessions = newSessionManager();
+        Session session = sessions.createDefault();
+        String sessionId = session.getSessionId();
+        sessions.appendMessage(sessionId, LlmMessage.user("一"), null);
+        sessions.appendMessage(sessionId, LlmMessage.user("二"), null);
+        when(agentManager.systemPromptOf(null)).thenReturn("agent 提示词");
+        contribute("plugin-a", 0, "插件贡献");
+
+        // When / Then：摘要与边界怎么变，system prompt 都逐字节不动。它是缓存前缀的第 0 个
+        // token，它一变后面全部内容（连同整个历史）都要按未命中价重发
+        String expected = "agent 提示词\n\n插件贡献";
+        assertEquals(expected, assembler.systemPromptOf(session));
+        sessions.applyCompaction(sessionId, "摘要 v1", session.getMessages().get(0).getMessageId(), 0);
+        assertEquals(expected, assembler.systemPromptOf(session));
+        sessions.appendMessage(sessionId, LlmMessage.user("三"), null);
+        sessions.applyCompaction(sessionId, "摘要 v2", session.getMessages().get(1).getMessageId(), 3);
+        assertEquals(expected, assembler.systemPromptOf(session));
+    }
+
+    @Test
+    void buildRequest_should_keepSummaryStandalone_when_nextHistoryMessageIsAssistant() {
+        // Given：边界之后紧接着一条 assistant(toolCalls) 而不是 user——合并就无从谈起
+        SessionManager sessions = newSessionManager();
+        Session session = sessions.createDefault();
+        String sessionId = session.getSessionId();
+        sessions.appendMessage(sessionId, LlmMessage.user("做点事"), null);
+        sessions.appendMessage(sessionId, assistantCalling("call-1"), null);
+        sessions.appendMessage(sessionId, LlmMessage.tool("call-1", "read_file", "A 的内容"), null);
+        sessions.applyCompaction(sessionId, "早前对话的摘要", session.getMessages().get(0).getMessageId(), 0);
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+
+        // When
+        LlmRequest request = assembler.buildRequest(session, resolvedModel(128_000, 4096));
+
+        // Then：摘要单独成一条 user 消息，历史原样跟在后面，全程没有连续同角色
+        assertEquals(3, request.getMessages().size());
+        assertEquals(LlmMessage.ROLE_USER, request.getMessages().get(0).getRole());
+        assertTrue(request.getMessages().get(0).getContent().startsWith("[历史摘要]"),
+                request.getMessages().get(0).getContent());
+        assertEquals(LlmMessage.ROLE_ASSISTANT, request.getMessages().get(1).getRole());
+        assertEquals(LlmMessage.ROLE_TOOL, request.getMessages().get(2).getRole());
     }
 
     @Test
@@ -556,6 +608,45 @@ class PromptAssemblerTest {
         // Then：比例无从判断（分母为 0），但请求照发
         assertEquals(0, assembly.getUsage().getBudgetTokens());
         assertFalse(assembly.getUsage().exceeds(80));
+    }
+
+    @Test
+    void buildRequest_should_keepSummary_when_historyGetsCropped() {
+        // Given：一条已经被压掉的开头 + 一长串历史，窗口小到必须裁剪
+        SessionManager sessions = newSessionManager();
+        Session session = sessions.createDefault();
+        String sessionId = session.getSessionId();
+        sessions.appendMessage(sessionId, LlmMessage.user("很久以前的那一句"), null);
+        sessions.applyCompaction(sessionId, "早前对话的摘要", session.getMessages().get(0).getMessageId(), 0);
+        for (int index = 0; index < 30; index++) {
+            sessions.appendMessage(sessionId, LlmMessage.user("很长的历史内容 " + index), null);
+        }
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+
+        // When
+        PromptAssembly assembly = assembler.assemble(session, resolvedModel(60, 0));
+
+        // Then：裁剪确实发生了
+        assertTrue(assembly.getUsage().isTruncated());
+        // 而摘要还在：它是被裁掉那一段的精华，让 ContextWindow.crop 有机会丢掉它等于白压一次。
+        // 它拼在裁剪之后而不是作为历史的一部分参与裁剪，正是为了这个
+        assertTrue(containsSummary(assembly.getRequest().getMessages()), "摘要不能被裁剪丢掉");
+    }
+
+    /**
+     * 判断实际发出的消息里是否还带着那段摘要。
+     *
+     * @param messages 实际发出的消息
+     * @return 带着返回 {@code true}
+     */
+    private static boolean containsSummary(List<LlmMessage> messages) {
+        for (LlmMessage message : messages) {
+            String content = message.getContent();
+            if (content != null && content.contains("早前对话的摘要")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

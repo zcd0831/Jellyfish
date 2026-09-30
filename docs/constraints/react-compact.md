@@ -62,7 +62,10 @@
   每次只压「上次边界之后、再留 `keepRecent` 条」的那段，并把上一份摘要一起喂回，**边界只向后移**。
 - **单次压缩、装不下就丢最旧**：待压范围超预算时从最旧侧丢弃，被丢弃条数如实上报并落盘
   （`droppedMessageCount`）；**至少进摘要 1 条**。
-- **摘要是 system prompt 里的一块，不是消息**：顺序 agent 提示词 → 插件贡献 → 历史摘要。
+- **摘要是一条每次现算的出站合成消息，不再是 system prompt 里的一块**：它排在压缩边界之后、被保留历史之前，
+  **不落盘**。这样 system prompt 在整个会话里逐字节恒定（只剩 agent 提示词与插件贡献块），
+  「system prompt 一变」于是可以用作 bug 信号。角色用 `user`，紧随其后也是 `user` 时并入其中——
+  既避开 Claude/Gemini 把 system 消息上提回顶层的行为，也避开 Anthropic 拒绝连续 user 的限制。
 - **触发两条**：`/compact`（MANUAL），或每轮组装时自动压（AUTO）——用量达 `react.autoCompactPercent`
   （缺省 80，写 0 关闭）或本次已被机械裁剪。自动压缩跑在本轮调用旁边不阻塞，**无范围时零成本**。
 - **`/compact` 只起头不等结果，且只有无参执行与 `preview` 两种形态**：跑在自持 `compact` 线程池，

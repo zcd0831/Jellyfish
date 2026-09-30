@@ -32,17 +32,28 @@ import java.util.Objects;
  * <p>
  * 组装四件事，按固定顺序：
  * <ol>
- *     <li><b>system prompt</b>：agent 提示词原文 + 各插件贡献块 + 历史摘要（{@code /compact} 压出来的
- *     那一块）；三者都为空则不下发；</li>
+ *     <li><b>system prompt</b>：agent 提示词原文 + 各插件贡献块；两者都为空则不下发；</li>
  *     <li><b>消息历史</b>：先跳过已被压缩摘要覆盖的那一段，再按模型上下文窗口做机械裁剪
- *     （只裁本次请求，不写回会话）；</li>
+ *     （只裁本次请求，不写回会话），最后把压缩摘要作为一条<b>合成消息</b>放在最前；</li>
  *     <li><b>工具清单</b>：来自 {@link ToolCatalog}，与注册表同源；</li>
  *     <li><b>采样参数</b>：模型名取 {@code Model.getId()}、最大输出取 {@code Model.getMaxOutputTokens()}。</li>
  * </ol>
+ * <b>system prompt 在一个会话里逐字节恒定</b>：它只由 agent 提示词与插件贡献块组成，两者都不随
+ * 轮次变化。这不是巧合而是刻意维持的不变量——厂商的 prompt 缓存是前缀匹配，system prompt 站在
+ * 第 0 个 token，它一变后面全部内容（连同整个历史）都要按未命中价重发。「system prompt 变了」
+ * 因此可以当成一条 bug 信号来查，见 {@link CacheBreakWatcher}。
+ * <p>
  * <b>插件上下文为什么拼进 system prompt 而不是消息列表</b>：它是「本轮的上下文注入」，不是对话历史。
  * 塞进 {@code messages} 会被后续 append 回会话，导致每轮重复累积、回放与 token 统计失真。
- * 待办、记忆召回这类插件状态因此只能走
- * {@link PromptContributionRequest}，由插件自己决定这一轮要不要说、说什么。
+ * <b>但会随轮次变化的状态就不该走这里</b>——它会让上面那条不变量当场失效，而代价是整个请求。
+ * 这类东西应走 {@link TurnContextRequest}（产物由 {@code ReActLooper} 拼进本轮用户消息并随消息落盘，
+ * 因此是 append-only 的），或者干脆不进 prompt。
+ * <p>
+ * <b>压缩摘要为什么改成「合成消息」而不是留在 system prompt</b>：摘要只在压缩时变，留在 system
+ * prompt 里并不会造成每轮断裂，因此这一改动<b>不带来命中率收益</b>——推导见
+ * {@code docs/design/llm-cache.md} §4.3，那里论证了两种排法的分叉点是同一个位置。换来的是上述
+ * 不变量，以及 Anthropic {@code cache_control} 的落点：断点应当打在稳定前缀的末尾，
+ * 而 system prompt 的末尾此前恰好是会变的摘要。
  *
  * @author zcd
  */
@@ -140,23 +151,26 @@ public class PromptAssembler {
         Objects.requireNonNull(resolvedModel, "resolvedModel must not be null");
         Objects.requireNonNull(toolFilter, "toolFilter must not be null");
         int boundary = effectiveBoundary(session);
-        String systemPrompt = systemPromptOf(session, boundary);
+        String systemPrompt = systemPromptOf(session);
+        LlmMessage summary = summaryMessageOf(session, boundary);
         // 老化排在裁剪之前：先把较早的大结果换成 stub，再让裁剪看到它真实的体积；
         // 反过来则会先把整组丢掉，连「内容在哪」都一起没了
         List<LlmMessage> history = toolResultAger.age(toLlmMessages(session, boundary + 1));
-        CropResult cropResult = crop(resolvedModel, systemPrompt, history);
+        CropResult cropResult = crop(resolvedModel, systemPrompt, summary, history);
+        // 摘要拼在裁剪之后：它是「被裁掉的那段的精华」，让裁剪有机会丢掉它等于白压一次
+        List<LlmMessage> messages = withSummary(summary, cropResult.getMessages());
         List<LlmTool> tools = toolCatalog.tools(toolFilter);
-        watchCacheBreak(session, systemPrompt, tools, cropResult.getMessages());
+        watchCacheBreak(session, systemPrompt, tools, messages);
         LlmRequest.Builder builder = LlmRequest.builder(resolvedModel.getModel().getId())
                 .systemPrompt(systemPrompt)
-                .messages(cropResult.getMessages())
+                .messages(messages)
                 .tools(tools);
         int maxOutputTokens = resolvedModel.getModel().getMaxOutputTokens();
         if (maxOutputTokens > 0) {
             builder.maxTokens(maxOutputTokens);
         }
         ContextUsage usage = new ContextUsage(TokenEstimator.estimate(systemPrompt)
-                + TokenEstimator.estimateMessages(cropResult.getMessages()), cropResult.getBudget(),
+                + TokenEstimator.estimateMessages(messages), cropResult.getBudget(),
                 cropResult.isTruncated());
         return new PromptAssembly(builder.build(), usage);
     }
@@ -188,31 +202,18 @@ public class PromptAssembler {
     }
 
     /**
-     * 组装 system prompt：agent 提示词原文 + 各插件贡献块 + 历史摘要。
+     * 组装 system prompt：agent 提示词原文 + 各插件贡献块。
      * <p>
-     * <b>摘要排在最后</b>（在插件贡献之后）是有意的：它是对「远古对话」的压缩，越靠后离当前对话越近，
-     * 模型越容易把它当成背景而不是当前指令；排在 agent 提示词之前则会反过来——一段可能是几天前的
-     * 总结会压住本次会话的角色设定。
+     * <b>不含压缩摘要，也不含任何随轮次变化的东西</b>：本方法的产物在同一个会话里必须逐字节恒定。
+     * 摘要曾经拼在这里（排在贡献块之后），现在改走 {@link #summaryMessageOf} 进消息区。
      *
      * @param session 会话运行态
-     * @return system prompt；三者都为空时返回 {@code null}（不下发）
+     * @return system prompt；两者都为空时返回 {@code null}（不下发）
      */
     public String systemPromptOf(Session session) {
-        return systemPromptOf(session, effectiveBoundary(session));
-    }
-
-    /**
-     * 组装 system prompt，复用已解析的压缩边界。
-     *
-     * @param session  会话运行态
-     * @param boundary 有效的压缩边界下标，{@code -1} 表示没有有效压缩
-     * @return system prompt；三者都为空时返回 {@code null}（不下发）
-     */
-    private String systemPromptOf(Session session, int boundary) {
         StringBuilder text = new StringBuilder();
         appendBlock(text, agentManager.systemPromptOf(session.getAgentId()));
         appendBlock(text, contributionsOf(session));
-        appendBlock(text, summaryBlockOf(session, boundary));
         return text.length() == 0 ? null : text.toString();
     }
 
@@ -233,7 +234,17 @@ public class PromptAssembler {
     }
 
     /**
-     * 把压缩摘要包装成 system prompt 里的一块。
+     * 把压缩摘要做成一条出站合成消息。
+     * <p>
+     * <b>为什么是「每次现算」而不是落盘</b>：它一旦被 append 回会话，就会每轮重复累积，
+     * 越聊越像一份不断膨胀的假历史；屏幕投影与 {@code /resume} 也会跟着多出一条谁都没说过的话。
+     * 现算的代价只是一次字符串拼接。
+     * <p>
+     * <b>角色固定为 {@code user}，并且不单独成条时会并进紧随其后的 user 消息</b>：
+     * 不能用 {@code system} 角色——那会被 Claude / Gemini 的 {@code collectSystemPrompt}
+     * 上提回顶层 system prompt，等于什么都没搬；而 Anthropic 又拒绝连续的 {@code user} 消息
+     * （见 {@code ClaudeLlmClient.buildMessages} 合并工具结果那段）。因此
+     * {@link #withSummary} 在必要时代为合并，见那里的说明。
      * <p>
      * <b>为什么带「已压缩 N 条」的抬头</b>：模型无从知道自己的历史被截过，它会自然地假设
      * 「我没看到的就是没发生过」。把这件事讲明，它才会在需要细节时去查文件而不是凭印象编。
@@ -244,9 +255,9 @@ public class PromptAssembler {
      *
      * @param session  会话运行态
      * @param boundary 有效的压缩边界下标，{@code -1} 表示没有有效压缩
-     * @return 摘要块；没有有效压缩时返回 {@code null}
+     * @return 摘要消息；没有有效压缩时返回 {@code null}
      */
-    private static String summaryBlockOf(Session session, int boundary) {
+    private static LlmMessage summaryMessageOf(Session session, int boundary) {
         if (boundary < 0) {
             return null;
         }
@@ -260,7 +271,37 @@ public class PromptAssembler {
         if (dropped > 0) {
             text.append("（其中 ").append(dropped).append(" 条因超出摘要预算未被收录）");
         }
-        return text.append("。摘要如下：\n").append(compaction.getSummary()).toString();
+        return LlmMessage.user(text.append("。摘要如下：\n").append(compaction.getSummary()).toString());
+    }
+
+    /**
+     * 把摘要消息拼到已裁剪历史的最前面，必要时与紧随其后的 user 消息合并。
+     * <p>
+     * <b>为什么需要合并这一步</b>：Anthropic 拒绝连续的 {@code user} 消息。压缩边界之后的第一条消息
+     * 既可能是 user（一个回合的开头）也可能是 assistant（工具调用组），前者占多数——若摘要与它各占一条，
+     * 请求会被直接拒掉。合并后仍是一条 user 消息，内容语义也没有损失：摘要本就是给模型的背景补充。
+     * <p>
+     * <b>只改出站内容，不动会话</b>：与 {@code ToolResultAger} 在发送期改写工具结果同一口径，
+     * 屏幕投影、落盘与 {@code /resume} 看到的仍是原始消息。
+     *
+     * @param summary  摘要消息，可为 {@code null}
+     * @param messages 已裁剪的历史消息，不可为 {@code null}
+     * @return 拼好摘要的消息列表
+     */
+    private static List<LlmMessage> withSummary(LlmMessage summary, List<LlmMessage> messages) {
+        if (summary == null) {
+            return messages;
+        }
+        List<LlmMessage> merged = new ArrayList<LlmMessage>(messages.size() + 1);
+        if (!messages.isEmpty() && LlmMessage.ROLE_USER.equals(messages.get(0).getRole())) {
+            merged.add(LlmMessage.user(summary.getContent() + BLOCK_SEPARATOR
+                    + StringUtils.defaultString(messages.get(0).getContent())));
+            merged.addAll(messages.subList(1, messages.size()));
+            return merged;
+        }
+        merged.add(summary);
+        merged.addAll(messages);
+        return merged;
     }
 
     /**
@@ -408,10 +449,12 @@ public class PromptAssembler {
      *
      * @param resolvedModel 已解析的模型
      * @param systemPrompt  已组装的 system prompt，可为 {@code null}
+     * @param summary       将要前置的摘要合成消息，可为 {@code null}
      * @param history       压缩边界之后的全部历史消息，不可为 {@code null}
      * @return 裁剪结果，保证非 {@code null}
      */
-    private CropResult crop(ResolvedModel resolvedModel, String systemPrompt, List<LlmMessage> history) {
+    private CropResult crop(ResolvedModel resolvedModel, String systemPrompt, LlmMessage summary,
+                            List<LlmMessage> history) {
         int contextLength = resolvedModel.getModel().getContextLength();
         if (contextLength <= 0) {
             // 没配上下文窗口就无从判断预算，原样下发（宁可让厂商报错，也不静默丢历史）
@@ -419,7 +462,8 @@ public class PromptAssembler {
         }
         int budget = contextLength - resolvedModel.getModel().getMaxOutputTokens()
                 - reactSettings().getContextReserveTokens();
-        int historyBudget = budget - TokenEstimator.estimate(systemPrompt);
+        // 摘要也要算进预算：它在裁剪之后才拼上去，不先扣掉就会让历史挤掉本该留给它的位置
+        int historyBudget = budget - TokenEstimator.estimate(systemPrompt) - TokenEstimator.estimateMessage(summary);
         ContextWindow.Result result = ContextWindow.crop(history, historyBudget);
         return new CropResult(result.getMessages(), budget, result.isTruncated());
     }
@@ -498,8 +542,8 @@ public class PromptAssembler {
      * <p>
      * <b>为什么在这里截断而不是删消息</b>：{@code /compact} 是非破坏式的——消息一条不删，
      * 屏幕投影、持久化与 {@code /resume} 看到的仍是完整历史，只有「发给模型的那条链路」按边界截。
-     * 这也是为什么摘要在 system prompt 里而不是作为一条消息回灌：它一旦进了 {@code messages}，
-     * 就会被后续每轮重复 append 回会话，越聊越像一份不断膨胀的假历史。
+     * 摘要也因此走「每次现算一条合成消息」而不是落进会话：它一旦被 append 回会话，
+     * 就会每轮重复累积，越聊越像一份不断膨胀的假历史。
      * <p>
      * <b>出站前还要过一遍工具调用配对约束</b>：切出来的序列两端都可能非法（开头是孤儿工具结果、
      * 结尾是悬空的工具调用），两类都会让厂商以 400 拒掉整次请求，详见 {@link ToolPairing}。

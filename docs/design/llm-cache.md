@@ -122,13 +122,17 @@ Plan Mode 不在切换时替换工具集，而是**保留全部工具** + 新增
 `ReActLooper.loop()`（`jellyfish-core/.../ReActLooper.java:314`）每轮调用 `PromptAssembler.assemble`：
 
 ```
-systemPrompt = agent 提示词 + 各插件贡献（按 order） + 历史摘要      ← ①
+systemPrompt = agent 提示词 + 各插件贡献（按 placement → order）      ← ①
 history      = 会话消息（压缩边界之后）
 history      = ToolResultAger.age(history)                        ← ②
 history      = ContextWindow.crop(history, budget)                ← ③
-messages     = [system] + history
+messages     = [历史摘要（合成）] + history
+history      = [system] + history
 tools        = ToolCatalog.tools(filter)                          ← ⑤
 ```
+
+> 以上是 P2 之后的形态。分析根因时 ① 的末尾还有一块**历史摘要**、易变状态（待办）也在系统提示词里；
+> P2a 把后者改成了随用户消息落盘的回合上下文，P2b 把摘要挪成了出站合成消息。
 
 序列化见 `AbstractOpenAiCompatibleLlmClient.buildRequestBody`：system 作为 **`messages[0]`** 下发。
 
@@ -233,6 +237,7 @@ LlmRequest.Builder builder = LlmRequest.builder(modelId)
 - ✅ **值得顺手做的一件事**：让 system prompt 在整个会话内**逐字节恒定**（压缩时也不变），
   这样「system prompt 一变 = 一定有 bug」成为一条可自动检查的不变量。
   这是**工程可维护性收益，不是命中率收益**——如实标注，不含糊。
+  **P2b 已落地**（见 §5.2）。
 - ✅ **已经做对的一件事**：`SessionCompaction.createdAt` **没有**被渲染进提示词
   （`summaryBlockOf` 只用 `boundary + 1`、`droppedMessageCount`、`summary`）。
   如果时间戳进了 system prompt，那就是 Claude Code 点名的第一个坑，必须保持现状。
@@ -321,8 +326,10 @@ LlmRequest.Builder builder = LlmRequest.builder(modelId)
   ——逐轮 WARN 会把日志刷满，反而让「它是什么时候开始的」看不出来。
 - **TUI 状态栏**：有缓存活动时在用量片段后面追加命中率（无缓存活动的会话完全不受影响）。
 
-**这一项待做**：把断裂观察器的日志接成指标（当前只有日志），以及与 P2 一起把「system prompt 变了」
-归因到具体是哪个插件的贡献块。
+**这一项仍待做**：把断裂观察器的日志接成指标（当前只有日志），以及把「system prompt 变了」归因到
+具体是哪个插件的贡献块。**P2 之后后者的优先级下降了**：摘要已挪出消息区、易变状态已改走回合上下文，
+system prompt 在设计上应当恒定，因此现在更需要的是「它变了」这条信号本身醒目，而不是先做归因；
+真出现断裂时，拿 `CacheBreakWatcher` 的日志配合逐块二分（临时注掉某个贡献块）已足够定位。
 
 #### 验收方式
 
@@ -351,14 +358,21 @@ LlmRequest.Builder builder = LlmRequest.builder(modelId)
 > 验收：`CacheBreakWatcher` 的日志应当从「每轮都断」变成「只在压缩时断」，
 > `/usage` 的命中率应显著抬升。
 
-#### P2b · 摘要移出 system prompt（待做）
+#### P2b · 摘要移出 system prompt —— 已落地
 
 **目标不是命中率，而是可检查的不变量 + 为显式断点铺路**（见 §4.3）：
 
-- 把压缩摘要从 system prompt 挪到消息流（由 `session.getCompaction()` 每轮现算的**合成消息**，
-  不落盘），system prompt 从此在**整个会话内逐字节恒定**。「system prompt 一变 = 一定有 bug」
-  于是成为一条可自动检查的断言。
-- 顺带为 Anthropic 的 `cache_control` 断点铺路：断点应当打在稳定前缀的末尾，而目前 system prompt
+- 压缩摘要由 `session.getCompaction()` **每轮现算**成一条合成消息（`PromptAssembler.summaryMessageOf`），
+  **不落盘**，由 `PromptAssembler.withSummary` 前置到已裁剪历史的最前面。`systemPromptOf` 从此不再读
+  `getCompaction()`，system prompt 在**整个会话内逐字节恒定**，「system prompt 一变 = 一定有 bug」
+  成为可自动检查的断言（用例 `systemPromptOf_should_stayByteIdentical_acrossCompactions`）。
+- **角色用 `user` 而不是 `system`**：Claude 与 Gemini 的 `collectSystemPrompt` 会把消息列表里的
+  system 消息**上提回顶层 system prompt**，用它等于什么都没搬（该行为有测试锁定）。
+- **紧随其后的消息也是 `user` 时并入其中**：Anthropic 拒绝连续 `user` 消息。压缩边界之后的第一条
+  既可能是 user（回合开头，占多数）也可能是 assistant（工具调用组），前者必须合并。
+- **摘要在裁剪之后才拼上**，且其 token 从历史预算里预先扣除：它是被裁掉那一段的精华，
+  让 `ContextWindow.crop` 有机会丢掉它等于白压一次。
+- 顺带为 Anthropic 的 `cache_control` 断点铺路：断点应当打在稳定前缀的末尾，而原先 system prompt
   的末尾恰好是会变的摘要。
 - **不期待命中率收益**：压缩同时推进了消息边界，两种排法的分叉点是同一个位置（§4.3 已论证）。
 

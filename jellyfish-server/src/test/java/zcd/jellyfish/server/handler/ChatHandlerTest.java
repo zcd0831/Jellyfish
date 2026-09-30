@@ -6,11 +6,17 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import zcd.jellyfish.api.JellyfishException;
+import zcd.jellyfish.api.event.RegisterOptions;
+import zcd.jellyfish.api.extension.InputTransformRequest;
+import zcd.jellyfish.api.extension.InputTransformResult;
 import zcd.jellyfish.core.AgentHarness;
 import zcd.jellyfish.core.ReActListener;
 import zcd.jellyfish.core.ReActResult;
 import zcd.jellyfish.core.ReActTurn;
+import zcd.jellyfish.core.input.InputTransforms;
+import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.permission.ApprovalChannel;
+import zcd.jellyfish.infra.registry.TypeRegistry;
 import zcd.jellyfish.infra.session.SessionManager;
 import zcd.jellyfish.server.ApprovalBridge;
 import zcd.jellyfish.server.ServerConfig;
@@ -69,6 +75,10 @@ class ChatHandlerTest {
     /** 被测试的处理器。 */
     private ChatHandler handler;
 
+    /** 真实输入改写服务：本类不注册任何处理器，因此它等价于「原样放行」。 */
+    private final InputTransforms inputTransforms =
+            new InputTransforms(new ExtensionRegistry(new TypeRegistry()));
+
     @BeforeEach
     void setUp() {
         harness = Mockito.mock(AgentHarness.class);
@@ -76,7 +86,7 @@ class ChatHandlerTest {
         turns = new SessionTurns();
         config = ServerConfig.builder("127.0.0.1", 9096).build();
         approvals = new ApprovalBridge(new ApprovalChannel());
-        handler = new ChatHandler(harness, sessions, turns, config, approvals);
+        handler = new ChatHandler(harness, sessions, turns, config, approvals, inputTransforms);
     }
 
     /**
@@ -158,6 +168,27 @@ class ChatHandlerTest {
     }
 
     @Test
+    void handle_should_write_input_handled_and_skip_turn_when_input_handled() {
+        // 被插件接过去的输入不该占一个在途回合槽位，也没有理由往会话里 append 一条用户消息
+        ExtensionRegistry handlingRegistry = new ExtensionRegistry(new TypeRegistry());
+        handlingRegistry.contribute("quick", InputTransformRequest.class, null,
+                request -> InputTransformResult.handled("先看看这份清单"), RegisterOptions.DEFAULT);
+        ChatHandler handlingHandler = new ChatHandler(harness, sessions, turns, config, approvals,
+                new InputTransforms(handlingRegistry));
+        Fixture fixture = fixture("{\"message\":\"?help\"}");
+
+        handlingHandler.handle(fixture.exchange, idParam("s1"));
+
+        String body = fixture.body();
+        assertTrue(body.contains("event: input_handled"), body);
+        assertTrue(body.contains("\"notice\":\"先看看这份清单\""), body);
+        Mockito.verify(harness, Mockito.never()).chat(Mockito.any(), Mockito.any(), Mockito.any());
+        // 槽位没被占：立刻还能再拿一个
+        Semaphore slot = turns.acquire("s1");
+        turns.release("s1", slot);
+    }
+
+    @Test
     void handle_should_return_400_when_message_blank() {
         ApiException error = assertThrows(ApiException.class,
                 () -> handler.handle(fixture("{\"message\":\"   \"}").exchange, idParam("s1")));
@@ -205,7 +236,7 @@ class ChatHandlerTest {
     @Test
     void handle_should_return_503_when_stream_limit_reached() {
         ChatHandler limited = new ChatHandler(harness, sessions, turns,
-                ServerConfig.builder("127.0.0.1", 9096).maxStreams(0).build(), approvals);
+                ServerConfig.builder("127.0.0.1", 9096).maxStreams(0).build(), approvals, inputTransforms);
 
         ApiException error = assertThrows(ApiException.class,
                 () -> limited.handle(fixture("{\"message\":\"hi\"}").exchange, idParam("s1")));

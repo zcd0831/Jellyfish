@@ -8,6 +8,7 @@ import zcd.jellyfish.cli.ExitCodes;
 import zcd.jellyfish.cli.StartupOptions;
 import zcd.jellyfish.cli.console.ConsoleIO;
 import zcd.jellyfish.core.AgentHarness;
+import zcd.jellyfish.core.input.InputTransforms;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.command.CommandManager;
 import zcd.jellyfish.infra.metrics.HealthCheck;
@@ -68,6 +69,9 @@ public final class ServerRunMode implements RunMode {
     /** 输出面板。 */
     private final ConsoleIO console;
 
+    /** 输入改写服务：交给自己构造的服务外壳，由它在起回合前问一遍插件。 */
+    private final InputTransforms inputTransforms;
+
     /**
      * 构造 Server 模式。
      *
@@ -78,11 +82,12 @@ public final class ServerRunMode implements RunMode {
      * @param agents      agent 门面，不可为 {@code null}
      * @param approvals   人工审批通道，不可为 {@code null}
      * @param healthCheck 健康检查汇总，不可为 {@code null}
+     * @param inputTransforms 输入改写服务，不可为 {@code null}
      * @param console     输出面板，不可为 {@code null}
      */
     public ServerRunMode(AgentHarness harness, CommandManager commands, SessionManager sessions,
                          ModelManager models, AgentManager agents, ApprovalChannel approvals,
-                         HealthCheck healthCheck, ConsoleIO console) {
+                         HealthCheck healthCheck, InputTransforms inputTransforms, ConsoleIO console) {
         this.harness = Objects.requireNonNull(harness, "harness must not be null");
         this.commands = Objects.requireNonNull(commands, "commands must not be null");
         this.sessions = Objects.requireNonNull(sessions, "sessions must not be null");
@@ -90,6 +95,7 @@ public final class ServerRunMode implements RunMode {
         this.agents = Objects.requireNonNull(agents, "agents must not be null");
         this.approvals = Objects.requireNonNull(approvals, "approvals must not be null");
         this.healthCheck = Objects.requireNonNull(healthCheck, "healthCheck must not be null");
+        this.inputTransforms = Objects.requireNonNull(inputTransforms, "inputTransforms must not be null");
         this.console = Objects.requireNonNull(console, "console must not be null");
     }
 
@@ -105,7 +111,7 @@ public final class ServerRunMode implements RunMode {
                 .apiKey(resolveApiKey(options, System.getenv()))
                 .build();
         JellyfishServer server = new JellyfishServer(config, harness, sessions, commands, agents, models,
-                approvals, healthCheck);
+                approvals, healthCheck, inputTransforms);
         try {
             server.start();
         } catch (JellyfishException e) {

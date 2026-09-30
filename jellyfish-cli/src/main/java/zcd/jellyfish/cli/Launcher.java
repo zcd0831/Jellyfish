@@ -132,16 +132,16 @@ public final class Launcher {
                 return new TuiRunMode(component.agentHarness(), component.commandManager(),
                         component.sessionManager(), component.modelManager(), component.agentManager(),
                         component.extensionRegistry(), component.eventChannel(), component.approvalChannel(),
-                        component.conversationCompactor(), component.inputDirectives(), console,
-                        component.sessionDefaults());
+                        component.conversationCompactor(), component.inputDirectives(), component.inputTransforms(),
+                        console, component.sessionDefaults());
             case SERVER:
                 return new ServerRunMode(component.agentHarness(), component.commandManager(),
                         component.sessionManager(), component.modelManager(), component.agentManager(),
-                        component.approvalChannel(), component.healthCheck(), console);
+                        component.approvalChannel(), component.healthCheck(), component.inputTransforms(), console);
             case CLI:
             default:
                 return new CliRunMode(component.agentHarness(), component.commandManager(),
-                        component.sessionManager(), console);
+                        component.sessionManager(), component.inputTransforms(), console);
         }
     }
 

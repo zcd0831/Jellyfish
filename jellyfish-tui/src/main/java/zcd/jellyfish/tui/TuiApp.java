@@ -16,6 +16,8 @@ import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.extension.CommandChoice;
 import zcd.jellyfish.api.extension.CommandDescriptor;
 import zcd.jellyfish.api.extension.CommandResult;
+import zcd.jellyfish.api.extension.InputTransformRequest;
+import zcd.jellyfish.api.extension.InputTransformResult;
 import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.api.ui.UiRegion;
 import zcd.jellyfish.core.AgentHarness;
@@ -24,6 +26,7 @@ import zcd.jellyfish.core.input.InputDirectiveCall;
 import zcd.jellyfish.core.input.InputDirectiveRun;
 import zcd.jellyfish.core.input.InputDirectives;
 import zcd.jellyfish.core.input.InputReferenceCompletion;
+import zcd.jellyfish.core.input.InputTransforms;
 import zcd.jellyfish.core.ReActTurn;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.command.CommandInfo;
@@ -129,6 +132,14 @@ public final class TuiApp extends ToolkitApp {
 
     /** 输入指令服务：{@code !} / {@code @} 的解析、执行与补全全在内核，外壳只渲染与分流。 */
     private final InputDirectives inputDirectives;
+
+    /**
+     * 输入改写服务：命令判定之后、指令解析与建会话之前的那一道扩展点。
+     * <p>
+     * 它与 {@link #inputDirectives} 的分工是「任意文本改写 / 短路」与「标记式语法」——
+     * 两者在管道里相邻，但管的是两件事。
+     */
+    private final InputTransforms inputTransforms;
 
     /**
      * 本进程内新建会话的待生效默认值。
@@ -269,13 +280,14 @@ public final class TuiApp extends ToolkitApp {
      * @param approvals 人工审批通道，不可为 {@code null}
      * @param compactor 会话压缩器，不可为 {@code null}
      * @param inputDirectives 输入指令服务，不可为 {@code null}
+     * @param inputTransforms 输入改写服务，不可为 {@code null}
      * @param thinkingExpanded 启动时是否展开思考过程（{@code --show-thinking} 置为 {@code true}）
      * @param sessionDefaults 本进程内新建会话的待生效默认值，不可为 {@code null}
      */
     public TuiApp(AgentHarness harness, CommandManager commands, SessionManager sessions, ModelManager models,
                   AgentManager agents, UiContributions uiContributions, ApprovalChannel approvals,
-                  ConversationCompactor compactor, InputDirectives inputDirectives, boolean thinkingExpanded,
-                  SessionDefaults sessionDefaults) {
+                  ConversationCompactor compactor, InputDirectives inputDirectives, InputTransforms inputTransforms,
+                  boolean thinkingExpanded, SessionDefaults sessionDefaults) {
         this.harness = Objects.requireNonNull(harness, "harness must not be null");
         this.commands = Objects.requireNonNull(commands, "commands must not be null");
         this.sessions = Objects.requireNonNull(sessions, "sessions must not be null");
@@ -285,6 +297,7 @@ public final class TuiApp extends ToolkitApp {
         this.approvals = Objects.requireNonNull(approvals, "approvals must not be null");
         this.compactor = Objects.requireNonNull(compactor, "compactor must not be null");
         this.inputDirectives = Objects.requireNonNull(inputDirectives, "inputDirectives must not be null");
+        this.inputTransforms = Objects.requireNonNull(inputTransforms, "inputTransforms must not be null");
         this.sessionDefaults = Objects.requireNonNull(sessionDefaults, "sessionDefaults must not be null");
         this.uiCache = new UiCache(uiContributions);
         this.pluginPanelsEnabled = pluginPanelsEnabled();
@@ -648,6 +661,18 @@ public final class TuiApp extends ToolkitApp {
             executeCommand(text, sessionId);
             return;
         }
+        // 输入改写：必须排在命令判定之后（插件改不动用户显式的命令）、指令解析之前
+        // （指令按改写后的文本解析），以及建会话之前——否则首页上拦不下输入，
+        // 「handled 时不建会话」这条约定在首页上就不成立
+        InputTransformResult transformed = inputTransforms.transform(sessionId, text, InputTransformRequest.Source.TUI);
+        if (transformed.isHandled()) {
+            chatState.appendNotice(text, noticeOf(transformed.getNotice()), ShellNotice.Kind.INFO);
+            uiCache.invalidate();
+            return;
+        }
+        if (transformed.hasText()) {
+            text = transformed.getText();
+        }
         if (sessionId == null) {
             // 首页上要发给模型或交给输入指令：先建会话，界面随之进入会话页
             sessionId = createSession();
@@ -899,6 +924,16 @@ public final class TuiApp extends ToolkitApp {
      * @param kind 命令结果状态，不可为 {@code null}
      * @return 提示语义
      */
+    /**
+     * 取插件给出说明的可用文本。
+     *
+     * @param notice 说明，可为 {@code null}
+     * @return 说明文本，空时返回固定占位
+     */
+    private static String noticeOf(String notice) {
+        return notice == null || notice.trim().isEmpty() ? "输入已被插件接过去" : notice;
+    }
+
     private static ShellNotice.Kind kindOf(CommandResult.Kind kind) {
         switch (kind) {
             case ERROR:

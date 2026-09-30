@@ -4,8 +4,11 @@ import io.undertow.server.HttpServerExchange;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import zcd.jellyfish.api.JellyfishException;
+import zcd.jellyfish.api.extension.InputTransformRequest;
+import zcd.jellyfish.api.extension.InputTransformResult;
 import zcd.jellyfish.core.AgentHarness;
 import zcd.jellyfish.core.ReActTurn;
+import zcd.jellyfish.core.input.InputTransforms;
 import zcd.jellyfish.infra.session.SessionManager;
 import zcd.jellyfish.server.ApprovalBridge;
 import zcd.jellyfish.server.ServerConfig;
@@ -15,6 +18,7 @@ import zcd.jellyfish.server.SseReActListener;
 import zcd.jellyfish.server.dto.ApprovalDto;
 import zcd.jellyfish.server.dto.ApprovalResolvedEvent;
 import zcd.jellyfish.server.dto.ChatRequest;
+import zcd.jellyfish.server.dto.InputHandledEvent;
 import zcd.jellyfish.server.dto.TurnStartEvent;
 import zcd.jellyfish.server.http.ApiException;
 import zcd.jellyfish.server.http.JsonBody;
@@ -69,6 +73,9 @@ public final class ChatHandler {
     /** 审批桥。 */
     private final ApprovalBridge approvals;
 
+    /** 输入改写服务：命令判定之后、占位与起回合之前的那一道扩展点。 */
+    private final InputTransforms inputTransforms;
+
     /** 并发流许可。 */
     private final Semaphore streamPermit;
 
@@ -80,14 +87,16 @@ public final class ChatHandler {
      * @param turns     在途回合表，不可为 {@code null}
      * @param config    运行参数，不可为 {@code null}
      * @param approvals 审批桥，不可为 {@code null}
+     * @param inputTransforms 输入改写服务，不可为 {@code null}
      */
     public ChatHandler(AgentHarness harness, SessionManager sessions, SessionTurns turns,
-                       ServerConfig config, ApprovalBridge approvals) {
+                       ServerConfig config, ApprovalBridge approvals, InputTransforms inputTransforms) {
         this.harness = harness;
         this.sessions = sessions;
         this.turns = turns;
         this.config = config;
         this.approvals = approvals;
+        this.inputTransforms = inputTransforms;
         this.streamPermit = new Semaphore(config.getMaxStreams());
     }
 
@@ -101,6 +110,17 @@ public final class ChatHandler {
         String sessionId = params.get("id");
         String message = readMessage(exchange);
         requireSession(sessionId);
+        // 输入改写：排在占位与起回合之前——被插件接过去的输入不该占一个在途回合槽位，
+        // 也没有理由往会话里 append 一条用户消息（那正是「不建会话、不起回合」的含义）
+        InputTransformResult transformed = inputTransforms.transform(sessionId, message,
+                InputTransformRequest.Source.SERVER);
+        if (transformed.isHandled()) {
+            writeHandled(exchange, sessionId, noticeOf(transformed.getNotice()));
+            return;
+        }
+        if (transformed.hasText()) {
+            message = transformed.getText();
+        }
         Semaphore slot = turns.acquire(sessionId);
         if (!streamPermit.tryAcquire()) {
             turns.release(sessionId, slot);
@@ -131,6 +151,38 @@ public final class ChatHandler {
             streamPermit.release();
             exchange.endExchange();
         }
+    }
+
+    /**
+     * 以 SSE 写出一条终态事件：输入被插件接过去了，没有回合可言。
+     * <p>
+     * 写完整流就结束，与 {@code done} / {@code cancelled} / {@code turn_blocked} 同形——
+     * 客户端因此不必为本事件单写一套读取逻辑。
+     *
+     * @param exchange  HTTP 交换对象
+     * @param sessionId 会话标识
+     * @param notice    贴给用户的说明
+     */
+    private static void writeHandled(HttpServerExchange exchange, String sessionId, String notice) {
+        try {
+            SseWriter writer = SseWriter.prepare(exchange);
+            writer.event("input_handled", new InputHandledEvent(sessionId, notice));
+        } catch (IOException e) {
+            // 客户端在拿到说明之前就断开：这是最正常的取消来源，不记为错误
+            LOG.info("SSE 客户端断开，input_handled 未送达: sessionId={}", sessionId);
+        } finally {
+            exchange.endExchange();
+        }
+    }
+
+    /**
+     * 取插件给出说明的可用文本。
+     *
+     * @param notice 说明，可为 {@code null}
+     * @return 说明文本，空时返回固定占位
+     */
+    private static String noticeOf(String notice) {
+        return notice == null || notice.trim().isEmpty() ? "输入已被插件接过去" : notice;
     }
 
     /**

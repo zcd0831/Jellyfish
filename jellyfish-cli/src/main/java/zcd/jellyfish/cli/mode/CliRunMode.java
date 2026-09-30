@@ -5,12 +5,15 @@ import org.slf4j.LoggerFactory;
 import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.RuntimeInfo;
 import zcd.jellyfish.api.extension.CommandResult;
+import zcd.jellyfish.api.extension.InputTransformRequest;
+import zcd.jellyfish.api.extension.InputTransformResult;
 import zcd.jellyfish.cli.ExitCodes;
 import zcd.jellyfish.cli.StartupOptions;
 import zcd.jellyfish.cli.console.CliReActListener;
 import zcd.jellyfish.cli.console.ConsoleIO;
 import zcd.jellyfish.core.AgentHarness;
 import zcd.jellyfish.core.ReActResult;
+import zcd.jellyfish.core.input.InputTransforms;
 import zcd.jellyfish.infra.command.CommandManager;
 import zcd.jellyfish.infra.session.Session;
 import zcd.jellyfish.infra.session.SessionManager;
@@ -53,18 +56,24 @@ public final class CliRunMode implements RunMode {
     /** 输出面板。 */
     private final ConsoleIO console;
 
+    /** 输入改写服务：命令判定之后、回合之前的那一道扩展点。 */
+    private final InputTransforms inputTransforms;
+
     /**
      * 构造 CLI 单次模式。
      *
      * @param harness  智能入口，不可为 {@code null}
      * @param commands 命令域服务，不可为 {@code null}
      * @param sessions 会话域服务，不可为 {@code null}
+     * @param inputTransforms 输入改写服务，不可为 {@code null}
      * @param console  输出面板，不可为 {@code null}
      */
-    public CliRunMode(AgentHarness harness, CommandManager commands, SessionManager sessions, ConsoleIO console) {
+    public CliRunMode(AgentHarness harness, CommandManager commands, SessionManager sessions,
+                      InputTransforms inputTransforms, ConsoleIO console) {
         this.harness = Objects.requireNonNull(harness, "harness must not be null");
         this.commands = Objects.requireNonNull(commands, "commands must not be null");
         this.sessions = Objects.requireNonNull(sessions, "sessions must not be null");
+        this.inputTransforms = Objects.requireNonNull(inputTransforms, "inputTransforms must not be null");
         this.console = Objects.requireNonNull(console, "console must not be null");
     }
 
@@ -84,6 +93,18 @@ public final class CliRunMode implements RunMode {
         String sessionId = currentSessionId();
         if (commands.isCommand(input)) {
             return executeCommand(input, sessionId);
+        }
+        // 输入改写：排在命令判定之后（插件改不动用户显式的命令）、回合之前。
+        // 它排在会话保证之后是刻意的：CLI 的单次调用必须有一个会话承载回合，
+        // 先把会话准备好再问插件，被拦下时也不会留下「为了这一次输入而建的会话」
+        InputTransformResult transformed = inputTransforms.transform(sessionId, input,
+                InputTransformRequest.Source.CLI);
+        if (transformed.isHandled()) {
+            writeCommandOutput(noticeOf(transformed.getNotice()));
+            return ExitCodes.OK;
+        }
+        if (transformed.hasText()) {
+            input = transformed.getText();
         }
         return executeTurn(input, sessionId, options);
     }
@@ -171,6 +192,16 @@ public final class CliRunMode implements RunMode {
             LOG.debug("CLI 回合失败", e);
             return ExitCodes.RUNTIME_ERROR;
         }
+    }
+
+    /**
+     * 取插件给出说明的可用文本。
+     *
+     * @param notice 说明，可为 {@code null}
+     * @return 说明文本，空时返回固定占位
+     */
+    private static String noticeOf(String notice) {
+        return notice == null || notice.trim().isEmpty() ? "输入已被插件接过去" : notice;
     }
 
     /**

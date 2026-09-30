@@ -6,6 +6,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.core.AgentHarness;
+import zcd.jellyfish.core.input.InputTransforms;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.command.CommandManager;
 import zcd.jellyfish.infra.metrics.HealthCheck;
@@ -71,6 +72,9 @@ public final class JellyfishServer {
     /** 健康检查汇总。 */
     private final HealthCheck healthCheck;
 
+    /** 输入改写服务：本次输入要不要换一段 / 要不要整个接过去。 */
+    private final InputTransforms inputTransforms;
+
     /** 在途回合表。 */
     private final SessionTurns turns = new SessionTurns();
 
@@ -100,7 +104,7 @@ public final class JellyfishServer {
      */
     public JellyfishServer(ServerConfig config, AgentHarness harness, SessionManager sessions,
                            CommandManager commands, AgentManager agents, ModelManager models,
-                           ApprovalChannel approvals, HealthCheck healthCheck) {
+                           ApprovalChannel approvals, HealthCheck healthCheck, InputTransforms inputTransforms) {
         this.config = config;
         this.harness = harness;
         this.sessions = sessions;
@@ -109,6 +113,7 @@ public final class JellyfishServer {
         this.models = models;
         this.approvals = new ApprovalBridge(approvals);
         this.healthCheck = healthCheck;
+        this.inputTransforms = inputTransforms;
     }
 
     /**
@@ -218,7 +223,7 @@ public final class JellyfishServer {
      */
     private HttpHandler buildRouter() {
         SessionHandlers sessionHandlers = new SessionHandlers(config, sessions, agents, models, turns);
-        ChatHandler chatHandler = new ChatHandler(harness, sessions, turns, config, approvals);
+        ChatHandler chatHandler = new ChatHandler(harness, sessions, turns, config, approvals, inputTransforms);
         CommandHandlers commandHandlers = new CommandHandlers(commands, config);
         ApprovalHandlers approvalHandlers = new ApprovalHandlers(approvals, config);
         HealthHandler healthHandler = new HealthHandler(healthCheck);

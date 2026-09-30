@@ -47,7 +47,7 @@ class ServerEndToEndIT {
         harness.bootstrap();
         JellyfishServer server = new JellyfishServer(ServerConfig.builder("127.0.0.1", 0).build(),
                 harness, component.sessionManager(), component.commandManager(), component.agentManager(),
-                component.modelManager(), component.approvalChannel(), component.healthCheck());
+                component.modelManager(), component.approvalChannel(), component.healthCheck(), component.inputTransforms());
         server.start();
         int boundPort = server.boundPort();
         try {
@@ -104,7 +104,7 @@ class ServerEndToEndIT {
         JellyfishServer restarted = new JellyfishServer(
                 ServerConfig.builder("127.0.0.1", boundPort).build(),
                 harness, component.sessionManager(), component.commandManager(), component.agentManager(),
-                component.modelManager(), component.approvalChannel(), component.healthCheck());
+                component.modelManager(), component.approvalChannel(), component.healthCheck(), component.inputTransforms());
         try {
             restarted.start();
             assertEquals(200, get("http://127.0.0.1:" + restarted.boundPort() + "/health").status);
@@ -121,7 +121,7 @@ class ServerEndToEndIT {
         JellyfishServer server = new JellyfishServer(
                 ServerConfig.builder("127.0.0.1", 0).apiKey("s3cret-api-key").build(),
                 harness, component.sessionManager(), component.commandManager(), component.agentManager(),
-                component.modelManager(), component.approvalChannel(), component.healthCheck());
+                component.modelManager(), component.approvalChannel(), component.healthCheck(), component.inputTransforms());
         server.start();
         String base = "http://127.0.0.1:" + server.boundPort();
         try {

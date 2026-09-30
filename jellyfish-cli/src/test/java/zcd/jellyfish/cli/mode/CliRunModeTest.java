@@ -6,7 +6,10 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import zcd.jellyfish.api.JellyfishException;
+import zcd.jellyfish.api.event.RegisterOptions;
 import zcd.jellyfish.api.extension.CommandResult;
+import zcd.jellyfish.api.extension.InputTransformRequest;
+import zcd.jellyfish.api.extension.InputTransformResult;
 import zcd.jellyfish.cli.ExitCodes;
 import zcd.jellyfish.cli.SessionTestSupport;
 import zcd.jellyfish.cli.StartupOptions;
@@ -14,9 +17,15 @@ import zcd.jellyfish.cli.console.RecordingConsoleIO;
 import zcd.jellyfish.core.AgentHarness;
 import zcd.jellyfish.core.ReActResult;
 import zcd.jellyfish.core.ReActTurn;
+import zcd.jellyfish.core.input.InputTransforms;
 import zcd.jellyfish.infra.command.CommandManager;
+import zcd.jellyfish.infra.extension.ExtensionRegistry;
+import zcd.jellyfish.infra.registry.TypeRegistry;
 import zcd.jellyfish.infra.session.Session;
 import zcd.jellyfish.infra.session.SessionManager;
+
+import java.util.ArrayList;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -54,6 +63,12 @@ class CliRunModeTest {
 
     private RecordingConsoleIO console;
 
+    /** 真实输入改写服务与它背后的注册表：新用例靠注册处理器验证接线。 */
+    private final ExtensionRegistry registry = new ExtensionRegistry(new TypeRegistry());
+
+    /** 输入改写服务。 */
+    private final InputTransforms inputTransforms = new InputTransforms(registry);
+
     private CliRunMode mode;
 
     @BeforeEach
@@ -61,7 +76,7 @@ class CliRunModeTest {
         console = new RecordingConsoleIO(null);
         session = SessionTestSupport.newSession();
         sessionId = session.getSessionId();
-        mode = new CliRunMode(harness, commands, sessions, console);
+        mode = new CliRunMode(harness, commands, sessions, inputTransforms, console);
     }
 
     @Test
@@ -164,7 +179,7 @@ class CliRunModeTest {
 
     @Test
     void run_should_return_usage_error_when_stdin_blank() {
-        CliRunMode stdinMode = new CliRunMode(harness, commands, sessions, new RecordingConsoleIO("  \n"));
+        CliRunMode stdinMode = new CliRunMode(harness, commands, sessions, inputTransforms, new RecordingConsoleIO("  \n"));
 
         int code = stdinMode.run(StartupOptions.builder(StartupOptions.Mode.CLI).build());
 
@@ -174,7 +189,7 @@ class CliRunModeTest {
     @Test
     void run_should_read_stdin_when_prompt_absent() {
         givenCurrentSession();
-        CliRunMode stdinMode = new CliRunMode(harness, commands, sessions, new RecordingConsoleIO("来自管道\n"));
+        CliRunMode stdinMode = new CliRunMode(harness, commands, sessions, inputTransforms, new RecordingConsoleIO("来自管道\n"));
         when(commands.isCommand("来自管道\n")).thenReturn(false);
         when(harness.chat(eq(sessionId), eq("来自管道\n"), any())).thenReturn(turn);
         when(turn.await()).thenReturn(ReActResult.completed(sessionId, "收到", 1));
@@ -305,11 +320,61 @@ class CliRunModeTest {
     }
 
     @Test
+    void run_should_write_notice_and_skip_turn_when_input_handled() {
+        // 被接过去的输入不进对话：不建回合、不调模型，只贴一条提示
+        givenCurrentSession();
+        when(commands.isCommand("?help")).thenReturn(false);
+        registry.contribute("quick", InputTransformRequest.class, null,
+                request -> InputTransformResult.handled("先看看这份清单"), RegisterOptions.DEFAULT);
+
+        int code = mode.run(options("?help"));
+
+        assertEquals(ExitCodes.OK, code);
+        assertTrue(console.out().contains("先看看这份清单"), console.out());
+        verify(harness, never()).chat(any(), any(), any());
+    }
+
+    @Test
+    void run_should_pass_replaced_text_to_turn() {
+        // 替换后的文本才是进回合的那一份：审批、轨迹行与会话里落库的都是它
+        givenCurrentSession();
+        when(commands.isCommand("继续")).thenReturn(false);
+        when(harness.chat(eq(sessionId), eq("附上上下文：继续"), any())).thenReturn(turn);
+        when(turn.await()).thenReturn(ReActResult.completed(sessionId, "好", 1));
+        registry.contribute("ctx", InputTransformRequest.class, null,
+                request -> InputTransformResult.replace("附上上下文：" + request.getText()),
+                RegisterOptions.DEFAULT);
+
+        mode.run(options("继续"));
+
+        verify(harness).chat(eq(sessionId), eq("附上上下文：继续"), any());
+    }
+
+    @Test
+    void run_should_not_transform_command() {
+        // 命令域是用户最显式的意图：一个插件不该能把 /help 改写成别的东西
+        givenCurrentSession();
+        when(commands.isCommand("/help")).thenReturn(true);
+        when(commands.execute("/help", sessionId)).thenReturn(CommandResult.ok("帮助"));
+        List<String> seen = new ArrayList<String>();
+        registry.contribute("probe", InputTransformRequest.class, null, request -> {
+            seen.add(request.getText());
+            return InputTransformResult.continueAsIs();
+        }, RegisterOptions.DEFAULT);
+
+        int code = mode.run(options("/help"));
+
+        assertEquals(ExitCodes.OK, code);
+        assertTrue(seen.isEmpty(), "命令不该进变换链：" + seen);
+    }
+
+    @Test
     void constructor_should_reject_null_collaborators() {
-        assertThrows(NullPointerException.class, () -> new CliRunMode(null, commands, sessions, console));
-        assertThrows(NullPointerException.class, () -> new CliRunMode(harness, null, sessions, console));
-        assertThrows(NullPointerException.class, () -> new CliRunMode(harness, commands, null, console));
-        assertThrows(NullPointerException.class, () -> new CliRunMode(harness, commands, sessions, null));
+        assertThrows(NullPointerException.class, () -> new CliRunMode(null, commands, sessions, inputTransforms, console));
+        assertThrows(NullPointerException.class, () -> new CliRunMode(harness, null, sessions, inputTransforms, console));
+        assertThrows(NullPointerException.class, () -> new CliRunMode(harness, commands, null, inputTransforms, console));
+        assertThrows(NullPointerException.class, () -> new CliRunMode(harness, commands, sessions, null, console));
+        assertThrows(NullPointerException.class, () -> new CliRunMode(harness, commands, sessions, inputTransforms, null));
     }
 
     /**

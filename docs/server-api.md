@@ -54,12 +54,16 @@
 | `tool_done` | 工具调用结束（权威结果） |
 | `approval_required` | 需要人工审批 |
 | `approval_resolved` | 审批已裁决 |
+| `input_handled` | 终态：输入被插件接过去了，没有回合，载荷 `{sessionId,notice}` |
 | `done` | 终态：回合正常结束 |
 | `cancelled` | 终态：回合被取消 |
 | `turn_blocked` | 终态：回合被插件在开始前拦下，载荷 `{turnId,sessionId,reason}` |
 | `error` | 终态：回合出错 |
 
-`done` / `cancelled` / `turn_blocked` / `error` 是终态，写出后流结束；空闲超时写 `: keepalive` 注释帧。
+`done` / `cancelled` / `turn_blocked` / `input_handled` / `error` 是终态，写出后流结束；空闲超时写 `: keepalive` 注释帧。
+
+**`input_handled` 与其他终态的区别**：它<b>根本没有回合</b>——没有用户消息落进会话、没有模型调用、没有轮数，
+因此它不带 `turnId`，也不占一个在途回合槽位。客户端应当把它当成「外壳提示」而不是「回答」。
 
 **`turn_blocked` 单独一档而不是归入 `error`**：它不是错误（没抛异常、没资源故障、客户端也没断开），
 客户端对两者的处理不同（改请求 / 找人确认 vs 重试 / 报障）。同一条理由在 `-cli` 上是退出码 `7`。

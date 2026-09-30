@@ -2,6 +2,7 @@ package zcd.jellyfish.cli.di;
 
 import dagger.Component;
 import zcd.jellyfish.core.AgentHarness;
+import zcd.jellyfish.core.input.InputTransforms;
 import zcd.jellyfish.core.compact.ConversationCompactor;
 import zcd.jellyfish.core.input.InputDirectives;
 import zcd.jellyfish.infra.agent.AgentManager;
@@ -163,6 +164,16 @@ public interface JellyfishComponent {
      * @return RuntimeInfoHolder
      */
     RuntimeInfoHolder runtimeInfoHolder();
+
+    /**
+     * 获取输入改写服务。
+     * <p>
+     * 调用点在三处外壳的输入入口：TUI 在命令判定之后、建会话之前；CLI 在命令判定之后、回合之前；
+     * Server 在占位与起回合之前。三处都排除了「命令」，也都排在「花钱与建会话」之前。
+     *
+     * @return InputTransforms
+     */
+    InputTransforms inputTransforms();
 
     /**
      * 获取健康检查汇总。

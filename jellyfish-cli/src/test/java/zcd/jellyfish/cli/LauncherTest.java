@@ -17,6 +17,7 @@ import zcd.jellyfish.cli.mode.RunMode;
 import zcd.jellyfish.cli.mode.ServerRunMode;
 import zcd.jellyfish.cli.mode.TuiRunMode;
 import zcd.jellyfish.core.AgentHarness;
+import zcd.jellyfish.core.input.InputTransforms;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.command.CommandManager;
 import zcd.jellyfish.infra.event.EventChannel;
@@ -95,6 +96,10 @@ class LauncherTest {
      * 刻意不用 mock：写入是断言的一部分，用 mock 就只能验「调过 set」而验不了「写进去的是什么」。
      */
     private final RuntimeInfoHolder runtimeInfoHolder = new RuntimeInfoHolder();
+
+    /** 真实输入改写服务：只为满足三个运行模式的构造（非空校验）。 */
+    private final InputTransforms inputTransforms =
+            new InputTransforms(new ExtensionRegistry(typeRegistry));
 
     /** 真实健康检查汇总，仅为满足 Server 装配。 */
     private final zcd.jellyfish.infra.metrics.HealthCheck healthCheck =
@@ -322,6 +327,7 @@ conversationCompactor = new ConversationCompactor(sessions, models, runtimeConfi
         when(component.agentHarness()).thenReturn(harness);
         when(component.commandManager()).thenReturn(commands);
         when(component.sessionManager()).thenReturn(sessions);
+        when(component.inputTransforms()).thenReturn(inputTransforms);
         lenient().when(component.runtimeInfoHolder()).thenReturn(runtimeInfoHolder);
     }
 

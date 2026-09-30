@@ -121,7 +121,8 @@ class AgentHarnessTest {
         // When
         harness.bootstrap();
 
-        // Then：事件订阅者就绪 → 注册指标 → 注册核心命令 → 配置 → 各索引 → 插件配置 → 插件启动 → 会话恢复
+        // Then：事件订阅者就绪 → 注册指标 → 注册核心命令 → 配置 → 各索引 → 插件配置 → 插件启动 →
+        // 目录发现 → 会话恢复
         InOrder order = inOrder(eventChannel, metricsSubscriber, systemCommands, subAgentTools, runtimeConfig,
                 modelManager, agentManager, pluginRuntimeConfig, pluginManager, sessionManager);
         order.verify(eventChannel).start();
@@ -135,6 +136,8 @@ class AgentHarnessTest {
         order.verify(agentManager).refresh(false);
         order.verify(pluginRuntimeConfig).refresh(roots, plugins);
         order.verify(pluginManager).bootstrap();
+        // 目录发现必须排在插件启动之后：传输实现与目录处理器都是插件在那一步才注册的
+        order.verify(modelManager).refreshCatalogs();
         // 恢复必须排在插件启动之后：插件此刻才注册好恢复处理器
         order.verify(sessionManager).restore();
     }

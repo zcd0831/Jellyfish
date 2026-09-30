@@ -11,6 +11,7 @@ import java.util.List;
  * 一个 LLM 服务商定义，对应配置文件 {@code providers} 中的一个条目。
  * <p>
  * 不可变：所有字段在构造时确定，合并时通过 {@link #withName(String)} 产生副本，不会改动原始对象。
+ * 模型列表也可能被目录发现整体替换（{@link #withModels(java.util.List)}）。
  * {@code name} 由配置文件中该条目的 key 回填（见 {@code RuntimeConfig} 的合并逻辑）；合并时同一 key
  * 的项目级定义<b>整对象替换</b>全局级定义，不同 key 视为新增 provider。
  *
@@ -141,5 +142,19 @@ public class Provider {
      */
     public Provider withName(String newName) {
         return new Provider(newName, type, apiKey, baseUrl, models, cache);
+    }
+
+    /**
+     * 用给定的模型列表产生一个副本。
+     * <p>
+     * 给动态目录发现用：插件报回来的模型<b>整体替换</b>配置里写的那份，而不是合并——
+     * 一个「配置里删过的模型又因为发现而回来了」的合并规则，没有人能从行为上验证它对不对。
+     * 本方法产出的副本<b>不会被写回配置文件</b>：{@code models.json} 始终是模型的唯一持久事实。
+     *
+     * @param newModels 新的模型列表，可为 {@code null}（等价空列表）
+     * @return 除模型列表外与当前对象完全一致的新实例
+     */
+    public Provider withModels(List<Model> newModels) {
+        return new Provider(name, type, apiKey, baseUrl, newModels, cache);
     }
 }

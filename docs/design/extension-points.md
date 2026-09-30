@@ -468,32 +468,47 @@ pi 的 `registerProvider` 覆盖的正是这一层。
 
 ### 5.2 两条路线与取舍
 
-**路线 A（推荐）：api 侧只加「传输契约」，`LlmRequest` 等模型留在 infra**
+**路线 A（已采用）：api 侧只加「传输契约」，`LlmRequest` 等模型留在 infra**
 
-- api 新增 `LlmTransport`（`send(LlmTransportRequest, LlmTransportListener)` + `listModels()`）；
-- `LlmTransportRequest` 是 api 侧的**传输值类型**：`model`、`systemPrompt`、`messages`、
-  `tools`、`toolChoice`、`temperature` 等字段 + 一个 `options` map；
+- api 新增 `LlmTransport`（只一个 `send(req, listener)`）；
+- api 新增一组**传输值类型**（`LlmTransportRequest` / `Response` / `Message` / `Tool` /
+  `ToolCall` / `Usage` / `Listener`），字段是各家协议都有的最小交集；
 - infra 新增 `PluginLlmClientAdapter implements LlmClient`，把 `LlmRequest` ↔ `LlmTransportRequest` 互转；
 - 插件实现 `LlmTransport`，由 `ProviderRegistrationRequest` 交回内核。
 
-代价：多了两个请求模型与一层 adapter。
+代价：十个左右的请求模型与一层 adapter。
 收益：`LlmRequest` / `LlmMessage` / `LlmTool` 这些**会随厂商持续演化**的模型不进入稳定契约。
 
 **路线 B：把 `LlmRequest` / `LlmMessage` / `LlmTool` / `LlmClient` 整体上提到 `api`**
 
 更像 pi，但会把「唯一的稳定契约」变成「随厂商变动的契约」，
-且要动 `LlmClientFactory`、所有厂商实现与大量测试。**不建议**。
+且要动 `LlmClientFactory`、所有厂商实现与大量测试。**已否决**。
 
-**结论**：走路线 A。理由是 `api` 的定位是「插件作者唯一的稳定契约」，
-把每次新厂商都要改的模型搬进去会稀释这一定位。
+**落地时的四点修订（P5 定稿）**：
+
+1. **插件只能加 `type`，不能加 provider 实例**（初稿在两处自相矛盾：§5.3 路由键是 provider type，
+   §5.4 又说「配置里显式声明的 provider 覆盖插件提供的同名 provider」——后者只有在插件能声明
+   provider 实例时才存在）。只加 type 之后 provider 实例一律来自 `models.json`，
+   「同名覆盖」这条自动成立且空洞。
+2. **反过来加一条真正重要的规则：内核内置 type 不可被插件覆盖**。这不只是先来后到——
+   传输请求里带的是<b>已解析好的 apiKey</b>（见 §5.5），一个能顶替 `openai` 的插件等于把所有用户的
+   密钥转发到自己的服务器上。因此内核只在自带 type 查不到时才去问注册表，**没有配置开关**。
+3. **`LlmTransport.listModels()` 与 `ProviderContribution.of(displayName, transport, models)` 一并去掉**，
+   模型发现只留 `ModelCatalogRequest`（路由键 = provider 名）。
+   理由：**模型属于 provider，不属于传输**——一个 `LlmTransport` 实例可以服务同一类型下的多个 provider，
+   而三个来源（静态声明 / 目录 / 配置）会引出「谁的答案算数」这条没人会读、也没人会记得的优先级规则。
+4. **`LlmHttpException` 从 `infra` 搬到 `api`**：§5.5 要求插件复用同一个异常类型，但插件看不到 `infra`，
+   这条按字面无法落地。它是 `JellyfishException` 的直接子类、零 infra 依赖，搬家是纯位移；
+   否则插件 provider 只能抛无状态码的普通异常，而 **`LlmCallFailedEvent` 丢的
+   「400 该降级 / 429 该重试」恰恰是对插件 provider 失效的那块**。
 
 ### 5.3 两个请求类型
 
 ```java
 public final class ProviderRegistrationRequest implements ExtensionRequest<ProviderContribution>
-        // 字段：providerType（即 Provider.getType() 的取值）
+        // 字段：providerType（即 Provider.getType() 的取值，已去空白并小写）
 public final class ProviderContribution
-        // 静态工厂：unsupported() / of(displayName, LlmTransport transport) / of(displayName, transport, models)
+        // 静态工厂：unsupported() / of(displayName, LlmTransport transport)
 
 public final class ModelCatalogRequest implements ExtensionRequest<ModelCatalogResult>
         // 字段：providerName、providerType
@@ -502,39 +517,55 @@ public final class ModelCatalogResult
 ```
 
 - **`ProviderRegistrationRequest` 用 `handle`，路由键 = provider type**（同键唯一）。
-  理由：一种类型只能有一个实现，多实现是 `AMBIGUOUS_HANDLER` 的真实场景。
+  理由：一种类型只能有一个实现，多实现是 `AMBIGUOUS_HANDLER` 的真实场景——同一份配置到底发给谁，
+  没有人能回答。（实际上同键唯一由注册表在<b>注册期</b>保证：第二个同类型注册会在那一刻拿到重复错误。）
 - **`ModelCatalogRequest` 用 `handle`，路由键 = provider name**。它回答「这个 provider 现在有哪些模型」，
-  供 `refreshModels` 式动态发现。
+  供 `refreshModels` 式动态发现。**它只被问到插件接管的类型**，内核自带类型有固定的模型来源。
 - **0 handler 时**：`ProviderRegistrationRequest` → `unsupported()`，内核报
-  「未知 provider 类型: X」并给出「装插件或改用 models.json」的提示（比今天的
-  「找不到客户端」信息量更大）；`ModelCatalogRequest` → `empty()`，回落到配置里的 `models`。
+  「未知 provider 类型」并列出内置类型、给出「装插件或改用既有类型」的下一步；
+  `ModelCatalogRequest` → 保留配置里写的 `models`。两者都必须与没有这个扩展点时**逐字段一致**。
+- **`ModelDescriptor` 的 `contextLength` / `maxOutputTokens` 允许为 0**，含义是「不知道」：
+  内核对此已有统一口径（窗口未知就不按窗口裁历史）。插件因此不必猜一个「看起来合理」的值——
+  猜错会让内核提前把历史丢掉，那比报错更难查。
 
 ### 5.4 优先级与热更新
 
-- **配置里显式声明的 provider 覆盖插件提供的同名 provider**（与 `global` / `project` 的
-  「覆盖」语义同向，也与 pi 的「models.json overrides still apply above it」一致）。
-  插件提供的是**默认**，不是最终值。
-- **插件 provider 的凭据来自插件自己的配置段**（`plugins.configurations.<pluginId>`），
-  **不从 `models.json` 读**。理由：插件本来就不允许自行读配置文件
-  （`PluginContext.configuration()` 的注释），双源合并与 `${ENV_VAR}` 插值由内核完成；
-  凭据跟着插件配置走，用户只需要维护一处。
-- **动态目录在 `/reload` 时重新询问**：`ModelManager.refresh` 之后、广播 `ConfigReloadedEvent` 之前，
-  对每个插件 provider 调一次 `ModelCatalogRequest`。发现结果**不落盘**（`models.json` 仍是唯一持久事实），
-  与 pi 的「live server 返回模型但不 persist」同口径。
+- **内核自带的 provider type 永远胜过插件**（见 §5.2 修订 2）。插件提供的是**新类型**，不是新 provider 实例，
+  因此不存在「配置 provider 与插件 provider 同名」这种情形。
+- **插件 provider 的凭据来自 `models.json` 的 provider 条目本身**：内核把**已解析好的最终值**
+  （`${ENV_VAR}` 已插值、双源合并已完成）交给传输，用户只需要维护一处。
+  插件自己那层协议还需的额外凭据（企业网关的自定义 header……）走它自己的配置段
+  （`PluginContext.configuration()`）——**插件不允许自行读配置文件**，双源合并与插值由内核完成。
+- **动态目录在两种时机被询问**：启动时插件全部就绪之后一次，每次 `/reload` 重启插件之后一次。
+  用的是独立的 `ModelManager.refreshCatalogs()` 而不是塞进 `refresh(boolean)`，因为后者的两个调用点
+  都**早于插件就绪**（启动时 `refresh` 跑在 `pluginManager.bootstrap()` 之前，`/reload` 时它跑在
+  `pluginManager.reload()` 之前）——问早了只会拿到空目录或旧实例的目录。
+  发现结果**不落盘**（`models.json` 仍是唯一持久事实），且每次都从配置的 provider 列表重新出发，
+  因此不会留下上一次发现到、这一次已消失的模型。
+- **目录结果非空就整体替换该 provider 的模型列表，为空就保留配置**：两者无法区分时按「保留」处理——
+  这是安全的那一侧（发现失败最坏是「用回配置」，而不是「provider 突然没有模型可用」）。
 - **插件 provider 的模型同样可被 `/model` 使用**，解析仍走 `SessionModelResolver` 的三级回落，
   不新增第二条解析路径。
 
 ### 5.5 安全与失败语义
 
-- **`apiKey` 绝不进日志、绝不进事件载荷**：`Provider` 今天带 `apiKey` 字段，
-  `PluginLlmClientAdapter` 传给插件的是「已解析好的最终值」；任何 DEBUG 日志都要显式排除它。
-  这条要在实现时加一条单测（构造一个带哨兵 key 的 provider，断言日志里不出现哨兵串）。
-- **插件传输调用抛错**：按 `LlmHttpException` 的既有语义区分「端点拒绝（可降级）」与
-  「限流/网络（可重试）」——这是 `LlmCallFailedEvent` 已有的判据，插件传输必须复用**同一个**异常类型，
-  不得另造一套。
-- **插件 provider 在 `stop()` 后失效**：`LlmClientFactory` 的客户端缓存按 provider 配置签名缓存，
-  插件卸载后该签名不再产生新客户端；已在途的调用按取消令牌走。
-  **这是已知边界**：不做「卸载前等待在途调用结束」，如实记录。
+- **`apiKey` 绝不进日志、绝不进事件载荷**：`LlmTransportRequest` 的 `toString()` 已把它脱敏成 `***`
+  （这是插件最容易顺手打日志的对象），内核自己产生的报错文案也不得包含它。
+  哨兵单测落在**内核自己会携带/展示的对象**上（传输请求的 `toString()`、adapter 产生与
+  `LlmClientFactory` 报出的异常消息）——仓库没有日志后端依赖，断言真实日志输出无从谈起，
+  这比写一条永远不生效的日志断言诚实。
+- **插件传输调用抛错**：状态码语义复用同一个 `LlmHttpException`（现已住在 `api`，见 §5.2 修订 4）——
+  这是 `LlmCallFailedEvent` 已有的判据。插件的其它异常（包括同步路径上的原始 `RuntimeException`）
+  由 adapter 在边界统一归一成 `JellyfishException`，否则调用点会漏报一条失败事件。
+- **`LlmTransport.send` 是阻塞的**：返回时全部事件已交给监听器，且最后一个一定是
+  `onComplete` / `onError` / `onCancelled` 之一。内核据此把同步调用内联执行、把流式调用放到线程池上，
+  因此**不需要「等多久算超时」这个新配置项**。插件违约（没投终止事件）时 adapter **报一条错误**，
+  而不是把「没有响应」当成「空响应」静默继续——后者会让用户看到一次莫名其妙的空回合，
+  而在流式路径上更糟：ReAct 循环正等它收尾，少一个终止事件就是一次永久挂住。
+- **取消是协作式的**，令牌复用既有的 `api` 侧 `CancellationToken`（`onCancel` 让插件中断自家 HTTP 调用）。
+  内核的取消只是置标志并停止投递后续事件；一个既不轮询也不登记回调的插件会跑到自己的超时为止。
+- **插件 provider 在 `stop()` 后失效**：注册按 owner 整批回收，后续查找回到「未知类型」那条路
+  （fail-closed，自动成立）。**这是已知边界**：不做「卸载前等待在途调用结束」，如实记录。
 
 ### 5.6 非目标
 
@@ -542,15 +573,21 @@ public final class ModelCatalogResult
   插件若要 OAuth，自己在 `start()` 里做完并写进自己的配置段。
 - **嵌入 provider（`streamSimple` 级别的 API 形状定制）**：路线 A 的传输契约是
   「厂商无关的请求 → 厂商格式的 HTTP」，不支持插件重写内核的序列化逻辑。
+- **插件提供 provider 实例**（自己声明名字 / 地址 / 模型台账）：只加 type，实例一律来自 `models.json`。
 - **运行时注册 `/model` 命令的候选**：候选来自注册表，插件 provider 的模型天然进注册表，不需要新入口。
 
-### 5.7 测试点
+### 5.7 测试点（均已落地）
 
-- 配置 provider 与插件 provider 同名时，配置胜出。
-- `ProviderRegistrationRequest` 0 handler 时的报错文案包含可执行的下一步。
-- 插件 `LlmTransport` 的请求/响应经 adapter 往返后字段无损（`LlmRequest` ↔ `LlmTransportRequest`）。
-- `apiKey` 不出现在任何日志与事件载荷里。
-- `/reload` 后动态目录刷新被调用一次，且不写 `models.json`。
+- 内核自带 type 与插件注册同名时，**内核胜出且插件处理器根本不会被调用**。
+- `ProviderRegistrationRequest` 0 handler 时的报错文案包含内置类型与可执行的下一步。
+- 插件 `LlmTransport` 的请求/响应经 adapter 往返后字段无损，**两个方向都覆盖**：
+  内核请求 → 传输请求（含消息、工具、缓存三件套、`minimalOutput`），传输响应 → 内核响应
+  （含分片工具调用按 index 归并、用量、结束原因）。
+- `apiKey` 不出现在传输请求的 `toString()`、adapter 的报错里。
+- 插件违约（没投终止事件 / 返回后什么都没投）在同步与流式两条路径上都报错。
+- 插件抛 `LlmHttpException` 时状态码不被包装掉；抛其它异常时归一到 `JellyfishException`。
+- `/reload` 在**插件重启之后**调一次 `refreshCatalogs()`，且不写 `models.json`。
+- 目录结果非空整体替换、为空或处理器抛错时保留配置里的模型；**内核自带 type 不会被问**。
 
 ---
 
@@ -1140,7 +1177,7 @@ Server 的那一期还需要一个后台触发点，那是它的真实代价。
 | **P2** | §3 输入改写 + §2 三个生命周期钩子 | P0 | 中（否决语义会牵动外壳的展示与退出码） |
 | **P3** | §9 动作通道 | P0 | **高**（线程模型与生命周期，必须先写测试再改） |
 | **P4** | §6 会话扩展条目与分支（含 `SessionKind` 迁移） | P3 | **高**（快照 schema + `parentSessionId` 语义迁移）**已完成** |
-| **P5** | §5 模型 / 厂商可插拔 | P0 | 中（凭据处理与 adapter 转换） |
+| **P5** | §5 模型 / 厂商可插拔 | P0 | 中（凭据处理与 adapter 转换）**已完成** |
 | **P6** | §7 工具激活 + §8 UI 深度 | P3（§7.3） | 低（§8）／中（§7 与缓存前缀保证的交互） |
 
 **跨期纪律**：每一期结束都必须保证「不注册任何新扩展点的老插件」行为**逐字节不变**，
@@ -1156,14 +1193,14 @@ Server 的那一期还需要一个后台触发点，那是它的真实代价。
 
 | 文档 | 要补什么 |
 | --- | --- |
-| `../constraints/extensions.md` | 新增的同步扩展点清单、`RuntimeInfo` 的边界、动作通道与「不能发起回调」的新措辞、动作队列「不是事件总线」的说明 |
+| `../constraints/extensions.md` | 新增的同步扩展点清单、`RuntimeInfo` 的边界、动作通道与「不能发起回调」的新措辞、动作队列「不是事件总线」的说明、厂商可插拔与目录发现的 0 handler / 失败语义 |
 | `../constraints/tools-output.md` | 工具执行管道的七步顺序、`DENY` 与权限审计分开、后置变换必须在 limit 之前 |
 | `../constraints/permissions.md` | 「变换在权限之前」这条决定及其理由（TOCTOU）、`DENY` 不进权限审计 |
 | `../constraints/react-compact.md` | `CompactionPreRequest`、`TurnBeforeRequest` 的 `BLOCKED`、`ToolActivation` 与清单冻结的关系、重建动作与前缀断裂 |
 | `../constraints/session-config.md` | 扩展条目、`SessionKind` 迁移、fork 的配对对齐与「不复制 usage」 |
 | `../constraints/shells.md` | `UiSegmentKind` 的三外壳映射、`ToolRenderHint`、快捷键的合法形状与保留键位、`RuntimeInfo` 的取值表 |
-| `../architecture.md` | 扩展层表格补新点；「已知边界与后续项」补本文的非目标（deferred 加载、完整会话树、自定义组件、OAuth、deferred provider） |
-| `../../README.md` / `../configuration.md` | 仅当新增配置项（动作队列容量、`ToolActivation` 开关）时同步 |
+| `../architecture.md` | 扩展层表格补新点、LLM 层的「传输契约 + 插件 provider」说明；「已知边界与后续项」补本文的非目标（deferred 加载、完整会话树、自定义组件、OAuth、deferred provider） |
+| `../../README.md` / `../configuration.md` | 仅当新增配置项（动作队列容量、`ToolActivation` 开关）时同步；P5 **无新配置项**，但 `models.json` 的 `type` 一节要补「插件可提供新 type」与动态目录的口径 |
 
 ### 11.2 测试
 
@@ -1293,6 +1330,25 @@ Server 的那一期还需要一个后台触发点，那是它的真实代价。
 - **`DeliverAs` 无 `NEXT_TURN`，`sendMessage` 与 `sendUserMessage` 合并，`compact` 不带指示**（§9.2）。
 - **待发队列与「空闲时起回合」明确不做**（§9.8），含恢复条件。
 
+### 12.14 P5 落地时对 §5 的修正（已归入正文）
+
+- **插件只能加 `type`，不能加 provider 实例**；反过来，**内核内置 type 不可被插件覆盖**
+  （安全红线：传输请求带已解析的 apiKey）。初稿的「配置 provider 覆盖插件同名 provider」被改写。
+- **模型发现只留 `ModelCatalogRequest`**（路由键 = provider 名），去掉 `LlmTransport.listModels()`
+  与 `of(displayName, transport, models)`。
+- **`LlmTransport.send` 定为阻塞式**，取消复用既有 `CancellationToken`，因此不新增超时配置项；
+  插件没投终止事件时 adapter 报错，而不是当成空响应（流式路径上那就是一次永久挂住）。
+- **`LlmHttpException` 从 `infra` 搬到 `api`**：否则 §5.5 的「插件复用同一个异常类型」按字面无法落地。
+
+### 12.15 动态目录的询问时机（P5 定稿）
+
+**决定**：用独立的 `ModelManager.refreshCatalogs()`，由装配根在**插件就绪之后**调两次——
+启动时（`pluginManager.bootstrap()` 之后）与 `/reload` 时（`pluginManager.reload()` 之后）。
+初稿说的「`ModelManager.refresh` 之后、广播 `ConfigReloadedEvent` 之前」在**时间区间上仍然成立**，
+但**不能真的在 `refresh` 里做**：两个 `refresh` 调用点都早于插件就绪（启动时早于 `bootstrap()`，
+`/reload` 时早于 `reload()`），问早了只会拿到空目录或旧实例的目录。两个调两处都用
+`InOrder` 单测钉住。
+
 ---
 
 ## 附：改动一览（本轮决策改到正文的哪些地方）
@@ -1307,3 +1363,5 @@ Server 的那一期还需要一个后台触发点，那是它的真实代价。
 | 12.6 `hidden` 叠加 | §7.2、§7.6 |
 | 12.7 条目上限 | §6.2、§6.6 |
 | 12.9 P3 对 §9 的修正 | §9.2、§9.3、§9.3.1、§9.7、§9.8 |
+| 12.14 P5 对 §5 的修正 | §5.2、§5.3、§5.4、§5.5、§5.7 |
+| 12.15 目录询问时机 | §5.4、§5.7 |

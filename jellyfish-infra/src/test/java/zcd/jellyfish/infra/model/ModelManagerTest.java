@@ -12,12 +12,19 @@ import zcd.jellyfish.infra.config.Model;
 import zcd.jellyfish.infra.config.Provider;
 import zcd.jellyfish.infra.config.RuntimeConfig;
 import zcd.jellyfish.infra.llm.LlmClient;
+import zcd.jellyfish.api.extension.ModelCatalogRequest;
+import zcd.jellyfish.api.extension.ModelCatalogResult;
+import zcd.jellyfish.api.extension.ModelDescriptor;
+import zcd.jellyfish.api.event.RegisterOptions;
+import zcd.jellyfish.infra.extension.ExtensionRegistry;
+import zcd.jellyfish.infra.registry.TypeRegistry;
 import zcd.jellyfish.infra.llm.LlmClientFactory;
 
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -57,6 +64,9 @@ class ModelManagerTest {
     /** 通知发布入口，用于验证装载事件。 */
     @Mock
     EventPublisher events;
+
+    /** 扩展注册表：用真实实现，目录发现本身就是「注册 + 按路由键查找」这条链路。 */
+    private final ExtensionRegistry extensions = new ExtensionRegistry(new TypeRegistry());
 
     /** provider 名。 */
     private static final String PROVIDER = "openai";
@@ -509,13 +519,147 @@ class ModelManagerTest {
         assertThrows(JellyfishException.class, () -> newModelManager().resolveReference("ghost"));
     }
 
+    @Test
+    void refreshCatalogs_should_replace_models_when_plugin_reports_catalog() {
+        // Given：一个由插件接管的 provider
+        Provider provider = pluginProvider();
+        when(runtimeConfig.getProviders()).thenReturn(Collections.singletonList(provider));
+        when(llmClientFactory.isBuiltinType("my-type")).thenReturn(false);
+        extensions.handle("plugin-a", ModelCatalogRequest.class, PROVIDER, null, request -> ModelCatalogResult.of(
+                Arrays.asList(new ModelDescriptor("llama-3", "Llama 3", 8192, 2048))),
+                RegisterOptions.DEFAULT);
+        ModelManager manager = newModelManager();
+
+        // When
+        manager.refreshCatalogs();
+
+        // Then
+        ArgumentCaptor<List<Provider>> captor = ArgumentCaptor.forClass(List.class);
+        verify(modelRegistry, times(2)).refresh(captor.capture());
+        Provider indexed = captor.getValue().get(0);
+        assertEquals(1, indexed.getModels().size());
+        assertEquals("llama-3", indexed.getModels().get(0).getId());
+        assertEquals(8192, indexed.getModels().get(0).getContextLength());
+        // 替换走的是副本：配置里那份 provider 对象本身一个字段都没被改
+        assertEquals(1, provider.getModels().size());
+        assertEquals("gpt-4o-id", provider.getModels().get(0).getId());
+    }
+
+    @Test
+    void refreshCatalogs_should_keep_configured_models_when_catalog_empty() {
+        // 「我不表态」必须回落成配置，而不是把一个本来能用的 provider 清空
+        Provider provider = pluginProvider();
+        when(runtimeConfig.getProviders()).thenReturn(Collections.singletonList(provider));
+        when(llmClientFactory.isBuiltinType("my-type")).thenReturn(false);
+        extensions.handle("plugin-a", ModelCatalogRequest.class, PROVIDER, null,
+                request -> ModelCatalogResult.empty(), RegisterOptions.DEFAULT);
+        ModelManager manager = newModelManager();
+
+        manager.refreshCatalogs();
+
+        ArgumentCaptor<List<Provider>> captor = ArgumentCaptor.forClass(List.class);
+        verify(modelRegistry, times(2)).refresh(captor.capture());
+        assertEquals("gpt-4o-id", captor.getValue().get(0).getModels().get(0).getId());
+    }
+
+    @Test
+    void refreshCatalogs_should_keep_configured_models_when_handler_fails() {
+        // 目录发现失败不该让一个本来可用的 provider 变得不可用
+        Provider provider = pluginProvider();
+        when(runtimeConfig.getProviders()).thenReturn(Collections.singletonList(provider));
+        when(llmClientFactory.isBuiltinType("my-type")).thenReturn(false);
+        extensions.handle("plugin-a", ModelCatalogRequest.class, PROVIDER, null, request -> {
+            throw new IllegalStateException("目录服务挂了");
+        }, RegisterOptions.DEFAULT);
+        ModelManager manager = newModelManager();
+
+        manager.refreshCatalogs();
+
+        ArgumentCaptor<List<Provider>> captor = ArgumentCaptor.forClass(List.class);
+        verify(modelRegistry, times(2)).refresh(captor.capture());
+        assertEquals("gpt-4o-id", captor.getValue().get(0).getModels().get(0).getId());
+    }
+
+    @Test
+    void refreshCatalogs_should_not_ask_plugins_for_builtin_types() {
+        // 内核自带的类型有固定的模型来源，问它们只是白跑一趟
+        Provider provider = provider();
+        when(runtimeConfig.getProviders()).thenReturn(Collections.singletonList(provider));
+        when(llmClientFactory.isBuiltinType("openai")).thenReturn(true);
+        AtomicInteger calls = new AtomicInteger();
+        extensions.handle("plugin-a", ModelCatalogRequest.class, PROVIDER, null, request -> {
+            calls.incrementAndGet();
+            return ModelCatalogResult.of(Collections.singletonList(ModelDescriptor.of("m")));
+        }, RegisterOptions.DEFAULT);
+        ModelManager manager = newModelManager();
+
+        manager.refreshCatalogs();
+
+        assertEquals(0, calls.get());
+    }
+
+    @Test
+    void refreshCatalogs_should_publish_models_loaded_event() {
+        when(runtimeConfig.getProviders()).thenReturn(Collections.<Provider>emptyList());
+        ModelManager manager = newModelManager();
+
+        manager.refreshCatalogs();
+
+        verify(events).publish(any(ModelsLoadedEvent.class));
+    }
+
+    @Test
+    void refreshCatalogs_should_tolerate_null_provider_entries() {
+        when(runtimeConfig.getProviders()).thenReturn(
+                Arrays.asList(provider(), null));
+        when(llmClientFactory.isBuiltinType("openai")).thenReturn(true);
+        ModelManager manager = newModelManager();
+
+        manager.refreshCatalogs();
+
+        ArgumentCaptor<List<Provider>> captor = ArgumentCaptor.forClass(List.class);
+        verify(modelRegistry, times(2)).refresh(captor.capture());
+        assertEquals(2, captor.getValue().size());
+        assertNull(captor.getValue().get(1));
+    }
+
+    @Test
+    void refreshCatalogs_should_call_catalog_handler_once_per_provider() {
+        Provider provider = pluginProvider();
+        when(runtimeConfig.getProviders()).thenReturn(Collections.singletonList(provider));
+        when(llmClientFactory.isBuiltinType("my-type")).thenReturn(false);
+        AtomicInteger calls = new AtomicInteger();
+        extensions.handle("plugin-a", ModelCatalogRequest.class, PROVIDER, null, request -> {
+            calls.incrementAndGet();
+            assertEquals(PROVIDER, request.getProviderName());
+            assertEquals("my-type", request.getProviderType());
+            assertEquals(PROVIDER, request.getRouteKey());
+            return ModelCatalogResult.of(Collections.singletonList(ModelDescriptor.of("m")));
+        }, RegisterOptions.DEFAULT);
+        ModelManager manager = newModelManager();
+
+        manager.refreshCatalogs();
+
+        assertEquals(1, calls.get());
+    }
+
+    /**
+     * 构造由插件接管的 provider（带一份配置里写的模型）。
+     *
+     * @return provider
+     */
+    private static Provider pluginProvider() {
+        return new Provider(PROVIDER, "my-type", "api-key", "https://api.example.com",
+                Arrays.asList(new Model("gpt-4o-id", MODEL, 128000, 4096)));
+    }
+
     /**
      * 构造被测实例，构造器会先执行一次索引刷新（不广播事件）。
      *
      * @return ModelManager 实例
      */
     private ModelManager newModelManager() {
-        return new ModelManager(runtimeConfig, modelRegistry, llmClientFactory, events);
+        return new ModelManager(runtimeConfig, modelRegistry, llmClientFactory, events, extensions);
     }
 
     /**

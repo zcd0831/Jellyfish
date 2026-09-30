@@ -4,16 +4,21 @@ import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import zcd.jellyfish.api.JellyfishException;
+import zcd.jellyfish.api.extension.ModelCatalogRequest;
+import zcd.jellyfish.api.extension.ModelCatalogResult;
+import zcd.jellyfish.api.extension.ModelDescriptor;
 import zcd.jellyfish.api.event.EventPublisher;
 import zcd.jellyfish.api.event.notification.ModelsLoadedEvent;
 import zcd.jellyfish.infra.config.Model;
 import zcd.jellyfish.infra.config.Provider;
 import zcd.jellyfish.infra.config.RuntimeConfig;
+import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.llm.LlmClient;
 import zcd.jellyfish.infra.llm.LlmClientFactory;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
+import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -60,6 +65,9 @@ public class ModelManager {
     /** 通知发布入口，用于广播索引重建事件。 */
     private final EventPublisher events;
 
+    /** 扩展注册表，用于向插件询问动态模型目录。 */
+    private final ExtensionRegistry extensions;
+
     /**
      * 构造时建立索引。
      * <p>
@@ -71,14 +79,16 @@ public class ModelManager {
      * @param modelRegistry    provider / model 索引
      * @param llmClientFactory LLM 客户端工厂
      * @param events           通知发布入口
+     * @param extensions       扩展注册表，用于查询插件接管的 provider 的动态目录
      */
     @Inject
     public ModelManager(RuntimeConfig runtimeConfig, ModelRegistry modelRegistry, LlmClientFactory llmClientFactory,
-                        EventPublisher events) {
+                        EventPublisher events, ExtensionRegistry extensions) {
         this.runtimeConfig = runtimeConfig;
         this.modelRegistry = modelRegistry;
         this.llmClientFactory = llmClientFactory;
         this.events = Objects.requireNonNull(events, "events must not be null");
+        this.extensions = extensions;
         rebuild(false);
     }
 
@@ -108,6 +118,98 @@ public class ModelManager {
             llmClientFactory.clearCache();
         }
         modelRegistry.refresh(runtimeConfig.getProviders());
+    }
+
+    /**
+     * 询问插件接管的 provider 现在有哪些模型，并按结果重建索引。
+     * <p>
+     * <b>为什么它是一个单独的方法，而不是塞进 {@link #refresh(boolean)} 里</b>：两个真实的顺序约束
+     * 都把它指向「<b>插件就绪之后</b>」——启动时 {@code refresh} 跑在 {@code pluginManager.bootstrap()}
+     * <b>之前</b>（那时一个插件都没起，问了也只会得到空目录），而 {@code /reload} 时
+     * {@code refresh} 跑在 {@code pluginManager.reload()} <b>之前</b>（那时插件还是旧配置的实例，
+     * 问回来的目录会陈旧到下次重载才修正）。因此它由装配根在两处分别调用，两处都在插件之后。
+     * <p>
+     * <b>只问插件接管的类型</b>：内核自带的类型有固定的模型来源，问它们只是白跑一趟。
+     * <p>
+     * <b>发现结果不落盘</b>：{@code models.json} 仍是模型的唯一持久事实；每次调用都从配置的 provider
+     * 列表重新出发，因此不会把上一次发现到、这一次已经消失的模型留下。
+     * <p>
+     * <b>失败一定保留配置里的模型</b>：目录发现失败不该让一个本来可用的 provider 变得不可用。
+     * 处理器抛错、返回空列表、返回的模型标识为空白，都按「没发现到」处理。
+     */
+    public void refreshCatalogs() {
+        modelRegistry.refresh(withCatalogs(runtimeConfig.getProviders()));
+        publishLoaded();
+    }
+
+    /**
+     * 对每个由插件接管的 provider 询问一次目录，非空则整体替换其模型列表。
+     *
+     * @param providers 配置中的 provider 列表
+     * @return 替换后的列表，与输入等长且顺序一致
+     */
+    private List<Provider> withCatalogs(List<Provider> providers) {
+        if (providers == null || providers.isEmpty()) {
+            return providers;
+        }
+        List<Provider> result = new ArrayList<Provider>(providers.size());
+        for (Provider provider : providers) {
+            result.add(provider == null ? null : withCatalog(provider));
+        }
+        return result;
+    }
+
+    /**
+     * 询问单个 provider 的目录。
+     *
+     * @param provider provider
+     * @return 发现到模型时返回副本，否则原样返回
+     */
+    private Provider withCatalog(Provider provider) {
+        if (extensions == null || llmClientFactory.isBuiltinType(provider.getType())) {
+            return provider;
+        }
+        ModelCatalogResult catalog = askCatalog(provider);
+        if (catalog == null || !catalog.isPresent()) {
+            return provider;
+        }
+        List<Model> models = new ArrayList<Model>();
+        for (ModelDescriptor descriptor : catalog.getModels()) {
+            if (descriptor == null || StringUtils.isBlank(descriptor.getId())) {
+                continue;
+            }
+            models.add(new Model(descriptor.getId(), descriptor.getName(),
+                    descriptor.getContextLength(), descriptor.getMaxOutputTokens()));
+        }
+        if (models.isEmpty()) {
+            return provider;
+        }
+        LOG.info("插件模型目录已刷新: provider={} type={} models={}",
+                provider.getName(), provider.getType(), models.size());
+        return provider.withModels(models);
+    }
+
+    /**
+     * 向注册表询问一个 provider 的目录。
+     * <p>
+     * 异常只记 WARN 并返回 {@code null}：目录发现是<b>锦上添花</b>，它失败的正确结果是
+     * 「用回配置里写的模型」，而不是让启动或重载失败。
+     *
+     * @param provider provider
+     * @return 目录结果，没人接管或处理失败时返回 {@code null}
+     */
+    private ModelCatalogResult askCatalog(Provider provider) {
+        try {
+            if (extensions.handlers(ModelCatalogRequest.class, provider.getName()).isEmpty()) {
+                return null;
+            }
+            return extensions.invoke(extensions.handler(ModelCatalogRequest.class, provider.getName()),
+                    new ModelCatalogRequest(provider.getName(), provider.getType()));
+        } catch (RuntimeException e) {
+            LOG.warn("插件模型目录查询失败: provider={} type={}",
+                    provider.getName(), provider.getType(), e);
+            return null;
+        }
     }
 
     /**

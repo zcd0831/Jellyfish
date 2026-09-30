@@ -28,19 +28,23 @@ import javax.inject.Singleton;
  * 目前落地了启动时序里与配置加载、索引建立、核心命令注册相关的一环：
  * <ul>
  *     <li>已在实现：启动事件总线 → 注册核心系统命令 → 加载运行时配置 → 重建模型 / agent 索引 →
- *     刷新插件配置 → 启动插件运行时 → 向插件恢复历史会话，保证启动期配置告警不丢失、各注册表在配置就绪后
- *     再建索引、插件在拿到最终的扫描目录与启用名单后启动、会话在插件注册好处理器之后才被问；核心命令
- *     先于插件注册，插件要覆盖同名命令必须显式声明 {@code override}；</li>
+ *     刷新插件配置 → 启动插件运行时 → 问一次插件模型目录 → 向插件恢复历史会话，保证启动期配置告警不丢失、
+ *     各注册表在配置就绪后再建索引、插件在拿到最终的扫描目录与启用名单后启动、目录发现与
+ *     会话恢复都在插件注册好处理器之后才发生；核心命令先于插件注册，插件要覆盖同名命令必须显式声明
+ *     {@code override}；</li>
  *     <li>已在实现：驱动 ReAct 循环（{@link #chat} 委托 {@link ReActLooper}）；关闭时优雅收敛。</li>
  * </ul>
  * 启动顺序有意固定为「先 {@code eventChannel.start()} → 再注册核心命令 → 再 {@code runtimeConfig.refresh()} →
- * 再各注册表 {@code refresh(...)} → 最后 {@code pluginManager.bootstrap()}」：
+ * 再各注册表 {@code refresh(...)} → 再 {@code pluginManager.bootstrap()} → 再
+ * {@code modelManager.refreshCatalogs()} → 最后 {@code sessionManager.restore()}」：
  * <ol>
  *     <li>通知订阅者注册完成后再加载配置，配置层发出的 {@code ConfigWarningEvent} 才能被订阅到；</li>
  *     <li>{@code ModelManager} / {@code AgentManager} 的索引必然建立在已加载的配置之上
  *     （两者构造期只建空索引，真正的装载就在这几行）；</li>
  *     <li>插件运行时在 {@code bootstrap()} 里才读扫描目录与启用 / 禁用名单，因此
- *     {@code pluginRuntimeConfig.refresh(...)} 必须排在它之前，否则插件按空配置启动。</li>
+ *     {@code pluginRuntimeConfig.refresh(...)} 必须排在它之前，否则插件按空配置启动；</li>
+ *     <li>模型目录发现必须排在 {@code pluginManager.bootstrap()} <b>之后</b>：传输实现与目录处理器
+ *     都是插件在那一步才注册的，早于它问只会得到空目录。</li>
  * </ol>
  *
  * @author zcd
@@ -175,6 +179,8 @@ public class AgentHarness {
         // 必须在插件启动前：插件运行时此刻才读扫描目录与启用 / 禁用名单
         pluginRuntimeConfig.refresh(runtimeConfig.getPluginRoots(), runtimeConfig.getPluginsSettings());
         pluginManager.bootstrap();
+        // 必须在插件启动后：传输实现与目录处理器都是插件在那一步才注册的，先问只会得到空目录
+        modelManager.refreshCatalogs();
         // 必须在插件启动后：插件此刻才注册好恢复处理器
         sessionManager.restore();
     }

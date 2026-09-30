@@ -1,11 +1,11 @@
 package zcd.jellyfish.core.input;
 
 import zcd.jellyfish.api.extension.CancellationToken;
-import zcd.jellyfish.core.tool.CancellationTokenSource;
 
 import java.util.Objects;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
+import zcd.jellyfish.infra.support.CancellationTokenSource;
 
 /**
  * 一次输入指令执行的句柄：由 {@link InputDirectives#submit} 立即返回，执行在专用线程上推进。

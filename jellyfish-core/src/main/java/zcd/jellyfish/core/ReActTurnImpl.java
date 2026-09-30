@@ -2,8 +2,8 @@ package zcd.jellyfish.core;
 
 import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.extension.CancellationToken;
-import zcd.jellyfish.core.tool.CancellationTokenSource;
 import zcd.jellyfish.infra.llm.LlmStreamHandle;
+import zcd.jellyfish.infra.support.CancellationTokenSource;
 
 import java.util.UUID;
 import java.util.concurrent.Callable;

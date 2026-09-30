@@ -94,6 +94,8 @@ class ConfigReloaderTest {
         order.verify(modelManager).refresh(true);
         order.verify(agentManager).refresh(false);
         order.verify(pluginManager).reload(any());
+        // 目录发现排在插件重启之后：重启的插件是换了配置段的新实例，早问一次会拿到旧实例的目录
+        order.verify(modelManager).refreshCatalogs();
     }
 
     @Test

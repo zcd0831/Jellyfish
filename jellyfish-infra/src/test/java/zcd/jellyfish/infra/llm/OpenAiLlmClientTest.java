@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import okhttp3.Request;
 import org.junit.jupiter.api.Test;
 import zcd.jellyfish.api.JellyfishException;
+import zcd.jellyfish.api.LlmHttpException;
 
 import java.io.IOException;
 import java.util.Arrays;

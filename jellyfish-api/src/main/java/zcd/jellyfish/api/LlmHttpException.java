@@ -1,9 +1,12 @@
-package zcd.jellyfish.infra.llm;
-
-import zcd.jellyfish.api.JellyfishException;
+package zcd.jellyfish.api;
 
 /**
  * 厂商以非 2xx 拒绝了一次请求。
+ * <p>
+ * <b>它住在 {@code api} 而不是 {@code infra}</b>：插件提供的传输实现要把同一种失败报回内核，而插件
+ * 看不到 {@code infra}。状态码是「这次失败该怎么应对」的唯一判据，插件 provider 不能因为拿不到
+ * 这个类型就把它降级成一条无状态码的普通异常——否则内核就只能对插件 provider 走一条更差的失败路径。
+ * 放在这里之后，两侧用的是<b>同一个类</b>，不存在「插件自己造一套、再靠适配器翻译」的分叉。
  * <p>
  * <b>为什么要有这个类型，而不是继续只抛 {@link JellyfishException}</b>：状态码是「这次失败该怎么应对」的
  * 第一个判据——400 多半是某个字段不被端点接受（应当降级），429 与 5xx 是暂时性的（应当稍后重试），

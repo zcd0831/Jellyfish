@@ -1,4 +1,4 @@
-package zcd.jellyfish.core.tool;
+package zcd.jellyfish.infra.support;
 
 import org.junit.jupiter.api.Test;
 

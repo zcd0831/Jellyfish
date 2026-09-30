@@ -29,7 +29,10 @@ import zcd.jellyfish.infra.plugin.PluginRuntimeConfig;
  *     <li>{@link AgentManager#refresh(boolean)} 于是传 {@code false}，复用同一份新快照——
  *     若也传 {@code true}，配置文件会被读第二遍，并在两遍之间产生一个「模型用了新配置、agent 还在用旧配置」
  *     的窗口；</li>
- *     <li>{@link PluginRuntimeConfig#refresh} 必须在插件运行时重载之前：后者读的是它那份快照。</li>
+ *     <li>{@link PluginRuntimeConfig#refresh} 必须在插件运行时重载之前：后者读的是它那份快照；</li>
+ *     <li>{@link ModelManager#refreshCatalogs()} 则在 {@code pluginManager.reload(...)} <b>之后</b>：
+ *     重启的插件是换了配置段的新实例，早问一次会拿到旧实例的目录，而目录要到下一次重载才修正。
+ *     它是重载的最后一步，仍在 {@code ConfigReloadedEvent} 之前。</li>
  * </ol>
  * <b>配置段变化的判定在替换快照之前取旧值</b>：一旦插件运行时快照被刷新，旧值就没了。
  * <p>
@@ -106,6 +109,9 @@ public final class ConfigReloader {
         Set<String> reconfigured = changedPluginIds(before,
                 pluginRuntimeConfig.getPluginConfigurations());
         PluginReloadReport pluginReport = pluginManager.reload(reconfigured);
+        // 必须在插件重启之后：重启的插件是换了配置段的新实例，早问一次会拿到旧实例的目录，
+        // 而目录要到下一次重载才修正
+        modelManager.refreshCatalogs();
 
         long duration = System.currentTimeMillis() - startedAt;
         publishReloaded(pluginReport, duration);

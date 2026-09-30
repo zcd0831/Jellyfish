@@ -9,6 +9,7 @@ import okhttp3.RequestBody;
 import okhttp3.Response;
 import okio.BufferedSource;
 import zcd.jellyfish.api.JellyfishException;
+import zcd.jellyfish.api.LlmHttpException;
 import zcd.jellyfish.infra.config.Provider;
 import zcd.jellyfish.infra.support.LlmClients;
 import zcd.jellyfish.infra.support.ObjectMapperWrapper;

@@ -38,7 +38,6 @@ import zcd.jellyfish.core.prompt.PromptAssembler;
 import zcd.jellyfish.core.prompt.ToolCatalog;
 import zcd.jellyfish.core.prompt.ToolFilter;
 import zcd.jellyfish.core.prompt.ToolResultAger;
-import zcd.jellyfish.core.tool.CancellationTokenSource;
 import zcd.jellyfish.core.tool.ToolExecutor;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.config.Model;
@@ -64,6 +63,7 @@ import zcd.jellyfish.infra.session.Session;
 import zcd.jellyfish.infra.action.ActionQueue;
 import zcd.jellyfish.infra.session.SessionManager;
 import zcd.jellyfish.infra.session.SessionDefaults;
+import zcd.jellyfish.infra.support.CancellationTokenSource;
 import zcd.jellyfish.infra.tooloutput.ToolOutputLimiter;
 import zcd.jellyfish.infra.tooloutput.ToolOutputStore;
 

@@ -12,6 +12,7 @@ import zcd.jellyfish.api.plugin.JellyfishPlugin;
 import zcd.jellyfish.api.plugin.PluginContext;
 import zcd.jellyfish.api.extension.ToolCallRequest;
 import zcd.jellyfish.api.extension.ToolCallResult;
+import zcd.jellyfish.infra.action.ActionQueue;
 import zcd.jellyfish.infra.event.EventChannel;
 import zcd.jellyfish.infra.event.EventChannelOptions;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
@@ -49,7 +50,8 @@ class JellyfishPluginFactoryTest {
             new ExtensionRegistry(new TypeRegistry()),
             new EventChannel(EventChannelOptions.defaults(), new TypeRegistry()),
             new TypeRegistry(),
-            new RuntimeInfoHolder());
+            new RuntimeInfoHolder(),
+            new ActionQueue());
 
     /** 记录插件生命周期回调。 */
     private static final List<String> RECORDED = new ArrayList<>();

@@ -12,6 +12,7 @@ import zcd.jellyfish.api.extension.ToolCallResult;
 import zcd.jellyfish.api.extension.ToolMetadata;
 import zcd.jellyfish.api.extension.TurnBeforeRequest;
 import zcd.jellyfish.api.extension.TurnDirective;
+import zcd.jellyfish.core.action.ActionDispatcher;
 import zcd.jellyfish.core.compact.ConversationCompactor;
 import zcd.jellyfish.core.prompt.PromptAssembler;
 import zcd.jellyfish.core.prompt.PromptAssembly;
@@ -126,6 +127,9 @@ public class ReActLooper implements AutoCloseable {
     /** 同步扩展点策略：回合开始前的拦截从同一份注册表取。 */
     private final ExtensionRegistry extensions;
 
+    /** 动作执行体：插件主动动作的排空与执行。 */
+    private final ActionDispatcher actionDispatcher;
+
     /** 专用执行器。 */
     private final ExecutorService executor;
 
@@ -142,14 +146,17 @@ public class ReActLooper implements AutoCloseable {
      * @param runScopes         委派作用域持有者
      * @param sessionModelResolver 会话模型解析器
      * @param extensions        同步扩展点策略
+     * @param actionDispatcher  动作执行体
      */
     @Inject
     public ReActLooper(SessionManager sessionManager, ModelManager modelManager, ToolExecutor toolExecutor,
                        EventPublisher events, PromptAssembler promptAssembler, RuntimeConfig runtimeConfig,
                        ConversationCompactor conversationCompactor, RunScopes runScopes,
-                       SessionModelResolver sessionModelResolver, ExtensionRegistry extensions) {
+                       SessionModelResolver sessionModelResolver, ExtensionRegistry extensions,
+                       ActionDispatcher actionDispatcher) {
         this(sessionManager, modelManager, toolExecutor, events, promptAssembler,
-                runtimeConfig, conversationCompactor, runScopes, sessionModelResolver, extensions, createExecutor());
+                runtimeConfig, conversationCompactor, runScopes, sessionModelResolver, extensions,
+                actionDispatcher, createExecutor());
     }
 
     /**
@@ -164,13 +171,15 @@ public class ReActLooper implements AutoCloseable {
      * @param conversationCompactor 会话压缩器
      * @param runScopes         委派作用域持有者
      * @param sessionModelResolver 会话模型解析器
+     * @param extensions        同步扩展点策略
+     * @param actionDispatcher  动作执行体
      * @param executor          专用执行器
      */
     ReActLooper(SessionManager sessionManager, ModelManager modelManager, ToolExecutor toolExecutor,
                 EventPublisher events, PromptAssembler promptAssembler,
                 RuntimeConfig runtimeConfig, ConversationCompactor conversationCompactor,
                 RunScopes runScopes, SessionModelResolver sessionModelResolver, ExtensionRegistry extensions,
-                ExecutorService executor) {
+                ActionDispatcher actionDispatcher, ExecutorService executor) {
         this.sessionManager = Objects.requireNonNull(sessionManager, "sessionManager must not be null");
         this.modelManager = Objects.requireNonNull(modelManager, "modelManager must not be null");
         this.toolExecutor = Objects.requireNonNull(toolExecutor, "toolExecutor must not be null");
@@ -183,6 +192,7 @@ public class ReActLooper implements AutoCloseable {
         this.sessionModelResolver = Objects.requireNonNull(sessionModelResolver,
                 "sessionModelResolver must not be null");
         this.extensions = Objects.requireNonNull(extensions, "extensions must not be null");
+        this.actionDispatcher = Objects.requireNonNull(actionDispatcher, "actionDispatcher must not be null");
         this.executor = Objects.requireNonNull(executor, "executor must not be null");
     }
 
@@ -197,7 +207,16 @@ public class ReActLooper implements AutoCloseable {
     public ReActTurn chat(String sessionId, String userInput, ReActListener listener) {
         ReActListener effective = listener == null ? ReActListener.NOOP : listener;
         ReActTurnImpl turn = new ReActTurnImpl();
-        turn.submit(executor, () -> execute(turn, sessionId, userInput, effective));
+        // 先登记再起回合：与外壳的回合闸门同理。反过来的话，「起回合」与「插件第一次投递」之间的
+        // 动作会白跑一趟，而那个窗口在真实使用里正好是「插件收到回合开始事件」那一刻
+        actionDispatcher.beginTurn(sessionId, turn::cancel);
+        try {
+            turn.submit(executor, () -> execute(turn, sessionId, userInput, effective));
+        } catch (RuntimeException e) {
+            // 执行器已关闭：任务不会跑，放在任务里的注销也就永远不会发生
+            actionDispatcher.endTurn(sessionId);
+            throw e;
+        }
         return turn;
     }
 
@@ -235,6 +254,9 @@ public class ReActLooper implements AutoCloseable {
         } finally {
             // react 池线程会被复用：不关的话下一个回合会继承本回合的深度与计数
             runScopes.close();
+            // 注销必须是回合的最后一步：排空点都在这之前，之后的投递已经没有窗口可进——
+            // 它们会在队列里被标成「本回合内没能排空」
+            actionDispatcher.endTurn(sessionId);
         }
     }
 
@@ -356,6 +378,12 @@ public class ReActLooper implements AutoCloseable {
             sessionManager.appendMessage(sessionId, assistantMessage(response, toolCalls), response.getUsage(),
                     response.getThinking());
             if (toolCalls.isEmpty()) {
+                // 收敛之前先把回合边界上的动作排掉（压缩 / 切换模型 / 插入点为「工具批次之后」的消息），
+                // 再看有没有人要求「接着干」——那会插一条消息，让本回合多跑一轮，而不是开一个新回合
+                actionDispatcher.drainTurnBoundary(sessionId, round < maxRounds);
+                if (actionDispatcher.drainConvergence(sessionId, round < maxRounds)) {
+                    continue;
+                }
                 ReActResult result = ReActResult.completed(sessionId, response.getContent(), round);
                 listener.onComplete(result);
                 return result;
@@ -375,6 +403,9 @@ public class ReActLooper implements AutoCloseable {
                         LlmMessage.tool(toolCall.getId(), toolCall.getName(), outputOf(outcome)),
                         null, null, outcome.getMetadata());
             }
+            // 工具批次之后、下一次模型调用之前：STEER 的插入点。放这里而不是轮首，
+            // 是因为「刚跑完一批工具」正是插件最可能知道「还有一步没做」的时刻
+            actionDispatcher.drainTurnBoundary(sessionId, round < maxRounds);
         }
         LOG.warn("ReAct 达到最大轮次: sessionId={} maxRounds={}", sessionId, maxRounds);
         ReActResult result = ReActResult.truncated(sessionId, MAX_ROUNDS_MESSAGE, maxRounds);

@@ -2,6 +2,10 @@ package zcd.jellyfish.infra.plugin;
 
 import org.junit.jupiter.api.Test;
 import zcd.jellyfish.api.JellyfishException;
+import zcd.jellyfish.api.action.ActionHandle;
+import zcd.jellyfish.api.action.ActionStatus;
+import zcd.jellyfish.api.action.DeliverAs;
+import zcd.jellyfish.api.action.PluginAction;
 import zcd.jellyfish.api.event.RegisterOptions;
 import zcd.jellyfish.api.event.Subscription;
 import zcd.jellyfish.api.event.notification.ConfigWarningEvent;
@@ -11,6 +15,7 @@ import zcd.jellyfish.api.extension.ExtensionException;
 import zcd.jellyfish.api.extension.ToolCallRequest;
 import zcd.jellyfish.api.plugin.PluginContext;
 import zcd.jellyfish.api.plugin.PluginDeclaration;
+import zcd.jellyfish.infra.action.ActionQueue;
 import zcd.jellyfish.infra.event.EventChannel;
 import zcd.jellyfish.infra.event.EventChannelOptions;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
@@ -38,8 +43,11 @@ class PluginContextFactoryTest {
     /** 事件通道。 */
     private final EventChannel events = new EventChannel(EventChannelOptions.defaults(), registry);
 
+    /** 动作队列：与注册同一时刻按 owner 回收。 */
+    private final ActionQueue actions = new ActionQueue();
+
     /** 被测工厂。 */
-    private final PluginContextFactory factory = new PluginContextFactory(extensions, events, registry, new RuntimeInfoHolder());
+    private final PluginContextFactory factory = new PluginContextFactory(extensions, events, registry, new RuntimeInfoHolder(), actions);
 
     @Test
     void create_should_bind_plugin_id_as_owner() {
@@ -170,13 +178,31 @@ class PluginContextFactoryTest {
     void factory_should_reject_null_dependencies() {
         // When / Then
         assertThrows(NullPointerException.class,
-                () -> new PluginContextFactory(null, events, registry, new RuntimeInfoHolder()));
+                () -> new PluginContextFactory(null, events, registry, new RuntimeInfoHolder(), new ActionQueue()));
         assertThrows(NullPointerException.class,
-                () -> new PluginContextFactory(extensions, null, registry, new RuntimeInfoHolder()));
+                () -> new PluginContextFactory(extensions, null, registry, new RuntimeInfoHolder(), new ActionQueue()));
         assertThrows(NullPointerException.class,
-                () -> new PluginContextFactory(extensions, events, null, new RuntimeInfoHolder()));
+                () -> new PluginContextFactory(extensions, events, null, new RuntimeInfoHolder(), new ActionQueue()));
         assertThrows(NullPointerException.class,
-                () -> new PluginContextFactory(extensions, events, registry, null));
+                () -> new PluginContextFactory(extensions, events, registry, null, new ActionQueue()));
+    }
+
+    @Test
+    void release_should_drop_pending_plugin_actions() {
+        // Given：插件投了一条动作，它还在队列里等排空
+        PluginContext context = factory.create(PluginDeclaration.of("plugin-a"));
+        actions.beginTurn("s1", () -> {
+        });
+        ActionHandle handle = context.submit(
+                PluginAction.sendUserMessage("s1", "接着干", DeliverAs.FOLLOW_UP));
+        assertEquals(ActionStatus.QUEUED, handle.getStatus());
+
+        // When
+        factory.release("plugin-a");
+
+        // Then：停止之后没人再来排空它，插件必须能从旬柄上看到「没投出去」
+        assertEquals(ActionStatus.DROPPED, handle.getStatus());
+        assertTrue(handle.getResult().contains("插件已停止"), handle.getResult());
     }
 
     @Test

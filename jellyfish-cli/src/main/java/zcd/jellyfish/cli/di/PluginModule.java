@@ -2,6 +2,7 @@ package zcd.jellyfish.cli.di;
 
 import dagger.Module;
 import dagger.Provides;
+import zcd.jellyfish.infra.action.ActionQueue;
 import zcd.jellyfish.infra.config.RuntimeConfig;
 import zcd.jellyfish.infra.event.EventChannel;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
@@ -58,14 +59,16 @@ public final class PluginModule {
      * @param events      事件通道
      * @param registry    共用注册表，用于按 owner 一次性回收
      * @param runtimeInfo 运行时信息持有者（外壳启动期写入）
+     * @param actions     动作队列
      * @return 插件上下文工厂
      */
     @Provides
     @Singleton
     static PluginContextFactory providePluginContextFactory(ExtensionRegistry extensions, EventChannel events,
                                                             TypeRegistry registry,
-                                                            RuntimeInfoHolder runtimeInfo) {
-        return new PluginContextFactory(extensions, events, registry, runtimeInfo);
+                                                            RuntimeInfoHolder runtimeInfo,
+                                                            ActionQueue actions) {
+        return new PluginContextFactory(extensions, events, registry, runtimeInfo, actions);
     }
 
     /**

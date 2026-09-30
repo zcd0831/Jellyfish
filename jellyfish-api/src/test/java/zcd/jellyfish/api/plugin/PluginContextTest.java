@@ -2,6 +2,8 @@ package zcd.jellyfish.api.plugin;
 
 import org.junit.jupiter.api.Test;
 import zcd.jellyfish.api.RuntimeInfo;
+import zcd.jellyfish.api.action.ActionHandle;
+import zcd.jellyfish.api.action.PluginAction;
 import zcd.jellyfish.api.event.JellyfishEvent;
 import zcd.jellyfish.api.event.RegisterOptions;
 import zcd.jellyfish.api.event.Subscription;
@@ -228,6 +230,13 @@ class PluginContextTest {
         @Override
         public void emit(JellyfishEvent event) {
             this.emitted = event;
+        }
+
+        @Override
+        public ActionHandle submit(PluginAction action) {
+            // 桩类只保留「有这个方法」这一点形状；投递语义（入队、失败回报、停止后抛错）
+            // 由 PluginContextImplTest 与 ActionQueueTest 覆盖
+            throw new UnsupportedOperationException("submit is not part of this stub");
         }
     }
 }

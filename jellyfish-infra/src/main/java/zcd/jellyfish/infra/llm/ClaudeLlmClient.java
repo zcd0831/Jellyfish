@@ -371,6 +371,15 @@ public class ClaudeLlmClient extends AbstractHttpLlmClient {
                 pendingToolResults.add(toolResultBlock(message));
                 continue;
             }
+            if (LlmMessage.ROLE_USER.equals(role) && !pendingToolResults.isEmpty()) {
+                // 用户发言紧跟工具结果时，它必须并进同一条 user 消息（Anthropic 要求 user / assistant 交替）。
+                // 两条来源都会走到这里：① 回合被取消时为未执行的调用补了工具结果，用户又开了一轮；
+                // ② 插件经动作通道往回合里插话，而插入点正好在工具批次之后（见 DeliverAs#STEER）。
+                // 另起一条 user 消息会被 Anthropic 直接拒绝，而那是一条很难归因的 400
+                appendTextBlock(flushToolResults(messages, pendingToolResults),
+                        LlmClients.nullToEmpty(message.getContent()));
+                continue;
+            }
             flushToolResults(messages, pendingToolResults);
             if (LlmMessage.ROLE_ASSISTANT.equals(role) && message.hasToolCalls()) {
                 messages.add(assistantToolUseMessage(message));
@@ -387,16 +396,39 @@ public class ClaudeLlmClient extends AbstractHttpLlmClient {
      *
      * @param messages 已构建的消息列表
      * @param pendingToolResults 待落盘的工具结果 block
+     * @return 已落盘的那条 user 消息；缓冲区为空时返回 {@code null}
      */
-    private static void flushToolResults(List<Map<String, Object>> messages, List<Map<String, Object>> pendingToolResults) {
+    private static Map<String, Object> flushToolResults(List<Map<String, Object>> messages,
+                                                        List<Map<String, Object>> pendingToolResults) {
         if (pendingToolResults.isEmpty()) {
-            return;
+            return null;
         }
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("role", LlmMessage.ROLE_USER);
         result.put("content", new ArrayList<>(pendingToolResults));
         messages.add(result);
         pendingToolResults.clear();
+        return result;
+    }
+
+    /**
+     * 往一条已构建的消息追加文本块。
+     * <p>
+     * 用于「用户发言必须与工具结果同处一条 user 消息」这一种合并：Anthropic 的一条 user 消息里
+     * 本来就可以同时装 {@code tool_result} 与 {@code text} 块，而拆成两条会被拒绝。
+     *
+     * @param message 目标消息，其 {@code content} 必须是可变的块列表
+     * @param text    文本，空白时不追加
+     */
+    @SuppressWarnings("unchecked")
+    private static void appendTextBlock(Map<String, Object> message, String text) {
+        if (message == null || text.trim().isEmpty()) {
+            return;
+        }
+        Map<String, Object> block = new LinkedHashMap<>();
+        block.put("type", "text");
+        block.put("text", text);
+        ((List<Map<String, Object>>) message.get("content")).add(block);
     }
 
     /**

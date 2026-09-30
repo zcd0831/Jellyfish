@@ -12,6 +12,7 @@ import zcd.jellyfish.api.extension.ToolCallRequest;
 import zcd.jellyfish.api.event.notification.ConfigWarningEvent;
 import zcd.jellyfish.api.plugin.JellyfishPlugin;
 import zcd.jellyfish.api.plugin.PluginContext;
+import zcd.jellyfish.infra.action.ActionQueue;
 import zcd.jellyfish.infra.event.EventChannel;
 import zcd.jellyfish.infra.event.EventChannelOptions;
 import zcd.jellyfish.infra.config.PluginsSettings;
@@ -72,7 +73,7 @@ class PF4JPluginManagerTest {
         extensions = new ExtensionRegistry(registry);
         eventChannel = new EventChannel(EventChannelOptions.defaults(), registry);
         eventChannel.start();
-        contexts = new PluginContextFactory(extensions, eventChannel, registry, new RuntimeInfoHolder());
+        contexts = new PluginContextFactory(extensions, eventChannel, registry, new RuntimeInfoHolder(), new ActionQueue());
     }
 
     @AfterEach

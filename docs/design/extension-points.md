@@ -913,17 +913,27 @@ public final class ShortcutBinding        // 字段：key、commandName、descri
 public abstract class PluginAction {
     // 每个动作都带 sessionId：插件是进程级的（PF4J 一次加载、能看到所有会话），
     // 「当前会话」对它不是天然概念，目标会话必须显式给出
-    public static PluginAction sendMessage(String sessionId, String text, DeliverAs as);
     public static PluginAction sendUserMessage(String sessionId, String text, DeliverAs as);
-    public static PluginAction compact(String sessionId, String instructions);
+    public static PluginAction compact(String sessionId);
     public static PluginAction abortTurn(String sessionId);
     public static PluginAction switchModel(String sessionId, String provider, String model);
     public static PluginAction forkSession(String sessionId, String messageId, String title);
     public static PluginAction rebuildToolCatalog(String sessionId, String reason);
 }
 
-public enum DeliverAs { NEXT_TURN, STEER, FOLLOW_UP }
+public enum DeliverAs { STEER, FOLLOW_UP }
 ```
+
+**落地时的两点修订**（P3 定稿，与本文初稿的差别）：
+
+1. **`DeliverAs` 只有两个取值，没有 `NEXT_TURN`**。它要表达的是「不着急，下次投递时带上」，
+   而那需要一个跨回合存活的待发队列；P3 决定不做这个扩展点（见 §9.8）。
+2. **`sendMessage` 与 `sendUserMessage` 合并成一个**。初稿里两个工厂参数完全相同，
+   而没有任何一处能说明它们的行为差异——两个同名的行为会让插件作者无法判断该用哪个。
+   保留 `sendUserMessage`：它说的是这条消息**以什么身份**进入会话，是本类唯一有定义的那件事。
+3. **`compact` 不带 `instructions`**：内核与 `/compact` 都没有「按这段指示压」这条能力，
+   而压缩策略已经有一条自己的路（`CompactionStrategy`）。保留一个没有落点的参数字段
+   比去掉它更糟——它会静默失效。
 
 **与 `PluginContext` 的接口**：
 
@@ -935,17 +945,51 @@ ActionHandle submit(PluginAction action);   // 入队即返回，绝不内联执
 `result()`——**轮询式**，与既有的 `InputDirectiveRun`、压缩状态同形态（外壳每帧轮询，
 TUI 的渲染线程契约因此不被破坏）。
 
+**失败是常态而不是异常**：`submit` 不抛「拿不到在途回合」这类错，而是回报 `FAILED` + 原因。
+典型来源是插件从事件订阅回调投递（事件是异步投递的，可能落在回合刚结束之后）
+或从自己的线程投递。
+
 ### 9.3 排空点（必须在实现时逐条写死）
 
 | 动作 | 排空点 | 线程 | 说明 |
 | --- | --- | --- | --- |
-| `ABORT_TURN` | **不入队**，直接对当前 `ReActTurn` 置取消标志 | 任意 | 与 `ReActTurnImpl.cancel()` 既有语义一致（「发个信号、置个标志」这类快动作），从渲染线程调用是既有的 |
-| `STEER`（`sendMessage` / `sendUserMessage`） | 一轮工具批次执行完、**下一次模型调用之前** | `react` 线程 | 与 pi 的 steer 语义一致：不影响当前 assistant 回合，影响下一轮 |
-| `FOLLOW_UP` | 回合 `finally` 里 `flush` 之后 | `react` 线程 | 若队列非空，追加一个新的顶层回合（不复用已结束的 `ReActTurn`） |
-| `NEXT_TURN` | 会话空闲时（外壳的下一轮输入之前） | 外壳线程 | 不触发新回合，只把消息挂进待发队列 |
-| `COMPACT` | 与 `/compact` 完全同一条路径（`compact` 线程池） | `compact` 线程 | 复用既有的状态轮询与失败上报 |
-| `SWITCH_MODEL` / `REBUILD_TOOL_CATALOG` | 回合边界（与 `STEER` 同点） | `react` 线程 | 都改缓存前缀，因此只在回合边界做，避免中途换模型/清单 |
-| `FORK_SESSION` | 会话空闲时 | 外壳线程 | 要求无在途回合 |
+| `ABORT_TURN` | **不入队**，投递时直接对当前 `ReActTurn` 置取消标志 | 提交线程 | 与 `ReActTurnImpl.cancel()` 既有语义一致（「发个信号、置个标志」这类快动作），从渲染线程调用是既有的。入队再等排空反而会让它错过自己想中止的那个回合。**没有在途回合也算成功**：「已经没有回合可中止了」与「中止成功」的结果相同 |
+| `STEER`（`sendUserMessage`） | 一轮工具批次执行完、**下一次模型调用之前** | `react` 线程 | 与 pi 的 steer 语义一致：不影响本轮的助手回复，影响下一轮 |
+| `FOLLOW_UP`（`sendUserMessage`） | 模型**本要收敛那一刻**（它已经不再要求工具调用） | `react` 线程 | **不是开新回合，而是让本回合多跑一轮**（见下方「回合内的插入」） |
+| `COMPACT` | 与 `/compact` 完全同一条路径（`compact` 线程池） | `react` 线程发起 | 复用既有的状态轮询与失败上报 |
+| `SWITCH_MODEL` | 回合边界（与 `STEER` 同点） | `react` 线程 | 改缓存前缀，因此只在回合边界做，避免中途换模型 |
+| `FORK_SESSION` | 投递时即回报 `FAILED` | — | P3 阶段尚未提供（依赖会话分支能力，随 P4 落地） |
+| `REBUILD_TOOL_CATALOG` | 投递时即回报 `FAILED` | — | P3 阶段尚未提供（依赖工具清单缓存，随 P6 落地） |
+
+### 9.3.1 回合内的插入（P3 定稿，推翻本文初稿）
+
+初稿把 `FOLLOW_UP` 定为「回合 `finally` 里 `flush` 之后，**追加一个新的顶层回合**」。
+**这条做不到**，而且做的方向也不对：
+
+- **做不到**：那个时刻 Server 的回合闸门（`SessionTurns`）还没释放——
+  `ReActTurnImpl.await()` 是 `future.get()`，而 `future` 在**整个任务返回时**才完成，
+  `runTurn` 的 `finally` 是任务体的一部分。因此新回合走闸门必然 409，绕过闸门就是静默破坏
+  「一会话一回合」；TUI / CLI 根本没有闸门，而后台回合的取消入口、在途指示、输入互斥
+  全部缺位。
+- **方向不对**：这个内核里「一次 `chat` 调用 = 一个回合」，回合的边界由外壳决定。
+  让内核自己起回合，等于让外壳不知道发生了什么事。
+
+**定稿的做法**：把两个用户消息类动作都做成**往当前回合里插一条消息**，不新增回合：
+
+- `STEER` 插在工具批次之后，因此**下一轮**模型调用就带着它；
+- `FOLLOW_UP` 插在收敛点，让本轮循环 `continue` 而不返回——回合长了一轮，但仍是一个回合：
+  同一个取消句柄、同一个 listener、同一次 SSE 流、同一个在途状态。
+
+**两个后果必须一起接受**：
+
+1. **`maxRounds` 仍是硬上界**，插入不允许把它撑长。没有剩余轮次时消息类动作直接 `FAILED`
+   （「本回合轮次已用尽」），而不是往历史里塞一条永远发不出去的提问——那会与用户的下一次输入
+   连成两条 `user` 消息。
+2. **插入的文本必须并入下一条 user 消息，不能另起一条**。`STEER` 的插入点上，会话里最后几条是
+   `assistant(tool_use)` + `tool`，而 Anthropic 要求 user / assistant 交替（见
+   `ClaudeLlmClient` 里「同一轮的多个工具结果必须合并」那句注释）。因此 `ClaudeLlmClient` 的映射
+   要把「紧跟工具结果的用户文本」并进那条 `user` 消息，作为 `tool_result` 块之后的 `text` 块。
+   这顺带修掉了一个既有隐患：回合被取消时为未执行的调用补上工具结果后，用户再开一轮也会形成同样的形状。
 
 **四条硬规则**：
 
@@ -953,17 +997,16 @@ TUI 的渲染线程契约因此不被破坏）。
    「工具批次结束后的排空点」执行——因此不存在「handler 还没返回，动作已经改了会话」的重入。
 2. **每会话一个队列**（Server 下多会话并发），全局队列只在 `FOLLOW_UP` 需要「谁来起新回合」时用。
    与 `SessionTurns` 的「一会话一在途回合」语义对齐。
-3. **跨会话可以投递，但只有当前会话能起新回合**（已决）：
-   - 写给任意**非瞬时**会话的消息都允许入队；**瞬时会话（子代理）一律拒绝**——
-     写进去没意义，那个会话会消失。
-   - `FOLLOW_UP` 的目标**不是当前会话**时**自动降级为 `NEXT_TURN`**（挂进该会话历史、不起回合）。
-     当前会话的判据与外壳一致：TUI / CLI 的当前会话、Server 下最近拥有在途回合的会话。
-   - 理由：写历史无害，**自动起回合会花模型钱**，而那是既没有审批链路也没有提示的动作。
-     降级而不是拒绝：动作的成功语义保留（消息确实进了历史），副作用被收窄到「等用户下次说话才发给模型」；
-     拒绝则会让插件无法区分「会话不存在」与「外壳策略不允许」，而这条信息对它没有用。
-   - `ABORT_TURN` 不受这条限制：它只是置取消标志（§9.3 第 1 行），是合法的运维动作。
-4. **队列有界**（缺省每会话 16，可配），**满了就丢并记 WARN + 发一条可丢通知**。
+3. **目标会话必须是根会话**：子代理会话（瞬时）一律拒绝——它随父回合结束而消失，
+   往里面写消息或压缩它都没有意义。动作通道只服务外壳看得见的会话。
+   该拒绝在投递时给出（原因写明「只能投进正在跑的顶层回合」），不拖到排空点。
+4. **队列有界**（缺省每会话 16），**满了就丢并记 WARN**。
    丢弃是安全的：动作是「建议内核做事」，不是「必须完成的事实」。
+   （初稿写的「可配」未落地：容量目前是常量 `ActionQueue.DEFAULT_CAPACITY`，
+   要开放配置就连同 `configuration.md` 一起改。）
+5. **窗口的存活期恰好是一个回合**：`ReActLooper.chat` 在**提交任务之前**打开窗口，
+   任务的 `finally` 关闭它。回合结束时仍在队列里的动作标 `FAILED`（「本回合内没能排空」）——
+   它们不是被淘汰的，而是再也不会有人来取了，插件需要知道这次没赶上。
 
 ### 9.4 生命周期、归属与失败语义
 
@@ -1001,12 +1044,35 @@ TUI 的渲染线程契约因此不被破坏）。
 
 ### 9.7 测试点
 
-- `submit` 之后**在提交线程返回之前动作一定没执行**（用一个记录线程名的动作断言）。
-- `STEER` 在工具批次结束后、下一次模型调用前生效。
-- `FOLLOW_UP` 在回合收敛后起一条新回合；`NEXT_TURN` 不起回合。
-- `stop()` 之后 `submit` 抛 `JellyfishException`；停止时在途动作整批丢弃。
-- 队列满时丢弃并记 WARN，`ActionHandle.status() == DROPPED`。
-- `ABORT_TURN` 从非 react 线程调用能中断回合（复用既有取消用例）。
+- `submit` 之后**在提交线程返回之前动作一定没执行**（`ActionQueueTest` 断言它停在 `QUEUED`）。
+- `STEER` 在工具批次结束后、下一次模型调用前生效（`ReActLooperTest` 断言它落在工具结果之后）。
+- `FOLLOW_UP` 让**本回合**多跑一轮（不是开新回合），且 `maxRounds` 仍是硬上界。
+- `stop()` 之后 `submit` 抛 `JellyfishException`；停止时在途动作整批丢弃（`DROPPED`）。
+- 队列满时丢弃并记 WARN，`ActionHandle.getStatus() == DROPPED`。
+- `ABORT_TURN` 不入队，投递时就中断回合。
+- 回合结束时残留的动作标 `FAILED`。
+- 回合内插入的文本与工具结果合处同一条 `user` 消息（`ClaudeLlmClientTest`）。
+
+### 9.8 明确不做：待发队列与「空闲时起回合」
+
+初稿的 `NEXT_TURN` 与「`FOLLOW_UP` 在无在途回合时起一个新回合」都是对同一个问题的回答：
+**插件在回合之外（或回合已结束时）想说话**。P3 决定不做它们，理由逐条如下：
+
+- **那些时刻大多不在回合里**。插件「有话要说」绝大多数是由回合内的同步处理器触发的
+  （工具 handler、权限判定、参数改写、`TurnBeforeRequest`……）——那正是动作通道完整覆盖的那一类。
+  余下三类（回合外的同步处理器、事件订阅回调、插件自己的线程）都要么本来就不属于回合，
+  要么来得太晚。
+- **「空闲时起回合」需要先把回合所有权收归内核**：三个外壳上分别缺回合闸门（Server 的
+  `SessionTurns` 在排空点上还没释放）、取消入口与在途指示（TUI / CLI），以及一个「谁在等」
+  （CLI 是一次性批处理，跑完就收敛）。这不是一个选项，而是一次独立迁移。
+- **待发队列会引入第二个真源**：「下次投递时带上」必须把消息并入下一条 `user` 消息
+  （否则连续 `user` 被 Anthropic 拒），于是产生「合并规则 + 三个外壳各一条可见提示 +
+  会话关闭时怎么清」一整套，而收益只覆盖「用户恰好在那之后开一轮」。
+
+**可以恢复的条件**：出现真实的「无人值守、由外部事件驱动」诉求时，按
+「外壳在自己空闲时收割队列」做——队列仍在 core，但起回合仍由外壳做，
+取消入口、在途指示与输入互斥全部是现成的，**不需要动 `SessionTurns`**。
+Server 的那一期还需要一个后台触发点，那是它的真实代价。
 
 ---
 
@@ -1105,18 +1171,24 @@ TUI 的渲染线程契约因此不被破坏）。
 
 ### 12.4 动作可跨会话投递，但只有当前会话能起新回合
 
-- **决定**：`PluginAction` 都带 `sessionId`；允许写给任意非瞬时会话；
+> **【P3 落地时被 §9.8 部分推翻】**下面的推导（「写历史无害、花模型钱要有理由」）仍然成立，
+> 但结论里的「`FOLLOW_UP` 降级为 `NEXT_TURN`」不成立——`NEXT_TURN` 与「空闲时起回合」都归到了
+> §9.8 的「明确不做」。现在的口径是：**动作只投进正在跑的顶层回合**，
+> 跨会话投递因此只剩「写进某个正在跑的回合」这一种形态，而它与目标是不是当前会话无关。
+
+- ~~**决定**：`PluginAction` 都带 `sessionId`；允许写给任意非瞬时会话；
   瞬时会话（子代理）一律拒绝；`FOLLOW_UP` 的目标不是当前会话时**自动降级为 `NEXT_TURN`**；
-  `ABORT_TURN` 不受限制。
+  `ABORT_TURN` 不受限制。~~
+- **仍然成立的部分**：`PluginAction` 都带 `sessionId`；瞬时会话（子代理）一律拒绝
+  （它随父回合结束而消失）；`ABORT_TURN` 不受限制。
 - **推导**：Jellyfish 的插件是进程级的（PF4J 一次加载、能看到所有会话），
   「当前会话」对它不是天然概念，一刀切禁止会挡掉真实用法（把 CI 结果写进指定会话）。
   但「允许自动起回合」会在**用户没看着的会话上烧 token**，而那是既没审批也没提示的动作。
   收窄这一半、放开另一半，正好对应「写历史无害、花模型钱要有理由」。
-  降级而非拒绝：成功语义保留，拒绝则会让插件无法区分「会话不存在」与「策略不允许」。
   与 pi 对齐：pi 的扩展实例随会话重绑（`session_shutdown` → `session_start`），它也不跨会话自动起回合。
 - **推翻条件**：若出现「必须由外部事件驱动某会话自动跑一轮」的真实需求，
   那应当是显式打开的能力（甚至是一条显式命令），而不是把默认放开。
-- **影响面**：§9.2 的动作签名、§9.3 的排空点表、`extensions.md`。
+- **影响面**：§9.2 的动作签名、§9.3 的排空点表、§9.8、`extensions.md`。
 
 ### 12.5 `RuntimeInfo.supportsApproval` 是静态语义
 
@@ -1162,6 +1234,14 @@ TUI 的渲染线程契约因此不被破坏）。
 - `CompactionDirective` 能不能让插件直接提供摘要正文：取决于 §5 落地后要不要开放摘要层的能力面。
 - 每插件（而不是每会话）的扩展条目配额：见 §12.7 的推翻条件。
 
+### 12.9 P3 落地时对 §9 的三处修正（已归入正文）
+
+- **`FOLLOW_UP` 不开新回合，而是让本回合多跑一轮**（§9.3.1）。初稿把它定在
+  「回合 `finally` 里追加一个新的顶层回合」，而那个时刻 Server 的回合闸门还没释放，
+  TUI / CLI 则根本没有任何回合所有权机制。
+- **`DeliverAs` 无 `NEXT_TURN`，`sendMessage` 与 `sendUserMessage` 合并，`compact` 不带指示**（§9.2）。
+- **待发队列与「空闲时起回合」明确不做**（§9.8），含恢复条件。
+
 ---
 
 ## 附：改动一览（本轮决策改到正文的哪些地方）
@@ -1171,7 +1251,8 @@ TUI 的渲染线程契约因此不被破坏）。
 | 12.1 `BLOCKED` = `7` | §2.2.3、§2.3 |
 | 12.2 `DENY` 不审计 | §1.2、§1.4、§1.5 |
 | 12.3 fork 与压缩边界 | §6.3、§6.4、§6.6 |
-| 12.4 动作跨会话 | §9.2、§9.3 |
+| 12.4 动作跨会话 | §9.2、§9.3、§9.8（P3 落地时部分推翻） |
 | 12.5 `supportsApproval` | §4.2、§4.3、§4.4 |
 | 12.6 `hidden` 叠加 | §7.2、§7.6 |
 | 12.7 条目上限 | §6.2、§6.6 |
+| 12.9 P3 对 §9 的修正 | §9.2、§9.3、§9.3.1、§9.7、§9.8 |

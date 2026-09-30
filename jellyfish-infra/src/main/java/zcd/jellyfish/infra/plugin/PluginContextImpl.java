@@ -2,6 +2,8 @@ package zcd.jellyfish.infra.plugin;
 
 import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.RuntimeInfo;
+import zcd.jellyfish.api.action.ActionHandle;
+import zcd.jellyfish.api.action.PluginAction;
 import zcd.jellyfish.api.event.JellyfishEvent;
 import zcd.jellyfish.api.event.RegisterOptions;
 import zcd.jellyfish.api.event.Subscription;
@@ -10,6 +12,7 @@ import zcd.jellyfish.api.extension.ExtensionRequest;
 import zcd.jellyfish.api.plugin.PluginContext;
 import zcd.jellyfish.api.plugin.PluginDeclaration;
 import zcd.jellyfish.api.plugin.PluginOwnerNamespace;
+import zcd.jellyfish.infra.action.ActionQueue;
 import zcd.jellyfish.infra.event.EventChannel;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
 
@@ -62,6 +65,9 @@ public final class PluginContextImpl implements PluginContext {
     /** 运行时信息持有者：外壳在启动期写入，这里只读快照。 */
     private final RuntimeInfoHolder runtimeInfo;
 
+    /** 动作队列：插件主动动作的入站队列，同一个根插件下的子上下文共用。 */
+    private final ActionQueue actions;
+
     /**
      * 构造一个<b>自持有存活标记</b>的插件上下文。
      * <p>
@@ -70,32 +76,35 @@ public final class PluginContextImpl implements PluginContext {
      * {@link PluginContextFactory#create(PluginDeclaration)}，那条路径才会登记标记以便停止时关闭。
      * <p>
      * 运行时信息用缺省的「未知外壳」：这条路得不到外壳启动流程写入的值，
-     * 而给一个保守的缺省比让调用方被迫伪造一个外壳要好。
+     * 而给一个保守的缺省比让调用方被迫伪造一个外壳要好。动作队列同理，建一个独立实例——
+     * 它与该插件自己的两个参数无关，且没有回收集道。
      *
      * @param declaration 插件声明，不可为 {@code null}
      * @param extensions  同步扩展点策略，不可为 {@code null}
      * @param events      事件通道，不可为 {@code null}
      */
     public PluginContextImpl(PluginDeclaration declaration, ExtensionRegistry extensions, EventChannel events) {
-        this(declaration, extensions, events, new ContextLifecycle(), new RuntimeInfoHolder());
+        this(declaration, extensions, events, new ContextLifecycle(), new RuntimeInfoHolder(), new ActionQueue());
     }
 
     /**
-     * 构造插件上下文，共用调用方给定的存活标记与运行时信息持有者。
+     * 构造插件上下文，共用调用方给定的存活标记、运行时信息持有者与动作队列。
      *
      * @param declaration 插件声明，不可为 {@code null}
      * @param extensions  同步扩展点策略，不可为 {@code null}
      * @param events      事件通道，不可为 {@code null}
      * @param lifecycle   存活标记，不可为 {@code null}；子上下文必须复用父上下文的同一个实例
      * @param runtimeInfo 运行时信息持有者，不可为 {@code null}；子上下文同样复用它
+     * @param actions     动作队列，不可为 {@code null}；子上下文同样复用它
      */
     PluginContextImpl(PluginDeclaration declaration, ExtensionRegistry extensions, EventChannel events,
-                      ContextLifecycle lifecycle, RuntimeInfoHolder runtimeInfo) {
+                      ContextLifecycle lifecycle, RuntimeInfoHolder runtimeInfo, ActionQueue actions) {
         this.declaration = declaration;
         this.extensions = extensions;
         this.events = events;
         this.lifecycle = lifecycle;
         this.runtimeInfo = runtimeInfo;
+        this.actions = actions;
     }
 
     @Override
@@ -123,7 +132,7 @@ public final class PluginContextImpl implements PluginContext {
         // 本方法刻意不做存活检查——它不产生任何注册，真正需要被拦住的是注册那一刻。
         // 运行时信息持有者也一并复用：外壳是进程级事实，子单元与父单元看到的必须一致
         return new PluginContextImpl(PluginDeclaration.of(childPluginId, declaration.getConfiguration()),
-                extensions, events, lifecycle, runtimeInfo);
+                extensions, events, lifecycle, runtimeInfo, actions);
     }
 
     @Override
@@ -153,6 +162,12 @@ public final class PluginContextImpl implements PluginContext {
     public void emit(JellyfishEvent event) {
         requireAlive("publish event");
         events.publish(event);
+    }
+
+    @Override
+    public ActionHandle submit(PluginAction action) {
+        requireAlive("submit action");
+        return actions.submit(pluginId(), action);
     }
 
     /**

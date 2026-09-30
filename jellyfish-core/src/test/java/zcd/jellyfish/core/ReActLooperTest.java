@@ -18,6 +18,10 @@ import zcd.jellyfish.api.extension.PermissionCheckRequest;
 import zcd.jellyfish.api.extension.PermissionDecision;
 import zcd.jellyfish.api.extension.CancellationToken;
 import zcd.jellyfish.api.extension.ToolCallRequest;
+import zcd.jellyfish.api.action.ActionHandle;
+import zcd.jellyfish.api.action.ActionStatus;
+import zcd.jellyfish.api.action.DeliverAs;
+import zcd.jellyfish.api.action.PluginAction;
 import zcd.jellyfish.api.extension.ToolCallResult;
 import zcd.jellyfish.api.extension.ToolMetadata;
 import zcd.jellyfish.api.extension.ToolOutputSink;
@@ -26,6 +30,7 @@ import zcd.jellyfish.api.extension.TurnContext;
 import zcd.jellyfish.api.extension.TurnContextRequest;
 import zcd.jellyfish.api.extension.TurnBeforeRequest;
 import zcd.jellyfish.api.extension.TurnDirective;
+import zcd.jellyfish.core.action.ActionDispatcher;
 import zcd.jellyfish.core.compact.ConversationCompactor;
 import zcd.jellyfish.core.prompt.CacheBreakWatcher;
 import zcd.jellyfish.core.prompt.ContextUsage;
@@ -56,6 +61,7 @@ import zcd.jellyfish.infra.model.ResolvedModel;
 import zcd.jellyfish.infra.permission.PermissionManager;
 import zcd.jellyfish.infra.registry.TypeRegistry;
 import zcd.jellyfish.infra.session.Session;
+import zcd.jellyfish.infra.action.ActionQueue;
 import zcd.jellyfish.infra.session.SessionManager;
 import zcd.jellyfish.infra.session.SessionDefaults;
 import zcd.jellyfish.infra.tooloutput.ToolOutputLimiter;
@@ -145,6 +151,12 @@ class ReActLooperTest {
     /** 委派作用域持有者：用真实实现，嵌套回合依赖它。 */
     private RunScopes runScopes;
 
+    /** 动作队列：用真实实现，用例直接往里投递插件动作。 */
+    private ActionQueue actionQueue;
+
+    /** 动作执行体：用真实实现，它才是被验证的那一层接线。 */
+    private ActionDispatcher actionDispatcher;
+
     @BeforeEach
     void setUp() {
         executor = Executors.newSingleThreadExecutor();
@@ -154,6 +166,8 @@ class ReActLooperTest {
                 new ToolResultAger(runtimeConfig, extensions), new CacheBreakWatcher(events));
         outputLimiter = new ToolOutputLimiter(runtimeConfig, new ToolOutputStore(runtimeConfig));
         runScopes = new RunScopes();
+        actionQueue = new ActionQueue();
+        actionDispatcher = new ActionDispatcher(actionQueue, sessionManager, conversationCompactor);
         // 这两个桩是共享前置条件：个别用例（会话不存在 / 提前取消）走不到这两步，用 lenient 避免误报
         lenient().when(modelManager.resolveDefault()).thenReturn(resolvedModel());
         lenient().when(modelManager.getClient(any(ResolvedModel.class))).thenReturn(client);
@@ -872,6 +886,148 @@ class ReActLooperTest {
                 () -> newLooper().runNested(child, "子任务", null, null, 4, ToolFilter.none()));
     }
 
+    @Test
+    void chat_should_inject_steer_message_after_tool_batch() {
+        // Given：插件在工具处理器里投递一条 STEER——「刚跑完一批工具」正是插件最可能知道
+        // 「还有一步没做」的时刻，也是它唯一稳定可用的投递位置
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        when(permissionManager.decide(any(PermissionCheckRequest.class)))
+                .thenReturn(PermissionDecision.allow(null));
+        Session session = sessionManager.createDefault();
+        List<ActionHandle> handles = new ArrayList<ActionHandle>();
+        registerTool("read", request -> {
+            handles.add(actionQueue.submit("plugin-a", PluginAction.sendUserMessage(
+                    session.getSessionId(), "顺便把日志也改了", DeliverAs.STEER)));
+            return new ToolCallResult("read", "文件内容");
+        });
+        stubResponses(toolCallResponse("call_1", "read"), LlmResponse.text("好了"));
+
+        // When
+        ReActResult result = newLooper().chat(session.getSessionId(), "读文件", new RecordingListener()).await();
+
+        // Then：消息排在工具结果之后、下一次模型调用之前，因此下一轮请求就带着它
+        assertEquals(ActionStatus.DONE, handles.get(0).getStatus());
+        assertEquals(5, session.size());
+        assertEquals(LlmMessage.ROLE_USER, session.getMessages().get(3).getMessage().getRole());
+        assertEquals("顺便把日志也改了", session.getMessages().get(3).getMessage().getContent());
+        assertEquals("好了", result.getContent());
+        assertEquals(2, result.getRounds());
+    }
+
+    @Test
+    void chat_should_continue_same_turn_when_follow_up_pending() {
+        // Given：插件要求「干完这件接着干那件」。它不能让回合收敛，而是让**本回合**多跑一轮——
+        // 不开新回合是刻意的：内核起的回合外壳不知道，在途状态、取消入口与并发写历史会一起变坏
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        when(permissionManager.decide(any(PermissionCheckRequest.class)))
+                .thenReturn(PermissionDecision.allow(null));
+        Session session = sessionManager.createDefault();
+        List<ActionHandle> handles = new ArrayList<ActionHandle>();
+        registerTool("read", request -> {
+            handles.add(actionQueue.submit("plugin-a", PluginAction.sendUserMessage(
+                    session.getSessionId(), "接着把测试补了", DeliverAs.FOLLOW_UP)));
+            return new ToolCallResult("read", "文件内容");
+        });
+        // 第 2 轮模型已经不再要求工具（本来就要收敛），第 3 轮才是收敛点之后那一轮
+        stubResponses(toolCallResponse("call_1", "read"), LlmResponse.text("读完了"),
+                LlmResponse.text("测试也补了"));
+
+        // When
+        ReActResult result = newLooper().chat(session.getSessionId(), "读文件", new RecordingListener()).await();
+
+        // Then
+        assertEquals(ActionStatus.DONE, handles.get(0).getStatus());
+        assertEquals("测试也补了", result.getContent());
+        assertEquals(3, result.getRounds());
+    }
+
+    @Test
+    void chat_should_fail_follow_up_when_turn_has_no_round_left() {
+        // Given：轮次上限为 2，收敛发生在最后一轮——插入的消息已经没有渠道发给模型
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings(2, 0, 20000, null, null, null));
+        when(permissionManager.decide(any(PermissionCheckRequest.class)))
+                .thenReturn(PermissionDecision.allow(null));
+        Session session = sessionManager.createDefault();
+        List<ActionHandle> handles = new ArrayList<ActionHandle>();
+        registerTool("read", request -> {
+            handles.add(actionQueue.submit("plugin-a", PluginAction.sendUserMessage(
+                    session.getSessionId(), "没轮次了", DeliverAs.FOLLOW_UP)));
+            return new ToolCallResult("read", "文件内容");
+        });
+        stubResponses(toolCallResponse("call_1", "read"), LlmResponse.text("读完了"));
+
+        // When
+        ReActResult result = newLooper().chat(session.getSessionId(), "读文件", new RecordingListener()).await();
+
+        // Then：回合本身照常收敛，失败只在动作句柄上——投了也发不出去的消息不进历史，
+        // 否则它会变成一条永远没人回答的提问，并与用户的下一次输入连成两条 user 消息
+        assertEquals(ActionStatus.FAILED, handles.get(0).getStatus());
+        assertTrue(handles.get(0).getResult().contains("轮次已用尽"), handles.get(0).getResult());
+        assertEquals("读完了", result.getContent());
+        // user + assistant(tool_use) + tool + assistant：插件的消息没进历史
+        assertEquals(4, session.size());
+    }
+
+    @Test
+    void chat_should_fail_queued_action_when_turn_ends_before_drain() {
+        // Given：轮次上限为 1，工具批次之后就直接收敛——FOLLOW_UP 等不到任何排空点
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings(1, 0, 20000, null, null, null));
+        when(permissionManager.decide(any(PermissionCheckRequest.class)))
+                .thenReturn(PermissionDecision.allow(null));
+        Session session = sessionManager.createDefault();
+        List<ActionHandle> handles = new ArrayList<ActionHandle>();
+        registerTool("read", request -> {
+            handles.add(actionQueue.submit("plugin-a", PluginAction.sendUserMessage(
+                    session.getSessionId(), "来不及了", DeliverAs.FOLLOW_UP)));
+            return new ToolCallResult("read", "文件内容");
+        });
+        stubResponses(toolCallResponse("call_1", "read"));
+
+        // When
+        newLooper().chat(session.getSessionId(), "读文件", new RecordingListener()).await();
+
+        // Then：回合结束时残留的动作被标失败，而不是镀成一个永不兑现的 QUEUED
+        assertEquals(ActionStatus.FAILED, handles.get(0).getStatus());
+        assertTrue(handles.get(0).getResult().contains("回合已结束"), handles.get(0).getResult());
+    }
+
+    @Test
+    void chat_should_abort_running_turn_when_plugin_asks() {
+        // Given：插件要求中止当前回合——它不入队，投递那一刻就置取消标志
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        when(permissionManager.decide(any(PermissionCheckRequest.class)))
+                .thenReturn(PermissionDecision.allow(null));
+        Session session = sessionManager.createDefault();
+        registerTool("read", request -> {
+            actionQueue.submit("plugin-a", PluginAction.abortTurn(session.getSessionId()));
+            return new ToolCallResult("read", "文件内容");
+        });
+        stubResponses(toolCallResponse("call_1", "read"), LlmResponse.text("不应该跑到这里"));
+
+        // When
+        ReActResult result = newLooper().chat(session.getSessionId(), "读文件", new RecordingListener()).await();
+
+        // Then
+        assertTrue(result.isCancelled());
+    }
+
+    @Test
+    void chat_should_fail_actions_submitted_after_turn_ended() {
+        // Given：回合已经跑完（窗口已关闭）
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        stubResponses(LlmResponse.text("你好"));
+        Session session = sessionManager.createDefault();
+        newLooper().chat(session.getSessionId(), "你好", new RecordingListener()).await();
+
+        // When：插件此刻才想说话（典型来源：它从事件回调里投递，而事件是异步投递的）
+        ActionHandle handle = actionQueue.submit("plugin-a",
+                PluginAction.sendUserMessage(session.getSessionId(), "太晚了", DeliverAs.STEER));
+
+        // Then：明确失败，而不是静默丢掉
+        assertEquals(ActionStatus.FAILED, handle.getStatus());
+        assertTrue(handle.getResult().contains("没有在途回合"), handle.getResult());
+    }
+
     /**
      * 构造被测对象。
      *
@@ -881,7 +1037,7 @@ class ReActLooperTest {
         return new ReActLooper(sessionManager, modelManager,
                 new ToolExecutor(permissionManager, extensions, events, outputLimiter),
                 events, promptAssembler, runtimeConfig, conversationCompactor, runScopes,
-                new SessionModelResolver(modelManager, agentManager), extensions, executor);
+                new SessionModelResolver(modelManager, agentManager), extensions, actionDispatcher, executor);
     }
 
     /**

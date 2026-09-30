@@ -561,6 +561,48 @@ class ClaudeLlmClientTest {
     }
 
     @Test
+    void chat_should_merge_user_text_into_pending_tool_result_message() throws IOException {
+        // Given：工具批次之后紧跟一条用户消息——插件经动作通道插话（DeliverAs#STEER）就是这个形状，
+        // 回合被取消后补了「未执行」结果、用户又开一轮也是这个形状
+        StubInterceptor stub = jsonStub("{\"content\":[]}");
+        ClaudeLlmClient client = client(stub);
+
+        // When
+        client.chat(LlmRequest.builder("claude-3-5-sonnet")
+                .message(LlmMessage.user("hi"))
+                .message(new LlmMessage(LlmMessage.ROLE_TOOL, "r1", "call-1", null, null))
+                .message(LlmMessage.user("顺便把日志也改了"))
+                .build());
+
+        // Then：文本必须并进那条装工具结果的 user 消息。另起一条会被 Anthropic 以
+        // 「user / assistant 必须交替」直接拒绝，而那是一条很难归因的 400
+        JsonNode messages = json(requestBody(stub.lastRequest())).path("messages");
+        assertEquals(2, messages.size());
+        JsonNode last = messages.get(messages.size() - 1);
+        assertEquals("user", last.path("role").asText());
+        assertEquals(2, last.path("content").size());
+        assertEquals("tool_result", last.path("content").get(0).path("type").asText());
+        assertEquals("text", last.path("content").get(1).path("type").asText());
+        assertEquals("顺便把日志也改了", last.path("content").get(1).path("text").asText());
+    }
+
+    @Test
+    void chat_should_keep_user_message_separate_when_no_tool_result_pending() throws IOException {
+        // 没有挂起的工具结果时，用户消息照旧是独立一条：合并只针对「会产生连续 user」那一种形状
+        StubInterceptor stub = jsonStub("{\"content\":[]}");
+        ClaudeLlmClient client = client(stub);
+
+        client.chat(LlmRequest.builder("claude-3-5-sonnet")
+                .message(LlmMessage.user("hi"))
+                .message(LlmMessage.user("又是我"))
+                .build());
+
+        JsonNode messages = json(requestBody(stub.lastRequest())).path("messages");
+        assertEquals(2, messages.size());
+        assertEquals("又是我", messages.get(1).path("content").get(0).path("text").asText());
+    }
+
+    @Test
     void chat_should_not_mark_empty_text_block_when_last_message_blank() throws IOException {
         // Given：Anthropic 不接受空文本块，为一个断点把请求弄成非法不值得
         StubInterceptor stub = jsonStub("{\"content\":[]}");

@@ -2,6 +2,10 @@ package zcd.jellyfish.infra.plugin;
 
 import org.junit.jupiter.api.Test;
 import zcd.jellyfish.api.JellyfishException;
+import zcd.jellyfish.api.action.ActionHandle;
+import zcd.jellyfish.api.action.ActionStatus;
+import zcd.jellyfish.api.action.DeliverAs;
+import zcd.jellyfish.api.action.PluginAction;
 import zcd.jellyfish.api.event.JellyfishEvent;
 import zcd.jellyfish.api.event.RegisterOptions;
 import zcd.jellyfish.api.event.notification.ConfigWarningEvent;
@@ -12,6 +16,7 @@ import zcd.jellyfish.api.extension.ToolDescriptor;
 import zcd.jellyfish.api.extension.ToolCallRequest;
 import zcd.jellyfish.api.extension.ToolCallResult;
 import zcd.jellyfish.api.plugin.PluginDeclaration;
+import zcd.jellyfish.infra.action.ActionQueue;
 import zcd.jellyfish.infra.event.EventChannel;
 import zcd.jellyfish.infra.event.EventChannelOptions;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
@@ -231,7 +236,7 @@ class PluginContextImplTest {
         // Given：注册窗口是插件存活期，停止之后一律拒绝——否则会留下幽灵注册
         ContextLifecycle lifecycle = new ContextLifecycle();
         PluginContextImpl closable = new PluginContextImpl(
-                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle, new RuntimeInfoHolder());
+                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle, new RuntimeInfoHolder(), new ActionQueue());
         lifecycle.close();
 
         // When / Then
@@ -245,7 +250,7 @@ class PluginContextImplTest {
         // Given
         ContextLifecycle lifecycle = new ContextLifecycle();
         PluginContextImpl closable = new PluginContextImpl(
-                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle, new RuntimeInfoHolder());
+                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle, new RuntimeInfoHolder(), new ActionQueue());
         lifecycle.close();
 
         // When / Then
@@ -259,7 +264,7 @@ class PluginContextImplTest {
         // Given
         ContextLifecycle lifecycle = new ContextLifecycle();
         PluginContextImpl closable = new PluginContextImpl(
-                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle, new RuntimeInfoHolder());
+                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle, new RuntimeInfoHolder(), new ActionQueue());
         lifecycle.close();
 
         // When / Then
@@ -274,7 +279,7 @@ class PluginContextImplTest {
         // Given
         ContextLifecycle lifecycle = new ContextLifecycle();
         PluginContextImpl closable = new PluginContextImpl(
-                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle, new RuntimeInfoHolder());
+                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle, new RuntimeInfoHolder(), new ActionQueue());
         lifecycle.close();
 
         // When / Then：停止之后的发布同样属于幽灵行为，不能静默丢掉了事
@@ -282,11 +287,41 @@ class PluginContextImplTest {
     }
 
     @Test
+    void submit_should_fail_when_context_already_closed() {
+        // Given：投递与注册共用同一条存活边界，否则会在一个没人排空的队列里留下永远不兑现的 QUEUED
+        ContextLifecycle lifecycle = new ContextLifecycle();
+        PluginContextImpl closable = new PluginContextImpl(
+                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle,
+                new RuntimeInfoHolder(), new ActionQueue());
+        lifecycle.close();
+
+        // When / Then
+        assertThrows(JellyfishException.class,
+                () -> closable.submit(PluginAction.abortTurn("s1")));
+    }
+
+    @Test
+    void submit_should_report_failure_instead_of_throwing_when_no_turn_in_flight() {
+        // Given：正常存活的上下文，但目标会话没有在途回合
+        ActionQueue actions = new ActionQueue();
+        PluginContextImpl alive = new PluginContextImpl(PluginDeclaration.of("plugin-a"), extensions,
+                events, new ContextLifecycle(), new RuntimeInfoHolder(), actions);
+
+        // When
+        ActionHandle handle = alive.submit(
+                PluginAction.sendUserMessage("s1", "接着干", DeliverAs.FOLLOW_UP));
+
+        // Then：「这次没赶上」是正常结果，不该变成必须 try/catch 的错误路径
+        assertEquals(ActionStatus.FAILED, handle.getStatus());
+        assertTrue(handle.getResult().contains("没有在途回合"), handle.getResult());
+    }
+
+    @Test
     void subContext_should_share_lifecycle_with_parent() {
         // Given：子上下文也握着注册能力，若它们各有一份标记，回收根上下文就管不住它们
         ContextLifecycle lifecycle = new ContextLifecycle();
         PluginContextImpl parent = new PluginContextImpl(
-                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle, new RuntimeInfoHolder());
+                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle, new RuntimeInfoHolder(), new ActionQueue());
         PluginContextImpl child = (PluginContextImpl) parent.subContext("jira");
 
         // When
@@ -302,7 +337,7 @@ class PluginContextImplTest {
         // Given：上一条的反面 —— 失效只在关闭之后生效，关闭之前照常注册
         ContextLifecycle lifecycle = new ContextLifecycle();
         PluginContextImpl closable = new PluginContextImpl(
-                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle, new RuntimeInfoHolder());
+                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle, new RuntimeInfoHolder(), new ActionQueue());
 
         // When
         closable.handle(ToolCallRequest.class, "calc", request -> new ToolCallResult("calc", "ok"));

@@ -1,6 +1,8 @@
 package zcd.jellyfish.api.plugin;
 
 import zcd.jellyfish.api.RuntimeInfo;
+import zcd.jellyfish.api.action.ActionHandle;
+import zcd.jellyfish.api.action.PluginAction;
 import zcd.jellyfish.api.event.JellyfishEvent;
 import zcd.jellyfish.api.event.RegisterOptions;
 import zcd.jellyfish.api.event.Subscription;
@@ -25,6 +27,12 @@ import java.util.function.Predicate;
  * </ul>
  * 唯一性、空表行为、执行位置与失败语义都由内核在调用点决定，不向插件暴露成参数。
  * <p>
+ * <b>方向不止一条</b>：{@link #handle} / {@link #contribute} / {@link #observe} 是「内核回头找插件」，
+ * {@link #emit} 与 {@link #submit} 是「插件往外发」。四条边都不是同步回调：
+ * 前三条由内核在定义好的调用点同步或异步派发，后两条只写队列（通知队列 / 动作队列）。
+ * 插件因此<b>无法在同一次调用里影响内核的状态机</b>，而反过来内核也不会在动作完成时回头调插件——
+ * 结果由插件轮询 {@link ActionHandle} 取得。
+ * <p>
  * <b>描述符随处理器一起落表</b>：工具这类需要向内核暴露元信息的扩展点，把
  * {@code ToolDescriptor} 作为 {@code descriptor} 传入，内核在需要时按类型取回，
  * 因此不存在第二份「工具清单」需要插件额外维护。
@@ -33,6 +41,9 @@ import java.util.function.Predicate;
  * {@link #observe} / {@link #emit}（<b>不限于 </b>{@code start()} 之内），{@link #stop()} 之后则一律失败。
  * 需要主动解除某条注册时，用注册时拿到的 {@link Subscription#close()}；
  * 插件停止时框架仍会按 {@code pluginId} 一次性把剩下的收干净，因此注销是可选优化而不是必须动作。
+ * <p>
+ * <b>投递与注册共用同一条存活边界</b>：{@link #submit} 同样在 {@code stop()} 之后当场失败，
+ * 并且停止时会把该插件尚未排空的动作整批丢弃（见 {@link ActionHandle}）。
  *
  * @author zcd
  */
@@ -228,6 +239,34 @@ public interface PluginContext {
                                                                        ExtensionHandler<C, R> handler) {
         return contribute(requestType, null, handler, RegisterOptions.DEFAULT);
     }
+
+    /**
+     * 投递一条主动动作给内核。
+     * <p>
+     * <b>入队即返回，绝不在本方法的调用栈上执行</b>：内核把动作排进待排空队列，
+     * 在定义好的安全点（回合内的一轮之后 / 回合收敛点 / 回合边界）才执行它。
+     * 因此在处理器里调用本方法不会造成重入——「handler 还没返回，动作已经改了会话」这种情形不存在。
+     * <p>
+     * <b>为什么会有失败</b>：动作只能投进<b>正在跑的那个回合</b>（见 {@link zcd.jellyfish.api.action.DeliverAs}），
+     * 而这个内核里回合的边界由外壳决定。因此插件从事件订阅回调（异步投递，可能落在回合刚结束之后）
+     * 或自己的线程上投递时，拿不到在途回合是<b>正常结果</b>，回报
+     * {@link zcd.jellyfish.api.action.ActionStatus#FAILED} 而不是抛异常——异常会把一条「这次没赶上」
+     * 变成需要 try/catch 的错误路径。
+     * <p>
+     * <b>能投什么是有界的</b>：只能投 {@link PluginAction} 上列出的那几种动作，
+     * 没有「直接改内核状态」「直接执行工具」「关闭会话」这些入口。动作放宽的是「谁能发起」，
+     * 不是「发起之后能做什么」——{@code sendUserMessage} 引起的工具调用照旧过完整的权限与审批链。
+     * <p>
+     * <b>停止之后一律失败</b>：与注册同一条存活边界，{@code stop()} 之后本方法当场抛
+     * {@link zcd.jellyfish.api.JellyfishException}（fail-closed），而不是静默落进一个没人排空的队列。
+     *
+     * @param action 动作，不可为 {@code null}
+     * @return 动作句柄，保证非 {@code null}；结果靠轮询取得
+     * @throws zcd.jellyfish.api.JellyfishException 插件上下文已失效（已停止）时抛出
+     * @see PluginAction
+     * @see ActionHandle
+     */
+    ActionHandle submit(PluginAction action);
 
     /**
      * 订阅内核通知。

@@ -5,6 +5,7 @@ import org.slf4j.LoggerFactory;
 import zcd.jellyfish.api.plugin.PluginContext;
 import zcd.jellyfish.api.plugin.PluginDeclaration;
 import zcd.jellyfish.api.plugin.PluginOwnerNamespace;
+import zcd.jellyfish.infra.action.ActionQueue;
 import zcd.jellyfish.infra.event.EventChannel;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.registry.TypeRegistry;
@@ -55,6 +56,9 @@ public final class PluginContextFactory {
     /** 运行时信息持有者：外壳启动期写入，插件上下文只读快照。 */
     private final RuntimeInfoHolder runtimeInfo;
 
+    /** 动作队列：插件主动动作的入站队列，与注册同时刻按 owner 回收。 */
+    private final ActionQueue actions;
+
     /** 根 {@code pluginId} → 存活标记；停止时据此让该插件的全部上下文失效。 */
     private final Map<String, ContextLifecycle> lifecycles = new ConcurrentHashMap<String, ContextLifecycle>();
 
@@ -65,14 +69,16 @@ public final class PluginContextFactory {
      * @param events      事件通道，不可为 {@code null}
      * @param registry    共用注册表，不可为 {@code null}
      * @param runtimeInfo 运行时信息持有者，不可为 {@code null}
+     * @param actions     动作队列，不可为 {@code null}
      */
     @Inject
     public PluginContextFactory(ExtensionRegistry extensions, EventChannel events, TypeRegistry registry,
-                               RuntimeInfoHolder runtimeInfo) {
+                               RuntimeInfoHolder runtimeInfo, ActionQueue actions) {
         this.extensions = Objects.requireNonNull(extensions, "extensions must not be null");
         this.events = Objects.requireNonNull(events, "events must not be null");
         this.registry = Objects.requireNonNull(registry, "registry must not be null");
         this.runtimeInfo = Objects.requireNonNull(runtimeInfo, "runtimeInfo must not be null");
+        this.actions = Objects.requireNonNull(actions, "actions must not be null");
     }
 
     /**
@@ -91,7 +97,7 @@ public final class PluginContextFactory {
             LOG.warn("插件上下文被重复创建，已关闭上一条生命周期: pluginId={}", declaration.getPluginId());
             previous.close();
         }
-        return new PluginContextImpl(declaration, extensions, events, lifecycle, runtimeInfo);
+        return new PluginContextImpl(declaration, extensions, events, lifecycle, runtimeInfo, actions);
     }
 
     /**
@@ -115,6 +121,9 @@ public final class PluginContextFactory {
             if (lifecycle != null) {
                 lifecycle.close();
             }
+            // 与注册同一条存活边界、同一时刻：插件停止后，它在途排队的动作再也无人排空，
+            // 留在队列里只会镀成一个永不兑现的 QUEUED
+            actions.dropByOwner(pluginId);
         }
         int removed = registry.removeAllUnder(pluginId, PluginOwnerNamespace.SEPARATOR);
         LOG.info("已回收插件注册: pluginId={} registrations={}", pluginId, removed);

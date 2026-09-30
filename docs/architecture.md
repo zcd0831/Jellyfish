@@ -200,9 +200,16 @@ jellyfish-tui（TUI 外壳）  jellyfish-server（HTTP 外壳）  →  jellyfish
   调用与一次 100000 token 的调用等权，于是命中率被大量无信息的小调用抬起来。
 - **`/usage` 与 `/status` 给出「命中 / 输入（百分比）」**：两个数都给，因为比例给判断、绝对值给量级。
   命中数为 0 既可能是真没命中、也可能是厂商不上报；当前接入的四家在有缓存活动时都会带上这些字段。
-- **会话级累计随会话落盘**（`SessionUsageSnapshot`），因此 `/resume` 之后命中率不归零；
-  **单条消息的用量快照（`TokenUsageSnapshot`）刻意不带缓存字段**——没有任何消费方需要它，
-  而它每条消息都要写进会话文件。
+- **两块用量快照都带缓存字段**：`SessionUsageSnapshot`（会话累计，随会话落盘，因此 `/resume` 之后
+  命中率不归零）与 `TokenUsageSnapshot`（单次调用，随消息落盘，同时是下面那个通知的载荷）。
+- **一次调用记完账会广播 `LlmCallCompletedEvent`**：它是「这台机器一共命中了多少缓存」唯一的来源——
+  `/usage` 读的是会话状态，进程退出即消失。`MetricsSubscriber` 据此累加 `llm.calls`、
+  `llm.promptTokens`、`llm.cacheReadTokens`、`llm.cacheWriteTokens`。两条边界：**不产生消息的调用
+  （`/compact` 的摘要）也要发**，否则它在进程级彻底不可见；**合并子代理累计量的那条路径不发**，
+  那份用量在子代理会话里已经逐次发过，再发一次会把子代理的账重复计入。
+- **可缓存前缀的断裂会被观察并记日志**：`CacheBreakWatcher` 对比同一会话相邻两轮的可缓存前缀，
+  指出断在哪一层（system prompt / 工具清单 / 第几条消息起），从稳定变为断裂的那一轮记 WARN、
+  断裂持续期间降到 DEBUG。它只比较、不改请求，详见 `PromptAssembler.watchCacheBreak`。
 
 ## 整体架构图
 

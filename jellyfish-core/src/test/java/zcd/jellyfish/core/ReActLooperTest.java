@@ -23,6 +23,7 @@ import zcd.jellyfish.api.extension.ToolMetadata;
 import zcd.jellyfish.api.extension.ToolOutputSink;
 import zcd.jellyfish.api.extension.ToolDescriptor;
 import zcd.jellyfish.core.compact.ConversationCompactor;
+import zcd.jellyfish.core.prompt.CacheBreakWatcher;
 import zcd.jellyfish.core.prompt.ContextUsage;
 import zcd.jellyfish.core.prompt.PromptAssembler;
 import zcd.jellyfish.core.prompt.ToolCatalog;
@@ -144,7 +145,7 @@ class ReActLooperTest {
         extensions = new ExtensionRegistry(new TypeRegistry());
         sessionManager = new SessionManager(agentManager, events, extensions, new SessionDefaults());
         promptAssembler = new PromptAssembler(agentManager, new ToolCatalog(extensions), runtimeConfig, extensions,
-                new ToolResultAger(runtimeConfig));
+                new ToolResultAger(runtimeConfig), new CacheBreakWatcher());
         outputLimiter = new ToolOutputLimiter(runtimeConfig, new ToolOutputStore(runtimeConfig));
         runScopes = new RunScopes();
         // 这两个桩是共享前置条件：个别用例（会话不存在 / 提前取消）走不到这两步，用 lenient 避免误报

@@ -17,8 +17,10 @@ import zcd.jellyfish.api.event.notification.SessionClosedEvent;
 import zcd.jellyfish.api.event.notification.SessionCreatedEvent;
 import zcd.jellyfish.api.event.notification.ToolCallCompletedEvent;
 import zcd.jellyfish.api.event.notification.ToolCallStartedEvent;
+import zcd.jellyfish.api.event.notification.LlmCallCompletedEvent;
 import zcd.jellyfish.api.extension.CommandResult;
 import zcd.jellyfish.api.extension.PermissionDecision;
+import zcd.jellyfish.api.extension.TokenUsageSnapshot;
 import zcd.jellyfish.infra.event.EventChannel;
 
 /**
@@ -93,6 +95,7 @@ public final class MetricsSubscriber implements AutoCloseable {
                 event -> registry.increment(MetricNames.CONFIG_WARNINGS)));
         subscriptions.add(events.subscribe(OWNER, ConfigReloadedEvent.class, this::onConfigReloaded));
         subscriptions.add(events.subscribe(OWNER, PluginStateChangedEvent.class, this::onPluginState));
+        subscriptions.add(events.subscribe(OWNER, LlmCallCompletedEvent.class, this::onLlmCall));
     }
 
     /**
@@ -173,6 +176,35 @@ public final class MetricsSubscriber implements AutoCloseable {
         registry.increment(MetricNames.COMPACTION_APPLIED);
         registry.add(MetricNames.COMPACTION_COMPRESSED_MESSAGES, event.getCompressedCount());
         registry.add(MetricNames.COMPACTION_DROPPED_MESSAGES, event.getDroppedCount());
+    }
+
+    /**
+     * 折算模型调用完成事件：把 token 与缓存计数累加进指标。
+     * <p>
+     * <b>为什么缓存命中数要单独累计</b>：命中率是一个「分子 / 分母」的比值——分子（命中）与
+     * 分母（总输入）在这里就是那个比值的两个分量。此前它们只在会话状态里（{@code /usage} 可读），
+     * 进程级完全看不到，于是「这台机器一共命中了多少缓存」无从算起。
+     * <p>
+     * <b>缺失的字段按 0 计</b>：指标是聚合量，为它引入一套「未知」语义只会让汇总表多一列谁都算不出来的数。
+     *
+     * @param event 模型调用完成事件
+     */
+    private void onLlmCall(LlmCallCompletedEvent event) {
+        TokenUsageSnapshot usage = event.getUsage();
+        registry.increment(MetricNames.LLM_CALLS);
+        registry.add(MetricNames.LLM_PROMPT_TOKENS, countOf(usage.getPromptTokens()));
+        registry.add(MetricNames.LLM_CACHE_READ_TOKENS, countOf(usage.getCacheReadTokens()));
+        registry.add(MetricNames.LLM_CACHE_WRITE_TOKENS, countOf(usage.getCacheWriteTokens()));
+    }
+
+    /**
+     * 把可空计数按 0 处理。
+     *
+     * @param value 计数，可为 {@code null}
+     * @return 非空计数
+     */
+    private static long countOf(Integer value) {
+        return value == null ? 0L : value.longValue();
     }
 
     /**

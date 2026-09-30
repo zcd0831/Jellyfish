@@ -76,7 +76,7 @@ class SessionRequestTypesTest {
 
     @Test
     void usageSnapshots_should_keepValues() {
-        TokenUsageSnapshot token = new TokenUsageSnapshot(1, 2, 3);
+        TokenUsageSnapshot token = new TokenUsageSnapshot(1, 2, 3, 4, 5);
         SessionUsageSnapshot session = new SessionUsageSnapshot(10L, 20L, 30L, 4L, 5L, 6L);
 
         assertEquals(1, token.getPromptTokens());
@@ -90,7 +90,7 @@ class SessionRequestTypesTest {
 
     @Test
     void usageSnapshots_should_allowUnknownCounters() {
-        TokenUsageSnapshot token = new TokenUsageSnapshot(null, null, null);
+        TokenUsageSnapshot token = new TokenUsageSnapshot(null, null, null, null, null);
 
         assertNull(token.getPromptTokens());
         assertNull(token.getCompletionTokens());

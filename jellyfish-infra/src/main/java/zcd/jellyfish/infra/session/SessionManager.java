@@ -7,6 +7,7 @@ import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.event.EventPublisher;
 import zcd.jellyfish.api.event.JellyfishEvent;
 import zcd.jellyfish.api.event.notification.CompactionAppliedEvent;
+import zcd.jellyfish.api.event.notification.LlmCallCompletedEvent;
 import zcd.jellyfish.api.event.notification.SessionClosedEvent;
 import zcd.jellyfish.api.event.notification.SessionCreatedEvent;
 import zcd.jellyfish.api.event.notification.SessionMessageAppendedEvent;
@@ -16,6 +17,7 @@ import zcd.jellyfish.api.extension.SessionPersistRequest;
 import zcd.jellyfish.api.extension.SessionRestoreRequest;
 import zcd.jellyfish.api.extension.SessionRestoreResult;
 import zcd.jellyfish.api.extension.SessionSnapshot;
+import zcd.jellyfish.api.extension.TokenUsageSnapshot;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.config.AgentDefinition;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
@@ -446,7 +448,32 @@ public class SessionManager {
         }
         publish(new SessionMessageAppendedEvent(session.getSessionId(), sessionMessage.getMessageId(),
                 sessionMessage.getRole()));
+        publishUsage(session, usage);
         return sessionMessage;
+    }
+
+    /**
+     * 广播「一次模型调用已记账」。
+     * <p>
+     * <b>为什么在记账处发而不是在调用处发</b>：用量进会话有两条路径（追加一条带用量的消息、
+     * 只记用量而不留消息），在调用处发就得把两条都记住；放在唯一的记账漏斗上，两条自动都覆盖。
+     * <p>
+     * <b>用量为 {@code null} 时不发</b>：「厂商没返回用量」不是一次可计量的调用，
+     * 发出去只会让订阅方多一堆要过滤的零。
+     * <p>
+     * <b>合并子代理累计量的那条路径不发</b>：那份用量在子代理的会话里已经逐次发过了，
+     * 再发一次会让「这个进程一共几次模型调用」把子代理的账重复计入。
+     *
+     * @param session 会话运行态
+     * @param usage   一次调用的用量，可为 {@code null}
+     */
+    private void publishUsage(Session session, LlmUsage usage) {
+        if (usage == null) {
+            return;
+        }
+        publish(new LlmCallCompletedEvent(session.getSessionId(), session.getProvider(), session.getModel(),
+                new TokenUsageSnapshot(usage.getPromptTokens(), usage.getCompletionTokens(),
+                        usage.getTotalTokens(), usage.getCacheReadTokens(), usage.getCacheWriteTokens())));
     }
 
     /**
@@ -569,7 +596,8 @@ public class SessionManager {
      * <p>
      * <b>为什么需要它</b>：{@code /compact} 的摘要调用花的是真实的 token，但它不该在对话里留下一条
      * 消息（屏幕投影会多出一条谁也没说过的话）。用量是「会话花掉了多少」这一笔账，与消息列表无关，
-     * 因此给它一个独立入口。<b>不广播事件</b>：用量变化没有对应的通知类型，{@code /usage} 读的是状态。
+     * 因此给它一个独立入口。**广播 {@link LlmCallCompletedEvent}**：这次调用不产生会话消息，
+     * 如果连事件也不发，它在进程级就彻底不可见（{@code /usage} 读的是会话状态，进程退出即消失）。
      *
      * @param sessionId 会话标识，不可为空白
      * @param usage     一次调用的用量，可为 {@code null}（只累加调用次数）
@@ -580,6 +608,7 @@ public class SessionManager {
         Session session = require(sessionId);
         session.recordUsage(usage);
         persist(session);
+        publishUsage(session, usage);
         return session;
     }
 

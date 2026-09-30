@@ -9,6 +9,7 @@ import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.event.EventPublisher;
 import zcd.jellyfish.api.event.JellyfishEvent;
 import zcd.jellyfish.api.event.RegisterOptions;
+import zcd.jellyfish.api.event.notification.LlmCallCompletedEvent;
 import zcd.jellyfish.api.event.notification.SessionClosedEvent;
 import zcd.jellyfish.api.event.notification.SessionCreatedEvent;
 import zcd.jellyfish.api.event.notification.SessionMessageAppendedEvent;
@@ -35,6 +36,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -206,6 +208,53 @@ class SessionManagerTest {
 
         // Then
         assertEquals(1, persists.get());
+    }
+
+    @Test
+    void appendMessage_should_publishLlmCallEvent_withTokenAndCacheCounts() {
+        // Given
+        SessionManager manager = manager();
+        Session session = manager.create(CODER, null, null, null);
+
+        // When：一次「总输入 100、其中命中 80」的调用随 assistant 消息落会话
+        manager.appendMessage(session.getSessionId(), LlmMessage.assistant("ok"),
+                new LlmUsage(100, 7, 107, 80, 0));
+
+        // Then：用量除了进会话状态（/usage 读它），还要能在进程级被订阅到——
+        // 后者是「这台机器一共命中了多少缓存」唯一可能的来源
+        LlmCallCompletedEvent event = publishedEvent(LlmCallCompletedEvent.class);
+        assertEquals(session.getSessionId(), event.getSessionId());
+        assertEquals(100, event.getUsage().getPromptTokens().intValue());
+        assertEquals(80, event.getUsage().getCacheReadTokens().intValue());
+        assertEquals(107L, session.getUsage().getTotalTokens());
+    }
+
+    @Test
+    void appendMessage_should_notPublishLlmCallEvent_when_usageIsAbsent() {
+        // Given
+        SessionManager manager = manager();
+        Session session = manager.create(CODER, null, null, null);
+
+        // When：工具结果等消息不带用量
+        manager.appendMessage(session.getSessionId(), LlmMessage.user("hi"), null);
+
+        // Then：「厂商没返回用量」不是一次可计量的调用，发出去只会让订阅方多一堆要过滤的零
+        verify(events, never()).publish(any(LlmCallCompletedEvent.class));
+    }
+
+    @Test
+    void recordUsage_should_publishLlmCallEvent_forCallsWithoutMessage() {
+        // Given：/compact 的摘要调用不产生会话消息
+        SessionManager manager = manager();
+        Session session = manager.create(CODER, null, null, null);
+
+        // When
+        manager.recordUsage(session.getSessionId(), new LlmUsage(200, 5, 205, 150, 0));
+
+        // Then：这条路径不产生消息，不发事件的话它在进程级彻底不可见
+        LlmCallCompletedEvent event = publishedEvent(LlmCallCompletedEvent.class);
+        assertEquals(150, event.getUsage().getCacheReadTokens().intValue());
+        assertEquals(205L, session.getUsage().getTotalTokens());
     }
 
     @Test

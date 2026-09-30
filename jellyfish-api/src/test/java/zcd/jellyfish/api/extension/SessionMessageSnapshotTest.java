@@ -25,7 +25,7 @@ class SessionMessageSnapshotTest {
     @Test
     void constructor_should_keepAllFields() {
         SessionMessageSnapshot snapshot = new SessionMessageSnapshot("m-1", 5L, "assistant", "内容",
-                "call-1", "read_file", null, new TokenUsageSnapshot(1, 2, 3), "想了一下", null);
+                "call-1", "read_file", null, new TokenUsageSnapshot(1, 2, 3, 4, 5), "想了一下", null);
 
         assertEquals("m-1", snapshot.getMessageId());
         assertEquals(5L, snapshot.getTimestamp());

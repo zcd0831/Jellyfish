@@ -6,6 +6,7 @@ import zcd.jellyfish.api.event.notification.CommandExecutedEvent;
 import zcd.jellyfish.api.event.notification.CompactionAppliedEvent;
 import zcd.jellyfish.api.event.notification.ConfigReloadedEvent;
 import zcd.jellyfish.api.event.notification.ConfigWarningEvent;
+import zcd.jellyfish.api.event.notification.LlmCallCompletedEvent;
 import zcd.jellyfish.api.event.notification.PermissionDecidedEvent;
 import zcd.jellyfish.api.event.notification.PluginStateChangedEvent;
 import zcd.jellyfish.api.event.notification.SessionClosedEvent;
@@ -15,6 +16,7 @@ import zcd.jellyfish.api.event.notification.ToolCallStartedEvent;
 import zcd.jellyfish.api.extension.CommandResult;
 import zcd.jellyfish.api.extension.PermissionDecision;
 import zcd.jellyfish.api.extension.PermissionMode;
+import zcd.jellyfish.api.extension.TokenUsageSnapshot;
 import zcd.jellyfish.infra.event.EventChannel;
 import zcd.jellyfish.infra.event.EventChannelOptions;
 import zcd.jellyfish.infra.registry.TypeRegistry;
@@ -152,6 +154,41 @@ class MetricsSubscriberTest {
         awaitCounter(MetricNames.COMPACTION_APPLIED, 2L);
         awaitCounter(MetricNames.COMPACTION_DROPPED_MESSAGES, 3L);
         awaitCounter(MetricNames.COMPACTION_COMPRESSED_MESSAGES, 20L);
+    }
+
+    @Test
+    void start_should_accumulate_llm_token_and_cache_counts() {
+        // Given
+        subscriber.start();
+        channel.start();
+
+        // When：两次调用，其中一次完全未命中缓存
+        channel.publish(new LlmCallCompletedEvent("s1", "deepseek", "deepseek-chat",
+                new TokenUsageSnapshot(100, 7, 107, 80, 0)));
+        channel.publish(new LlmCallCompletedEvent("s1", "deepseek", "deepseek-chat",
+                new TokenUsageSnapshot(50, 3, 53, 0, 5)));
+
+        // Then：命中率是「命中 / 总输入」的比值，两个分量都要能读出来（80/150）
+        awaitCounter(MetricNames.LLM_CALLS, 2L);
+        awaitCounter(MetricNames.LLM_PROMPT_TOKENS, 150L);
+        awaitCounter(MetricNames.LLM_CACHE_READ_TOKENS, 80L);
+        awaitCounter(MetricNames.LLM_CACHE_WRITE_TOKENS, 5L);
+    }
+
+    @Test
+    void start_should_count_missing_token_fields_as_zero() {
+        // Given：厂商没返回用量
+        subscriber.start();
+        channel.start();
+
+        // When
+        channel.publish(new LlmCallCompletedEvent("s1", null, null,
+                new TokenUsageSnapshot(null, null, null, null, null)));
+
+        // Then：调用次数要涨，token 计 0——指标是聚合量，为它引入一套「未知」语义
+        // 只会让汇总表多一列谁都算不出来的数
+        awaitCounter(MetricNames.LLM_CALLS, 1L);
+        awaitCounter(MetricNames.LLM_PROMPT_TOKENS, 0L);
     }
 
     @Test

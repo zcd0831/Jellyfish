@@ -12,6 +12,7 @@ import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.extension.HandlerBinding;
 import zcd.jellyfish.infra.llm.LlmMessage;
 import zcd.jellyfish.infra.llm.LlmRequest;
+import zcd.jellyfish.infra.llm.LlmTool;
 import zcd.jellyfish.infra.model.ResolvedModel;
 import zcd.jellyfish.infra.session.Session;
 import zcd.jellyfish.infra.session.SessionCompaction;
@@ -66,6 +67,9 @@ public class PromptAssembler {
     /** 工具结果老化器：较早的大结果在发往模型前换成 stub。 */
     private final ToolResultAger toolResultAger;
 
+    /** 缓存断裂观察器：对比相邻两轮的可缓存前缀，断裂时记日志。 */
+    private final CacheBreakWatcher cacheBreakWatcher;
+
     /**
      * 构造提示词组装器。
      *
@@ -74,15 +78,19 @@ public class PromptAssembler {
      * @param runtimeConfig 运行时配置门面（读取 ReAct 段的预留 token）
      * @param extensions    同步扩展点策略（取本轮提示词贡献）
      * @param toolResultAger 工具结果老化器（较早的大结果换成 stub）
+     * @param cacheBreakWatcher 缓存断裂观察器（对比相邻两轮的可缓存前缀）
      */
     @Inject
     public PromptAssembler(AgentManager agentManager, ToolCatalog toolCatalog, RuntimeConfig runtimeConfig,
-                           ExtensionRegistry extensions, ToolResultAger toolResultAger) {
+                           ExtensionRegistry extensions, ToolResultAger toolResultAger,
+                           CacheBreakWatcher cacheBreakWatcher) {
         this.agentManager = Objects.requireNonNull(agentManager, "agentManager must not be null");
         this.toolCatalog = Objects.requireNonNull(toolCatalog, "toolCatalog must not be null");
         this.runtimeConfig = Objects.requireNonNull(runtimeConfig, "runtimeConfig must not be null");
         this.extensions = Objects.requireNonNull(extensions, "extensions must not be null");
         this.toolResultAger = Objects.requireNonNull(toolResultAger, "toolResultAger must not be null");
+        this.cacheBreakWatcher = Objects.requireNonNull(cacheBreakWatcher,
+                "cacheBreakWatcher must not be null");
     }
 
     /**
@@ -134,10 +142,12 @@ public class PromptAssembler {
         // 反过来则会先把整组丢掉，连「内容在哪」都一起没了
         List<LlmMessage> history = toolResultAger.age(toLlmMessages(session, boundary + 1));
         CropResult cropResult = crop(resolvedModel, systemPrompt, history);
+        List<LlmTool> tools = toolCatalog.tools(toolFilter);
+        watchCacheBreak(session, systemPrompt, tools, cropResult.getMessages());
         LlmRequest.Builder builder = LlmRequest.builder(resolvedModel.getModel().getId())
                 .systemPrompt(systemPrompt)
                 .messages(cropResult.getMessages())
-                .tools(toolCatalog.tools(toolFilter));
+                .tools(tools);
         int maxOutputTokens = resolvedModel.getModel().getMaxOutputTokens();
         if (maxOutputTokens > 0) {
             builder.maxTokens(maxOutputTokens);
@@ -146,6 +156,32 @@ public class PromptAssembler {
                 + TokenEstimator.estimateMessages(cropResult.getMessages()), cropResult.getBudget(),
                 cropResult.isTruncated());
         return new PromptAssembly(builder.build(), usage);
+    }
+
+    /**
+     * 观察本轮的可缓存前缀，断裂时记一条日志。
+     * <p>
+     * <b>为什么在「实际要发送的消息」上观察，而不是在会话历史上</b>：缓存匹配的是<b>发出去的那一段</b>。
+     * 老化与裁剪都发生在组装里，只有这里能看到它们对前缀做了什么——在会话历史上看到的「一切正常」，
+     * 恰恰是缓存断裂最容易藏身的地方。
+     * <p>
+     * <b>为什么断裂只告警一次</b>：断裂当前是设计性的（见 {@code docs/design/llm-cache.md} 的 R1 / R2），
+     * 逐轮 WARN 会把日志刷满，反而让「它是什么时候开始的」看不出来。恢复之后再次断裂会重新告警。
+     *
+     * @param session      会话运行态
+     * @param systemPrompt 本轮的 system prompt，可为 {@code null}
+     * @param tools        本轮的工具清单
+     * @param messages     本轮实际要发送的消息
+     */
+    private void watchCacheBreak(Session session, String systemPrompt, List<LlmTool> tools,
+                                 List<LlmMessage> messages) {
+        CacheBreakWatcher.Report report =
+                cacheBreakWatcher.observe(session.getSessionId(), systemPrompt, tools, messages);
+        if (report.isFirstWarning()) {
+            LOG.warn("可缓存前缀断裂: {} (sessionId={})", report.describe(), session.getSessionId());
+        } else {
+            LOG.debug("可缓存前缀: {} (sessionId={})", report.describe(), session.getSessionId());
+        }
     }
 
     /**

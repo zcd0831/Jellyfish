@@ -199,15 +199,35 @@ public final class StatusBarView {
     }
 
     /**
-     * 生成 token 累计用量标签，按上传 / 下载分列。
+     * 生成 token 累计用量标签，按上传 / 下载分列；有缓存活动时追加命中率。
+     * <p>
+     * <b>只在累计命中大于 0 时追加</b>：状态栏是一行，而绝大多数会话（不接缓存、或前缀每次都变）
+     * 根本没有命中可看。判据用「有没有命中过」而不是「厂商支不支持缓存」——后者要么得让状态栏
+     * 认识每个厂商，要么在不支持的厂商上常驻一个恒为 0 的数字。
+     * <p>
+     * <b>不用 ⚡ 之类的图标</b>：{@code DisplayWidth.isWide} 的宽字符区间不含 U+26A1，
+     * 而终端普遍按两列渲染它——那会让状态栏的宽度账目错一列。中文标签落在已知的宽字符区间里。
      *
      * @param usage 会话用量，可为 {@code null}
-     * @return 标签，形如 {@code ↑3.2k ↓1.1k}；无用量时返回 {@code ↑0 ↓0}
+     * @return 标签，形如 {@code ↑3.2k ↓1.1k}；有缓存活动时为 {@code ↑3.2k ↓1.1k 命中18%}
      */
     private static String usageLabel(SessionUsage usage) {
         long prompt = usage == null ? 0L : usage.getPromptTokens();
         long completion = usage == null ? 0L : usage.getCompletionTokens();
-        return "\u2191" + abbreviate(prompt) + " \u2193" + abbreviate(completion);
+        return "\u2191" + abbreviate(prompt) + " \u2193" + abbreviate(completion) + cacheSuffix(usage);
+    }
+
+    /**
+     * 生成缓存命中率后缀；没有缓存活动时返回空串。
+     *
+     * @param usage 会话用量，可为 {@code null}
+     * @return 形如 {@code  命中18%}；无缓存活动时为空串
+     */
+    private static String cacheSuffix(SessionUsage usage) {
+        if (usage == null || usage.getCacheReadTokens() <= 0L) {
+            return "";
+        }
+        return " 命中" + Math.round(usage.getCacheHitRate() * 100.0d) + "%";
     }
 
     /**

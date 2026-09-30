@@ -308,13 +308,21 @@ LlmRequest.Builder builder = LlmRequest.builder(modelId)
 > **一处行为变更（修正而非回归）**：Anthropic 的输入总数会变大——它此前把缓存部分**整个漏掉**
 > （有缓存活动时，会话用量少算的恰好是最大那一块）。OpenAI / DeepSeek / Gemini 的展示数字不变。
 
-**待做（P0b：持续观测与自动告警）**：
+**待做（P0b：持续观测与自动告警）——已落地**：
 
-- `MetricsRegistry` 出缓存命中计数。**不能直接加**：本项目指标只从事件派生（`MetricsSubscriber`），
-  而当前没有携带 `LlmUsage` 的事件，因此需要先加一个「一次模型调用完成」的通知类型。
-- **缓存断裂告警**：内核每轮记录 `system prompt 哈希` + `工具清单哈希` + `第一条变动的消息下标`，
-  与上一轮比对，变了就 WARN（可归因到「哪个插件贡献块变了」）。需要在 `PromptAssembler` 上挂每会话状态。
-- TUI 状态栏显示命中率（目前只有输入 / 输出）。
+- **`LlmCallCompletedEvent` + 指标**：新增一个「一次调用已记账」的通知（载荷是 api 侧的
+  `TokenUsageSnapshot`，因此也补上了它的缓存字段），`MetricsSubscriber` 据此累加
+  `llm.calls` / `llm.promptTokens` / `llm.cacheReadTokens` / `llm.cacheWriteTokens`。
+  发布点在**记账漏斗**（`SessionManager`）而不是调用点：用量进会话有两条路径（追加带用量的消息、
+  只记用量不留消息），放在漏斗上两条自动都覆盖。
+- **缓存断裂观察器**（`core/prompt/CacheBreakWatcher`）：每轮对比同一会话相邻两次请求的
+  可缓存前缀，指出断在哪一层（system prompt / 工具清单 / 第几条消息起）。
+  **按「一轮断裂」节流**：从稳定变为断裂的那一轮 WARN，持续期间降到 DEBUG，恢复后再断会重新告警
+  ——逐轮 WARN 会把日志刷满，反而让「它是什么时候开始的」看不出来。
+- **TUI 状态栏**：有缓存活动时在用量片段后面追加命中率（无缓存活动的会话完全不受影响）。
+
+**这一项待做**：把断裂观察器的日志接成指标（当前只有日志），以及与 P2 一起把「system prompt 变了」
+归因到具体是哪个插件的贡献块。
 
 #### 验收方式
 

@@ -143,7 +143,7 @@ public final class SessionSnapshots {
             return null;
         }
         return new TokenUsageSnapshot(usage.getPromptTokens(), usage.getCompletionTokens(),
-                usage.getTotalTokens());
+                usage.getTotalTokens(), usage.getCacheReadTokens(), usage.getCacheWriteTokens());
     }
 
     /**
@@ -168,9 +168,10 @@ public final class SessionSnapshots {
         if (snapshot == null) {
             return null;
         }
-        // 三个字段都可能缺失，缺失按 0 计：这是「读过一次但厂商没给全」的合理下限
+        // 五个字段都可能缺失，缺失按 0 计：这是「读过一次但厂商没给全」的合理下限
         return new LlmUsage(orZero(snapshot.getPromptTokens()), orZero(snapshot.getCompletionTokens()),
-                orZero(snapshot.getTotalTokens()));
+                orZero(snapshot.getTotalTokens()), orZero(snapshot.getCacheReadTokens()),
+                orZero(snapshot.getCacheWriteTokens()));
     }
 
     /**

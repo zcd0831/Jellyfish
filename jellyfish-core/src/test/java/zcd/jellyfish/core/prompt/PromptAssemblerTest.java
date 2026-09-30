@@ -83,7 +83,7 @@ class PromptAssemblerTest {
         // 工具结果老化器在有些用例里不会被走到，用 lenient 预置缺省 React 段，避免严格桩误报
         lenient().when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
         assembler = new PromptAssembler(agentManager, toolCatalog, runtimeConfig, extensions,
-                new ToolResultAger(runtimeConfig));
+                new ToolResultAger(runtimeConfig), new CacheBreakWatcher());
     }
 
     @Test

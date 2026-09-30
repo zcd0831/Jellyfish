@@ -67,6 +67,18 @@ public final class MetricNames {
     /** 插件进入失败态的次数。 */
     public static final String PLUGIN_FAILED = "plugin.failed";
 
+    /** 模型调用累计次数（含未返回用量的调用）。 */
+    public static final String LLM_CALLS = "llm.calls";
+
+    /** 输入 token 累计总数（含缓存命中与建缓存的部分）。 */
+    public static final String LLM_PROMPT_TOKENS = "llm.promptTokens";
+
+    /** 输入中命中缓存的累计 token 数。 */
+    public static final String LLM_CACHE_READ_TOKENS = "llm.cacheReadTokens";
+
+    /** 输入中写入缓存的累计 token 数。 */
+    public static final String LLM_CACHE_WRITE_TOKENS = "llm.cacheWriteTokens";
+
     /** 插件状态变更总次数。 */
     public static final String PLUGIN_STATE_CHANGES = "plugin.stateChanges";
 

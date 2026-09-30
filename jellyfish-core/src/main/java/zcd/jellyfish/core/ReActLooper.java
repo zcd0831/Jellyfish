@@ -328,7 +328,7 @@ public class ReActLooper implements AutoCloseable {
             // 结果在下一轮组装时才生效（那时边界已经推进）
             conversationCompactor.autoCompactIfNeeded(sessionId, assembly.getUsage());
             LlmResponse response = callStreaming(turn, modelManager.getClient(resolvedModel),
-                    assembly.getRequest(), listener);
+                    assembly.getRequest(), listener, sessionId);
             if (response == null) {
                 return cancel(sessionId, listener, round - 1);
             }
@@ -371,11 +371,12 @@ public class ReActLooper implements AutoCloseable {
      * @param client  LLM 客户端
      * @param request 请求
      * @param listener 监听器
+     * @param sessionId 会话标识，失败时用于上报
      * @return 聚合后的响应；被取消时返回 {@code null}
      * @throws JellyfishException 流失败或等待被中断时抛出
      */
     private LlmResponse callStreaming(ReActTurnImpl turn, LlmClient client, LlmRequest request,
-                                      ReActListener listener) {
+                                      ReActListener listener, String sessionId) {
         CountDownLatch latch = new CountDownLatch(1);
         AtomicReference<LlmResponse> responseRef = new AtomicReference<LlmResponse>();
         AtomicReference<Throwable> errorRef = new AtomicReference<Throwable>();
@@ -420,6 +421,12 @@ public class ReActLooper implements AutoCloseable {
         }
         Throwable error = errorRef.get();
         if (error != null) {
+            // 在这里上报、而不是等异常穿出去：状态码只长在原始异常的类型上，
+            // 而下面那句包装会把它降成普通 JellyfishException。订阅方要靠状态码区分
+            // 「字段被拒该降级」与「限流该重试」，丢了它这个事件就只剩一半用处
+            sessionManager.publishCallFailure(sessionId, request.getModel(),
+                    error instanceof JellyfishException ? (JellyfishException) error
+                            : new JellyfishException(error.getMessage(), error));
             throw new JellyfishException("llm stream failed: " + error.getMessage(), error);
         }
         LlmResponse response = responseRef.get();

@@ -200,6 +200,20 @@ class OpenAiLlmClientTest {
     }
 
     @Test
+    void chat_should_sendOneMaxTokens_when_minimalOutputRequested() throws IOException {
+        // Given：OpenAI 系的下限是 1——max_tokens: 0 会以 "'0' is less than the minimum of 1" 被拒，
+        // 因此「不要求输出」在这里落成 1，而不是 Anthropic 那种 0
+        StubInterceptor stub = jsonStub("{\"choices\":[{\"message\":{\"content\":\"ok\"}}]}");
+        OpenAiLlmClient client = client(stub);
+
+        // When
+        client.chat(LlmRequest.builder("gpt-4o").message(LlmMessage.user("hi")).minimalOutput().build());
+
+        // Then
+        assertEquals(1, json(requestBody(stub.lastRequest())).path("max_tokens").asInt());
+    }
+
+    @Test
     void chat_should_parse_tool_calls_when_response_contains_them() {
         // Given
         StubInterceptor stub = jsonStub("{\"choices\":[{\"message\":{\"tool_calls\":[{\"id\":\"call-1\","
@@ -234,6 +248,20 @@ class OpenAiLlmClientTest {
         // When / Then
         assertThrows(JellyfishException.class,
                 () -> client.chat(LlmRequest.builder("gpt-4o").message(LlmMessage.user("hi")).build()));
+    }
+
+    @Test
+    void chat_should_carryStatusCode_when_http_status_is_error() {
+        // Given：订阅方要靠状态码区分「字段被拒该降级」与「限流该重试」
+        OpenAiLlmClient client = client(errorStub(400, "{\"error\":\"unknown field\"}"));
+
+        // When
+        LlmHttpException failure = assertThrows(LlmHttpException.class,
+                () -> client.chat(LlmRequest.builder("gpt-4o").message(LlmMessage.user("hi")).build()));
+
+        // Then：它仍然是 JellyfishException，既有捕获点一个都不用改
+        assertEquals(400, failure.getStatusCode());
+        assertTrue(failure.getMessage().contains("400"));
     }
 
     @Test

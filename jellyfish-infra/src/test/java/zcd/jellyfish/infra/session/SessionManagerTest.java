@@ -10,6 +10,7 @@ import zcd.jellyfish.api.event.EventPublisher;
 import zcd.jellyfish.api.event.JellyfishEvent;
 import zcd.jellyfish.api.event.RegisterOptions;
 import zcd.jellyfish.api.event.notification.LlmCallCompletedEvent;
+import zcd.jellyfish.api.event.notification.LlmCallFailedEvent;
 import zcd.jellyfish.api.event.notification.SessionClosedEvent;
 import zcd.jellyfish.api.event.notification.SessionCreatedEvent;
 import zcd.jellyfish.api.event.notification.SessionMessageAppendedEvent;
@@ -19,6 +20,7 @@ import zcd.jellyfish.api.extension.SessionPersistRequest;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.config.AgentDefinition;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
+import zcd.jellyfish.infra.llm.LlmHttpException;
 import zcd.jellyfish.infra.llm.LlmMessage;
 import zcd.jellyfish.infra.llm.LlmUsage;
 import zcd.jellyfish.infra.registry.TypeRegistry;
@@ -27,6 +29,7 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -227,6 +230,72 @@ class SessionManagerTest {
         assertEquals(100, event.getUsage().getPromptTokens().intValue());
         assertEquals(80, event.getUsage().getCacheReadTokens().intValue());
         assertEquals(107L, session.getUsage().getTotalTokens());
+    }
+
+    @Test
+    void publishCallFailure_should_carryStatusCode_andSessionAttribution() {
+        // Given
+        SessionManager manager = manager();
+        Session session = manager.create(CODER, "openai", "gpt-4o", null);
+
+        // When：端点以 400 拒收某个字段
+        manager.publishCallFailure(session.getSessionId(), "gpt-4o",
+                new LlmHttpException("chat request failed (HTTP 400): unknown field", 400));
+
+        // Then：状态码必须留下来——订阅方要靠它区分「字段被拒该降级」与「限流该重试」
+        LlmCallFailedEvent event = publishedEvent(LlmCallFailedEvent.class);
+        assertEquals(400, event.getStatusCode());
+        assertTrue(event.isRejected());
+        assertEquals(session.getSessionId(), event.getSessionId());
+        assertEquals("openai", event.getProvider());
+        assertEquals("gpt-4o", event.getModel());
+    }
+
+    @Test
+    void publishCallFailure_should_notTreatRateLimitAsRejected() {
+        // Given：429 是暂时性的，与 400 的处理完全相反
+        SessionManager manager = manager();
+        Session session = manager.create(CODER, "openai", "gpt-4o", null);
+
+        // When
+        manager.publishCallFailure(session.getSessionId(), null,
+                new LlmHttpException("chat request failed (HTTP 429)", 429));
+
+        // Then
+        LlmCallFailedEvent event = publishedEvent(LlmCallFailedEvent.class);
+        assertEquals(429, event.getStatusCode());
+        assertFalse(event.isRejected());
+    }
+
+    @Test
+    void publishCallFailure_should_useZeroStatusAndSessionModel_when_notHttpFailure() {
+        // Given：网络异常不是 HTTP 层面的失败，而模型标识可以由会话补上
+        SessionManager manager = manager();
+        Session session = manager.create(CODER, "openai", "gpt-4o", null);
+
+        // When
+        manager.publishCallFailure(session.getSessionId(), null,
+                new JellyfishException("chat request failed for provider: openai"));
+
+        // Then
+        LlmCallFailedEvent event = publishedEvent(LlmCallFailedEvent.class);
+        assertEquals(0, event.getStatusCode());
+        assertFalse(event.isRejected());
+        assertEquals("gpt-4o", event.getModel());
+    }
+
+    @Test
+    void publishCallFailure_should_notThrow_when_sessionIsGone() {
+        // Given：调用失败可能发生在会话已经被关掉之后
+        SessionManager manager = manager();
+
+        // When
+        manager.publishCallFailure("s-不存在", "gpt-4o", new JellyfishException("boom"));
+
+        // Then：报一条事件不该因为「找不到会话」而抛出来盖掉原来的失败
+        LlmCallFailedEvent event = publishedEvent(LlmCallFailedEvent.class);
+        assertNull(event.getProvider());
+        assertEquals("gpt-4o", event.getModel());
     }
 
     @Test

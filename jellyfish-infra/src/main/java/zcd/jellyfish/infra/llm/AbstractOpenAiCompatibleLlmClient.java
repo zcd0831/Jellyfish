@@ -25,6 +25,15 @@ import java.util.concurrent.ExecutorService;
 public abstract class AbstractOpenAiCompatibleLlmClient extends AbstractHttpLlmClient {
 
     /**
+     * 最小合法输出上限。
+     * <p>
+     * OpenAI 系、DeepSeek、MiniMax 的下限都是 1：{@code max_tokens: 0} 会以
+     * {@code "'0' is less than the minimum of 1"} 被拒。因此「不要求输出」在这里落成 1，
+     * 而不是 Anthropic 那种 0。
+     */
+    private static final int MIN_OUTPUT_TOKENS = 1;
+
+    /**
      * 构造 OpenAI 兼容协议客户端。
      *
      * @param provider       provider 配置
@@ -131,7 +140,10 @@ public abstract class AbstractOpenAiCompatibleLlmClient extends AbstractHttpLlmC
         if (request.getTopP() != null) {
             body.put("top_p", request.getTopP());
         }
-        if (request.getMaxTokens() != null && request.getMaxTokens() > 0) {
+        if (request.isMinimalOutput()) {
+            // OpenAI 与 DeepSeek 的下限都是 1，0 会被 400 拒绝（"'0' is less than the minimum of 1"）
+            body.put("max_tokens", MIN_OUTPUT_TOKENS);
+        } else if (request.getMaxTokens() != null && request.getMaxTokens() > 0) {
             body.put("max_tokens", request.getMaxTokens());
         }
         if (!request.getStop().isEmpty()) {

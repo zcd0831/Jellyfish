@@ -10,10 +10,12 @@ import zcd.jellyfish.infra.support.LlmClients;
 import zcd.jellyfish.infra.support.ObjectMapperWrapper;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 
 /**
@@ -56,6 +58,13 @@ public class ClaudeLlmClient extends AbstractHttpLlmClient {
 
     /** 请求未指定 max_tokens 时使用的默认值，Anthropic 要求该字段必填。 */
     private static final int DEFAULT_MAX_TOKENS = 4096;
+
+    /**
+     * 最小合法输出上限。
+     * <p>
+     * <b>仅用于流式下的「最省输出」</b>：非流式时那种请求会走 {@code 0}（见 {@link #maxTokensOf}）。
+     */
+    private static final int MIN_OUTPUT_TOKENS = 1;
 
     /**
      * 构造 Claude 客户端。
@@ -145,9 +154,7 @@ public class ClaudeLlmClient extends AbstractHttpLlmClient {
     private Map<String, Object> buildRequestBody(LlmRequest request, boolean stream) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("model", request.getModel());
-        body.put("max_tokens", request.getMaxTokens() != null && request.getMaxTokens() > 0
-                ? request.getMaxTokens()
-                : DEFAULT_MAX_TOKENS);
+        body.put("max_tokens", maxTokensOf(request, stream));
         if (stream) {
             body.put("stream", true);
         }
@@ -160,7 +167,8 @@ public class ClaudeLlmClient extends AbstractHttpLlmClient {
         if (!request.getStop().isEmpty()) {
             body.put("stop_sequences", request.getStop());
         }
-        String system = collectSystemPrompt(request);
+        Set<Integer> keptSystem = keptSystemIndexes(request.getMessages());
+        String system = collectSystemPrompt(request, keptSystem);
         int breakpoints = breakpointsOf(request);
         Map<String, Object> cacheControl = cacheControlOf(request);
         // 前端断点优先落在最后一个 system 块上：它排在全部工具定义之后，一个断点护住两段。
@@ -169,7 +177,7 @@ public class ClaudeLlmClient extends AbstractHttpLlmClient {
         if (LlmClients.isNotBlank(system)) {
             body.put("system", systemMarked ? systemBlocks(system, cacheControl) : system);
         }
-        List<Map<String, Object>> messages = buildMessages(request);
+        List<Map<String, Object>> messages = buildMessages(request, keptSystem);
         if (breakpoints >= 2) {
             // 尾部断点盖住整段历史，随对话增长而前移
             markLastBlock(messages, cacheControl);
@@ -184,6 +192,63 @@ public class ClaudeLlmClient extends AbstractHttpLlmClient {
             }
         }
         return body;
+    }
+
+    /**
+     * 算出哪些消息区的 system 消息可以留在原位。
+     * <p>
+     * <b>为什么不是「全部都不上提」</b>：Anthropic 对会话中途的 system 消息有<b>放置规则</b>——
+     * 不能是 {@code messages[0]}、必须跟在 user 消息之后、且必须是最后一条或被 assistant 回合跟随。
+     * 违反规则不是「缓存不生效」，而是<b>整个请求被 400 拒绝</b>。因此内核只打开能确定合法的那一格，
+     * 其余仍旧上提：上提的代价是缓存失效，违反规则的代价是对话直接不可用，两者不是一个量级。
+     * <p>
+     * <b>保守到什么程度</b>：只认「<b>紧跟在 user 消息之后、且是最后一条</b>」这一个位置，
+     * 比官方规则更紧（官方还允许被 assistant 回合跟随的中间位置）。宁可少留一段，
+     * 也不去构造一个自己推不出结论的放置判断。
+     * <p>
+     * <b>一个仍然存在的风险</b>：官方写明这些消息<b>并非所有模型都支持</b>，不支持的模型会以
+     * {@code role 'system' is not supported on this model} 返回 400，而官方建议的兜底是「被拒后改放
+     * user 回合的 {@code <system-reminder>} 块」。内核没有重试机制，因此这条兜底只能由订阅方来做
+     * ——它们能从 {@code LlmCallFailedEvent} 看到这次拒绝，从而不再走这条通道。
+     *
+     * @param messages 消息列表
+     * @return 应留在原位的下标集合，保证非 {@code null}
+     */
+    private static Set<Integer> keptSystemIndexes(List<LlmMessage> messages) {
+        Set<Integer> kept = new HashSet<>();
+        int last = messages.size() - 1;
+        if (last <= 0) {
+            return kept;
+        }
+        LlmMessage message = messages.get(last);
+        if (LlmMessage.ROLE_SYSTEM.equals(message.getRole())
+                && LlmClients.isNotBlank(message.getContent())
+                && LlmMessage.ROLE_USER.equals(messages.get(last - 1).getRole())) {
+            kept.add(Integer.valueOf(last));
+        }
+        return kept;
+    }
+
+    /**
+     * 换算本次的 {@code max_tokens}。
+     * <p>
+     * <b>{@code 0} 是本家独有的写法，语义是「只做 prefill 并写缓存，不生成输出」</b>——Anthropic
+     * 明确支持它（官方把它作为预热 / 保活的标准做法）。而 OpenAI 系与 DeepSeek 的下限是 1，
+     * 因此这个换算必须在本层做：调用方只声明「我不需要输出」，由各家换算成本家合法的写法。
+     * <p>
+     * <b>它与流式互斥</b>：{@code max_tokens: 0} 配 {@code stream: true} 会被拒，因此那种组合退回 1。
+     * 流式只是传输方式、不属于被缓存的前缀，退一步没有代价。
+     *
+     * @param request 统一请求模型
+     * @param stream  是否为流式请求
+     * @return 本次生效的 {@code max_tokens}
+     */
+    private static int maxTokensOf(LlmRequest request, boolean stream) {
+        if (request.isMinimalOutput()) {
+            return stream ? MIN_OUTPUT_TOKENS : 0;
+        }
+        Integer declared = request.getMaxTokens();
+        return declared != null && declared > 0 ? declared : DEFAULT_MAX_TOKENS;
     }
 
     /**
@@ -283,12 +348,22 @@ public class ClaudeLlmClient extends AbstractHttpLlmClient {
      * @param request 统一请求模型
      * @return Anthropic messages 数组
      */
-    private static List<Map<String, Object>> buildMessages(LlmRequest request) {
+    private static List<Map<String, Object>> buildMessages(LlmRequest request, Set<Integer> keptSystemIndexes) {
         List<Map<String, Object>> messages = new ArrayList<>();
         List<Map<String, Object>> pendingToolResults = new ArrayList<>();
-        for (LlmMessage message : request.getMessages()) {
+        List<LlmMessage> source = request.getMessages();
+        for (int index = 0; index < source.size(); index++) {
+            LlmMessage message = source.get(index);
             String role = message.getRole();
             if (LlmMessage.ROLE_SYSTEM.equals(role)) {
+                if (!keptSystemIndexes.contains(Integer.valueOf(index))) {
+                    // 其余 system 消息已经上提到顶层 system 字段，这里再发一遍就成了两处同文
+                    continue;
+                }
+                // 留在原位：它排在历史之后，因此注入它不会动到已经缓存的前缀。
+                // 先冲刷挂起的工具结果——它们会合成一条 user 消息，而 system 消息必须跟在 user 之后
+                flushToolResults(messages, pendingToolResults);
+                messages.add(textMessage(role, LlmClients.nullToEmpty(message.getContent())));
                 continue;
             }
             if (LlmMessage.ROLE_TOOL.equals(role)) {

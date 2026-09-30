@@ -1079,6 +1079,41 @@ class PromptAssemblerTest {
         assertEquals(parent.getCacheBreakpoints(), fork.getCacheBreakpoints());
     }
 
+    @Test
+    void buildKeepAlive_should_declareMinimalOutput_insteadOfPinningOneToken() {
+        // Given：保活要的不是内容，而是「碰一下缓存、把 TTL 续上」
+        SessionManager sessions = newSessionManager();
+        Session session = sessions.createDefault();
+        sessions.appendMessage(session.getSessionId(), LlmMessage.user("一"), null);
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+
+        // When
+        LlmRequest keepAlive = assembler.buildKeepAlive(session, resolvedModel(128_000, 4096), "保活");
+
+        // Then：只声明意图。最省写法各家不同（Anthropic 是 max_tokens: 0，OpenAI 系下限是 1），
+        // 由客户端换算——内核写死一个数字就等于把它自己绑在某一家的协议上
+        assertTrue(keepAlive.isMinimalOutput());
+        assertNull(keepAlive.getMaxTokens());
+    }
+
+    @Test
+    void buildFork_should_keepParentMaxTokens_andNotBeMinimalOutput() {
+        // Given：fork 要的是真的摘要正文，不是「不需要输出」
+        SessionManager sessions = newSessionManager();
+        Session session = sessions.createDefault();
+        sessions.appendMessage(session.getSessionId(), LlmMessage.user("一"), null);
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        ResolvedModel model = resolvedModel(128_000, 4096);
+
+        // When
+        LlmRequest parent = assembler.buildRequest(session, model);
+        LlmRequest fork = assembler.buildFork(session, model, 0, 0, "写摘要");
+
+        // Then
+        assertFalse(fork.isMinimalOutput());
+        assertEquals(parent.getMaxTokens(), fork.getMaxTokens());
+    }
+
     /**
      * 给工具目录桩上一个工具。
      */

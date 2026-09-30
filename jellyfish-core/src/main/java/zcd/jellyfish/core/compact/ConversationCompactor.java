@@ -344,7 +344,15 @@ public class ConversationCompactor implements AutoCloseable {
     private void run(String sessionId, CompactionPlan plan, CompactionTrigger trigger) {
         try {
             ResolvedModel resolvedModel = resolveModel(sessionManager.require(sessionId));
-            LlmResponse response = clientOf(resolvedModel).chat(plan.getRequest());
+            LlmResponse response;
+            try {
+                response = clientOf(resolvedModel).chat(plan.getRequest());
+            } catch (JellyfishException e) {
+                // 只报这一句：下面的 catch 还会接住「边界消息不在会话里」这类内部错误，
+                // 它们不是模型调用失败，混进同一条事件会让订阅方误以为端点拒了请求
+                sessionManager.publishCallFailure(sessionId, resolvedModel.getModel().getId(), e);
+                throw e;
+            }
             // 用量先记：请求已经发出去了，token 就花掉了——哪怕摘要在下面被判定为不可用
             if (response.getUsage() != null) {
                 sessionManager.recordUsage(sessionId, response.getUsage());

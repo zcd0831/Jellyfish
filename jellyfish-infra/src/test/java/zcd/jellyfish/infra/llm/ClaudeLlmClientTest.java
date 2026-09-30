@@ -168,6 +168,96 @@ class ClaudeLlmClientTest {
     }
 
     @Test
+    void chat_should_keepTrailingSystemMessageInPlace_whenItFollowsUserMessage() throws IOException {
+        // Given：会话中途的 operator 指令（模式切换、注入状态）跟在 user 消息之后、且是最后一条——
+        // 这是官方允许的放置，而且是「不能伪造」的通道
+        StubInterceptor stub = jsonStub("{\"content\":[]}");
+        ClaudeLlmClient client = client(stub);
+
+        // When
+        client.chat(LlmRequest.builder("claude-3-5-sonnet")
+                .systemPrompt("稳定前缀")
+                .message(LlmMessage.user("hi"))
+                .message(LlmMessage.system("精简模式"))
+                .build());
+
+        // Then：它必须留在 messages 里。上提到顶层 system 等于改了请求的第 0 个 token，
+        // 整段已经缓存的前缀随之作废——那正是本条通道存在的理由
+        JsonNode body = json(requestBody(stub.lastRequest()));
+        assertEquals("稳定前缀", body.path("system").get(0).path("text").asText());
+        JsonNode messages = body.path("messages");
+        assertEquals(2, messages.size());
+        assertEquals("system", messages.get(1).path("role").asText());
+        assertEquals("精简模式", messages.get(1).path("content").get(0).path("text").asText());
+    }
+
+    @Test
+    void chat_should_hoistSystemMessage_when_itIsNotTheTrailingOne() throws IOException {
+        // Given：中间位置的 system 消息（官方对放置另有要求，内核保守地一律上提）
+        StubInterceptor stub = jsonStub("{\"content\":[]}");
+        ClaudeLlmClient client = client(stub);
+
+        // When
+        client.chat(LlmRequest.builder("claude-3-5-sonnet")
+                .message(LlmMessage.system("早先的指令"))
+                .message(LlmMessage.user("hi"))
+                .message(LlmMessage.assistant("ok"))
+                .build());
+
+        // Then：上提（代价是缓存失效），而不是构造一个自己推不出合法性的放置
+        JsonNode body = json(requestBody(stub.lastRequest()));
+        assertEquals("早先的指令", body.path("system").get(0).path("text").asText());
+        assertEquals(2, body.path("messages").size());
+    }
+
+    @Test
+    void chat_should_hoistTrailingSystemMessage_when_itDoesNotFollowUserMessage() throws IOException {
+        // Given：跟在 assistant 之后
+        StubInterceptor stub = jsonStub("{\"content\":[]}");
+        ClaudeLlmClient client = client(stub);
+
+        // When
+        client.chat(LlmRequest.builder("claude-3-5-sonnet")
+                .message(LlmMessage.user("hi"))
+                .message(LlmMessage.assistant("ok"))
+                .message(LlmMessage.system("指令"))
+                .build());
+
+        // Then
+        assertEquals("指令", json(requestBody(stub.lastRequest())).path("system").get(0).path("text").asText());
+    }
+
+    @Test
+    void chat_should_hoistSystemMessage_when_itIsTheOnlyMessage() throws IOException {
+        // Given：messages[0] 是官方明确不允许放 system 的位置（那正是顶层 system 的用途）
+        StubInterceptor stub = jsonStub("{\"content\":[]}");
+        ClaudeLlmClient client = client(stub);
+
+        // When
+        client.chat(LlmRequest.builder("claude-3-5-sonnet").message(LlmMessage.system("唯一的指令")).build());
+
+        // Then
+        assertEquals("唯一的指令", json(requestBody(stub.lastRequest())).path("system").get(0).path("text").asText());
+    }
+
+    @Test
+    void chat_should_notSendTrailingSystemMessage_twice() throws IOException {
+        // Given：留在原位与上提到顶层是同一个决定的两面——两处都发就成了同一段话说两遍
+        StubInterceptor stub = jsonStub("{\"content\":[]}");
+        ClaudeLlmClient client = client(stub);
+
+        // When
+        client.chat(LlmRequest.builder("claude-3-5-sonnet")
+                .message(LlmMessage.user("hi"))
+                .message(LlmMessage.system("只应出现一次"))
+                .build());
+
+        // Then
+        JsonNode body = json(requestBody(stub.lastRequest()));
+        assertFalse(body.path("system").asText().contains("只应出现一次"));
+        assertTrue(body.path("messages").toString().contains("只应出现一次"));
+    }
+
     void chat_should_map_required_tool_choice_to_any_when_configured() throws IOException {
         // Given
         StubInterceptor stub = jsonStub("{\"content\":[]}");
@@ -248,6 +338,36 @@ class ClaudeLlmClientTest {
 
         // When / Then
         assertThrows(JellyfishException.class, () -> client.chat(null));
+    }
+
+    @Test
+    void chat_should_sendZeroMaxTokens_when_minimalOutputRequested() throws IOException {
+        // Given：Anthropic 明确支持 max_tokens: 0（只做 prefill 并写缓存，不生成输出），
+        // 这正是缓存保活要的形式——它要的不是内容，而是把缓存 TTL 续上
+        StubInterceptor stub = jsonStub("{\"content\":[]}");
+        ClaudeLlmClient client = client(stub);
+
+        // When
+        client.chat(LlmRequest.builder("claude-3-5-sonnet").message(LlmMessage.user("hi"))
+                .minimalOutput().build());
+
+        // Then
+        assertEquals(0, json(requestBody(stub.lastRequest())).path("max_tokens").asInt());
+    }
+
+    @Test
+    void chatStream_should_fallBackToOneMaxTokens_when_minimalOutputRequested() throws IOException {
+        // Given：max_tokens: 0 与 stream: true 互斥（会被拒），因此流式下退回 1。
+        // 流式只是传输方式、不属于被缓存的前缀，退这一步没有代价
+        StubInterceptor stub = sseStub(STREAM_SSE);
+        ClaudeLlmClient client = client(stub);
+
+        // When
+        client.chatStream(LlmRequest.builder("claude-3-5-sonnet").message(LlmMessage.user("hi"))
+                .minimalOutput().build(), new RecordingListener());
+
+        // Then
+        assertEquals(1, json(requestBody(stub.lastRequest())).path("max_tokens").asInt());
     }
 
     @Test

@@ -14,6 +14,9 @@ import zcd.jellyfish.infra.support.LlmClients;
 import zcd.jellyfish.infra.support.ObjectMapperWrapper;
 
 import java.io.IOException;
+import java.util.Collections;
+import java.util.List;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -132,8 +135,10 @@ public abstract class AbstractHttpLlmClient implements LlmClient {
         try (Response response = okHttpClient.newCall(request).execute()) {
             String body = readBody(response);
             if (!response.isSuccessful()) {
-                throw new JellyfishException(action + " failed for provider: " + provider.getName()
-                        + " (HTTP " + response.code() + "): " + truncate(body));
+                // 状态码是「该怎么应对」的第一个判据（400 该降级、429/5xx 该重试），
+                // 因此给它一个可下钻的类型，而不是只留在消息文本里
+                throw new LlmHttpException(action + " failed for provider: " + provider.getName()
+                        + " (HTTP " + response.code() + "): " + truncate(body), response.code());
             }
             if (body.isEmpty()) {
                 throw new JellyfishException(action + " returned an empty body for provider: " + provider.getName());
@@ -191,9 +196,9 @@ public abstract class AbstractHttpLlmClient implements LlmClient {
         LlmResponse completed;
         try (Response httpResponse = call.execute()) {
             if (!httpResponse.isSuccessful()) {
-                listener.onError(new JellyfishException("stream request failed for provider: "
+                listener.onError(new LlmHttpException("stream request failed for provider: "
                         + provider.getName() + " (HTTP " + httpResponse.code() + "): "
-                        + truncate(readBody(httpResponse))));
+                        + truncate(readBody(httpResponse)), httpResponse.code()));
                 return;
             }
             listener.onOpen();
@@ -320,17 +325,41 @@ public abstract class AbstractHttpLlmClient implements LlmClient {
      * @return 合并后的系统提示词，无内容时返回空字符串
      */
     protected static String collectSystemPrompt(LlmRequest request) {
+        return collectSystemPrompt(request, Collections.<Integer>emptySet());
+    }
+
+    /**
+     * 收集 system prompt，但<b>跳过指定下标的消息区 system 消息</b>。
+     * <p>
+     * <b>为什么要这个变体</b>：把消息区的 system 消息上提到顶层 system 字段，等于改了请求的
+     * <b>第 0 个 token</b>——前缀缓存随之整段作废。而 Anthropic 支持会话中途的 system 消息，
+     * 那是「不能伪造的 operator 通道」：它排在历史之后，因此注入它不会动到已经缓存的前缀。
+     * 对那些能满足厂商放置规则的消息，应当留在原位而不是上提。
+     * <p>
+     * <b>但留在原位的前提是「顶层不能再出现同一段文本」</b>：否则同一段话会真的下发两次。
+     * 因此上提与原地保留必须是同一个决定的两面，由调用方把「已决定保留的下标」传进来。
+     *
+     * @param request      统一请求模型
+     * @param keptIndexes  已决定保留在原位的消息下标，不可为 {@code null}
+     * @return 上提到顶层 system 的文本；无内容时为空串
+     */
+    protected static String collectSystemPrompt(LlmRequest request, Set<Integer> keptIndexes) {
         StringBuilder builder = new StringBuilder();
         if (LlmClients.isNotBlank(request.getSystemPrompt())) {
             builder.append(request.getSystemPrompt());
         }
-        for (LlmMessage message : request.getMessages()) {
-            if (LlmMessage.ROLE_SYSTEM.equals(message.getRole()) && LlmClients.isNotBlank(message.getContent())) {
-                if (builder.length() > 0) {
-                    builder.append('\n');
-                }
-                builder.append(message.getContent());
+        List<LlmMessage> messages = request.getMessages();
+        for (int index = 0; index < messages.size(); index++) {
+            LlmMessage message = messages.get(index);
+            if (!LlmMessage.ROLE_SYSTEM.equals(message.getRole())
+                    || keptIndexes.contains(Integer.valueOf(index))
+                    || !LlmClients.isNotBlank(message.getContent())) {
+                continue;
             }
+            if (builder.length() > 0) {
+                builder.append('\n');
+            }
+            builder.append(message.getContent());
         }
         return builder.toString();
     }

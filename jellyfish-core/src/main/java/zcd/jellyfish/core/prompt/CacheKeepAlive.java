@@ -2,6 +2,7 @@ package zcd.jellyfish.core.prompt;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.infra.config.ProviderCacheSettings;
 import zcd.jellyfish.infra.config.RuntimeConfig;
 import zcd.jellyfish.infra.llm.LlmClient;
@@ -192,7 +193,15 @@ public class CacheKeepAlive implements AutoCloseable {
                 return;
             }
             LlmClient client = modelManager.getClient(resolvedModel);
-            LlmResponse response = client.chat(request);
+            LlmResponse response;
+            try {
+                response = client.chat(request);
+            } catch (JellyfishException e) {
+                // 保活失败也要上报：它多半就是「这个端点不认那个缓存字段」，
+                // 而那正是插件据此停止下发该字段的信号
+                sessionManager.publishCallFailure(sessionId, resolvedModel.getModel().getId(), e);
+                throw e;
+            }
             if (response != null && response.getUsage() != null) {
                 // 保活花掉的 token 必须进账（否则 /usage 与实际账单对不上），但它不产生消息、
                 // 也不该被当成「用户活动」——空闲期是靠消息条数判定的，因此两者不冲突

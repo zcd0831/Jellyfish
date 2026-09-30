@@ -22,6 +22,9 @@ import java.util.concurrent.ExecutorService;
  */
 public class GeminiLlmClient extends AbstractHttpLlmClient {
 
+    /** 最小合法输出上限：Gemini 的下限同样是 1。 */
+    private static final int MIN_OUTPUT_TOKENS = 1;
+
     /** Gemini 官方默认 baseUrl。 */
     static final String DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com";
 
@@ -341,7 +344,10 @@ public class GeminiLlmClient extends AbstractHttpLlmClient {
         if (request.getTopP() != null) {
             config.put("topP", request.getTopP());
         }
-        if (request.getMaxTokens() != null && request.getMaxTokens() > 0) {
+        if (request.isMinimalOutput()) {
+            // Gemini 的下限同样是 1，0 不被接受
+            config.put("maxOutputTokens", MIN_OUTPUT_TOKENS);
+        } else if (request.getMaxTokens() != null && request.getMaxTokens() > 0) {
             config.put("maxOutputTokens", request.getMaxTokens());
         }
         if (!request.getStop().isEmpty()) {

@@ -8,6 +8,7 @@ import zcd.jellyfish.api.event.EventPublisher;
 import zcd.jellyfish.api.event.JellyfishEvent;
 import zcd.jellyfish.api.event.notification.CompactionAppliedEvent;
 import zcd.jellyfish.api.event.notification.LlmCallCompletedEvent;
+import zcd.jellyfish.api.event.notification.LlmCallFailedEvent;
 import zcd.jellyfish.api.event.notification.SessionClosedEvent;
 import zcd.jellyfish.api.event.notification.SessionCreatedEvent;
 import zcd.jellyfish.api.event.notification.SessionMessageAppendedEvent;
@@ -22,6 +23,7 @@ import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.config.AgentDefinition;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.extension.HandlerBinding;
+import zcd.jellyfish.infra.llm.LlmHttpException;
 import zcd.jellyfish.infra.llm.LlmMessage;
 import zcd.jellyfish.infra.llm.LlmUsage;
 
@@ -32,6 +34,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -474,6 +477,43 @@ public class SessionManager {
         publish(new LlmCallCompletedEvent(session.getSessionId(), session.getProvider(), session.getModel(),
                 new TokenUsageSnapshot(usage.getPromptTokens(), usage.getCompletionTokens(),
                         usage.getTotalTokens(), usage.getCacheReadTokens(), usage.getCacheWriteTokens())));
+    }
+
+    /**
+     * 把一次<b>失败的</b>模型调用广播出去。
+     * <p>
+     * <b>它不写会话状态</b>：失败的调用没有用量可言，会话里也没有任何东西可计。它存在的唯一理由是把
+     * 「这一次被拒了」放到可订阅的通道上——{@link LlmCallCompletedEvent} 只覆盖成功的调用，
+     * 于是插件无法得知自己前一次下的缓存字段被端点拒了，也就无法自我修正。
+     * <p>
+     * <b>与用量入口同属一处而不是散在三个调用点</b>：回合、压缩、缓存保活三条路径都会失败，
+     * 而它们的报告口径必须一致（同一个事件类型、同一套状态码提取），放在这里才不会三处各写一遍。
+     *
+     * @param sessionId 会话标识，可为 {@code null}
+     * @param model     模型标识，可为 {@code null}
+     * @param error     失败原因，不可为 {@code null}
+     */
+    public void publishCallFailure(String sessionId, String model, JellyfishException error) {
+        Objects.requireNonNull(error, "error must not be null");
+        // 取不到就当没有：失败的调用可能发生在会话已被关掉之后，而「报一条事件」不该因此抛异常
+        Session session = sessionId == null ? null : sessions.get(sessionId);
+        publish(new LlmCallFailedEvent(sessionId,
+                session == null ? null : session.getProvider(),
+                model == null && session != null ? session.getModel() : model,
+                statusCodeOf(error), error.getMessage()));
+    }
+
+    /**
+     * 从异常里取出 HTTP 状态码。
+     * <p>
+     * <b>取不到就是 {@code 0}</b>，而不是抛或猜：网络异常、超时、反序列化失败都不是 HTTP 层面的失败，
+     * 对订阅方而言「不是 HTTP 失败」本身就是一条可用信息（它排除了「字段被拒」）。
+     *
+     * @param error 失败原因
+     * @return HTTP 状态码；非 HTTP 失败时返回 {@code 0}
+     */
+    private static int statusCodeOf(JellyfishException error) {
+        return error instanceof LlmHttpException ? ((LlmHttpException) error).getStatusCode() : 0;
     }
 
     /**

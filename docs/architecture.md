@@ -223,9 +223,15 @@ jellyfish-tui（TUI 外壳）  jellyfish-server（HTTP 外壳）  →  jellyfish
   `llm.promptTokens`、`llm.cacheReadTokens`、`llm.cacheWriteTokens`。两条边界：**不产生消息的调用
   （`/compact` 的摘要）也要发**，否则它在进程级彻底不可见；**合并子代理累计量的那条路径不发**，
   那份用量在子代理会话里已经逐次发过，再发一次会把子代理的账重复计入。
-- **可缓存前缀的断裂会被观察并记日志**：`CacheBreakWatcher` 对比同一会话相邻两轮的可缓存前缀，
-  指出断在哪一层（system prompt / 工具清单 / 第几条消息起），从稳定变为断裂的那一轮记 WARN、
-  断裂持续期间降到 DEBUG。它只比较、不改请求，详见 `PromptAssembler.watchCacheBreak`。
+- **失败的调用会广播 `LlmCallFailedEvent`，两者互斥**：成功的调用没用量可言，反之亦然。
+  事件带上**结构化的 HTTP 状态码**（`LlmHttpException` 携带它，因此不用去消息文本里正则匹配），
+  订阅方据此区分「字段被拒该降级」与「限流该重试」——`isRejected()` 把这条判据固化在载荷上。
+  它由 `SessionManager.publishCallFailure` 统一发出，回合 / 压缩 / 缓存保活三条路径共用同一个口径；
+  **只包裹真正的那一次模型调用**，压缩过程中「边界消息不在会话里」这类内部错误不会被误报成端点拒了请求。
+- **可缓存前缀的断裂会被观察、记日志并广播**：`CacheBreakWatcher` 对比同一会话相邻两轮的可缓存前缀，
+  指出断在哪一层（system prompt / 工具清单 / 第几条消息起）。**日志内的 WARN 会节流，
+  `CachePrefixChangedEvent` 不节流**：下一轮的前缀如果仍然与这一轮不连续，那就是又一次真实的缓存损失，
+  计数型订阅方需要看到每一次。它只比较、不改请求，详见 `PromptAssembler.watchCacheBreak`。
 
 ## 整体架构图
 

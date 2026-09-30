@@ -195,7 +195,7 @@ public class PromptAssembler {
      */
     public LlmRequest buildFork(Session session, ResolvedModel resolvedModel, int fromIndex, int keepCount,
                                 String instruction) {
-        LlmRequest fork = reuseOf(session, resolvedModel, fromIndex, keepCount, instruction, null);
+        LlmRequest fork = reuseOf(session, resolvedModel, fromIndex, keepCount, instruction, false);
         if (fork == null) {
             // 待压的那一段已经不在父请求里。此时 fork 出来的前缀会缺一段内容、摘要将毫无依据，
             // 因此只能退回旧路径把该段渲染成正文发出去——按全价，但摘要至少建立在完整材料上。
@@ -210,8 +210,12 @@ public class PromptAssembler {
      * 构建一次「缓存保活」请求：整段前缀原样复用，只要求输出一个 token。
      * <p>
      * <b>与 {@link #buildFork} 是同一件事的两种用处</b>：都靠「前缀与父请求逐字节相同」拿到命中价，
-     * 区别只在末尾那条指令与输出上限。保活要的不是内容，而是<b>碰一下缓存、把它的 TTL 续上</b>，
-     * 因此输出上限钉成 1——不钉的话模型可能真的写出一大段回答，那笔钱就白花了。
+     * 区别只在末尾那条指令与输出要求。保活要的不是内容，而是<b>碰一下缓存、把它的 TTL 续上</b>，
+     * 因此声明「不需要输出」——不声明的话模型可能真的写出一大段回答，那笔钱就白花了。
+     * <p>
+     * <b>为什么不说「上限为 1」</b>：最省写法各家不同，Anthropic 能用 {@code max_tokens: 0}
+     * （只 prefill、不生成），而 OpenAI 系与 DeepSeek 的下限是 1。内核只说意图，
+     * 由客户端换算成本家合法的写法——否则这里就要写一个「除了 Claude 都是 1」的分支。
      * <p>
      * <b>任何一处不能原样复现就返回 {@code null}</b>：保活是「锦上添花」，宁可不做也不该发一个
      * 前缀不同、按 1× 计费的请求——那比不保活更贵。
@@ -222,7 +226,7 @@ public class PromptAssembler {
      * @return 保活请求；前缀无法原样复现时返回 {@code null}
      */
     public LlmRequest buildKeepAlive(Session session, ResolvedModel resolvedModel, String instruction) {
-        return reuseOf(session, resolvedModel, 0, 0, instruction, Integer.valueOf(1));
+        return reuseOf(session, resolvedModel, 0, 0, instruction, true);
     }
 
     /**
@@ -233,11 +237,11 @@ public class PromptAssembler {
      * @param fromIndex       待压范围的第一条消息对应的会话下标（保活传 {@code 0}，即不裁）
      * @param keepCount       父请求末尾要丢掉的消息条数（保活传 {@code 0}，即全要）
      * @param instruction     追加在末尾的指令
-     * @param maxOutputTokens 输出上限定死值；{@code null} 表示沿用父请求的
+     * @param minimalOutput   是否只要求厂商允许的最省输出（保活传 {@code true}，fork 传 {@code false}）
      * @return 请求；前缀无法原样复现时返回 {@code null}
      */
     private LlmRequest reuseOf(Session session, ResolvedModel resolvedModel, int fromIndex, int keepCount,
-                               String instruction, Integer maxOutputTokens) {
+                               String instruction, boolean minimalOutput) {
         Parent parent = parentOf(session, resolvedModel, ToolFilter.none());
         LlmRequest base = parent.getRequest();
         if (parent.getFirstSessionIndex() < 0 || parent.getFirstSessionIndex() > fromIndex) {
@@ -260,8 +264,10 @@ public class PromptAssembler {
                 .cacheKey(base.getCacheKey())
                 .cacheRetention(base.getCacheRetention())
                 .cacheBreakpoints(base.getCacheBreakpoints());
-        Integer output = maxOutputTokens == null ? base.getMaxTokens() : maxOutputTokens;
-        if (output != null) {
+        Integer output = base.getMaxTokens();
+        if (minimalOutput) {
+            builder.minimalOutput();
+        } else if (output != null) {
             builder.maxTokens(output);
         }
         return builder.build();

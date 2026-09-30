@@ -66,6 +66,19 @@ public final class LlmRequest {
     private final Integer cacheBreakpoints;
 
     /**
+     * 本次调用不要求生成内容，只要厂商允许的最省形式。
+     * <p>
+     * <b>为什么是一个意图而不是一个数字</b>：最省形式是各家的协议细节，而且各家不同——
+     * Anthropic 接受 {@code max_tokens: 0}（明确支持，语义是「只做 prefill 并写缓存、不生成输出」），
+     * 而 OpenAI 与 DeepSeek 的下限是 1（{@code 0} 会被 400 拒绝）。因此调用方只说「我不需要输出」，
+     * 由各个客户端自己换算成本家合法的写法。把数字写在调用方，等于让内核去记住每一家的下限。
+     * <p>
+     * 目前只有缓存保活用它：一次保活请求要的是「碰一下缓存、把 TTL 续上」，
+     * 输出内容没有意义，而多生成一个 token 就多花一笔钱。
+     */
+    private final boolean minimalOutput;
+
+    /**
      * 由 builder 构造请求，并对所有集合做防御性拷贝。
      *
      * @param builder 请求构建器
@@ -87,6 +100,7 @@ public final class LlmRequest {
         this.cacheKey = builder.cacheKey;
         this.cacheRetention = builder.cacheRetention;
         this.cacheBreakpoints = builder.cacheBreakpoints;
+        this.minimalOutput = builder.minimalOutput;
     }
 
     /**
@@ -208,6 +222,15 @@ public final class LlmRequest {
     }
 
     /**
+     * 判断本次调用是否只要求厂商允许的最省输出。
+     *
+     * @return 不要求生成内容时返回 {@code true}
+     */
+    public boolean isMinimalOutput() {
+        return minimalOutput;
+    }
+
+    /**
      * 判断本次请求是否声明了工具。
      *
      * @return 声明了工具时返回 {@code true}
@@ -258,6 +281,9 @@ public final class LlmRequest {
 
         /** 缓存断点数。 */
         private Integer cacheBreakpoints;
+
+        /** 是否只要求厂商允许的最省输出。 */
+        private boolean minimalOutput;
 
         /**
          * 构造构建器。
@@ -408,6 +434,16 @@ public final class LlmRequest {
          */
         public Builder cacheBreakpoints(Integer cacheBreakpoints) {
             this.cacheBreakpoints = cacheBreakpoints;
+            return this;
+        }
+
+        /**
+         * 声明本次调用不要求生成内容，只要厂商允许的最省形式。
+         *
+         * @return 当前构建器
+         */
+        public Builder minimalOutput() {
+            this.minimalOutput = true;
             return this;
         }
 

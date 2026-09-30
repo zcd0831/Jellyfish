@@ -150,6 +150,49 @@ class ToolCatalogTest {
                 namesOf(new ToolCatalog(extensions).tools()));
     }
 
+    @Test
+    void tools_should_freezeSnapshot_perSession_when_registryChanges() {
+        // Given：两个会话各取过一次清单
+        ExtensionRegistry extensions = newRegistry();
+        register(extensions, "a_read", new ToolDescriptor("a_read", "读文件"));
+        ToolCatalog catalog = new ToolCatalog(extensions);
+        assertEquals(Collections.singletonList("a_read"),
+                namesOf(catalog.tools("s-1", ToolFilter.none())));
+        assertEquals(Collections.singletonList("a_read"),
+                namesOf(catalog.tools("s-2", ToolFilter.none())));
+
+        // When：MCP 那类插件在会话中途又注册了一个工具
+        register(extensions, "b_write", new ToolDescriptor("b_write", "写文件"));
+
+        // Then：旧会话的清单不动——工具清单在厂商模板里排在 messages 之前，它一变整段请求作废
+        assertEquals(Collections.singletonList("a_read"),
+                namesOf(catalog.tools("s-1", ToolFilter.none())));
+        assertEquals(Collections.singletonList("a_read"),
+                namesOf(catalog.tools("s-2", ToolFilter.none())));
+        // 而变化只对新会话生效，活性因此没有丢
+        assertEquals(Arrays.asList("a_read", "b_write"),
+                namesOf(catalog.tools("s-3", ToolFilter.none())));
+        // 实时入口照旧看得到变化：它是给诊断用的，不是请求路径
+        assertEquals(Arrays.asList("a_read", "b_write"), namesOf(catalog.tools(ToolFilter.none())));
+    }
+
+    @Test
+    void tools_should_shareOneSnapshot_betweenDifferentFilters() {
+        // Given：同一会话里主回合与子代理回合的过滤器不同，底稿必须是一份
+        ExtensionRegistry extensions = newRegistry();
+        register(extensions, "a_read", new ToolDescriptor("a_read", "读文件"));
+        register(extensions, "b_write", new ToolDescriptor("b_write", "写文件"));
+        ToolCatalog catalog = new ToolCatalog(extensions);
+        catalog.tools("s-1", ToolFilter.none());
+
+        // When：注册表变了，但子代理回合仍属于同一个会话
+        register(extensions, "c_shell", new ToolDescriptor("c_shell", "跑命令"));
+
+        // Then：过滤只作用于清单，底稿还是那一份——否则「这个会话的工具集到底变没变」又说不清了
+        assertEquals(Collections.singletonList("b_write"),
+                namesOf(catalog.tools("s-1", ToolFilter.of("b_write"::equals))));
+    }
+
     /**
      * 取出工具名列表。
      *

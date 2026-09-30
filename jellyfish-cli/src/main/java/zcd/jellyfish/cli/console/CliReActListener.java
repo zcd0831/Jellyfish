@@ -299,6 +299,23 @@ public final class CliReActListener implements ReActListener {
         console.writeErrLine("已取消。");
     }
 
+    /**
+     * 回合在开始前被插件拦下。
+     * <p>
+     * <b>故意不继承 {@link #onCancelled()} 的处理</b>：被拦下的回合一句都没发给模型，
+     * 因此缓冲里<b>不可能</b>有「已生成的部分」可转写——那是取消路径的需求，不是这里的。
+     * 它也与「已取消」是两回事：用户没按过 Esc。
+     * <p>
+     * <b>理由走 stderr、stdout 保持空</b>：stdout 是「回答」，而被拦下的回合没有回答；
+     * 把理由写到那里会破坏外壳与脚本之间的机器契约（退出码 {@code 7} 与之配套）。
+     *
+     * @param reason 拦下的理由，可为 {@code null}
+     */
+    @Override
+    public void onBlocked(String reason) {
+        console.writeErrLine("回合被拦下：" + (reason == null || reason.trim().isEmpty() ? "未提供理由" : reason));
+    }
+
     @Override
     public void onError(Throwable error) {
         closeThinkingLine();

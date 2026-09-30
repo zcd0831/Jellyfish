@@ -228,6 +228,22 @@ class CliRunModeTest {
     }
 
     @Test
+    void run_should_return_turn_blocked_when_plugin_blocks_turn() {
+        // 被插件拦下不是运行失败：脚本对它的补救动作（改请求 / 找人确认）与对 4（看日志排故障）完全不同
+        givenCurrentSession();
+        when(commands.isCommand("提交")).thenReturn(false);
+        when(harness.chat(eq(sessionId), eq("提交"), any())).thenReturn(turn);
+        when(turn.await()).thenReturn(ReActResult.blocked(sessionId, "工作区不干净"));
+
+        int code = mode.run(options("提交"));
+
+        assertEquals(ExitCodes.TURN_BLOCKED, code);
+        // stdout 是「回答」的通道，而被拦下的回合没有回答；理由由监听器写进 stderr
+        // （监听器侧的断言在 CliReActListenerTest）
+        assertTrue(console.out().isEmpty());
+    }
+
+    @Test
     void run_should_return_runtime_error_when_turn_cancelled() {
         givenCurrentSession();
         when(commands.isCommand("取消")).thenReturn(false);

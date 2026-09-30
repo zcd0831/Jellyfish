@@ -6,8 +6,12 @@ import org.slf4j.LoggerFactory;
 import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.event.EventPublisher;
 import zcd.jellyfish.api.extension.CancellationToken;
+import zcd.jellyfish.api.extension.ExtensionHandler;
+import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.api.extension.ToolCallResult;
 import zcd.jellyfish.api.extension.ToolMetadata;
+import zcd.jellyfish.api.extension.TurnBeforeRequest;
+import zcd.jellyfish.api.extension.TurnDirective;
 import zcd.jellyfish.core.compact.ConversationCompactor;
 import zcd.jellyfish.core.prompt.PromptAssembler;
 import zcd.jellyfish.core.prompt.PromptAssembly;
@@ -16,6 +20,7 @@ import zcd.jellyfish.core.tool.ToolExecutor;
 import zcd.jellyfish.infra.config.ReactSettings;
 import zcd.jellyfish.infra.config.RuntimeConfig;
 import zcd.jellyfish.infra.config.SubAgentSettings;
+import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.llm.LlmClient;
 import zcd.jellyfish.infra.llm.LlmMessage;
 import zcd.jellyfish.infra.llm.LlmRequest;
@@ -118,6 +123,9 @@ public class ReActLooper implements AutoCloseable {
     /** 委派作用域持有者：顶层回合开闭，嵌套回合进出。 */
     private final RunScopes runScopes;
 
+    /** 同步扩展点策略：回合开始前的拦截从同一份注册表取。 */
+    private final ExtensionRegistry extensions;
+
     /** 专用执行器。 */
     private final ExecutorService executor;
 
@@ -133,14 +141,15 @@ public class ReActLooper implements AutoCloseable {
      * @param conversationCompactor 会话压缩器
      * @param runScopes         委派作用域持有者
      * @param sessionModelResolver 会话模型解析器
+     * @param extensions        同步扩展点策略
      */
     @Inject
     public ReActLooper(SessionManager sessionManager, ModelManager modelManager, ToolExecutor toolExecutor,
                        EventPublisher events, PromptAssembler promptAssembler, RuntimeConfig runtimeConfig,
                        ConversationCompactor conversationCompactor, RunScopes runScopes,
-                       SessionModelResolver sessionModelResolver) {
+                       SessionModelResolver sessionModelResolver, ExtensionRegistry extensions) {
         this(sessionManager, modelManager, toolExecutor, events, promptAssembler,
-                runtimeConfig, conversationCompactor, runScopes, sessionModelResolver, createExecutor());
+                runtimeConfig, conversationCompactor, runScopes, sessionModelResolver, extensions, createExecutor());
     }
 
     /**
@@ -160,7 +169,8 @@ public class ReActLooper implements AutoCloseable {
     ReActLooper(SessionManager sessionManager, ModelManager modelManager, ToolExecutor toolExecutor,
                 EventPublisher events, PromptAssembler promptAssembler,
                 RuntimeConfig runtimeConfig, ConversationCompactor conversationCompactor,
-                RunScopes runScopes, SessionModelResolver sessionModelResolver, ExecutorService executor) {
+                RunScopes runScopes, SessionModelResolver sessionModelResolver, ExtensionRegistry extensions,
+                ExecutorService executor) {
         this.sessionManager = Objects.requireNonNull(sessionManager, "sessionManager must not be null");
         this.modelManager = Objects.requireNonNull(modelManager, "modelManager must not be null");
         this.toolExecutor = Objects.requireNonNull(toolExecutor, "toolExecutor must not be null");
@@ -172,6 +182,7 @@ public class ReActLooper implements AutoCloseable {
         this.runScopes = Objects.requireNonNull(runScopes, "runScopes must not be null");
         this.sessionModelResolver = Objects.requireNonNull(sessionModelResolver,
                 "sessionModelResolver must not be null");
+        this.extensions = Objects.requireNonNull(extensions, "extensions must not be null");
         this.executor = Objects.requireNonNull(executor, "executor must not be null");
     }
 
@@ -290,8 +301,17 @@ public class ReActLooper implements AutoCloseable {
         String sessionId = session.getSessionId();
         sessionManager.beginTurn(sessionId);
         try {
-            sessionManager.appendMessage(sessionId,
-                    LlmMessage.user(withTurnContext(session, userInput, nested)), null);
+            // 回合开始前钩子：位置必须在追加用户消息之前——一旦消息进了会话，拦下就只剩「再删掉」
+            // 这条路，而历史是 append-only 的（缓存前缀与落盘都依赖这条性质）。
+            // 顶层与嵌套共用本方法，因此子代理路径不会绕过钩子
+            TurnDirective directive = turnDirective(session, userInput, nested);
+            if (directive.isCancelled()) {
+                LOG.info("回合被插件拦下: sessionId={} reason={}", sessionId, directive.getReason());
+                listener.onBlocked(directive.getReason());
+                return ReActResult.blocked(sessionId, directive.getReason());
+            }
+            sessionManager.appendMessage(sessionId, LlmMessage.user(
+                    withTurnContext(session, effectiveInput(directive, userInput, nested), nested)), null);
             return loop(turn, session, listener, maxRounds, toolFilter);
         } catch (JellyfishException e) {
             listener.onError(e);
@@ -549,6 +569,81 @@ public class ReActLooper implements AutoCloseable {
             return LlmMessage.assistant(response.getContent());
         }
         return LlmMessage.assistant(response.getContent(), toolCalls);
+    }
+
+    /**
+     * 跑一遍回合开始前钩子链，返回最终指令。
+     * <p>
+     * <b>链式语义</b>（写在调用点的 {@code for} 循环里，注册表不参与）：第一个 {@code cancel}
+     * 立即短路（理由取自它）；{@code replaceInput} 取<b>最后一个非缺省</b>值。
+     * <p>
+     * <b>失败语义是「放行」</b>：同步派发没有护栏，异常处置是本方法的责任；拦截点坏掉时宁可放行，
+     * 也不要让整个会话彻底不能用。
+     * <p>
+     * <b>无插件时不构造任何请求对象</b>，行为与引入本钩子之前逐字段一致。
+     *
+     * @param session   会话运行态
+     * @param userInput 用户输入原文
+     * @param nested    是否嵌套回合
+     * @return 最终指令；链上没有可用处理器或都没意见时为 {@link TurnDirective#proceed()}
+     */
+    private TurnDirective turnDirective(Session session, String userInput, boolean nested) {
+        List<ExtensionHandler<TurnBeforeRequest, TurnDirective>> handlers =
+                extensions.handlers(TurnBeforeRequest.class, null);
+        if (handlers.isEmpty()) {
+            return TurnDirective.proceed();
+        }
+        RunScope scope = runScopes.current();
+        int depth = scope == null ? 0 : scope.getDepth();
+        String sessionId = session.getSessionId();
+        String agentId = session.getAgentId();
+        PermissionMode mode = session.getPermissionMode();
+        String input = userInput;
+        boolean replaced = false;
+        for (ExtensionHandler<TurnBeforeRequest, TurnDirective> handler : handlers) {
+            TurnDirective directive;
+            try {
+                directive = extensions.invoke(handler,
+                        new TurnBeforeRequest(sessionId, agentId, input, nested, depth, mode));
+            } catch (RuntimeException e) {
+                LOG.warn("回合开始前处理器抛错，按放行处理: sessionId={}", sessionId, e);
+                continue;
+            }
+            if (directive == null) {
+                continue;
+            }
+            if (directive.isCancelled()) {
+                return directive;
+            }
+            if (directive.hasInput()) {
+                input = directive.getInput();
+                replaced = true;
+            }
+        }
+        return replaced ? TurnDirective.replaceInput(input) : TurnDirective.proceed();
+    }
+
+    /**
+     * 取本次回合实际要追加的输入。
+     * <p>
+     * <b>嵌套回合忽略 {@code replaceInput}</b>：它的输入是模型写出来的任务描述，改写会让
+     * 「模型要什么」与「子代理收到什么」分叉，而模型无从得知。请求里带了 {@code nested}，
+     * 插件本可以自己判断；这里再兜一次底，保证任何插件都改不动模型给出的任务描述。
+     *
+     * @param directive 钩子给出的指令
+     * @param userInput 用户输入原文
+     * @param nested    是否嵌套回合
+     * @return 实际要追加的输入
+     */
+    private static String effectiveInput(TurnDirective directive, String userInput, boolean nested) {
+        if (!directive.hasInput()) {
+            return userInput;
+        }
+        if (nested) {
+            LOG.debug("嵌套回合忽略 replaceInput：子代理的任务描述由模型给出，插件改不动它");
+            return userInput;
+        }
+        return directive.getInput();
     }
 
     /**

@@ -87,6 +87,14 @@ public final class InflightTurn {
         /** 用户中断。 */
         CANCELLED,
 
+        /**
+         * 被插件在回合开始前拦下。
+         * <p>
+         * 与 {@link #CANCELLED} 分开：用户没按过 Esc，这不是用户意图；也与 {@link #ERROR} 分开：
+         * 没有失败，只是一次策略拦截（{@code -cli} 为此给了独立的退出码）。
+         */
+        BLOCKED,
+
         /** 失败。 */
         ERROR
     }

@@ -6,9 +6,12 @@ import org.slf4j.LoggerFactory;
 import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.event.EventPublisher;
 import zcd.jellyfish.api.event.notification.ConfigWarningEvent;
+import zcd.jellyfish.api.extension.CompactionDirective;
+import zcd.jellyfish.api.extension.CompactionPreRequest;
 import zcd.jellyfish.api.extension.CompactionStrategy;
 import zcd.jellyfish.api.extension.CompactionStrategyRequest;
 import zcd.jellyfish.api.extension.CompactionTrigger;
+import zcd.jellyfish.api.extension.ExtensionHandler;
 import zcd.jellyfish.core.prompt.ContextUsage;
 import zcd.jellyfish.core.prompt.TokenEstimator;
 import zcd.jellyfish.core.prompt.ToolPairing;
@@ -33,6 +36,7 @@ import zcd.jellyfish.infra.session.SessionMessage;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -394,6 +398,18 @@ public class ConversationCompactor implements AutoCloseable {
             throw new CompactionUnavailableException(availabilityMessage(session));
         }
         int keepRecent = keepRecentOf(strategy, messages.size());
+        // 压缩前钩子：位置是本条链上唯一「还没花钱」的点。它必须排在范围选定之前，
+        // 因为插件能改保留条数；排在范围之后就只能否决，不能表达「少压一点」。
+        // 装配顺序也顺带说明了为什么不能挪到 run() 里：那时摘要请求已经发出去了
+        CompactionDirective directive = compactionDirective(session.getSessionId(), trigger, messages, from,
+                keepRecent, previous == null ? null : previous.getBoundaryMessageId());
+        if (directive.isCancelled()) {
+            throw new JellyfishException("压缩被插件拦下：" + reasonOf(directive.getReason()));
+        }
+        if (directive.hasKeepRecent()) {
+            // 与策略给出的值同一套钳制：插件写出荒谬的值不该让压缩失控
+            keepRecent = Math.max(0, Math.min(directive.getKeepRecent().intValue(), messages.size()));
+        }
         int end = alignToToolGroup(messages, messages.size() - keepRecent, from);
         if (end <= from) {
             return null;
@@ -624,6 +640,76 @@ public class ConversationCompactor implements AutoCloseable {
         Integer declared = strategy.getKeepRecentMessages();
         int keepRecent = declared == null ? reactSettings().getCompactKeepRecentMessages() : declared;
         return Math.max(0, Math.min(keepRecent, messageCount));
+    }
+
+    /**
+     * 跑一遍压缩前钩子链，返回最终指令。
+     * <p>
+     * <b>链式语义</b>（写在调用点的 {@code for} 循环里，注册表不参与）：
+     * 第一个 {@code cancel} 立即短路（理由取自它）；{@code keepRecent} 取<b>最后一个非缺省</b>值。
+     * <p>
+     * <b>失败语义是「放行」</b>：同步派发没有护栏，异常处置是本方法的责任；插件坏掉不该让压缩
+     * 彻底不能用，也不该静默改掉保留条数。
+     * <p>
+     * <b>无插件时不构造任何请求对象</b>：token 估算要把整段历史过一遍，只有真要问插件时才付这个代价。
+     *
+     * @param sessionId  会话标识
+     * @param trigger    触发原因
+     * @param messages   当前会话的全部消息
+     * @param from       待压缩范围的起点（旧边界之后）
+     * @param keepRecent 策略算完后的保留条数
+     * @param previousBoundaryMessageId 旧边界消息标识，可为 {@code null}
+     * @return 最终指令；链上没有可用处理器时为 {@link CompactionDirective#proceed()}
+     */
+    private CompactionDirective compactionDirective(String sessionId, CompactionTrigger trigger,
+                                                    List<SessionMessage> messages, int from, int keepRecent,
+                                                    String previousBoundaryMessageId) {
+        List<ExtensionHandler<CompactionPreRequest, CompactionDirective>> handlers =
+                extensions.handlers(CompactionPreRequest.class, null);
+        if (handlers.isEmpty()) {
+            return CompactionDirective.proceed();
+        }
+        int tokensBefore = estimateTokens(messages, from);
+        Integer override = null;
+        for (ExtensionHandler<CompactionPreRequest, CompactionDirective> handler : handlers) {
+            CompactionDirective directive;
+            try {
+                directive = extensions.invoke(handler, new CompactionPreRequest(sessionId, trigger, messages.size(),
+                        tokensBefore, keepRecent, previousBoundaryMessageId));
+            } catch (RuntimeException e) {
+                LOG.warn("压缩前处理器抛错，按放行处理", e);
+                continue;
+            }
+            if (directive == null) {
+                continue;
+            }
+            if (directive.isCancelled()) {
+                return directive;
+            }
+            if (directive.hasKeepRecent()) {
+                override = directive.getKeepRecent();
+            }
+        }
+        return override == null ? CompactionDirective.proceed() : CompactionDirective.keepRecent(override.intValue());
+    }
+
+    /**
+     * 估算一段历史消息的 token 数。
+     * <p>
+     * <b>估算而不是实测</b>：按文本长度折算，不含 system prompt 与工具定义。它只用于给插件一个
+     * 「现在多大了」的参考，因此精度够用；不要拿它与厂商返回的计费数对上。
+     *
+     * @param messages 全部消息
+     * @param from     起点下标
+     * @return token 估算值
+     */
+    private static int estimateTokens(List<SessionMessage> messages, int from) {
+        int start = Math.max(0, Math.min(from, messages.size()));
+        List<LlmMessage> history = new ArrayList<LlmMessage>(messages.size() - start);
+        for (int index = start; index < messages.size(); index++) {
+            history.add(messages.get(index).getMessage());
+        }
+        return TokenEstimator.estimateMessages(history);
     }
 
     /**
@@ -868,6 +954,16 @@ public class ConversationCompactor implements AutoCloseable {
     private static String messageOf(Throwable throwable) {
         return StringUtils.isBlank(throwable.getMessage())
                 ? throwable.getClass().getSimpleName() : throwable.getMessage();
+    }
+
+    /**
+     * 取插件给出的理由的可用文本。
+     *
+     * @param reason 理由，可为 {@code null}
+     * @return 理由文本，空时返回固定占位
+     */
+    private static String reasonOf(String reason) {
+        return StringUtils.isBlank(reason) ? "未提供理由" : reason;
     }
 
     /**

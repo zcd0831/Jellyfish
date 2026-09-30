@@ -2,6 +2,7 @@ package zcd.jellyfish.server;
 
 import zcd.jellyfish.core.ReActListener;
 import zcd.jellyfish.core.ReActResult;
+import zcd.jellyfish.server.dto.TurnBlockedEvent;
 import zcd.jellyfish.server.dto.TurnCancelledEvent;
 import zcd.jellyfish.server.dto.TurnCompleteEvent;
 import zcd.jellyfish.server.dto.TurnErrorEvent;
@@ -166,6 +167,19 @@ public final class SseReActListener implements ReActListener {
     @Override
     public void onCancelled() {
         queue.offer(new SseEvent("cancelled", new TurnCancelledEvent(turnId, sessionId), true));
+    }
+
+    /**
+     * 回合在开始前被插件拦下。
+     * <p>
+     * 写成独立终态而不是 {@code error}：客户端对两者的处理不同（改请求 vs 报障），
+     * 且这不是错误——没抛异常、没资源故障、客户端也没断开。
+     *
+     * @param reason 拦下的理由，可为 {@code null}
+     */
+    @Override
+    public void onBlocked(String reason) {
+        queue.offer(new SseEvent("turn_blocked", new TurnBlockedEvent(turnId, sessionId, reason), true));
     }
 
     @Override

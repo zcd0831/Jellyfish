@@ -856,6 +856,14 @@ public final class TranscriptProjector {
                 out.addAll(LineWrapper.wrap(new StyledSegment(NOTICE_PREFIX, ERROR_STYLE),
                         wrapBody(label, ERROR_STYLE), width));
                 break;
+            case BLOCKED:
+                // 中性样式：被拦下不是错误，也不是用户中断，而是「这次压根没跑」
+                String blocked = inflight.getErrorMessage();
+                String blockedLabel = blocked == null || blocked.isEmpty()
+                        ? "回合被拦下" : "回合被拦下：" + blocked;
+                out.addAll(LineWrapper.wrap(new StyledSegment(NOTICE_PREFIX, CANCELLED_STYLE),
+                        wrapBody(blockedLabel, CANCELLED_STYLE), width));
+                break;
             default:
                 // COMPLETED / RUNNING：正文已由会话消息承载，这里不补任何行
                 break;

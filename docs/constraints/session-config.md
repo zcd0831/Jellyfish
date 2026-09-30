@@ -18,6 +18,18 @@
 `SessionManager` 是唯一变更入口。变更同步派发 `SessionPersistRequest` 且**异常原样上抛**
 （关闭先落盘再移除，删除走 `SessionDeleteRequest`、**删不掉就当没删**）。
 
+**关闭前可被插件拦下（`SessionBeforeCloseRequest` → `LifecycleVerdict`）**：调用点在<b>最后一次落盘之前</b>，
+让插件有一个正式的收尾点（写检查点、导出记录）。三条规则：
+
+- **只有 `USER_REQUEST` 的否决会被采纳**：进程收尾（`SHUTDOWN`）、配置重载（`RELOAD`）与内部收尾
+  （`INTERNAL`，如瞬时子代理会话跑完）都是一个必须完成的事实，在那里按插件的意愿留下一个
+  「本该关掉的会话」只会变成资源泄漏。钩子仍然会被调用，只是 `cancel` 被忽略。
+- **否决是 fail-loud**：抛 `JellyfishException` 且会话留在表里，而不是静默不关——后者与
+  「会话不存在」无法区分，调用方会以为已经关掉了。
+- **handler 抛错按放行处理**，否则一个坏插件会让会话永远关不掉。
+
+**它只管「结束运行态、保留快照」**：删除是另一件事，走既有的 `SessionDeleteRequest`。
+
 两个例外：
 
 - **例外一：创建不落盘**——空会话不留文件与提交，`create` 的失败语义随之从「创建时暴露」变成

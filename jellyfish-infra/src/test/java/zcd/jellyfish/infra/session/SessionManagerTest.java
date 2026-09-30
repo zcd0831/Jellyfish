@@ -15,7 +15,9 @@ import zcd.jellyfish.api.event.notification.SessionClosedEvent;
 import zcd.jellyfish.api.event.notification.SessionCreatedEvent;
 import zcd.jellyfish.api.event.notification.SessionMessageAppendedEvent;
 import zcd.jellyfish.api.extension.ExtensionHandler;
+import zcd.jellyfish.api.extension.LifecycleVerdict;
 import zcd.jellyfish.api.extension.PermissionMode;
+import zcd.jellyfish.api.extension.SessionBeforeCloseRequest;
 import zcd.jellyfish.api.extension.SessionPersistRequest;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.config.AgentDefinition;
@@ -25,6 +27,8 @@ import zcd.jellyfish.infra.llm.LlmMessage;
 import zcd.jellyfish.infra.llm.LlmUsage;
 import zcd.jellyfish.infra.registry.TypeRegistry;
 
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -339,6 +343,104 @@ class SessionManagerTest {
         // Then：父会话的账要把子代理的调用次数一并算上
         assertEquals(12L, session.getUsage().getTotalTokens());
         assertEquals(3L, session.getUsage().getLlmCalls());
+    }
+
+    @Test
+    void close_should_ask_hook_before_persisting_when_user_requested() {
+        // Given：关闭前钩子排在落盘之前——排在之后就没有「拦下」可言，收尾动作也只会晚于持久化
+        SessionManager manager = manager();
+        Session session = manager.create(CODER, null, null, null);
+        List<String> order = new ArrayList<String>();
+        extensions.contribute("guard", SessionBeforeCloseRequest.class, null, request -> {
+            order.add("hook:" + request.getReason() + ":" + request.isVetoSupported());
+            return LifecycleVerdict.proceed();
+        }, RegisterOptions.DEFAULT);
+        extensions.contribute("persist", SessionPersistRequest.class, null, request -> {
+            order.add("persist");
+            return null;
+        }, RegisterOptions.DEFAULT);
+
+        // When
+        manager.close(session.getSessionId(), SessionBeforeCloseRequest.Reason.USER_REQUEST);
+
+        // Then
+        assertEquals(Arrays.asList("hook:USER_REQUEST:true", "persist"), order);
+    }
+
+    @Test
+    void close_should_reject_when_hook_cancels_user_request() {
+        // Given：用户主动关闭是唯一有意义的否决场景
+        SessionManager manager = manager();
+        Session session = manager.create(CODER, null, null, null);
+        extensions.contribute("guard", SessionBeforeCloseRequest.class, null,
+                request -> LifecycleVerdict.cancel("还有未保存的改动"), RegisterOptions.DEFAULT);
+
+        // When / Then：fail-loud 而不是静默不关——后者与「会话不存在」无法区分
+        JellyfishException error = assertThrows(JellyfishException.class,
+                () -> manager.close(session.getSessionId(), SessionBeforeCloseRequest.Reason.USER_REQUEST));
+        assertTrue(error.getMessage().contains("还有未保存的改动"), error.getMessage());
+        // 会话仍在：拦下必须真的拦住
+        assertSame(session, manager.require(session.getSessionId()));
+    }
+
+    @Test
+    void close_should_ignore_veto_when_shutdown() {
+        // Given：关机路径不允许被插件拖住——否则结果是「本该关掉的会话留在了表里」
+        SessionManager manager = manager();
+        Session session = manager.create(CODER, null, null, null);
+        extensions.contribute("guard", SessionBeforeCloseRequest.class, null,
+                request -> LifecycleVerdict.cancel("等等我"), RegisterOptions.DEFAULT);
+
+        // When
+        manager.close(session.getSessionId(), SessionBeforeCloseRequest.Reason.SHUTDOWN);
+
+        // Then
+        assertTrue(manager.all().isEmpty());
+    }
+
+    @Test
+    void close_should_ignore_veto_when_internal() {
+        // Given：内部收尾（瞬时子代理会话跑完）同样不由用户发起，也不允许被拖住
+        SessionManager manager = manager();
+        Session session = manager.createEphemeral("parent-1", CODER, null, null, null);
+        extensions.contribute("guard", SessionBeforeCloseRequest.class, null,
+                request -> LifecycleVerdict.cancel("等等我"), RegisterOptions.DEFAULT);
+
+        // When：无原因的重载就是这一档
+        manager.close(session.getSessionId());
+
+        // Then：会话已经不在表里（瞬时会话不进 all()，因此用 require 反证）
+        assertThrows(JellyfishException.class, () -> manager.require(session.getSessionId()));
+    }
+
+    @Test
+    void close_should_proceed_when_hook_throws() {
+        // Given：钩子坏掉不该把关不掉的会话留在进程里
+        SessionManager manager = manager();
+        Session session = manager.create(CODER, null, null, null);
+        extensions.contribute("broken", SessionBeforeCloseRequest.class, null, request -> {
+            throw new IllegalStateException("插件崩了");
+        }, RegisterOptions.DEFAULT);
+
+        // When
+        manager.close(session.getSessionId(), SessionBeforeCloseRequest.Reason.USER_REQUEST);
+
+        // Then
+        assertTrue(manager.all().isEmpty());
+    }
+
+    @Test
+    void close_should_not_ask_hook_when_no_handler_registered() {
+        // Given：0 handler 是兼容性承诺
+        SessionManager manager = manager();
+        Session session = manager.create(CODER, null, null, null);
+
+        // When
+        Session closed = manager.close(session.getSessionId(), SessionBeforeCloseRequest.Reason.USER_REQUEST);
+
+        // Then
+        assertSame(session, closed);
+        assertTrue(manager.all().isEmpty());
     }
 
     @Test

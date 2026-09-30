@@ -10,6 +10,8 @@ import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.event.EventPublisher;
 import zcd.jellyfish.api.event.RegisterOptions;
 import zcd.jellyfish.api.event.notification.ConfigWarningEvent;
+import zcd.jellyfish.api.extension.CompactionDirective;
+import zcd.jellyfish.api.extension.CompactionPreRequest;
 import zcd.jellyfish.api.extension.CompactionStrategy;
 import zcd.jellyfish.api.extension.CompactionStrategyRequest;
 import zcd.jellyfish.api.extension.CompactionTrigger;
@@ -68,6 +70,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -921,6 +924,87 @@ class ConversationCompactorTest {
         // 只出计划（preview）的用例不会发请求，因此这里用 lenient 免得被「多余打桩」判失败
         lenient().when(modelManager.getClient(resolved)).thenReturn(client);
         applyKeepRecent(3);
+    }
+
+    @Test
+    @DisplayName("压缩前钩子能改保留条数：范围按插件给的值重算")
+    void plan_should_honourKeepRecentFromHook() {
+        sessionWithMessages(8);
+        givenModel(128_000, 4_000);
+        // 策略说保留 6 条；插件说只保留 4 条——后者胜出（二者不是二选一，而是覆盖）
+        applyKeepRecent(6);
+        extensions.contribute("guard", CompactionPreRequest.class, null,
+                request -> CompactionDirective.keepRecent(4), RegisterOptions.order(1));
+
+        CompactionPlan plan = compactor.plan(createdSessionId);
+
+        assertEquals(4, plan.getCompressedCount());
+    }
+
+    @Test
+    @DisplayName("压缩前钩子能拦下：理由进异常消息，且不发起任何模型调用")
+    void plan_should_cancel_when_hookCancels() {
+        sessionWithMessages(8);
+        givenModel(128_000, 4_000);
+        extensions.contribute("guard", CompactionPreRequest.class, null,
+                request -> CompactionDirective.cancel("长任务正在跑"), RegisterOptions.order(1));
+
+        JellyfishException error = assertThrows(JellyfishException.class,
+                () -> compactor.start(createdSessionId, CompactionTrigger.MANUAL));
+
+        assertTrue(error.getMessage().contains("长任务正在跑"), error.getMessage());
+        // 拦下的位置必须在花钱之前：start 当场报错，任务根本没派发到执行器
+        verifyNoInteractions(client);
+    }
+
+    @Test
+    @DisplayName("压缩前钩子能看到规模信息，但看不到消息正文")
+    void plan_should_exposeScaleNotContent_toHook() {
+        Session session = sessionWithMessages(8);
+        sessionManager.applyCompaction(createdSessionId, "旧摘要", boundaryIdOf(session, 2), 0);
+        givenModel(128_000, 4_000);
+        applyKeepRecent(3);
+        List<String> seen = new ArrayList<String>();
+        extensions.contribute("probe", CompactionPreRequest.class, null, request -> {
+            seen.add(request.getMessageCount() + "/" + request.getKeepRecentMessages() + "/"
+                    + (request.getPreviousBoundaryMessageId() == null ? "none" : "boundary"));
+            assertTrue(request.getTokensBefore() > 0, "token 估算应大于 0");
+            return CompactionDirective.proceed();
+        }, RegisterOptions.order(1));
+
+        compactor.plan(createdSessionId);
+
+        assertEquals(Collections.singletonList("8/3/boundary"), seen);
+    }
+
+    @Test
+    @DisplayName("压缩前钩子抛错时按放行处理：压缩不该因为一个观察者坏了而失败")
+    void plan_should_proceed_when_hookThrows() {
+        sessionWithMessages(8);
+        givenModel(128_000, 4_000);
+        applyKeepRecent(4);
+        extensions.contribute("broken", CompactionPreRequest.class, null, request -> {
+            throw new IllegalStateException("插件崩了");
+        }, RegisterOptions.order(1));
+
+        CompactionPlan plan = compactor.plan(createdSessionId);
+
+        // 与没有这个钩子时完全一致：策略给的保留条数生效
+        assertEquals(4, plan.getCompressedCount());
+    }
+
+    @Test
+    @DisplayName("没有压缩前钩子时计划与改造前逐字段一致")
+    void plan_should_beUnchanged_when_noHookRegistered() {
+        Session session = sessionWithMessages(8);
+        givenModel(128_000, 4_000);
+        applyKeepRecent(3);
+
+        CompactionPlan plan = compactor.plan(createdSessionId);
+
+        assertEquals(5, plan.getCompressedCount());
+        assertEquals(boundaryIdOf(session, 4), plan.getBoundaryMessageId());
+        assertEquals(0, plan.getDroppedCount());
     }
 
     /**

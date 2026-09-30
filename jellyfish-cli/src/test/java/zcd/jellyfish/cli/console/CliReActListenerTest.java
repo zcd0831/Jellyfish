@@ -381,6 +381,40 @@ class CliReActListenerTest {
     }
 
     @Test
+    void onBlocked_should_write_reason_to_stderr_and_keep_stdout_empty() {
+        RecordingConsoleIO console = new RecordingConsoleIO(null);
+        CliReActListener listener = new CliReActListener(console, false, false);
+
+        listener.onBlocked("工作区不干净");
+
+        assertEquals("回合被拦下：工作区不干净\n", console.err());
+        // stdout 是「回答」的通道：被拦下的回合没有回答，因此它必须保持空（退出码 7 与之配套）
+        assertEquals("", console.out());
+    }
+
+    @Test
+    void onBlocked_should_fall_back_to_placeholder_when_reason_blank() {
+        RecordingConsoleIO console = new RecordingConsoleIO(null);
+        CliReActListener listener = new CliReActListener(console, false, false);
+
+        listener.onBlocked(null);
+
+        assertEquals("回合被拦下：未提供理由\n", console.err());
+    }
+
+    @Test
+    void onBlocked_should_not_flush_buffered_text() {
+        // 被拦下的回合一句都没发给模型，因此缓冲里不可能有「已生成的部分」——
+        // 那是取消路径的转写逻辑，不应该在这里被借来用
+        RecordingConsoleIO console = new RecordingConsoleIO(null);
+        CliReActListener listener = new CliReActListener(console, false, false);
+
+        listener.onBlocked("拦下了");
+
+        assertEquals("回合被拦下：拦下了\n", console.err());
+    }
+
+    @Test
     void onCancelled_should_move_buffered_text_to_stderr() {
         RecordingConsoleIO console = new RecordingConsoleIO(null);
         CliReActListener listener = new CliReActListener(console, false, false);

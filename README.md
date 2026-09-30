@@ -137,6 +137,7 @@ echo "/help" | java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -
 | `4` | 运行失败：回合抛异常，或命令执行失败 |
 | `3`（TUI） | TUI 需要可交互终端而当前没有（stdin 或 stdout 被重定向也算） |
 | `6` | 回合未收敛：达到最大轮次仍未给出最终回复 |
+| `7` | 回合被插件拦下：一句都没发给模型（stdout 保持为空，原因在 stderr） |
 
 单次模式里输入以 `/` 开头就走命令域（`/help` `/model` `/agent` `/new` …），否则走一次 LLM 对话。
 

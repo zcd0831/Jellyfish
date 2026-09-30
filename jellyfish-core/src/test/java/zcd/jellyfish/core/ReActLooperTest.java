@@ -24,6 +24,8 @@ import zcd.jellyfish.api.extension.ToolOutputSink;
 import zcd.jellyfish.api.extension.ToolDescriptor;
 import zcd.jellyfish.api.extension.TurnContext;
 import zcd.jellyfish.api.extension.TurnContextRequest;
+import zcd.jellyfish.api.extension.TurnBeforeRequest;
+import zcd.jellyfish.api.extension.TurnDirective;
 import zcd.jellyfish.core.compact.ConversationCompactor;
 import zcd.jellyfish.core.prompt.CacheBreakWatcher;
 import zcd.jellyfish.core.prompt.ContextUsage;
@@ -82,6 +84,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -878,7 +881,7 @@ class ReActLooperTest {
         return new ReActLooper(sessionManager, modelManager,
                 new ToolExecutor(permissionManager, extensions, events, outputLimiter),
                 events, promptAssembler, runtimeConfig, conversationCompactor, runScopes,
-                new SessionModelResolver(modelManager, agentManager), executor);
+                new SessionModelResolver(modelManager, agentManager), extensions, executor);
     }
 
     /**
@@ -895,6 +898,136 @@ class ReActLooperTest {
             return (LlmStreamHandle) () -> {
             };
         });
+    }
+
+    @Test
+    void chat_should_block_turn_and_skip_model_when_plugin_cancels() {
+        // Given：回合开始前钩子拦下——一句都不发给模型
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        extensions.contribute("guard", TurnBeforeRequest.class, null,
+                request -> TurnDirective.cancel("工作区有未提交的改动"), RegisterOptions.DEFAULT);
+        Session session = sessionManager.createDefault();
+        RecordingListener listener = new RecordingListener();
+
+        // When
+        ReActResult result = newLooper().chat(session.getSessionId(), "提交吧", listener).await();
+
+        // Then：它不是失败也不是取消，而是一档独立的终态（-cli 据此给独立退出码）
+        assertTrue(result.isBlocked());
+        assertFalse(result.isCancelled());
+        assertFalse(result.isTruncated());
+        assertEquals("工作区有未提交的改动", result.getBlockedReason());
+        // 会话一条消息都没多：拦下发生在追加用户消息之前，历史因此保持干净
+        assertEquals(0, session.size());
+        assertEquals(Collections.singletonList("工作区有未提交的改动"), listener.blocked);
+        // 模型一次都没被调用——这是「拦截在花钱之前」的直接断言
+        verifyNoInteractions(client);
+    }
+
+    @Test
+    void chat_should_replace_input_when_plugin_asks() {
+        // Given
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        extensions.contribute("ctx", TurnBeforeRequest.class, null,
+                request -> TurnDirective.replaceInput("附上分支：main\n" + request.getInput()),
+                RegisterOptions.DEFAULT);
+        stubResponses(LlmResponse.text("好"));
+        Session session = sessionManager.createDefault();
+
+        // When
+        newLooper().chat(session.getSessionId(), "继续", new RecordingListener()).await();
+
+        // Then：落进会话的是替换后的文本（与提示词注入不同，它只影响这一次输入）
+        assertEquals("附上分支：main\n继续", session.getMessages().get(0).getMessage().getContent());
+    }
+
+    @Test
+    void chat_should_notAlterInput_when_noTurnHookRegistered() {
+        // Given：0 handler 是兼容性承诺
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        stubResponses(LlmResponse.text("好"));
+        Session session = sessionManager.createDefault();
+
+        // When
+        ReActResult result = newLooper().chat(session.getSessionId(), "原文", new RecordingListener()).await();
+
+        // Then
+        assertEquals("原文", session.getMessages().get(0).getMessage().getContent());
+        assertFalse(result.isBlocked());
+    }
+
+    @Test
+    void chat_should_ignoreInputReplacement_for_nested_turn() {
+        // Given：嵌套回合的输入是模型写出来的任务描述，插件改不动它
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        when(permissionManager.decide(any(PermissionCheckRequest.class)))
+                .thenReturn(PermissionDecision.allow(null));
+        extensions.contribute("ctx", TurnBeforeRequest.class, null,
+                request -> TurnDirective.replaceInput("被改写的任务描述"), RegisterOptions.DEFAULT);
+        ReActLooper looper = newLooper();
+        Session parent = sessionManager.createDefault();
+        Session child = sessionManager.createDefault();
+        registerTool("delegate", request -> {
+            ReActResult nested = looper.runNested(child, "原始任务描述", new RecordingListener(),
+                    request.getCancellationToken(), 2, ToolFilter.none());
+            return new ToolCallResult("delegate", nested.getContent());
+        });
+        stubResponses(toolCallResponse("call_1", "delegate"), LlmResponse.text("子代理答复"),
+                LlmResponse.text("父回合结束"));
+
+        // When
+        looper.chat(parent.getSessionId(), "委派一下", new RecordingListener()).await();
+
+        // Then：嵌套回合用的是模型给出的任务描述；顶层那一次仍然按指令替换了
+        assertEquals("原始任务描述", child.getMessages().get(0).getMessage().getContent());
+        assertEquals("被改写的任务描述", parent.getMessages().get(0).getMessage().getContent());
+    }
+
+    @Test
+    void chat_should_report_depth_and_nested_flag_to_turn_hook() {
+        // Given
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        when(permissionManager.decide(any(PermissionCheckRequest.class)))
+                .thenReturn(PermissionDecision.allow(null));
+        List<String> seen = new ArrayList<String>();
+        extensions.contribute("probe", TurnBeforeRequest.class, null, request -> {
+            seen.add(request.isNested() + "/" + request.getDepth());
+            return TurnDirective.proceed();
+        }, RegisterOptions.DEFAULT);
+        ReActLooper looper = newLooper();
+        Session parent = sessionManager.createDefault();
+        Session child = sessionManager.createDefault();
+        registerTool("delegate", request -> {
+            looper.runNested(child, "子任务", new RecordingListener(), request.getCancellationToken(), 2,
+                    ToolFilter.none());
+            return new ToolCallResult("delegate", "done");
+        });
+        stubResponses(toolCallResponse("call_1", "delegate"), LlmResponse.text("子代理答复"),
+                LlmResponse.text("父回合结束"));
+
+        // When
+        looper.chat(parent.getSessionId(), "委派一下", new RecordingListener()).await();
+
+        // Then：顶层深度 0；嵌套回合已进入作用域，因此深度为 1 且 nested 为真
+        assertEquals(Arrays.asList("false/0", "true/1"), seen);
+    }
+
+    @Test
+    void chat_should_treat_turn_hook_failure_as_proceed() {
+        // Given：拦截点坏掉时宁可放行，也不要让会话彻底不能用
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        extensions.contribute("broken", TurnBeforeRequest.class, null, request -> {
+            throw new IllegalStateException("插件崩了");
+        }, RegisterOptions.DEFAULT);
+        stubResponses(LlmResponse.text("好"));
+        Session session = sessionManager.createDefault();
+
+        // When
+        ReActResult result = newLooper().chat(session.getSessionId(), "原文", new RecordingListener()).await();
+
+        // Then
+        assertEquals("好", result.getContent());
+        assertEquals("原文", session.getMessages().get(0).getMessage().getContent());
     }
 
     /**
@@ -993,6 +1126,14 @@ class ReActLooperTest {
 
         /** 取消次数。 */
         private int cancelledCount;
+
+        /** 被拦下的理由（按发生顺序）。 */
+        private final List<String> blocked = new ArrayList<String>();
+
+        @Override
+        public void onBlocked(String reason) {
+            blocked.add(reason);
+        }
 
         @Override
         public void onToolCallStarted(String toolCallId, String toolName) {

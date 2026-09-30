@@ -56,9 +56,13 @@
 | `approval_resolved` | 审批已裁决 |
 | `done` | 终态：回合正常结束 |
 | `cancelled` | 终态：回合被取消 |
+| `turn_blocked` | 终态：回合被插件在开始前拦下，载荷 `{turnId,sessionId,reason}` |
 | `error` | 终态：回合出错 |
 
-`done` / `cancelled` / `error` 是终态，写出后流结束；空闲超时写 `: keepalive` 注释帧。
+`done` / `cancelled` / `turn_blocked` / `error` 是终态，写出后流结束；空闲超时写 `: keepalive` 注释帧。
+
+**`turn_blocked` 单独一档而不是归入 `error`**：它不是错误（没抛异常、没资源故障、客户端也没断开），
+客户端对两者的处理不同（改请求 / 找人确认 vs 重试 / 报障）。同一条理由在 `-cli` 上是退出码 `7`。
 
 **`tool_output` 是可丢的过程信息**：它是工具**执行期**的实时输出（命令行跑十分钟时能看见动静），载荷
 `{turnId,toolCallId,toolName,chunk}`。服务端按待发条数封顶（超出即丢），客户端应当把它当成进度展示，
@@ -66,6 +70,8 @@
 
 **`tool_done`** 除了 `output` 还带 `metadata`：工具结果的结构化事实（命令行的 `exitCode` / `terminal`）。
 **前端据字段渲染失败标记，不要去解析 `output` 的首行文案**——那行措辞是给模型看的，改一个词标记就会消失。
+`terminal` 的取值集合含 `FAILED`（工具自己没成）与 `REJECTED`（参数被插件拒绝，工具压根没跑），
+两者都让界面显示警示标记。
 **工具抛异常时也带 `metadata.terminal=FAILED`**（并按条件带 `summary` 说明原因），因此前端不必再读 `success`
 就能画出失败标记。没有元数据时它是空对象 `{}`。
 

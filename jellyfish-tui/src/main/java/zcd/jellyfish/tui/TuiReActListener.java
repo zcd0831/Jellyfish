@@ -105,6 +105,19 @@ public final class TuiReActListener implements ReActListener {
         inflight.finish(InflightTurn.Outcome.CANCELLED, null);
     }
 
+    /**
+     * 回合在开始前被插件拦下。
+     * <p>
+     * 理由走与失败同一条展示通道（终局行），但用中性样式：不是错误，是策略拦截。
+     * 它也没必要清空增量缓冲——一句都没发给模型，缓冲里不可能有东西。
+     *
+     * @param reason 拦下的理由，可为 {@code null}
+     */
+    @Override
+    public void onBlocked(String reason) {
+        inflight.finish(InflightTurn.Outcome.BLOCKED, reason);
+    }
+
     @Override
     public void onError(Throwable error) {
         inflight.clearText();

@@ -28,6 +28,18 @@ public final class ExitCodes {
     /** 回合未收敛：达到最大轮次仍未给出最终回复。 */
     public static final int TRUNCATED = 6;
 
+    /**
+     * 回合被插件拦下：一句都没发给模型。
+     * <p>
+     * <b>为什么不归到 {@link #RUNTIME_ERROR}</b>：它不是运行失败——没抛异常、没被用户取消、
+     * 没有资源故障。脚本对它的补救动作（改请求 / 找人确认）与对 {@code 4}（看日志排故障）完全不同。
+     * 现有集合已经在做同类区分（{@code 0} = 未知命令 vs {@code 4} = 跑挂了），
+     * 把「策略拦下」塞进 {@code 4} 会丢掉同一层的信息。
+     * <p>
+     * 该回合的 stdout <b>保持为空</b>（它没有回答），原因只进 stderr。
+     */
+    public static final int TURN_BLOCKED = 7;
+
     private ExitCodes() {
     }
 }

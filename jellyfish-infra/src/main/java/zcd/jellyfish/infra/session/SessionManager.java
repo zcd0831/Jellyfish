@@ -12,7 +12,10 @@ import zcd.jellyfish.api.event.notification.LlmCallFailedEvent;
 import zcd.jellyfish.api.event.notification.SessionClosedEvent;
 import zcd.jellyfish.api.event.notification.SessionCreatedEvent;
 import zcd.jellyfish.api.event.notification.SessionMessageAppendedEvent;
+import zcd.jellyfish.api.extension.ExtensionHandler;
+import zcd.jellyfish.api.extension.LifecycleVerdict;
 import zcd.jellyfish.api.extension.PermissionMode;
+import zcd.jellyfish.api.extension.SessionBeforeCloseRequest;
 import zcd.jellyfish.api.extension.SessionDeleteRequest;
 import zcd.jellyfish.api.extension.SessionPersistRequest;
 import zcd.jellyfish.api.extension.SessionRestoreRequest;
@@ -288,12 +291,37 @@ public class SessionManager {
      * @return 被关闭的会话运行态，会话不存在时返回 {@code null}
      */
     public Session close(String sessionId) {
+        // 无原因的重载归为「内部收尾」：它今天唯一的调用点是瞬时子代理会话跑完，
+        // 那既不是用户意图也不是进程收尾，与 SHELL 关心的三类原因不是一回事
+        return close(sessionId, SessionBeforeCloseRequest.Reason.INTERNAL);
+    }
+
+    /**
+     * 关闭会话，并声明这次关闭是谁想要的。
+     * <p>
+     * <b>为什么要把原因显式传进来</b>：它决定插件能不能拦。只有 {@link Reason#USER_REQUEST}
+     * 的否决会被采纳——进程收尾、配置重载与内部收尾都是一个必须完成的事实，
+     * 在那里按插件的意愿留下一个「本该关掉的会话」只会变成资源泄漏。
+     *
+     * @param sessionId 会话标识，可为 {@code null}
+     * @param reason    关闭原因，不可为 {@code null}
+     * @return 被关闭的会话运行态，会话不存在或关闭被拦下时返回 {@code null}
+     * @throws JellyfishException 关闭被插件拦下（仅 {@code USER_REQUEST}）或落盘失败时抛出
+     */
+    public Session close(String sessionId, SessionBeforeCloseRequest.Reason reason) {
+        Objects.requireNonNull(reason, "reason must not be null");
         if (sessionId == null) {
             return null;
         }
         Session session = sessions.get(sessionId);
         if (session == null) {
             return null;
+        }
+        // 关闭前钩子排在落盘之前：插件在这里做收尾（写检查点、导出记录）或拦下这一次关闭。
+        // 排在落盘之后就没有「拦下」可言了，而收尾也只会晚于持久化、看到一份已经写出去的快照
+        LifecycleVerdict verdict = beforeClose(session, reason);
+        if (verdict.isCancelled() && reason == SessionBeforeCloseRequest.Reason.USER_REQUEST) {
+            throw new JellyfishException("会话关闭被插件拦下：" + reasonOf(verdict.getReason()));
         }
         // 先落最后一次快照再移除：落盘失败时宁可不关，也不要留下「已关闭但没存下」的会话
         persist(session);
@@ -304,6 +332,54 @@ public class SessionManager {
         publish(new SessionClosedEvent(sessionId, session.getAgentId(), session.size(),
                 session.getParentSessionId()));
         return session;
+    }
+
+    /**
+     * 跑一遍会话关闭前钩子链，返回最终裁定。
+     * <p>
+     * <b>链式语义</b>（写在调用点的 {@code for} 循环里，注册表不参与）：第一个 {@code cancel} 短路，
+     * 理由取自它。
+     * <p>
+     * <b>失败语义是「放行」</b>：同步派发没有护栏，异常处置是本方法的责任；插件坏掉不该把
+     * 关不掉的会话留在进程里。
+     * <p>
+     * <b>无插件时不构造任何请求对象</b>。
+     *
+     * @param session 会话运行态，不可为 {@code null}
+     * @param reason  关闭原因，不可为 {@code null}
+     * @return 最终裁定；链上没有可用处理器或都没意见时为 {@link LifecycleVerdict#proceed()}
+     */
+    private LifecycleVerdict beforeClose(Session session, SessionBeforeCloseRequest.Reason reason) {
+        List<ExtensionHandler<SessionBeforeCloseRequest, LifecycleVerdict>> handlers =
+                extensions.handlers(SessionBeforeCloseRequest.class, null);
+        if (handlers.isEmpty()) {
+            return LifecycleVerdict.proceed();
+        }
+        String sessionId = session.getSessionId();
+        String agentId = session.getAgentId();
+        for (ExtensionHandler<SessionBeforeCloseRequest, LifecycleVerdict> handler : handlers) {
+            LifecycleVerdict verdict;
+            try {
+                verdict = extensions.invoke(handler, new SessionBeforeCloseRequest(sessionId, agentId, reason));
+            } catch (RuntimeException e) {
+                LOG.warn("会话关闭前处理器抛错，按放行处理: sessionId={}", sessionId, e);
+                continue;
+            }
+            if (verdict != null && verdict.isCancelled()) {
+                return verdict;
+            }
+        }
+        return LifecycleVerdict.proceed();
+    }
+
+    /**
+     * 取插件给出的理由的可用文本。
+     *
+     * @param reason 理由，可为 {@code null}
+     * @return 理由文本，空时返回固定占位
+     */
+    private static String reasonOf(String reason) {
+        return StringUtils.isBlank(reason) ? "未提供理由" : reason;
     }
 
     /**

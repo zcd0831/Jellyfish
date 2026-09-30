@@ -151,6 +151,11 @@ public final class CliRunMode implements RunMode {
                 options.isShowToolArgs());
         try {
             ReActResult result = harness.chat(sessionId, input, listener).await();
+            // 顺序有讲究：拦下与取消互斥，但两者都比「未收敛」先判——
+            // 一个根本没跑起来的回合不该被说成「达到最大轮次」
+            if (result.isBlocked()) {
+                return ExitCodes.TURN_BLOCKED;
+            }
             if (result.isCancelled()) {
                 return ExitCodes.RUNTIME_ERROR;
             }

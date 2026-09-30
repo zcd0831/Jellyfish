@@ -130,6 +130,23 @@ public interface ReActListener {
     }
 
     /**
+     * 回合在开始前被插件拦下。
+     * <p>
+     * 与 {@link #onComplete(ReActResult)} / {@link #onCancelled()} / {@link #onError(Throwable)} 互斥：
+     * 它发生时用户消息根本没有进会话，模型一次都没被调用。
+     * <p>
+     * <b>它必须被实现方当成「本回合结束了」</b>：缺省实现委托到 {@link #onCancelled()}，
+     * 因此尚未改造的外壳不会把界面永远留在「进行中」。改造过的外壳应当覆盖它，
+     * 把理由走自己的提示通道（TUI 的 {@code ShellNotice}、{@code -cli} 的 stderr、Server 的 SSE），
+     * <b>而不是把它当作模型的回答渲染出来</b>——它压根不是模型说的。
+     *
+     * @param reason 拦下的理由，可为 {@code null}
+     */
+    default void onBlocked(String reason) {
+        onCancelled();
+    }
+
+    /**
      * 回合因异常终止，与 {@link #onComplete(ReActResult)} / {@link #onCancelled()} 互斥。
      *
      * @param error 失败原因

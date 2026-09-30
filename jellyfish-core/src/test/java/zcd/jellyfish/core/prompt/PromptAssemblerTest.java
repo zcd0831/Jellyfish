@@ -22,8 +22,10 @@ import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.config.Model;
 import zcd.jellyfish.infra.config.Provider;
+import zcd.jellyfish.infra.config.ReactCacheSettings;
 import zcd.jellyfish.infra.config.ReactSettings;
 import zcd.jellyfish.infra.config.RuntimeConfig;
+import zcd.jellyfish.infra.config.ToolOutputSettings;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.llm.LlmMessage;
 import zcd.jellyfish.infra.llm.LlmRequest;
@@ -34,6 +36,7 @@ import zcd.jellyfish.infra.registry.TypeRegistry;
 import zcd.jellyfish.infra.session.Session;
 import zcd.jellyfish.infra.session.SessionManager;
 import zcd.jellyfish.infra.session.SessionDefaults;
+import zcd.jellyfish.infra.tooloutput.ToolOutputEnvelope;
 
 import java.util.Collections;
 import java.util.List;
@@ -58,6 +61,9 @@ import static org.mockito.Mockito.when;
  */
 @ExtendWith(MockitoExtension.class)
 class PromptAssemblerTest {
+
+    /** 同构负载的轮数。 */
+    private static final int AGING_TURNS = 10;
 
     /** agent 门面。 */
     @Mock
@@ -647,6 +653,182 @@ class PromptAssemblerTest {
             }
         }
         return false;
+    }
+
+    @Test
+    void aging_should_breakPrefixAtMostOnce_whereLegacyBreaksEveryTurn() {
+        // Given：先跑一遍「从不老化」的参照，拿到这段负载的用量增长曲线，再把水位取成
+        // 「第一轮用量」与「最后一轮用量」的中点百分比。不写死数字，因此以后调整负载
+        // （轮数、信封大小、窗口）不会让这个用例悄悄变成一句空话
+        AgingRun reference = runAging(100);
+        int watermarkPercent = (reference.percentAt(0) + reference.percentAt(AGING_TURNS - 1)) / 2;
+        assertTrue(watermarkPercent > reference.percentAt(0),
+                "水位必须高于第一轮用量，否则老化会在第 0 轮就发生，用例观察不到那次断裂");
+        assertTrue(watermarkPercent < reference.percentAt(AGING_TURNS - 1),
+                "水位必须低于最后一轮用量，否则它永远不会被跨过");
+
+        // When
+        int legacy = runAging(0).getBreaks();
+        int watermark = runAging(watermarkPercent).getBreaks();
+
+        // Then：不老化时本应是纯追加——每一步都是上一步的真前缀。这条同时给了前两条一个基准
+        assertEquals(0, reference.getBreaks(), "不老化时不该有任何断裂");
+
+        // 旧口径下「本轮新老化的那条」恰好落在上一轮已经发过、且刚被缓存的位置，于是每轮都断。
+        // 这就是 R2，也是命中率上不去的头号原因
+        assertTrue(legacy >= 5, "旧口径本就该每轮都断，实际 " + legacy + " 次");
+
+        // 而水位口径把一个压缩周期内的断裂压到恰好一次。窗口远大于这 10 轮的总量，
+        // 系统 prompt 恒定、不发生压缩也不会裁剪，因此能改写前缀的只剩下老化本身——
+        // 这一条同时也证明了「老化确实发生过」
+        assertEquals(1, watermark, "水位口径应当恰好断一次（且必须断过），实际 " + watermark + " 次");
+    }
+
+    /**
+     * 用指定的老化口径跑一段同构负载。
+     * <p>
+     * 每次都重建组装器与会话：老化边界是按会话记住的，复用会让结果依赖执行顺序。
+     *
+     * @param agingPercent 老化触发水位线，{@code 0} 表示旧口径（按距尾部条数）
+     * @return 本次实验的结果
+     */
+    private AgingRun runAging(int agingPercent) {
+        configureAging(2, agingPercent);
+        PromptAssembler fresh = new PromptAssembler(agentManager, toolCatalog, runtimeConfig, extensions,
+                new ToolResultAger(runtimeConfig), new CacheBreakWatcher());
+        SessionManager sessions = newSessionManager();
+        Session session = sessions.createDefault();
+        String sessionId = session.getSessionId();
+        when(agentManager.systemPromptOf(null)).thenReturn("agent 提示词");
+        List<LlmMessage> previous = null;
+        int[] usedTokens = new int[AGING_TURNS];
+        int breaks = 0;
+        int budgetTokens = 0;
+        for (int turn = 0; turn < AGING_TURNS; turn++) {
+            sessions.appendMessage(sessionId, LlmMessage.user("第 " + turn + " 轮提问"), null);
+            sessions.appendMessage(sessionId, assistantCalling("call-" + turn), null);
+            sessions.appendMessage(sessionId, LlmMessage.tool("call-" + turn, "read_file",
+                    envelopeOf("第 " + turn + " 轮的读取结果")), null);
+            PromptAssembly assembly = fresh.assemble(session, resolvedModel(4000, 100));
+            List<LlmMessage> current = assembly.getRequest().getMessages();
+            usedTokens[turn] = assembly.getUsage().getUsedTokens();
+            budgetTokens = assembly.getUsage().getBudgetTokens();
+            if (previous != null && !isPrefixOf(previous, current)) {
+                breaks++;
+            }
+            previous = current;
+        }
+        return new AgingRun(breaks, usedTokens, budgetTokens);
+    }
+
+    /**
+     * 一次老化实验的结果。
+     */
+    private static final class AgingRun {
+
+        /** 相邻两轮之间前缀被改写的次数。 */
+        private final int breaks;
+
+        /** 每轮组装出的上下文用量。 */
+        private final int[] usedTokens;
+
+        /** 可用 token 预算，各轮相同。 */
+        private final int budgetTokens;
+
+        /**
+         * 构造实验结果。
+         *
+         * @param breaks       前缀断裂次数
+         * @param usedTokens   每轮用量
+         * @param budgetTokens 可用预算
+         */
+        AgingRun(int breaks, int[] usedTokens, int budgetTokens) {
+            this.breaks = breaks;
+            this.usedTokens = usedTokens;
+            this.budgetTokens = budgetTokens;
+        }
+
+        /**
+         * 获取前缀断裂次数。
+         *
+         * @return 次数
+         */
+        int getBreaks() {
+            return breaks;
+        }
+
+        /**
+         * 取某一轮的用量占预算的百分比（向下取整）。
+         *
+         * @param turn 轮次下标
+         * @return 百分比
+         */
+        int percentAt(int turn) {
+            return budgetTokens <= 0 ? 0 : usedTokens[turn] * 100 / budgetTokens;
+        }
+    }
+
+    /**
+     * 判断 {@code previous} 是否逐字节等于 {@code current} 的前缀。
+     * <p>
+     * 逐字段比较而不是用 {@code equals}：要断言的正是「厂商看到的那串字节一模一样」，
+     * 因此把角色、正文、工具调用都拍成字符串再比，失败时也能直接看出差在哪。
+     *
+     * @param previous 上一轮实际发出的消息
+     * @param current  本轮实际发出的消息
+     * @return 是前缀返回 {@code true}
+     */
+    private static boolean isPrefixOf(List<LlmMessage> previous, List<LlmMessage> current) {
+        if (previous.size() > current.size()) {
+            return false;
+        }
+        for (int index = 0; index < previous.size(); index++) {
+            if (!wireOf(previous.get(index)).equals(wireOf(current.get(index)))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * 把一条消息拍成「厂商会看到的样子」。
+     *
+     * @param message 消息
+     * @return 可比较、可读的字符串
+     */
+    private static String wireOf(LlmMessage message) {
+        StringBuilder text = new StringBuilder(message.getRole()).append('|')
+                .append(message.getContent()).append('|')
+                .append(message.getToolCallId()).append('|')
+                .append(message.getName());
+        for (LlmToolCall call : message.getToolCalls()) {
+            text.append('|').append(call.getId()).append(':').append(call.getName())
+                    .append(':').append(call.getArguments());
+        }
+        return text.toString();
+    }
+
+    /**
+     * 构造一份示例截断信封。
+     *
+     * @param preview 预览正文
+     * @return 信封文本
+     */
+    private static String envelopeOf(String preview) {
+        return ToolOutputEnvelope.text("read_file", 1000, 1, "/tmp/spill.txt", "hint", preview).render();
+    }
+
+    /**
+     * 把老化口径写进配置桩，并把上下文预留置为 {@code 0} 以便预算可预测。
+     *
+     * @param keepRecent   保留完整内容的最近消息条数
+     * @param agingPercent 老化触发水位线，{@code 0} 表示旧口径
+     */
+    private void configureAging(int keepRecent, int agingPercent) {
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings(
+                null, 0, null, null, null, null,
+                new ToolOutputSettings(null, null, null, null, keepRecent),
+                new ReactCacheSettings(agingPercent)));
     }
 
     /**

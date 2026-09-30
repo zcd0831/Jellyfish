@@ -66,6 +66,14 @@ public class PromptAssembler {
     /** 贡献块之间的分隔符。 */
     private static final String BLOCK_SEPARATOR = "\n\n";
 
+    /**
+     * 「模型没配上下文窗口」的预算哨兵。
+     * <p>
+     * 不用 {@code 0}：预算恰好为 {@code 0} 是「配了窗口但被输出与预留吃光」的真实情形，
+     * 那种情况下仍需按 {@code 0} 预算裁剪，而不是当作「无从判断」原样下发。
+     */
+    private static final int NO_CONTEXT_WINDOW = -1;
+
     /** agent 提示词。 */
     private final AgentManager agentManager;
 
@@ -153,10 +161,15 @@ public class PromptAssembler {
         int boundary = effectiveBoundary(session);
         String systemPrompt = systemPromptOf(session);
         LlmMessage summary = summaryMessageOf(session, boundary);
-        // 老化排在裁剪之前：先把较早的大结果换成 stub，再让裁剪看到它真实的体积；
-        // 反过来则会先把整组丢掉，连「内容在哪」都一起没了
-        List<LlmMessage> history = toolResultAger.age(toLlmMessages(session, boundary + 1));
-        CropResult cropResult = crop(resolvedModel, systemPrompt, summary, history);
+        List<LlmMessage> history = toLlmMessages(session, boundary + 1);
+        int budget = budgetOf(resolvedModel);
+        // 老化仍排在裁剪之前：先把较早的大结果换成 stub，再让裁剪看到它真实的体积；
+        // 反过来则会先把整组丢掉，连「内容在哪」都一起没了。
+        // 但触发判据是「若原样发出去会占多少」，因此用量必须在老化<b>之前</b>算——
+        // 顺序反过来会自我抵销：老化腾出空间 → 用量降下来 → 下一轮不老化 → 用量又涨上去，来回跳
+        List<LlmMessage> aged = toolResultAger.age(session.getSessionId(), boundary,
+                usageOf(systemPrompt, summary, history, budget), history);
+        CropResult cropResult = crop(budget, systemPrompt, summary, aged);
         // 摘要拼在裁剪之后：它是「被裁掉的那段的精华」，让裁剪有机会丢掉它等于白压一次
         List<LlmMessage> messages = withSummary(summary, cropResult.getMessages());
         List<LlmTool> tools = toolCatalog.tools(toolFilter);
@@ -169,10 +182,43 @@ public class PromptAssembler {
         if (maxOutputTokens > 0) {
             builder.maxTokens(maxOutputTokens);
         }
-        ContextUsage usage = new ContextUsage(TokenEstimator.estimate(systemPrompt)
-                + TokenEstimator.estimateMessages(messages), cropResult.getBudget(),
-                cropResult.isTruncated());
-        return new PromptAssembly(builder.build(), usage);
+        return new PromptAssembly(builder.build(),
+                usageOf(systemPrompt, null, messages, cropResult.getBudget(), cropResult.isTruncated()));
+    }
+
+    /**
+     * 计算一次请求的上下文用量。
+     * <p>
+     * <b>为什么老化前也算一次</b>：老化的触发判据与压缩一样要跟裁剪同源（同一个
+     * {@link TokenEstimator}、同一个预算），否则三处会在边界情形给出互相矛盾的结论。
+     * 老化那一次看的是「若原样发出去会占多少」，因此不含裁剪结果。
+     *
+     * @param systemPrompt system prompt，可为 {@code null}
+     * @param summary      将要前置的摘要合成消息，可为 {@code null}
+     * @param messages     本次要发送的消息
+     * @param budget       可用预算，{@code <= 0} 表示无从判断
+     * @return 用量
+     */
+    private static ContextUsage usageOf(String systemPrompt, LlmMessage summary, List<LlmMessage> messages,
+                                       int budget) {
+        return usageOf(systemPrompt, summary, messages, budget, false);
+    }
+
+    /**
+     * 计算一次请求的上下文用量，并指定是否已发生机械裁剪。
+     *
+     * @param systemPrompt system prompt，可为 {@code null}
+     * @param summary      将要前置的摘要合成消息，可为 {@code null}
+     * @param messages     本次要发送的消息
+     * @param budget       可用预算，{@code <= 0} 表示无从判断
+     * @param truncated    是否已发生机械裁剪
+     * @return 用量
+     */
+    private static ContextUsage usageOf(String systemPrompt, LlmMessage summary, List<LlmMessage> messages,
+                                       int budget, boolean truncated) {
+        int used = TokenEstimator.estimate(systemPrompt) + TokenEstimator.estimateMessage(summary)
+                + TokenEstimator.estimateMessages(messages);
+        return new ContextUsage(used, budget, truncated);
     }
 
     /**
@@ -445,23 +491,39 @@ public class PromptAssembler {
     }
 
     /**
-     * 按模型上下文窗口裁剪会话历史，并把「预算」与「是否裁过」一起回给调用方。
+     * 计算可用 token 预算。
+     * <p>
+     * 预算只算一次并往下传：老化的水位判据、裁剪的边界、{@link ContextUsage} 的分母必须是同一个
+     * 数——三处各算一遍就会出现「一个说还很宽裕、一个已经开始丢历史」的相反结论。
      *
      * @param resolvedModel 已解析的模型
-     * @param systemPrompt  已组装的 system prompt，可为 {@code null}
-     * @param summary       将要前置的摘要合成消息，可为 {@code null}
+     * @return 可用预算；模型没配上下文窗口时返回 {@link #NO_CONTEXT_WINDOW}
+     *         （与「预算恰好为 0」区分开）
+     */
+    private int budgetOf(ResolvedModel resolvedModel) {
+        int contextLength = resolvedModel.getModel().getContextLength();
+        if (contextLength <= 0) {
+            return NO_CONTEXT_WINDOW;
+        }
+        return contextLength - resolvedModel.getModel().getMaxOutputTokens()
+                - reactSettings().getContextReserveTokens();
+    }
+
+    /**
+     * 按预算裁剪会话历史，并把「预算」与「是否裁过」一起回给调用方。
+     *
+     * @param budget       可用预算，{@link #NO_CONTEXT_WINDOW} 表示模型没配窗口
+     * @param systemPrompt 已组装的 system prompt，可为 {@code null}
+     * @param summary      将要前置的摘要合成消息，可为 {@code null}
      * @param history       压缩边界之后的全部历史消息，不可为 {@code null}
      * @return 裁剪结果，保证非 {@code null}
      */
-    private CropResult crop(ResolvedModel resolvedModel, String systemPrompt, LlmMessage summary,
-                            List<LlmMessage> history) {
-        int contextLength = resolvedModel.getModel().getContextLength();
-        if (contextLength <= 0) {
+    private static CropResult crop(int budget, String systemPrompt, LlmMessage summary,
+                                   List<LlmMessage> history) {
+        if (budget == NO_CONTEXT_WINDOW) {
             // 没配上下文窗口就无从判断预算，原样下发（宁可让厂商报错，也不静默丢历史）
             return new CropResult(history, 0, false);
         }
-        int budget = contextLength - resolvedModel.getModel().getMaxOutputTokens()
-                - reactSettings().getContextReserveTokens();
         // 摘要也要算进预算：它在裁剪之后才拼上去，不先扣掉就会让历史挤掉本该留给它的位置
         int historyBudget = budget - TokenEstimator.estimate(systemPrompt) - TokenEstimator.estimateMessage(summary);
         ContextWindow.Result result = ContextWindow.crop(history, historyBudget);

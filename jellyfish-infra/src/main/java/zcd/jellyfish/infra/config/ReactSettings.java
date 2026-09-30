@@ -81,11 +81,14 @@ public class ReactSettings {
     /** 工具结果落盘与上下文治理参数。 */
     private final ToolOutputSettings toolOutput;
 
+    /** 提示词缓存的治理参数。 */
+    private final ReactCacheSettings cache;
+
     /**
      * 构造缺省运行期参数。
      */
     public ReactSettings() {
-        this(null, null, null, null, null, null, null);
+        this(null, null, null, null, null, null, null, null);
     }
 
     /**
@@ -105,7 +108,28 @@ public class ReactSettings {
                          Integer compactKeepRecentMessages, Integer compactMaxSummaryChars,
                          Integer autoCompactPercent) {
         this(maxRounds, contextReserveTokens, maxToolOutputChars, compactKeepRecentMessages,
-                compactMaxSummaryChars, autoCompactPercent, null);
+                compactMaxSummaryChars, autoCompactPercent, null, null);
+    }
+
+    /**
+     * 兼容旧调用点的便捷构造器：缓存段按缺省值处理。
+     * <p>
+     * 与六参构造器同一条理由：绝大多数调用点不关心 {@code react.cache}，而它的缺省值恰好就是
+     * 「沿用旧行为」，因此让它们多写一个 {@code null} 只是噪音。
+     *
+     * @param maxRounds                 最大循环轮数
+     * @param contextReserveTokens      上下文预留 token 数
+     * @param maxToolOutputChars        单个工具输出最大字符数
+     * @param compactKeepRecentMessages {@code /compact} 保留的最近消息条数
+     * @param compactMaxSummaryChars    摘要长度上限
+     * @param autoCompactPercent        自动压缩的触发百分比
+     * @param toolOutput                工具结果落盘与上下文治理段
+     */
+    public ReactSettings(Integer maxRounds, Integer contextReserveTokens, Integer maxToolOutputChars,
+                         Integer compactKeepRecentMessages, Integer compactMaxSummaryChars,
+                         Integer autoCompactPercent, ToolOutputSettings toolOutput) {
+        this(maxRounds, contextReserveTokens, maxToolOutputChars, compactKeepRecentMessages,
+                compactMaxSummaryChars, autoCompactPercent, toolOutput, null);
     }
 
     /**
@@ -120,6 +144,7 @@ public class ReactSettings {
      * @param autoCompactPercent        自动压缩的触发百分比，负数或缺省按缺省值处理；
      *                                  {@code 0} 合法（关闭自动压缩），超过 100 按 100 处理
      * @param toolOutput                工具结果落盘与上下文治理段，{@code null} 按缺省值处理
+     * @param cache                     提示词缓存治理段，{@code null} 按缺省值处理
      */
     @JsonCreator
     public ReactSettings(@JsonProperty("maxRounds") Integer maxRounds,
@@ -128,7 +153,8 @@ public class ReactSettings {
                          @JsonProperty("compactKeepRecentMessages") Integer compactKeepRecentMessages,
                          @JsonProperty("compactMaxSummaryChars") Integer compactMaxSummaryChars,
                          @JsonProperty("autoCompactPercent") Integer autoCompactPercent,
-                         @JsonProperty("toolOutput") ToolOutputSettings toolOutput) {
+                         @JsonProperty("toolOutput") ToolOutputSettings toolOutput,
+                         @JsonProperty("cache") ReactCacheSettings cache) {
         this.maxRounds = maxRounds != null && maxRounds > 0 ? maxRounds : DEFAULT_MAX_ROUNDS;
         this.contextReserveTokens = contextReserveTokens != null && contextReserveTokens >= 0
                 ? contextReserveTokens : DEFAULT_CONTEXT_RESERVE_TOKENS;
@@ -141,6 +167,7 @@ public class ReactSettings {
         this.autoCompactPercent = autoCompactPercent != null && autoCompactPercent >= 0
                 ? Math.min(autoCompactPercent, 100) : DEFAULT_AUTO_COMPACT_PERCENT;
         this.toolOutput = toolOutput == null ? new ToolOutputSettings() : toolOutput;
+        this.cache = cache == null ? new ReactCacheSettings() : cache;
     }
 
     /**
@@ -207,12 +234,21 @@ public class ReactSettings {
     }
 
     /**
+     * 获取提示词缓存的治理段。
+     *
+     * @return 缓存设置，保证非 {@code null}
+     */
+    public ReactCacheSettings getCache() {
+        return cache;
+    }
+
+    /**
      * 判断是否与缺省值完全一致。
      * <p>
      * 供 {@link JellyfishSettings#isEmpty()} 判断「整份运行期设置是否什么都没配」，
      * 因此只比较是否等于缺省，不比较字段来源。
      *
-     * @return 全部字段（含工具结果段）都等于缺省值返回 {@code true}
+     * @return 全部字段（含工具结果段与缓存段）都等于缺省值返回 {@code true}
      */
     public boolean isDefault() {
         return maxRounds == DEFAULT_MAX_ROUNDS
@@ -221,6 +257,7 @@ public class ReactSettings {
                 && compactKeepRecentMessages == DEFAULT_COMPACT_KEEP_RECENT_MESSAGES
                 && compactMaxSummaryChars == DEFAULT_COMPACT_MAX_SUMMARY_CHARS
                 && autoCompactPercent == DEFAULT_AUTO_COMPACT_PERCENT
-                && toolOutput.isDefault();
+                && toolOutput.isDefault()
+                && cache.isDefault();
     }
 }

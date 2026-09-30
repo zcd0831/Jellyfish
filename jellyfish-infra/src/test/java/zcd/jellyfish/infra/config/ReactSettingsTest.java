@@ -168,4 +168,27 @@ class ReactSettingsTest {
         assertEquals(2, settings.getToolOutput().getKeepRecentMessages());
         assertFalse(settings.isDefault());
     }
+
+    @Test
+    void constructor_should_apply_cache_defaults_when_section_missing() {
+        // When：用最旧的那个便捷构造器（连 toolOutput 都不传）
+        ReactSettings settings = new ReactSettings(null, null, null, null, null, null);
+
+        // Then：缓存段也必须落在缺省上，而不是 null
+        assertEquals(ReactCacheSettings.DEFAULT_AGING_PERCENT, settings.getCache().getAgingPercent());
+        assertTrue(settings.getCache().isDefault());
+    }
+
+    @Test
+    void deserialization_should_bind_cache_section() {
+        // Given
+        String json = "{\"cache\":{\"agingPercent\":70}}";
+
+        // When
+        ReactSettings settings = ObjectMapperWrapper.readValue(json, ReactSettings.class);
+
+        // Then：只改了缓存段也必须被视为「配过了」，否则热更新会把它当空配置丢掉
+        assertEquals(70, settings.getCache().getAgingPercent());
+        assertFalse(settings.isDefault());
+    }
 }

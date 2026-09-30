@@ -218,15 +218,16 @@ class ActionQueueTest {
     }
 
     @Test
-    void submit_should_fail_when_capability_not_available() {
+    void submit_should_queue_rebuild_tool_catalog_at_turn_boundary() {
+        // 它是「回合边界」那一档：正在跑的回合已经拿过清单，中途换掉会让同一个回合里模型看到两套工具
         queue.beginTurn("s1", () -> {
         });
 
         ActionHandle rebuild = queue.submit("plugin-a", PluginAction.rebuildToolCatalog("s1", "插件变了"));
 
-        // 尚未提供的能力在投递时就说清楚，而不是静默无效——插件据此可以不做重试
-        assertEquals(ActionStatus.FAILED, rebuild.getStatus());
-        assertTrue(rebuild.getResult().contains("工具清单"), rebuild.getResult());
+        assertEquals(ActionStatus.QUEUED, rebuild.getStatus());
+        assertEquals(1, queue.takeTurnBoundary("s1").size());
+        assertTrue(queue.takeConvergence("s1").isEmpty());
     }
 
     @Test

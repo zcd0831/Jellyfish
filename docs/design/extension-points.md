@@ -803,7 +803,14 @@ public final class ToolActivation
 **调用时机**：**只在 `ToolCatalog` 为该会话冻结清单的那一刻**，对每个已注册工具问一次。
 **不是每轮**——每轮问一次就等于把「清单逐轮可变」放回来了，与冻结保证直接冲突。
 
-**无插件时**：0 handler → 全部 `visible`。
+**无插件时**：0 handler → 全部 `visible`（与改造前逐字段一致）。
+
+**落地时的一处签名修订**（P6a 定稿）：请求要 `agentId` 与 `permissionMode`，而
+`ToolCatalog` 原先只有 `sessionId`。因此请求路径从 `tools(String sessionId, ToolFilter)`
+改成 **`tools(Session session, ToolFilter)`**：会话本就是 `sessionId` / `agentId` / 权限模式三者的
+唯一来源，散着传三个都可能为 `null` 的字符串，调用点很容易传错位。
+内建的两个诊断入口（`tools()` / `tools(ToolFilter)`）**不冻结、也不做激活判定**——
+没有会话就没有那两项事实可交，它们只回答「现在装了什么」。
 
 **失败语义**：抛错 → 记 WARN、按 `abstain`（即 `visible`）处理。
 理由：失败时**保留工具**比隐藏工具安全——隐藏会让模型「不知道有这个能力」而进入死路，
@@ -832,11 +839,26 @@ public final class ToolActivation
 RebuildToolCatalogAction(sessionId, reason)
 ```
 
-- 内核重建该会话的清单，并**发一条 `CachePrefixChangedEvent`**，`reason` 字段
-  新增取值 `TOOL_ACTIVATION`，让既有的缓存监控能归因；
+- **排空点 = 回合边界**（与 `SWITCH_MODEL` / `FORK_SESSION` 同档），即**对下一个回合生效**。
+  不能在本轮中途排空：ReAct 循环每轮都重新装配请求，中途换清单会让**同一个回合里模型先后看到两套工具**，
+  而「按会话冻结」这条保证正是为了挡这个。也就是说这条动作只把该会话的冻结快照清掉，
+  本回合照旧用完它手上那份；
 - **必须由调用方显式发起**。内核绝不在注册表变化时自动重建——MCP 的会话中途工具变化
   正是靠「按会话冻结」被挡住的，自动重建会把那个保证拆掉；
 - **记录一条 WARN**：这是明确的「用一次前缀断裂换一次能力变化」，值得在日志里留痕。
+
+**落地时的一处修订：不新增事件的 `reason` 字段，动作也不单独发事件**（P6a 定稿，推翻了本节初稿）。
+初稿说「发一条 `CachePrefixChangedEvent`，`reason` 新增取值 `TOOL_ACTIVATION`」，但：
+
+1. 该事件**没有 `reason` 字段**（它按 `Layer` 定位断裂点，与 `reason` 是两套坐标）；
+2. 而且**同一次断裂会被报两次**——`CacheBreakWatcher` 已经在下一次请求装配时按会话比较快照并发出
+   `Layer.TOOLS` 事件。事件自己的 javadoc 明说「每一次真实的缓存损失，计数型订阅方都需要看到每一次」，
+   重复上报会直接把计数喂坏；
+3. 反过来，**只有 `TOOL_ACTIVATION` 一个取值的字段就是会撒谎的契约**。
+
+真正的归因本来就已经成立：**按会话冻结之后，内核里能让某个会话的工具清单变化的只剩这一个来源**
+（MCP 重扫只改注册表，改不动已冻结的清单）。这句话写进 `CachePrefixChangedEvent.Layer.TOOLS` 的 javadoc，
+动作则只做「清快照 + 记 WARN」两件事。
 
 ### 7.4 与子代理 `ToolFilter` 的关系
 
@@ -852,7 +874,7 @@ RebuildToolCatalogAction(sessionId, reason)
 - **按轮激活**：`ToolActivation` 只在冻结时求值，不提供 per-turn 入口。
 - **自动感知 `tools/list_changed`**：MCP 的重扫仍只改注册表，不影响已冻结的会话清单。
 
-### 7.6 测试点
+### 7.6 测试点（均已落地）
 
 - 冻结时求值一次：注册变化后已有会话清单不变，新会话生效。
 - `hidden` 的工具不进 `LlmTool` 列表，但**仍在注册表里**（`descriptors` 查得到，
@@ -860,7 +882,13 @@ RebuildToolCatalogAction(sessionId, reason)
 - handler 抛错时工具保持可见。
 - **子代理的清单冻结也走同一次求值**：主会话隐藏的工具在子代理清单里同样不出现；
   `hidden` 不参与 `ToolFilter` 的收窄判据（两者叠加，不是合并）。
-- `RebuildToolCatalogAction` 之后清单变化，且恰好发一条 `CachePrefixChangedEvent(reason=TOOL_ACTIVATION)`。
+- `rebuildToolCatalog` 之后只有被重建的那个会话跟上注册表变化；**下一个回合**才生效
+  （排空点在回合边界），且没有冻结清单时也回报 `DONE`（没有代价）。
+- **激活与过滤器叠加**：两个闸门都放行才进清单（隐藏的不因 `ToolFilter` 放行而现身，
+  被 `ToolFilter` 拒的也不因激活说「可见」而进）。
+- 激活判定只在冻结点求值一次：同一会话问几次、过滤器不同都只问一次，新会话才再问一次。
+- `CachePrefixChangedEvent` 的 `reason` 字段**不新增**（见 §7.3 的落地修订）：
+  归因靠 `Layer.TOOLS`，报告由 `CacheBreakWatcher` 在下一轮装配时发。
 
 ---
 
@@ -1178,7 +1206,8 @@ Server 的那一期还需要一个后台触发点，那是它的真实代价。
 | **P3** | §9 动作通道 | P0 | **高**（线程模型与生命周期，必须先写测试再改） |
 | **P4** | §6 会话扩展条目与分支（含 `SessionKind` 迁移） | P3 | **高**（快照 schema + `parentSessionId` 语义迁移）**已完成** |
 | **P5** | §5 模型 / 厂商可插拔 | P0 | 中（凭据处理与 adapter 转换）**已完成** |
-| **P6** | §7 工具激活 + §8 UI 深度 | P3（§7.3） | 低（§8）／中（§7 与缓存前缀保证的交互） |
+| **P6a** | §7 工具激活与重建动作 | P3（§7.3） | 中（与缓存前缀保证的交互）**已完成** |
+| **P6b** | §8 UI 深度 | P0 | 低 **待做** |
 
 **跨期纪律**：每一期结束都必须保证「不注册任何新扩展点的老插件」行为**逐字节不变**，
 并用上一期的回归用例守住。这是本文最重要的验收标准——
@@ -1196,7 +1225,7 @@ Server 的那一期还需要一个后台触发点，那是它的真实代价。
 | `../constraints/extensions.md` | 新增的同步扩展点清单、`RuntimeInfo` 的边界、动作通道与「不能发起回调」的新措辞、动作队列「不是事件总线」的说明、厂商可插拔与目录发现的 0 handler / 失败语义 |
 | `../constraints/tools-output.md` | 工具执行管道的七步顺序、`DENY` 与权限审计分开、后置变换必须在 limit 之前 |
 | `../constraints/permissions.md` | 「变换在权限之前」这条决定及其理由（TOCTOU）、`DENY` 不进权限审计 |
-| `../constraints/react-compact.md` | `CompactionPreRequest`、`TurnBeforeRequest` 的 `BLOCKED`、`ToolActivation` 与清单冻结的关系、重建动作与前缀断裂 |
+| `../constraints/react-compact.md` | `CompactionPreRequest`、`TurnBeforeRequest` 的 `BLOCKED`、**`ToolActivation` 与清单冻结的关系、重建动作与前缀断裂**（P6a 已同步）|
 | `../constraints/session-config.md` | 扩展条目、`SessionKind` 迁移、fork 的配对对齐与「不复制 usage」 |
 | `../constraints/shells.md` | `UiSegmentKind` 的三外壳映射、`ToolRenderHint`、快捷键的合法形状与保留键位、`RuntimeInfo` 的取值表 |
 | `../architecture.md` | 扩展层表格补新点、LLM 层的「传输契约 + 插件 provider」说明；「已知边界与后续项」补本文的非目标（deferred 加载、完整会话树、自定义组件、OAuth、deferred provider） |
@@ -1349,6 +1378,15 @@ Server 的那一期还需要一个后台触发点，那是它的真实代价。
 `/reload` 时早于 `reload()`），问早了只会拿到空目录或旧实例的目录。两个调两处都用
 `InOrder` 单测钉住。
 
+### 12.16 P6a 落地时对 §7 的两处修正（已归入正文）
+
+- **`rebuildToolCatalog` 的排空点是回合边界**，对下一个回合生效（§7.3）。本轮中途换清单会拆掉
+  「按会话冻结」这条保证本身。
+- **不新增 `CachePrefixChangedEvent.reason`**，动作也不单独发事件，只清快照 + 记 WARN（§7.3）：
+  事件没有那个字段，而同一个断裂会与 `CacheBreakWatcher` 的常规上报撞车，把计数喂坏；
+  归因靠 `Layer.TOOLS`（按会话冻结之下它只可能来自这个动作）。
+- 顺带一处签名修订：请求路径改成 `tools(Session, ToolFilter)`（§7.2）。
+
 ---
 
 ## 附：改动一览（本轮决策改到正文的哪些地方）
@@ -1365,3 +1403,4 @@ Server 的那一期还需要一个后台触发点，那是它的真实代价。
 | 12.9 P3 对 §9 的修正 | §9.2、§9.3、§9.3.1、§9.7、§9.8 |
 | 12.14 P5 对 §5 的修正 | §5.2、§5.3、§5.4、§5.5、§5.7 |
 | 12.15 目录询问时机 | §5.4、§5.7 |
+| 12.16 P6a 对 §7 的修正 | §7.2、§7.3、§7.6 |

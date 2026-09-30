@@ -157,17 +157,21 @@ class ReActLooperTest {
     /** 动作执行体：用真实实现，它才是被验证的那一层接线。 */
     private ActionDispatcher actionDispatcher;
 
+    /** 工具目录：用真实实现，重建工具清单的动作要落到它头上。 */
+    private ToolCatalog toolCatalog;
+
     @BeforeEach
     void setUp() {
         executor = Executors.newSingleThreadExecutor();
         extensions = new ExtensionRegistry(new TypeRegistry());
         sessionManager = new SessionManager(agentManager, events, extensions, new SessionDefaults());
-        promptAssembler = new PromptAssembler(agentManager, new ToolCatalog(extensions), runtimeConfig, extensions,
+        toolCatalog = new ToolCatalog(extensions);
+        promptAssembler = new PromptAssembler(agentManager, toolCatalog, runtimeConfig, extensions,
                 new ToolResultAger(runtimeConfig, extensions), new CacheBreakWatcher(events));
         outputLimiter = new ToolOutputLimiter(runtimeConfig, new ToolOutputStore(runtimeConfig));
         runScopes = new RunScopes();
         actionQueue = new ActionQueue();
-        actionDispatcher = new ActionDispatcher(actionQueue, sessionManager, conversationCompactor);
+        actionDispatcher = new ActionDispatcher(actionQueue, sessionManager, conversationCompactor, toolCatalog);
         // 这两个桩是共享前置条件：个别用例（会话不存在 / 提前取消）走不到这两步，用 lenient 避免误报
         lenient().when(modelManager.resolveDefault()).thenReturn(resolvedModel());
         lenient().when(modelManager.getClient(any(ResolvedModel.class))).thenReturn(client);

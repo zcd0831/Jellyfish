@@ -307,7 +307,7 @@ public class PromptAssembler {
         // 「发出的第一条 ↔ 会话下标」这个换算才成立
         int sentHistory = cropResult.getMessages().size();
         int firstSessionIndex = sentHistory == 0 ? -1 : start + (aged.size() - sentHistory);
-        List<LlmTool> tools = toolCatalog.tools(session.getSessionId(), toolFilter);
+        List<LlmTool> tools = toolCatalog.tools(session, toolFilter);
         watchCacheBreak(session, systemPrompt, tools, messages);
         LlmRequest.Builder builder = LlmRequest.builder(resolvedModel.getModel().getId())
                 .systemPrompt(systemPrompt)

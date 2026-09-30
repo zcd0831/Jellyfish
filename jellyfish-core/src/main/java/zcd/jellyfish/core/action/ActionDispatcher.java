@@ -5,6 +5,7 @@ import org.slf4j.LoggerFactory;
 import zcd.jellyfish.api.action.PluginAction;
 import zcd.jellyfish.api.extension.CompactionTrigger;
 import zcd.jellyfish.core.compact.ConversationCompactor;
+import zcd.jellyfish.core.prompt.ToolCatalog;
 import zcd.jellyfish.infra.action.ActionQueue;
 import zcd.jellyfish.infra.llm.LlmMessage;
 import zcd.jellyfish.infra.session.Session;
@@ -54,19 +55,24 @@ public class ActionDispatcher {
     /** 压缩器：{@code COMPACT} 动作与 {@code /compact} 走同一条路径。 */
     private final ConversationCompactor compactor;
 
+    /** 工具目录：{@code REBUILD_TOOL_CATALOG} 要丢的冻结清单就在它手里。 */
+    private final ToolCatalog toolCatalog;
+
     /**
      * 构造执行体。
      *
      * @param queue          动作队列，不可为 {@code null}
      * @param sessionManager 会话域服务，不可为 {@code null}
      * @param compactor      压缩器，不可为 {@code null}
+     * @param toolCatalog    工具目录，不可为 {@code null}
      */
     @Inject
     public ActionDispatcher(ActionQueue queue, SessionManager sessionManager,
-                           ConversationCompactor compactor) {
+                           ConversationCompactor compactor, ToolCatalog toolCatalog) {
         this.queue = queue;
         this.sessionManager = sessionManager;
         this.compactor = compactor;
+        this.toolCatalog = toolCatalog;
     }
 
     /**
@@ -157,11 +163,41 @@ public class ActionDispatcher {
             case FORK_SESSION:
                 return fork(sessionId, entry, (PluginAction.ForkSession) action);
             case REBUILD_TOOL_CATALOG:
+                return rebuildToolCatalog(sessionId, entry);
             default:
-                // 投递时已经拦过（见 ActionQueue.submit），这里只是不让 switch 有遗漏分支
+                // 动作清单是封闭的，走到这里说明新增了动作却没接上执行分支
                 entry.fail("本内核尚未提供该能力：" + action.getKind());
                 return 0;
         }
+    }
+
+    /**
+     * 丢弃目标会话的冻结工具清单，让它于<b>下一个回合</b>重新冻结。
+     * <p>
+     * <b>只对下一个回合生效</b>：正在跑的回合已经拿过清单，而它每轮都用同一份（冻结保证）——
+     * 在本轮中途换掉会让同一个回合里模型先后看到两套工具，而那正是冻结要挡的东西。
+     * 排空点因此与 {@code SWITCH_MODEL} 同档（回合边界）。
+     * <p>
+     * <b>它必定换来一次缓存前缀断裂</b>：工具清单在多数厂商的模板里排在 messages 之前，
+     * 一变则整段请求作废。因此这里记一条 WARN 留痕（事件由下一轮装配时的缓存观察器发出，
+     * 那时才有「与上一轮不一致」这个可比较的事实）。
+     *
+     * @param sessionId 会话标识
+     * @param entry     待执行动作
+     * @return 恒为 0（重建不注入消息）
+     */
+    private int rebuildToolCatalog(String sessionId, ActionQueue.Pending entry) {
+        boolean dropped = toolCatalog.rebuild(sessionId);
+        PluginAction.RebuildToolCatalog action = (PluginAction.RebuildToolCatalog) entry.getAction();
+        if (!dropped) {
+            // 没有冻结清单 = 本会话还没装配过请求，下一次装配本就会带上最新工具集，没有代价
+            entry.succeed("该会话尚未冻结工具清单，下一个回合本就会带上最新工具集");
+            return 0;
+        }
+        LOG.warn("插件请求重建工具清单，将换来一次缓存前缀断裂: sessionId={} reason={}",
+                sessionId, action.getReason());
+        entry.succeed("工具清单已重建，下一个回合生效（本次会作废一段缓存前缀）");
+        return 0;
     }
 
     /**

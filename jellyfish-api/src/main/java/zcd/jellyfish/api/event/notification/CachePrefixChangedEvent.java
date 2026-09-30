@@ -40,7 +40,14 @@ public final class CachePrefixChangedEvent extends AbstractJellyfishEvent {
          */
         SYSTEM_PROMPT,
 
-        /** 工具清单：在多数厂商的模板里排在 messages 之前，一变同样作废整段。 */
+        /**
+         * 工具清单：在多数厂商的模板里排在 messages 之前，一变同样作废整段。
+         * <p>
+         * <b>它在本内核里只可能来自一处</b>：{@code PluginAction.rebuildToolCatalog(...)}。
+         * 工具清单按会话冻结，注册表在会话中途的变化（MCP 的 {@code tools/list_changed} 重扫）
+         * <b>不会</b>影响已冻结的清单，而唯一能清掉快照的入口就是那个显式动作。因此本层本身就是
+         * 一条可归因的结论，不需要额外的 {@code reason} 字段——只有一个取值的字段只会撒谎。
+         */
         TOOLS,
 
         /** 历史消息：被改写（压缩边界前移、旧工具结果被老化），改动点之后的内容全部失效。 */

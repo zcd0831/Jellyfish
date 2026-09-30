@@ -10,6 +10,7 @@ import zcd.jellyfish.api.action.DeliverAs;
 import zcd.jellyfish.api.action.PluginAction;
 import zcd.jellyfish.api.extension.CompactionTrigger;
 import zcd.jellyfish.core.compact.ConversationCompactor;
+import zcd.jellyfish.core.prompt.ToolCatalog;
 import zcd.jellyfish.infra.action.ActionQueue;
 import zcd.jellyfish.infra.llm.LlmMessage;
 import zcd.jellyfish.infra.session.Session;
@@ -42,6 +43,9 @@ class ActionDispatcherTest {
     /** 压缩器：桩，验证走的是与 /compact 同一条路径。 */
     private ConversationCompactor compactor;
 
+    /** 工具目录。 */
+    private ToolCatalog toolCatalog;
+
     /** 被测对象。 */
     private ActionDispatcher dispatcher;
 
@@ -50,7 +54,8 @@ class ActionDispatcherTest {
         queue = new ActionQueue();
         sessionManager = mock(SessionManager.class);
         compactor = mock(ConversationCompactor.class);
-        dispatcher = new ActionDispatcher(queue, sessionManager, compactor);
+        toolCatalog = mock(ToolCatalog.class);
+        dispatcher = new ActionDispatcher(queue, sessionManager, compactor, toolCatalog);
         dispatcher.beginTurn("s1", () -> {
         });
     }
@@ -145,6 +150,43 @@ class ActionDispatcherTest {
         assertEquals(ActionStatus.FAILED, broken.getStatus());
         assertTrue(broken.getResult().contains("模型不认识"), broken.getResult());
         assertEquals(ActionStatus.DONE, healthy.getStatus());
+    }
+
+    @Test
+    void drainTurnBoundary_should_rebuild_tool_catalog() {
+        when(toolCatalog.rebuild("s1")).thenReturn(true);
+        ActionHandle handle = queue.submit("plugin-a",
+                PluginAction.rebuildToolCatalog("s1", "MCP 工具变了"));
+
+        dispatcher.drainTurnBoundary("s1", true);
+
+        // 重建必定换来一次缓存前缀断裂，因此结果里要说清楚「下一个回合生效」
+        assertEquals(ActionStatus.DONE, handle.getStatus());
+        assertTrue(handle.getResult().contains("下一个回合"), handle.getResult());
+    }
+
+    @Test
+    void drainTurnBoundary_should_succeed_when_nothing_frozen_yet() {
+        // 没有冻结清单 = 本会话还没装配过请求，下一个回合本就会带上最新工具集，没有代价
+        when(toolCatalog.rebuild("s1")).thenReturn(false);
+        ActionHandle handle = queue.submit("plugin-a",
+                PluginAction.rebuildToolCatalog("s1", "MCP 工具变了"));
+
+        dispatcher.drainTurnBoundary("s1", true);
+
+        assertEquals(ActionStatus.DONE, handle.getStatus());
+        assertTrue(handle.getResult().contains("尚未冻结"), handle.getResult());
+    }
+
+    @Test
+    void drainTurnBoundary_should_fail_when_rebuild_throws() {
+        when(toolCatalog.rebuild("s1")).thenThrow(new IllegalStateException("目录炸了"));
+        ActionHandle handle = queue.submit("plugin-a",
+                PluginAction.rebuildToolCatalog("s1", "MCP 工具变了"));
+
+        dispatcher.drainTurnBoundary("s1", true);
+
+        assertEquals(ActionStatus.FAILED, handle.getStatus());
     }
 
     @Test

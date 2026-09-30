@@ -411,6 +411,12 @@ flowchart TB
 - **实时输出**：三种外壳都有——`-cli` 写 stderr、`-tui` 渲染「运行中的工具轨迹」块、`-server` 推可丢的
   `tool_output` SSE 事件。**已知边界**：`-server` 的丢弃计数只在服务端可观测，没有推给客户端
   （客户端以 `tool_done` 为准）。
+- **TUI 轨迹行带调用参数**：`⎿` 行是「工具名 + 结果摘要 + 失败后缀 + 调用参数」，参数取自会话里 assistant 的
+  `toolCalls`（**执行之前就落库**），按 `toolCallId` 与结果消息配对，因此运行期与 `-resume` 之后看到的是同一份文本。
+  参数折行且受行数上限约束（`Ctrl+E` / `/toolargs` 展开），不用按列截断——长命令的尾巴恰恰是最该看见的部分。
+  **参数 → 展示文本的口径只有一份**（`infra/support/ToolArgumentsText`）：审批浮层、TUI 轨迹行、
+  `-cli --show-tool-args` 三处共用它，否则同一条参数会有三种面貌。**参数不脱敏**（与 Codex 的 `--verbose`
+  同口径）：按参数名猜遮不住真正会出事的地方（`command` / `content`），要遮蔽得由工具或用户显式声明。
 - **工具结果元数据已结构化**（`exitCode` / `terminal` / `summary` 三个约定键 + 工具自定键）：TUI 轨迹、
   CLI 结束行、SSE `tool_done`、会话快照四处都拿到了。**仍需注意**：`metadata` 只在会话快照里
   （进不了 `LlmMessage`），因此它也不参与上下文裁剪——这正是想要的（模型不需要它，界面需要）。

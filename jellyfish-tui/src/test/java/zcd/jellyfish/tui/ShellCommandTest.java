@@ -24,8 +24,26 @@ class ShellCommandTest {
         assertEquals("/ui", UiCommand.PREFIX);
         assertEquals("thinking", ShellCommand.THINKING_NAME);
         assertEquals("/thinking", ShellCommand.THINKING);
+        assertEquals("toolargs", ShellCommand.TOOL_ARGS_NAME);
+        assertEquals("/toolargs", ShellCommand.TOOL_ARGS);
         assertEquals("mouse", MouseCommand.NAME);
         assertEquals("/mouse", MouseCommand.PREFIX);
+    }
+
+    @Test
+    @DisplayName("/toolargs 是外壳命令，且不与 /thinking /exit 误判")
+    void isToolArgsCommand_should_onlyMatchToolArgs() {
+        assertTrue(ShellCommand.isToolArgsCommand("/toolargs"));
+        assertTrue(ShellCommand.isToolArgsCommand("  /toolargs  "));
+        assertTrue(ShellCommand.isToolArgsCommand("/toolargs on"));
+        assertTrue(ShellCommand.isShellCommand("/toolargs"));
+
+        assertFalse(ShellCommand.isToolArgsCommand("/toolarg"));
+        assertFalse(ShellCommand.isToolArgsCommand("/thinking"));
+        assertFalse(ShellCommand.isToolArgsCommand("/exit"));
+        assertFalse(ShellCommand.isToolArgsCommand("toolargs"));
+        assertFalse(ShellCommand.isToolArgsCommand(null));
+        assertFalse(ShellCommand.isExitCommand("/toolargs"));
     }
 
     @Test
@@ -37,6 +55,7 @@ class ShellCommandTest {
         assertTrue(ShellCommand.isShellCommand("/thinking"));
 
         assertFalse(ShellCommand.isThinkingCommand("/think"));
+        assertFalse(ShellCommand.isThinkingCommand("/toolargs"));
         assertFalse(ShellCommand.isThinkingCommand("/exit"));
         assertFalse(ShellCommand.isThinkingCommand("/ui"));
         assertFalse(ShellCommand.isThinkingCommand("thinking"));
@@ -69,6 +88,7 @@ class ShellCommandTest {
         assertTrue(ShellCommand.isShellCommand("/ui"));
         assertTrue(ShellCommand.isShellCommand("/ui dock off"));
         assertTrue(ShellCommand.isShellCommand("/thinking"));
+        assertTrue(ShellCommand.isShellCommand("/toolargs"));
         assertTrue(ShellCommand.isShellCommand("/mouse"));
         assertTrue(ShellCommand.isShellCommand("/mouse off"));
     }

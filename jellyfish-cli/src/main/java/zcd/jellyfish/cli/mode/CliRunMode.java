@@ -140,7 +140,8 @@ public final class CliRunMode implements RunMode {
      * @return 退出码
      */
     private int executeTurn(String input, String sessionId, StartupOptions options) {
-        CliReActListener listener = new CliReActListener(console, options.isShowThinking());
+        CliReActListener listener = new CliReActListener(console, options.isShowThinking(),
+                options.isShowToolArgs());
         try {
             ReActResult result = harness.chat(sessionId, input, listener).await();
             if (result.isCancelled()) {

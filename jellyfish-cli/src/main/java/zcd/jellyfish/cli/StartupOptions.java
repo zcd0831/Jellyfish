@@ -94,6 +94,14 @@ public final class StartupOptions {
     /** 是否展示思考过程（cli 模式打到 stderr，tui 模式决定启动时的展开状态）。 */
     private final boolean showThinking;
 
+    /**
+     * 是否在 cli 模式的工具轨迹行上打出调用参数。
+     * <p>
+     * 只归 {@code -cli}：互动界面已有运行期开关（{@code Ctrl+E} / {@code /toolargs}），
+     * 而单次模式没有交互窗口，想看「模型到底要跑什么」就只剩启动参数这一条路。
+     */
+    private final boolean showToolArgs;
+
     /** 是否把日志级别降到 DEBUG。 */
     private final boolean verbose;
 
@@ -120,6 +128,7 @@ public final class StartupOptions {
         this.host = builder.host;
         this.apiKey = builder.apiKey;
         this.showThinking = builder.showThinking;
+        this.showToolArgs = builder.showToolArgs;
         this.verbose = builder.verbose;
         this.help = builder.help;
         this.version = builder.version;
@@ -235,6 +244,15 @@ public final class StartupOptions {
     }
 
     /**
+     * 判断是否在 cli 模式的工具轨迹行上打出调用参数。
+     *
+     * @return 需要显示返回 {@code true}
+     */
+    public boolean isShowToolArgs() {
+        return showToolArgs;
+    }
+
+    /**
      * 判断是否把日志级别降到 DEBUG。
      *
      * @return 需要详细日志返回 {@code true}
@@ -302,6 +320,9 @@ public final class StartupOptions {
 
         /** 是否展示思考过程。 */
         private boolean showThinking;
+
+        /** 是否在 cli 模式的工具轨迹行上打出调用参数。 */
+        private boolean showToolArgs;
 
         /** 是否把日志级别降到 DEBUG。 */
         private boolean verbose;
@@ -419,6 +440,17 @@ public final class StartupOptions {
          */
         public Builder showThinking(boolean showThinking) {
             this.showThinking = showThinking;
+            return this;
+        }
+
+        /**
+         * 设置是否在 cli 模式的工具轨迹行上打出调用参数。
+         *
+         * @param showToolArgs 需要显示传 {@code true}
+         * @return 本构建器
+         */
+        public Builder showToolArgs(boolean showToolArgs) {
+            this.showToolArgs = showToolArgs;
             return this;
         }
 

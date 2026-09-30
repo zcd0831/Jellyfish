@@ -4,6 +4,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import zcd.jellyfish.api.extension.ToolMetadata;
 import zcd.jellyfish.infra.llm.LlmMessage;
+import zcd.jellyfish.infra.llm.LlmToolCall;
 import zcd.jellyfish.infra.session.SessionMessage;
 import zcd.jellyfish.tui.text.VisualLine;
 
@@ -771,7 +772,41 @@ class TranscriptProjectorTest {
      */
     private static List<VisualLine> project(List<SessionMessage> messages, List<ShellNotice> notices,
                                             InflightTurn.Snapshot inflight, int width, int maxMessages) {
-        return TranscriptProjector.project(messages, notices, inflight, width, maxMessages, false);
+        return project(messages, notices, inflight, width, maxMessages, false);
+    }
+
+    /**
+     * 以指定的工具参数展开态执行一次投影。
+     *
+     * @param messages          消息列表
+     * @param inflight          暂存区快照
+     * @param width             可用列数
+     * @param maxMessages       消息上限
+     * @param toolArgsExpanded  工具参数是否展开
+     * @return 视觉行列表
+     */
+    private static List<VisualLine> project(List<SessionMessage> messages, InflightTurn.Snapshot inflight,
+                                            int width, int maxMessages, boolean toolArgsExpanded) {
+        return project(messages, Collections.<ShellNotice>emptyList(), inflight, width, maxMessages,
+                toolArgsExpanded);
+    }
+
+    /**
+     * 以指定的工具参数展开态执行一次带外壳提示的投影。
+     *
+     * @param messages          消息列表
+     * @param notices           外壳提示列表
+     * @param inflight          暂存区快照
+     * @param width             可用列数
+     * @param maxMessages       消息上限
+     * @param toolArgsExpanded  工具参数是否展开
+     * @return 视觉行列表
+     */
+    private static List<VisualLine> project(List<SessionMessage> messages, List<ShellNotice> notices,
+                                            InflightTurn.Snapshot inflight, int width, int maxMessages,
+                                            boolean toolArgsExpanded) {
+        return TranscriptProjector.project(messages, notices, inflight, width, maxMessages, false,
+                toolArgsExpanded);
     }
 
     /**
@@ -784,7 +819,43 @@ class TranscriptProjectorTest {
     private static List<VisualLine> projectExpanded(List<SessionMessage> messages,
                                                     InflightTurn.Snapshot inflight) {
         return TranscriptProjector.project(messages, Collections.<ShellNotice>emptyList(), inflight, WIDE,
-                TranscriptProjector.DEFAULT_MAX_MESSAGES, true);
+                TranscriptProjector.DEFAULT_MAX_MESSAGES, true, false);
+    }
+
+    /**
+     * 构造一条携带工具调用的助手消息。
+     *
+     * @param calls 工具调用
+     * @return 会话消息
+     */
+    private static SessionMessage assistantWithCalls(LlmToolCall... calls) {
+        return SessionMessage.of(LlmMessage.assistant("", Arrays.asList(calls)));
+    }
+
+    /**
+     * 构造一条工具调用。
+     *
+     * @param id        调用标识
+     * @param name      工具名
+     * @param arguments 参数 JSON 原文
+     * @return 工具调用
+     */
+    private static LlmToolCall call(String id, String name, String arguments) {
+        return new LlmToolCall(0, id, name, arguments);
+    }
+
+    /**
+     * 把投影出的文本拼成一整段，用于断言「内容没被丢掉」。
+     *
+     * @param lines 视觉行列表
+     * @return 拼接后的文本
+     */
+    private static String joinTexts(List<VisualLine> lines) {
+        StringBuilder sb = new StringBuilder();
+        for (String line : texts(lines)) {
+            sb.append(line).append('\n');
+        }
+        return sb.toString();
     }
 
     /**
@@ -876,8 +947,8 @@ class TranscriptProjectorTest {
     }
 
     @Test
-    @DisplayName("运行中目标按显示列截断并保持单行：全角字符不能当码点算")
-    void project_should_truncate_long_running_tool_target_to_single_line() {
+    @DisplayName("运行中参数折行而不是截断：把尾巴截掉恰恰丢的是最需要看的部分")
+    void project_should_wrap_long_running_tool_arguments_without_truncating() {
         InflightTurn turn = new InflightTurn();
         turn.begin();
         Map<String, Object> arguments = new LinkedHashMap<String, Object>();
@@ -886,11 +957,119 @@ class TranscriptProjectorTest {
 
         List<VisualLine> lines = project(Collections.<SessionMessage>emptyList(), turn.snapshot());
 
-        // 空行 + 表头 + 恰好一行轨迹；折行就说明没按列算
-        assertEquals(3, lines.size(), texts(lines).toString());
-        String label = texts(lines).get(2);
-        assertTrue(label.startsWith("      \u23bf write_file \u00b7 "), label);
-        assertTrue(label.endsWith("\u2026"), label);
+        // 空行 + 表头 + 多条折行；只有一行就说明还在截断
+        assertTrue(lines.size() > 3, texts(lines).toString());
+        String joined = joinTexts(lines);
+        assertFalse(joined.contains("\u2026"), texts(lines).toString());
+        // 200 个全角字一个不少：折行只是换行，不是丢内容
+        assertEquals(200, joined.length() - joined.replace("中", "").length(), joined);
+    }
+
+    @Test
+    @DisplayName("运行中参数折行到上限时收尾成一行明确的省略提示")
+    void project_should_mark_omitted_running_tool_arguments_when_capped() {
+        InflightTurn turn = new InflightTurn();
+        turn.begin();
+        Map<String, Object> arguments = new LinkedHashMap<String, Object>();
+        arguments.put("content", repeat("中", 4000));
+        turn.beginTool("write_file", arguments);
+
+        List<VisualLine> lines = project(Collections.<SessionMessage>emptyList(), turn.snapshot());
+
+        // 空行 + 表头 + 恰好上限行数
+        assertEquals(2 + TranscriptProjector.MAX_ARGUMENT_ROWS, lines.size(), texts(lines).toString());
+        String last = texts(lines).get(lines.size() - 1);
+        assertTrue(last.contains("已省略后续内容"), last);
+        assertTrue(last.contains("Ctrl+E 展开"), last);
+        assertTrue(last.startsWith(TranscriptProjector.TRACE_INDENT), last);
+    }
+
+    @Test
+    @DisplayName("展开工具参数后把上限放宽到展开态上限")
+    void project_should_raise_row_limit_when_arguments_expanded() {
+        InflightTurn turn = new InflightTurn();
+        turn.begin();
+        Map<String, Object> arguments = new LinkedHashMap<String, Object>();
+        arguments.put("content", repeat("中", 4000));
+        turn.beginTool("write_file", arguments);
+
+        List<VisualLine> collapsed = project(Collections.<SessionMessage>emptyList(), turn.snapshot(),
+                WIDE, TranscriptProjector.DEFAULT_MAX_MESSAGES, false);
+        List<VisualLine> expanded = project(Collections.<SessionMessage>emptyList(), turn.snapshot(),
+                WIDE, TranscriptProjector.DEFAULT_MAX_MESSAGES, true);
+
+        assertTrue(expanded.size() > collapsed.size(), texts(expanded).toString());
+        assertFalse(joinTexts(expanded).contains("已省略后续内容"), texts(expanded).toString());
+        assertTrue(expanded.size() <= 2 + TranscriptProjector.MAX_ARGUMENT_ROWS_EXPANDED);
+    }
+
+    @Test
+    @DisplayName("工具参数从会话里的 assistant.toolCalls 读出：事后（含 -resume）也看得到命令原文")
+    void project_should_render_tool_arguments_from_session() {
+        List<SessionMessage> messages = Arrays.asList(
+                assistantWithCalls(call("call_1", "shell", "{\"command\":\"mvn test\"}")),
+                SessionMessage.of(LlmMessage.tool("call_1", "shell", "输出")));
+
+        List<VisualLine> lines = project(messages, completed());
+
+        // 参数与工具名 / 结果同在一行，且是 argumentsOf 的空格形态
+        assertTrue(joinTexts(lines).contains("\u23bf shell \u00b7 {\"command\": \"mvn test\"}"),
+                texts(lines).toString());
+    }
+
+    @Test
+    @DisplayName("轨迹行会按 toolCallId 配对，而不是按消息先后：一轮多个调用也不会串台")
+    void project_should_pair_arguments_by_tool_call_id() {
+        List<SessionMessage> messages = Arrays.asList(
+                assistantWithCalls(call("c1", "read_file", "{\"path\":\"a.txt\"}"),
+                        call("c2", "read_file", "{\"path\":\"b.txt\"}")),
+                SessionMessage.of(LlmMessage.tool("c2", "read_file", "B")),
+                SessionMessage.of(LlmMessage.tool("c1", "read_file", "A")));
+
+        List<String> body = texts(project(messages, completed()));
+
+        // 空行 + 表头 + 两条轨迹；配对按 id，因此顺序跟的是结果消息而不是调用顺序
+        assertEquals(4, body.size(), body.toString());
+        assertTrue(body.get(2).contains("b.txt"), body.toString());
+        assertTrue(body.get(3).contains("a.txt"), body.toString());
+    }
+
+    @Test
+    @DisplayName("会话里的参数原样显示：轨迹行要能当作「模型当时到底要干什么」的证据")
+    void project_should_show_arguments_verbatim_from_session() {
+        List<SessionMessage> messages = Arrays.asList(
+                assistantWithCalls(call("call_1", "call", "{\"apiKey\":\"sk-secret\"}")),
+                SessionMessage.of(LlmMessage.tool("call_1", "call", "输出")));
+
+        assertTrue(joinTexts(project(messages, completed())).contains("{\"apiKey\": \"sk-secret\"}"),
+                texts(project(messages, completed())).toString());
+    }
+
+    @Test
+    @DisplayName("参数不是合法 JSON 时退回原文，而不是整行消失")
+    void project_should_fall_back_to_raw_arguments_when_json_invalid() {
+        List<SessionMessage> messages = Arrays.asList(
+                assistantWithCalls(call("call_1", "shell", "mvn test --flag")),
+                SessionMessage.of(LlmMessage.tool("call_1", "shell", "输出")));
+
+        assertTrue(joinTexts(project(messages, completed())).contains("mvn test --flag"),
+                texts(project(messages, completed())).toString());
+    }
+
+    @Test
+    @DisplayName("会话里的长参数同样折行并受上限约束")
+    void project_should_cap_arguments_from_session() {
+        String command = repeat("中", 4000);
+        List<SessionMessage> messages = Arrays.asList(
+                assistantWithCalls(call("call_1", "shell", "{\"command\":\"" + command + "\"}")),
+                SessionMessage.of(LlmMessage.tool("call_1", "shell", "输出")));
+
+        List<VisualLine> collapsed = project(messages, completed());
+
+        // 空行 + 表头 + 上限行数
+        assertEquals(2 + TranscriptProjector.MAX_ARGUMENT_ROWS, collapsed.size(), texts(collapsed).toString());
+        assertTrue(texts(collapsed).get(collapsed.size() - 1).contains("已省略后续内容"),
+                texts(collapsed).toString());
     }
 
     @Test
@@ -912,8 +1091,8 @@ class TranscriptProjectorTest {
     }
 
     @Test
-    @DisplayName("运行中目标对敏感参数脱敏——与审批浮层同一口径")
-    void project_should_mask_sensitive_arguments_in_running_tool_target() {
+    @DisplayName("运行中目标原样显示——与审批浮层同一口径，不做按名猜测")
+    void project_should_show_running_tool_target_verbatim() {
         InflightTurn turn = new InflightTurn();
         turn.begin();
         Map<String, Object> arguments = new LinkedHashMap<String, Object>();
@@ -922,9 +1101,7 @@ class TranscriptProjectorTest {
 
         List<VisualLine> lines = project(Collections.<SessionMessage>emptyList(), turn.snapshot());
 
-        String label = texts(lines).get(2);
-        assertFalse(label.contains("sk-secret"), label);
-        assertTrue(label.contains("\"***\""), label);
+        assertTrue(texts(lines).get(2).contains("{\"apiKey\": \"sk-secret\"}"), texts(lines).get(2));
     }
 
     @Test

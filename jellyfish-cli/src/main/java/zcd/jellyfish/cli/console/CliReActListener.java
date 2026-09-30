@@ -5,6 +5,7 @@ import java.util.Map;
 import zcd.jellyfish.api.extension.ToolMetadata;
 import zcd.jellyfish.core.ReActListener;
 import zcd.jellyfish.core.ReActResult;
+import zcd.jellyfish.infra.support.ToolArgumentsText;
 
 import java.util.Objects;
 
@@ -35,6 +36,13 @@ import java.util.Objects;
  * <b>工具执行期的输出为什么也写 stderr</b>：它是诊断而不是回答，走 stdout 会直接违反上面那条字节级契约。
  * 它让「一条跑几分钟的命令」在 {@code -cli} 下也能看到进展（默认只按工具名给一行开始与结束，不打印内容）。
  * <p>
+ * <b>工具调用的参数为什么默认不打</b>：参数长度不受控（一次 {@code write_file} 就能把整篇正文倒进来），
+ * 而 stderr 会被重定向到文件、收进 CI 日志，因此只能显式开（{@code --show-tool-args}）。
+ * 开了之后参数以单行、封顶的形式跟在工具名后面，过长截断——这里是诊断流而不是看全文的地方
+ * （要看全文用 {@code -tui} 的轨迹块或审批浮层）。<b>参数不脱敏</b>（与 Codex 的 {@code --verbose}
+ * 同口径）：外壳按参数名猜不出哪个是密钥，遮不住命令原文与写入正文这些真正会出事的地方；
+ * 所以把「参数里可能有敏感信息」当作使用者自己知道的前提（与官方文档的警告同理）。
+ * <p>
  * <b>线程语义</b>：{@link #onToolCallOutput(String, String, String)} 不在 {@code react} 线程上，
  * 它由工具的 stdout / stderr 两条泵线程<b>并发</b>调用，因此本类里只有它需要加锁
  * （其余回调都发生在同一条 {@code react} 线程上，且工具执行期间那条线程正阻塞在工具里）。
@@ -58,11 +66,22 @@ public final class CliReActListener implements ReActListener {
     /** 工具执行期输出的行首缩进：与工具行区分开，同时不太宽。 */
     private static final String TOOL_OUTPUT_INDENT = "  │ ";
 
+    /**
+     * 工具参数单行的码点上限（含结尾的省略号）。
+     * <p>
+     * 按码点而不是显示列：CLI 的 stderr 是日志流，这里要的是一个有界的字节预算，
+     * 而不是屏幕上的对齐（与 {@code InflightTurn} 的单行上限同一口径）。
+     */
+    private static final int MAX_ARGUMENT_CHARS = 200;
+
     /** 输出面板。 */
     private final ConsoleIO console;
 
     /** 是否显示思考过程。 */
     private final boolean showThinking;
+
+    /** 是否在工具轨迹行上打出调用参数。 */
+    private final boolean showToolArgs;
 
     /** 当前轮次已收到的文本缓冲，收敛时整体写 stdout；中间轮次则转写 stderr。 */
     private final StringBuilder answer = new StringBuilder();
@@ -84,10 +103,12 @@ public final class CliReActListener implements ReActListener {
      *
      * @param console      输出面板，不可为 {@code null}
      * @param showThinking 是否把思考过程打到 stderr
+     * @param showToolArgs 是否在工具轨迹行上打出调用参数（单行、封顶）
      */
-    public CliReActListener(ConsoleIO console, boolean showThinking) {
+    public CliReActListener(ConsoleIO console, boolean showThinking, boolean showToolArgs) {
         this.console = Objects.requireNonNull(console, "console must not be null");
         this.showThinking = showThinking;
+        this.showToolArgs = showToolArgs;
     }
 
     @Override
@@ -117,11 +138,54 @@ public final class CliReActListener implements ReActListener {
 
     @Override
     public void onToolCallStarted(String toolCallId, String toolName) {
+        // 兼容重载：没有参数也要走同一条路径，否则既有调用点会落到空的默认实现上
+        onToolCallStarted(toolCallId, toolName, null);
+    }
+
+    @Override
+    public void onToolCallStarted(String toolCallId, String toolName, Map<String, Object> arguments) {
         closeThinkingLine();
         closeToolOutputLine();
         // 走到这里说明本轮以工具调用收尾，缓冲的文本是过程轨迹而非最终回答，转写 stderr 后清空
         flushTrace();
-        console.writeErrLine(TOOL_START_PREFIX + toolName);
+        console.writeErrLine(TOOL_START_PREFIX + toolName + argumentsSuffix(arguments));
+    }
+
+    /**
+     * 取工具行的参数后缀。
+     * <p>
+     * <b>为什么不像 TUI 那样折行</b>：TUI 的轨迹块是给人滚着看的一片区域，CLI 的 stderr 是流——
+     * 折出来的行会被后面的内容冲散，反而更难读；一行截断至少能让人 grep 到「这次调用了什么」。
+     * <p>
+     * 口径与 TUI 共用 {@link ToolArgumentsText}：同一条参数在三个显示面上必须是同一份文本，
+     *
+     * @param arguments 工具参数，可为 {@code null}
+     * @return 后缀文本（含分隔空格）；未开启或没有参数时返回空串
+     */
+    private String argumentsSuffix(Map<String, Object> arguments) {
+        if (!showToolArgs) {
+            return "";
+        }
+        String text = ToolArgumentsText.singleLine(arguments);
+        if (text.isEmpty()) {
+            return "";
+        }
+        return " " + truncate(text);
+    }
+
+    /**
+     * 按码点截断文本，超出部分用省略号代替。
+     *
+     * @param text 文本，保证非 {@code null}
+     * @return 截断后的文本，总长不超过 {@link #MAX_ARGUMENT_CHARS} 个码点
+     */
+    private static String truncate(String text) {
+        if (text.codePointCount(0, text.length()) <= MAX_ARGUMENT_CHARS) {
+            return text;
+        }
+        // 留一个位置给省略号，保证结果整体不超上限
+        int end = text.offsetByCodePoints(0, MAX_ARGUMENT_CHARS - 1);
+        return text.substring(0, end) + "\u2026";
     }
 
     /**

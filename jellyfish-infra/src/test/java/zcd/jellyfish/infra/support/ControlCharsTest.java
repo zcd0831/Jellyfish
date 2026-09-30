@@ -1,4 +1,4 @@
-package zcd.jellyfish.tui.text;
+package zcd.jellyfish.infra.support;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

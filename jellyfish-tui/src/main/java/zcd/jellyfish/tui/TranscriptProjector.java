@@ -3,8 +3,10 @@ package zcd.jellyfish.tui;
 import dev.tamboui.style.Style;
 import zcd.jellyfish.api.extension.ToolMetadata;
 import zcd.jellyfish.infra.llm.LlmMessage;
+import zcd.jellyfish.infra.llm.LlmToolCall;
 import zcd.jellyfish.infra.session.SessionMessage;
-import zcd.jellyfish.tui.text.ControlChars;
+import zcd.jellyfish.infra.support.ControlChars;
+import zcd.jellyfish.infra.support.ToolArgumentsText;
 import zcd.jellyfish.tui.text.DisplayWidth;
 import zcd.jellyfish.tui.text.LineWrapper;
 import zcd.jellyfish.tui.text.MarkdownRenderer;
@@ -13,6 +15,7 @@ import zcd.jellyfish.tui.text.VisualLine;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.List;
 
@@ -34,7 +37,7 @@ import java.util.List;
  *
  *   ⏺ jellyfish
  *     助手正文（markdown：标题 / 列表 / 引用 / 代码块 / 行内样式）
- *       ⎿ 工具轨迹（暗色）
+ *       ⎿ 工具轨迹：工具名 · 结果摘要 · 调用参数（暗色；参数按列折行，超行数上限时收尾成一行省略提示）
  *       │   工具执行中的实时输出（暗色，只留末尾若干行，工具一返回就被正式结果取代）
  *       ✻ 思考过程（暗色斜体）
  *       ⎿ 已中断（黄）/ 错误（红）
@@ -73,18 +76,35 @@ public final class TranscriptProjector {
     static final String WARNING_MARK = "\u26a0";
 
     /**
-     * 运行中工具目标的显示列上限。
+     * 折叠态下工具调用参数最多占用的视觉行数（含最后那行省略提示）。
      * <p>
-     * <b>为什么按列不按码点</b>：全角字符每字占 2 列，用码点数当上限会让一条标签在中文参数下
-     * 折成好几行。这是「一眼扫过的信号」，不是看全文的地方。
+     * <b>为什么按行折行而不是按列截断</b>：参数的权威来源是会话里 assistant 的 {@code toolCalls}，
+     * 长度不受我们控制。按列截断会把长命令的尾巴丢掉（那恰恰是最需要看见的部分），
+     * 而折行能在「看得全」与「不把后面的内容挤出屏幕」之间给一个固定预算。
      * <p>
-     * 它只是上限；实际预算还要减去前缀与工具名占用的列（见 {@link #targetSuffix}），
-     * 否则一条 120 列的标签照样会在 80 列终端上折行。
+     * <b>为什么必须有上限</b>：{@code write_file} 的正文、MCP 的大入参都在这条路上，
+     * 而无界折行会让一条参数把每帧投影撑爆、把实时输出挤出屏幕。
      */
-    private static final int MAX_TARGET_COLUMNS = 120;
+    static final int MAX_ARGUMENT_ROWS = 8;
 
-    /** 运行中目标与工具名之间的分隔符，与结果轨迹行的摘要分隔符保持一致。 */
-    private static final String TARGET_SEPARATOR = " \u00b7 ";
+    /**
+     * 展开态（{@code Ctrl+E} / {@code /toolargs}）下的行数上限。
+     * <p>
+     * 展开也不是无限：它只把上限放大到「正常命令永远够用、超大参数不至于拖垮投影」的量级，
+     * 而不是承诺任意长度的参数都能铺满屏幕。
+     */
+    static final int MAX_ARGUMENT_ROWS_EXPANDED = 200;
+
+    /**
+     * 轨迹续行的缩进（与 {@link #TRACE_PREFIX} 等宽）。
+     * <p>
+     * 参数折行的续行与省略提示都用它：{@link LineWrapper} 的续行缩进是按前缀宽度算的，
+     * 省略提示是独立一行，只能自己补同样的宽度，否则它会顶到最左边、看起来不再属于这条轨迹。
+     */
+    static final String TRACE_INDENT = "        ";
+
+    /** 工具名 / 结果摘要与参数之间的分隔符。 */
+    private static final String ARGUMENT_SEPARATOR = " \u00b7 ";
 
     /** 思考过程前缀。 */
     static final String THINKING_PREFIX = "      \u273b ";
@@ -231,11 +251,13 @@ public final class TranscriptProjector {
      * @param width       可用列数，小于 1 时按 1 处理
      * @param maxMessages 参与投影的最近消息条数上限；小于 1 时使用 {@link #DEFAULT_MAX_MESSAGES}
      * @param thinkingExpanded 是否展开思考过程：{@code false} 时每个思考块压成一行
+     * @param toolArgumentsExpanded 是否展开工具调用参数：{@code false} 时参数折行到
+     *        {@link #MAX_ARGUMENT_ROWS} 行为止，{@code true} 时放宽到 {@link #MAX_ARGUMENT_ROWS_EXPANDED} 行
      * @return 视觉行列表，保证非 {@code null}
      */
     public static List<VisualLine> project(List<SessionMessage> messages, List<ShellNotice> notices,
                                            InflightTurn.Snapshot inflight, int width, int maxMessages,
-                                           boolean thinkingExpanded) {
+                                           boolean thinkingExpanded, boolean toolArgumentsExpanded) {
         List<SessionMessage> source = messages == null ? Collections.<SessionMessage>emptyList() : messages;
         List<ShellNotice> noticeSource = notices == null ? Collections.<ShellNotice>emptyList() : notices;
         int limit = maxMessages < 1 ? DEFAULT_MAX_MESSAGES : maxMessages;
@@ -253,6 +275,8 @@ public final class TranscriptProjector {
             noticeCutoff = source.get(start).getTimestamp();
         }
 
+        // 参数索引只覆盖投影窗口：折叠掉的参数不会再显示，为它们解析 JSON 是白花的钱
+        Map<String, String> callArguments = toolCallArguments(source, start);
         int noticeIndex = firstVisibleNotice(noticeSource, noticeCutoff);
         for (int i = start; i < source.size(); i++) {
             SessionMessage message = source.get(i);
@@ -266,7 +290,8 @@ public final class TranscriptProjector {
                 insideAssistantBlock = appendAssistant(out, insideAssistantBlock, content,
                         message.getThinking(), thinkingExpanded, width);
             } else if (LlmMessage.ROLE_TOOL.equals(role)) {
-                insideAssistantBlock = appendToolTrace(out, insideAssistantBlock, message, width);
+                insideAssistantBlock = appendToolTrace(out, insideAssistantBlock, message,
+                        callArguments, toolArgumentsExpanded, width);
             }
             // 其余角色（如 system）不进消息列表；即便进了也不显示，避免泄漏系统提示词
         }
@@ -275,8 +300,43 @@ public final class TranscriptProjector {
             out.addAll(notice(noticeSource.get(noticeIndex), width));
             noticeIndex++;
         }
-        appendInflight(out, inflight, thinkingExpanded, insideAssistantBlock, width);
+        appendInflight(out, inflight, thinkingExpanded, toolArgumentsExpanded, insideAssistantBlock, width);
         return out;
+    }
+
+    /**
+     * 索引投影窗口里的「工具调用 id → 参数显示文本」。
+     * <p>
+     * <b>为什么参数要回到 assistant 消息里取</b>：工具结果消息只带工具名与结果正文，参数只存在于
+     * assistant 的 {@code toolCalls} 里；而那条 assistant 消息<b>在工具执行之前就落库了</b>
+     * （{@code ReActLooper} 先 {@code appendMessage} 再执行工具），因此运行期与回合结束后都能拿到同一份。
+     * 界面因此不持有第二份参数，{@code -resume} 之后也照样显示。
+     * <p>
+     * <b>为什么按 id 配对而不是按消息相邻</b>：一轮可以带多个工具调用，而结果消息是在每个工具
+     * 返回时逐条追加的，调用与结果在消息列表里并不相邻；只有 {@code toolCallId} 能可靠地把它俩连起来。
+     * <p>
+     * <b>同 id 取第一条</b>：正常情况下 id 唯一；真的撞上时（厂商复用 id）取先出现的那个，
+     * 最坏结果是一条轨迹显示成另一条调用的参数，而不是解析失败导致整行消失。
+     *
+     * @param messages 会话消息列表，不可为 {@code null}
+     * @param from     投影窗口的起始下标
+     * @return 工具调用 id 到参数显示文本的映射，保证非 {@code null}
+     */
+    private static Map<String, String> toolCallArguments(List<SessionMessage> messages, int from) {
+        Map<String, String> arguments = new LinkedHashMap<String, String>();
+        for (int i = Math.max(0, from); i < messages.size(); i++) {
+            for (LlmToolCall call : messages.get(i).getMessage().getToolCalls()) {
+                String id = call.getId();
+                if (id == null || id.isEmpty() || arguments.containsKey(id)) {
+                    continue;
+                }
+                String rendered = ToolArgumentsText.singleLineFromJson(call.getArguments());
+                if (!rendered.isEmpty()) {
+                    arguments.put(id, rendered);
+                }
+            }
+        }
+        return arguments;
     }
 
     /**
@@ -500,15 +560,21 @@ public final class TranscriptProjector {
 
     /**
      * 投影一条工具结果消息为轨迹行。
+     * <p>
+     * <b>行的构成</b>：{@code 工具名 · 结果摘要 · 失败后缀 · 调用参数}。参数放在最后有两个原因：
+     * 失败后缀（红）是最需要一眼看见的那段，不能被参数挤出显示范围；而「哪个工具 · 成没成」
+     * 与改造前一模一样，老会话（没有 assistant 参数可配）的渲染结果完全不变。
      *
-     * @param out      输出列表
-     * @param inBlock  当前是否已处于助手块内
-     * @param message  工具消息
-     * @param width    可用列数
+     * @param out         输出列表
+     * @param inBlock     当前是否已处于助手块内
+     * @param message     工具消息
+     * @param callArguments 工具调用 id 到参数显示文本的映射，不可为 {@code null}
+     * @param expanded    是否展开工具参数
+     * @param width       可用列数
      * @return 投影后是否处于助手块内（恒为 {@code true}）
      */
-    private static boolean appendToolTrace(List<VisualLine> out, boolean inBlock,
-                                           SessionMessage message, int width) {
+    private static boolean appendToolTrace(List<VisualLine> out, boolean inBlock, SessionMessage message,
+                                           Map<String, String> callArguments, boolean expanded, int width) {
         if (!inBlock) {
             out.add(VisualLine.EMPTY);
             out.add(VisualLine.of(new StyledSegment(ASSISTANT_HEADER, ASSISTANT_HEADER_STYLE)));
@@ -524,8 +590,89 @@ public final class TranscriptProjector {
         // 错误用红色后缀而不是把整行变红：工具名与结论要能一起读，整行染色会让
         // 「哪个工具失败了」这条信息淹没在颜色里。判据来自元数据字段，不去解析首行文案
         body.addAll(wrapBody(ControlChars.strip(failureSuffix(message)), ERROR_STYLE));
-        out.addAll(LineWrapper.wrap(new StyledSegment(TRACE_PREFIX, TRACE_STYLE), body, width));
+        // 参数取自 assistant 的工具调用（已解析、已压成单行），按 toolCallId 配对
+        body.addAll(wrapBody(argumentSuffix(callArguments.get(message.getMessage().getToolCallId())),
+                TRACE_STYLE));
+        appendTraceLine(out, body, expanded, width);
         return true;
+    }
+
+    /**
+     * 拼出参数后缀。
+     *
+     * @param arguments 参数显示文本，可为 {@code null} 或空串
+     * @return 后缀文本；没有参数时返回空串
+     */
+    private static String argumentSuffix(String arguments) {
+        if (arguments == null || arguments.isEmpty()) {
+            return "";
+        }
+        return ARGUMENT_SEPARATOR + arguments;
+    }
+
+    /**
+     * 把一条轨迹的逻辑行折成视觉行，超过行数上限时收尾成一行明确的省略提示。
+     * <p>
+     * <b>为什么省略提示要占一行而不是把最后一行截掉一半</b>：断在半句上的文本会被读成
+     * 「参数就只有这么多」，而明确的一行提示才能让用户知道「后面还有，只是没显示」。
+     *
+     * @param out      输出列表
+     * @param body     逻辑行正文（工具名 + 摘要 + 失败后缀 + 参数）
+     * @param expanded 是否展开工具参数
+     * @param width    可用列数
+     */
+    private static void appendTraceLine(List<VisualLine> out, List<StyledSegment> body, boolean expanded,
+                                        int width) {
+        int maxRows = expanded ? MAX_ARGUMENT_ROWS_EXPANDED : MAX_ARGUMENT_ROWS;
+        // 先把逻辑行的长度压到「上限行数能装下的量」再折行：否则一条 100KB 的参数会被折成上千条
+        // 视觉行、再丢掉除前几行之外的全部——行数上限只封住了输出，没封住成本。
+        // 上限取 maxRows * width 是宽松的：一行最多装 width 列（实际还要减去前缀），
+        // 因此它一定大于「前 maxRows 行能装下的内容」，可见结果与不预裁时逐字相同。
+        List<StyledSegment> capped = capBody(body, maxRows * Math.max(1, width));
+        List<VisualLine> lines = LineWrapper.wrap(new StyledSegment(TRACE_PREFIX, TRACE_STYLE), capped, width);
+        if (lines.size() <= maxRows) {
+            out.addAll(lines);
+            return;
+        }
+        out.addAll(lines.subList(0, maxRows - 1));
+        String marker = "\u2026 参数过长，已省略后续内容"
+                + (expanded ? "" : "\uff08Ctrl+E 展开\uff09");
+        out.add(VisualLine.of(new StyledSegment(TRACE_INDENT + marker, FOLDED_STYLE)));
+    }
+
+    /**
+     * 把逻辑行正文按码点预算截短，保留各段样式。
+     * <p>
+     * <b>为什么需要它</b>：{@link LineWrapper} 会把正文整段折成视觉行，而调用方只保留前面几行；
+     * 参数是模型给的、长度不受控（{@code write_file} 的正文、MCP 的大入参），不先截短就会为一份
+     * 看不见的内容每帧分配上千条 {@link VisualLine}。
+     * <p>
+     * <b>先截哪种内容</b>：按原顺序截，因此工具名、结果摘要、失败后缀（都在参数之前）不会被截掉——
+     * 最需要一眼看见的那几段必须留下来。
+     *
+     * @param body          逻辑行正文，不可为 {@code null}
+     * @param maxCodePoints 码点预算，小于 1 时按 1 处理
+     * @return 截短后的正文，保证非 {@code null}
+     */
+    private static List<StyledSegment> capBody(List<StyledSegment> body, int maxCodePoints) {
+        int remaining = Math.max(1, maxCodePoints);
+        List<StyledSegment> capped = new ArrayList<StyledSegment>(body.size());
+        for (StyledSegment segment : body) {
+            if (remaining <= 0) {
+                break;
+            }
+            String text = segment.getText();
+            int count = text.codePointCount(0, text.length());
+            if (count <= remaining) {
+                capped.add(segment);
+                remaining -= count;
+                continue;
+            }
+            capped.add(new StyledSegment(text.substring(0, text.offsetByCodePoints(0, remaining)),
+                    segment.getStyle()));
+            remaining = 0;
+        }
+        return capped;
     }
 
     /**
@@ -581,11 +728,13 @@ public final class TranscriptProjector {
      * @param out      输出列表
      * @param inflight 暂存区快照
      * @param thinkingExpanded 是否展开思考过程
+     * @param toolArgumentsExpanded 是否展开工具调用参数
      * @param width    可用列数
      * @param insideAssistantBlock 投影到这里时是否已在助手块内（决定要不要补表头）
      */
     private static void appendInflight(List<VisualLine> out, InflightTurn.Snapshot inflight,
-                                       boolean thinkingExpanded, boolean insideAssistantBlock, int width) {
+                                       boolean thinkingExpanded, boolean toolArgumentsExpanded,
+                                       boolean insideAssistantBlock, int width) {
         String thinking = inflight.getThinking();
         String text = inflight.getText();
         InflightTurn.Outcome outcome = inflight.getOutcome();
@@ -596,7 +745,7 @@ public final class TranscriptProjector {
                 // 工具在跑：显示它的名字与实时输出末尾若干行。
                 // 这个分支必须排在「处理中…」之前——命令行可能跑几分钟，在那几分钟里
                 // 「处理中…」传达的信息量是零，而一条卡死的命令与一条在跑的看起来完全一样
-                if (appendRunningTool(out, inflight, insideAssistantBlock, width)) {
+                if (appendRunningTool(out, inflight, insideAssistantBlock, toolArgumentsExpanded, width)) {
                     return;
                 }
                 // 没有可显示增量时给一个「还在干活」的信号，否则屏幕看起来像卡死了
@@ -635,11 +784,12 @@ public final class TranscriptProjector {
      * @param out      输出列表
      * @param inflight 暂存区快照
      * @param insideAssistantBlock 是否已在助手块内
+     * @param expanded 是否展开工具参数
      * @param width    可用列数
      * @return 是否产出了内容
      */
     private static boolean appendRunningTool(List<VisualLine> out, InflightTurn.Snapshot inflight,
-                                             boolean insideAssistantBlock, int width) {
+                                             boolean insideAssistantBlock, boolean expanded, int width) {
         String toolName = inflight.getRunningToolName();
         List<String> lines = inflight.getToolOutputLines();
         if (toolName == null && lines.isEmpty()) {
@@ -650,8 +800,13 @@ public final class TranscriptProjector {
             out.add(VisualLine.of(new StyledSegment(ASSISTANT_HEADER, ASSISTANT_HEADER_STYLE)));
         }
         String label = toolName == null || toolName.isEmpty() ? "工具" : toolName;
-        out.addAll(LineWrapper.wrap(new StyledSegment(TRACE_PREFIX, TRACE_STYLE),
-                wrapBody(label + targetSuffix(inflight, label, width), TRACE_STYLE), width));
+        List<StyledSegment> body = new ArrayList<StyledSegment>();
+        body.addAll(wrapBody(label, TRACE_STYLE));
+        // 参数与完成后的轨迹行同一形态、同一上限：运行期与落库后看到的文本一致，
+        // 不会出现「跑的时候看得到、跑完就变了」这种无法解释的跳变。
+        // 工具一返回这里就被会话投影出的正式轨迹与结果取代，所以它不标「已截断」。
+        body.addAll(wrapBody(argumentSuffix(runningArguments(inflight)), TRACE_STYLE));
+        appendTraceLine(out, body, expanded, width);
         for (String line : lines) {
             // 控制字符必须在显示边界上滤掉：命令输出里的一个 ESC 序列能改写屏幕。
             // 与 MarkdownRenderer / ApprovalPrompt 同一处理位置
@@ -667,91 +822,17 @@ public final class TranscriptProjector {
     }
 
     /**
-     * 取运行中工具的目标后缀：把工具参数渲染成一行「它在动什么」。
+     * 取运行中工具的参数显示文本。
      * <p>
-     * <b>为什么显示参数而不是靠工具自报</b>：工具此刻还没返回，没有 metadata 可用；
-     * 参数是这一时刻唯一能说明目标的输入。规则本身与工具名无关（有参数就显示），
-     * 因此不破坏「外壳对工具一无所知」的前提。
-     * <p>
-     * <b>为什么按显示列硬截断而不是折行</b>：这是「一眼扫过的信号」，不是看全文的地方——
-     * 要看全文有审批浮层。折行会把一条轨迹撑成好几行，把后面的轨迹挤下去。
+     * <b>为什么运行期不读 assistant 消息里的参数</b>：工具还没返回，结果消息尚未落库，
+     * 而这条轨迹本身就是「工具在跑」的唯一显示处。参数由 {@code ReActListener.onToolCallStarted}
+     * 带进暂存区，与完成后从会话读到的参数是同一份输入的两种载体。
      *
      * @param inflight 暂存区快照
-     * @param label    工具名（已处理空值）
-     * @param width    可用列数
-     * @return 后缀文本；没有参数或放不下时返回空串
+     * @return 单行显示文本；没有参数时返回空串
      */
-    private static String targetSuffix(InflightTurn.Snapshot inflight, String label, int width) {
-        Map<String, Object> arguments = inflight.getRunningToolArguments();
-        if (arguments == null || arguments.isEmpty()) {
-            return "";
-        }
-        // argumentsOf 已经过滤控制字符并对敏感键脱敏；这里再压掉它刻意保留的换行
-        String rendered = collapseToSingleLine(ApprovalPrompt.argumentsOf(arguments));
-        // 预算要减去前缀与工具名，否则 120 列的上限在窄终端上依旧会折行
-        int used = DisplayWidth.of(TRACE_PREFIX) + DisplayWidth.of(label) + DisplayWidth.of(TARGET_SEPARATOR);
-        int budget = Math.min(MAX_TARGET_COLUMNS, width - used);
-        if (budget < 1) {
-            return "";
-        }
-        return TARGET_SEPARATOR + truncateToColumns(rendered, budget);
-    }
-
-    /**
-     * 把文本压成单行：连续的空白（含换行）折成一个空格。
-     *
-     * @param text 原始文本，可为 {@code null}
-     * @return 单行文本，保证非 {@code null}
-     */
-    private static String collapseToSingleLine(String text) {
-        if (text == null || text.isEmpty()) {
-            return "";
-        }
-        StringBuilder sb = new StringBuilder(text.length());
-        boolean pendingSpace = false;
-        int index = 0;
-        while (index < text.length()) {
-            int codePoint = text.codePointAt(index);
-            index += Character.charCount(codePoint);
-            if (Character.isWhitespace(codePoint)) {
-                pendingSpace = true;
-                continue;
-            }
-            if (pendingSpace && sb.length() > 0) {
-                sb.append(' ');
-            }
-            pendingSpace = false;
-            sb.appendCodePoint(codePoint);
-        }
-        return sb.toString();
-    }
-
-    /**
-     * 按显示列数截断文本，超出部分用省略号代替。
-     *
-     * @param text       文本，保证非 {@code null}
-     * @param maxColumns 显示列上限
-     * @return 截断后的文本
-     */
-    private static String truncateToColumns(String text, int maxColumns) {
-        if (DisplayWidth.of(text) <= maxColumns) {
-            return text;
-        }
-        StringBuilder sb = new StringBuilder(text.length());
-        int width = 0;
-        int index = 0;
-        while (index < text.length()) {
-            int codePoint = text.codePointAt(index);
-            index += Character.charCount(codePoint);
-            int next = DisplayWidth.ofCodePoint(codePoint);
-            // 留一列给省略号，保证结果整体不超过 maxColumns
-            if (width + next > maxColumns - 1) {
-                break;
-            }
-            sb.appendCodePoint(codePoint);
-            width += next;
-        }
-        return sb.append('\u2026').toString();
+    private static String runningArguments(InflightTurn.Snapshot inflight) {
+        return ToolArgumentsText.singleLine(inflight.getRunningToolArguments());
     }
 
     /**

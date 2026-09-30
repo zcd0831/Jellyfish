@@ -27,6 +27,16 @@ public enum InputAction {
      */
     TOGGLE_THINKING,
 
+    /**
+     * 展开 / 折叠工具调用参数。
+     * <p>
+     * 全局开关（{@code Ctrl+E} / {@code /toolargs}）：参数默认只折行到固定行数上限，
+     * 超出部分收尾成一行省略提示；展开后把上限放宽，让长命令与 heredoc 能整段读完。
+     * <p>
+     * 与 {@link #TOGGLE_THINKING} 一样是全局而不是逐条：屏幕上没有「选中某个工具调用」的交互模型。
+     */
+    TOGGLE_TOOL_ARGS,
+
     /** 消息区上翻一页。 */
     PAGE_UP,
 

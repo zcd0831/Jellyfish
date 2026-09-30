@@ -233,6 +233,34 @@ class StartupOptionsParserTest {
     }
 
     @Test
+    void parse_should_keep_show_tool_args_when_cli_given() {
+        StartupOptions options = StartupOptionsParser.parse(new String[] {"-cli", "--show-tool-args"});
+
+        assertTrue(options.isShowToolArgs());
+        assertEquals(StartupOptions.Mode.CLI, options.getMode());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"-tui", "-server"})
+    void parse_should_fail_when_show_tool_args_given_outside_cli(String mode) {
+        // TUI 的能力在运行期开关（Ctrl+E / /toolargs）上，不需要启动参数；Server 根本没有终端界面
+        JellyfishException error = assertThrows(JellyfishException.class,
+                () -> StartupOptionsParser.parse(new String[] {mode, "--show-tool-args"}));
+
+        assertTrue(error.getMessage().contains("--show-tool-args 只在 -cli 下被接受"), error.getMessage());
+    }
+
+    @Test
+    void parse_should_default_show_tool_args_to_false() {
+        assertFalse(StartupOptionsParser.parse(new String[] {"-cli"}).isShowToolArgs());
+    }
+
+    @Test
+    void usage_should_document_show_tool_args() {
+        assertTrue(StartupOptionsParser.usage().contains("--show-tool-args"), StartupOptionsParser.usage());
+    }
+
+    @Test
     void parse_should_keep_session_when_tui_given() {
         StartupOptions options = StartupOptionsParser.parse(new String[] {"-tui", "--session", "abc"});
 

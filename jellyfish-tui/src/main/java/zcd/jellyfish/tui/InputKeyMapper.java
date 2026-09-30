@@ -51,6 +51,9 @@ final class InputKeyMapper {
         if (isCtrl(key, 't')) {
             return InputAction.TOGGLE_THINKING;
         }
+        if (isCtrl(key, 'e')) {
+            return InputAction.TOGGLE_TOOL_ARGS;
+        }
         if (isCtrl(key, 'o')) {
             return InputAction.TOGGLE_MOUSE;
         }

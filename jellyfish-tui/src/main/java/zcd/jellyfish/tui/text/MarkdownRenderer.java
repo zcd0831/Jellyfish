@@ -1,6 +1,7 @@
 package zcd.jellyfish.tui.text;
 
 import dev.tamboui.style.Style;
+import zcd.jellyfish.infra.support.ControlChars;
 import org.commonmark.ext.gfm.strikethrough.Strikethrough;
 import org.commonmark.ext.gfm.strikethrough.StrikethroughExtension;
 import org.commonmark.ext.gfm.tables.TableBlock;

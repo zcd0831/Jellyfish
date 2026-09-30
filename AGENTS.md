@@ -94,7 +94,7 @@ jellyfish-infra/src/main/java/zcd/jellyfish/infra/
 ├── metrics/                    # 指标与健康检查 MetricsRegistry / MetricsSubscriber / HealthCheck
 ├── config/                     # 配置加载与热更新 RuntimeConfig / ConfigReloader
 ├── tooloutput/                 # 工具结果治理：ToolOutputEnvelope / ToolOutputStore / ToolOutputLimiter
-└── support/                    # 序列化封装、类型常量
+└── support/                    # 序列化封装、类型常量，以及跨外壳共用的展示口径（ControlChars / ToolArgumentsText）
 
 jellyfish-core/src/main/java/zcd/jellyfish/core/
 ├── AgentHarness.java           # 组装门面（chat 是唯一智能入口）
@@ -120,7 +120,7 @@ jellyfish-tui/src/main/java/zcd/jellyfish/tui/
 ├── ChatShell / ChatLayout      # 版式与二维账本
 ├── TranscriptProjector / ChatState / InflightTurn   # 视图投影与状态
 ├── 其余视图 / 输入 / 插件 UI 类
-└── text/                       # DisplayWidth / LineWrapper / MarkdownRenderer / ControlChars
+└── text/                       # DisplayWidth / LineWrapper / MarkdownRenderer
 ```
 
 资源位置：`default-agent.json` / `jellyfish.md` 在 infra 资源根；`summary-prompt.md` 在压缩插件资源根；

@@ -75,6 +75,9 @@ public final class StartupOptionsParser {
     /** 思考过程旗标。 */
     private static final String FLAG_SHOW_THINKING = "--show-thinking";
 
+    /** 工具调用参数旗标。 */
+    private static final String FLAG_SHOW_TOOL_ARGS = "--show-tool-args";
+
     /** 详细日志旗标。 */
     private static final String FLAG_VERBOSE = "--verbose";
 
@@ -110,6 +113,7 @@ public final class StartupOptionsParser {
             + "      --api-key <密钥>    服务器 API key（仅 -server）；不配则不鉴权，也可用环境变量\n"
             + "                          " + ServerConfig.ENV_API_KEY + "（推荐：argv 会出现在 ps 输出里）\n"
             + "      --show-thinking     展示思考过程（-cli：打到 stderr；-tui：启动时展开）\n"
+            + "      --show-tool-args    在 -cli 的工具轨迹行上打出调用参数（单行，过长截断；可能含敏感信息）\n"
             + "      --verbose           日志级别降到 DEBUG\n"
             + "  -h, --help              显示本帮助\n"
             + "  -V, --version           显示版本号\n"
@@ -152,6 +156,7 @@ public final class StartupOptionsParser {
         String hostOption = null;
         String apiKeyOption = null;
         boolean showThinking = false;
+        boolean showToolArgs = false;
         boolean verbose = false;
         boolean help = false;
         boolean version = false;
@@ -169,6 +174,8 @@ public final class StartupOptionsParser {
                 version = true;
             } else if (FLAG_SHOW_THINKING.equals(arg)) {
                 showThinking = true;
+            } else if (FLAG_SHOW_TOOL_ARGS.equals(arg)) {
+                showToolArgs = true;
             } else if (FLAG_VERBOSE.equals(arg)) {
                 verbose = true;
             } else if (FLAG_PROMPT_SHORT.equals(arg) || FLAG_PROMPT_LONG.equals(arg)) {
@@ -198,7 +205,7 @@ public final class StartupOptionsParser {
             }
         }
         return build(mode, prompt, sessionId, agentId, provider, model, permissionMode, portOption, hostOption,
-                apiKeyOption, showThinking, verbose, help, version, positionals);
+                apiKeyOption, showThinking, showToolArgs, verbose, help, version, positionals);
     }
 
     /**
@@ -214,6 +221,7 @@ public final class StartupOptionsParser {
      * @param portOption     {@code --port} 取值，可为 {@code null}
      * @param hostOption     {@code --host} 取值，可为 {@code null}
      * @param showThinking   是否显示思考过程
+     * @param showToolArgs   是否在工具轨迹行上打出调用参数
      * @param verbose        是否详细日志
      * @param help           是否请求帮助
      * @param version        是否请求版本号
@@ -224,7 +232,7 @@ public final class StartupOptionsParser {
     private static StartupOptions build(StartupOptions.Mode mode, String prompt, String sessionId, String agentId,
                                         String provider, String model, PermissionMode permissionMode,
                                         Integer portOption, String hostOption, String apiKeyOption,
-                                        boolean showThinking, boolean verbose,
+                                        boolean showThinking, boolean showToolArgs, boolean verbose,
                                         boolean help, boolean version, List<String> positionals) {
         if (help || version) {
             // 帮助与版本不执行任何模式：模式只用于填一个合法值，避免为一个纯展示请求纠结「模式没给」
@@ -232,7 +240,8 @@ public final class StartupOptionsParser {
             return StartupOptions.builder(displayMode)
                     .prompt(prompt).sessionId(sessionId).agentId(agentId).model(provider, model)
                     .permissionMode(permissionMode).port(StartupOptions.DEFAULT_PORT).host(hostOption)
-                    .apiKey(apiKeyOption).showThinking(showThinking).verbose(verbose).help(help).version(version)
+                    .apiKey(apiKeyOption).showThinking(showThinking).showToolArgs(showToolArgs)
+                    .verbose(verbose).help(help).version(version)
                     .build();
         }
         if (mode == null) {
@@ -246,6 +255,8 @@ public final class StartupOptionsParser {
                 "TUI 用 /model 设置，Server 在 POST /sessions 请求体里指定");
         requireCliOnly(mode, permissionMode != null, "--mode",
                 "TUI 用 /mode 设置，Server 在 POST /sessions 请求体里指定");
+        requireCliOnly(mode, showToolArgs, FLAG_SHOW_TOOL_ARGS,
+                "TUI 用 Ctrl+E / /toolargs 在界面上切（同样是全局开关）");
         if (mode == StartupOptions.Mode.SERVER && showThinking) {
             throw new JellyfishException("--show-thinking 只在 -cli / -tui 下被接受：-server 没有终端界面");
         }
@@ -275,7 +286,8 @@ public final class StartupOptionsParser {
         return StartupOptions.builder(mode)
                 .prompt(prompt).sessionId(sessionId).agentId(agentId).model(provider, model)
                 .permissionMode(permissionMode).port(port).host(hostOption).apiKey(apiKeyOption)
-                .showThinking(showThinking).verbose(verbose).help(help).version(version).build();
+                .showThinking(showThinking).showToolArgs(showToolArgs)
+                .verbose(verbose).help(help).version(version).build();
     }
 
     /**

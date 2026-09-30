@@ -83,6 +83,9 @@ public final class ChatState {
     /** 最近一次投影时的思考展开状态。 */
     private boolean lastThinkingExpanded;
 
+    /** 最近一次投影时的工具参数展开状态。 */
+    private boolean lastToolArgumentsExpanded;
+
     /** 最近一次投影时的提示版本号。 */
     private int lastNoticeVersion = -1;
 
@@ -102,6 +105,15 @@ public final class ChatState {
      * 默认折叠：思考过程通常比正文长好几倍，默认展开会把正文推到屏幕外。
      */
     private boolean thinkingExpanded;
+
+    /**
+     * 工具调用参数是否展开。
+     * <p>
+     * 与 {@link #thinkingExpanded} 同一套取舍：全局开关而不是逐条展开。参数默认只折行到
+     * {@code TranscriptProjector#MAX_ARGUMENT_ROWS} 行为止，展开后放宽到
+     * {@code MAX_ARGUMENT_ROWS_EXPANDED} 行——展开是「把超大参数铺开」，不是「无界地铺」。
+     */
+    private boolean toolArgumentsExpanded;
 
     /** 提示缓冲版本号，参与投影缓存判据。 */
     private int noticeVersion;
@@ -166,6 +178,25 @@ public final class ChatState {
      */
     public boolean isThinkingExpanded() {
         return thinkingExpanded;
+    }
+
+    /**
+     * 切换工具调用参数展开状态。
+     *
+     * @return 切换后的状态（{@code true} 为已展开）
+     */
+    public boolean toggleToolArguments() {
+        toolArgumentsExpanded = !toolArgumentsExpanded;
+        return toolArgumentsExpanded;
+    }
+
+    /**
+     * 判断工具调用参数是否展开。
+     *
+     * @return 展开返回 {@code true}
+     */
+    public boolean isToolArgumentsExpanded() {
+        return toolArgumentsExpanded;
     }
 
     /**
@@ -408,6 +439,7 @@ public final class ChatState {
                 && lastViewportRows == viewportRows
                 && lastMaxMessages == maxMessages
                 && lastThinkingExpanded == thinkingExpanded
+                && lastToolArgumentsExpanded == toolArgumentsExpanded
                 && lastMessageCount == source.size()
                 && lastNoticeVersion == noticeVersion
                 && Objects.equals(lastMessageId, lastId)
@@ -426,12 +458,13 @@ public final class ChatState {
             projected = TranscriptProjector.home(notices, width, viewportRows);
         } else {
             projected = TranscriptProjector.project(source, notices, snapshot, width, maxMessages,
-                    thinkingExpanded);
+                    thinkingExpanded, toolArgumentsExpanded);
         }
         lastWidth = width;
         lastViewportRows = viewportRows;
         lastMaxMessages = maxMessages;
         lastThinkingExpanded = thinkingExpanded;
+        lastToolArgumentsExpanded = toolArgumentsExpanded;
         lastMessageCount = source.size();
         lastMessageId = lastId;
         lastSessionId = sessionId;

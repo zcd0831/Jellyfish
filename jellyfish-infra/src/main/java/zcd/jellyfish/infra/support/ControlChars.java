@@ -1,4 +1,4 @@
-package zcd.jellyfish.tui.text;
+package zcd.jellyfish.infra.support;
 
 /**
  * 控制字符过滤：把来自模型 / 工具参数 / 插件贡献的文本里会干扰终端的内容剔掉。
@@ -9,8 +9,11 @@ package zcd.jellyfish.tui.text;
  * 这不是「显示得不好看」的问题，而是「屏幕显示的内容与工具真正要执行的内容不是同一回事」
  * ——审批框恰恰建立在这两者一致的前提上。
  * <p>
+ * <b>为什么放在 infra 而不是某个外壳里</b>：要过滤的边界是「不可信文本进入终端 / 日志」这个事实，
+ * 它与外壳无关——{@code -cli} 写 stderr、{@code -tui} 画屏幕、日志落文件，三处都可能被一个
+ * {@code ESC} 改写。口径只有一份，才能保证三条输出路径的过滤规则不会各自漂移。
  * <b>过滤规则</b>：丢弃全部 {@code Character.CONTROL} 类型的码点（C0 与 C1，含 DEL），
- * 只保留 {@code \n}（换行是排版语义，且已经由 {@link LineWrapper} 自己掌控）；
+ * 只保留 {@code \n}（换行是排版语义，且已经由外层自己掌控）；
  * 额外丢弃双向控制符（{@code U+202A}～{@code U+202E}、{@code U+2066}～{@code U+2069}），
  * 它们能让一段文本在视觉上读作与真实内容相反的顺序。制表符换成空格而不是删除，
  * 否则 {@code a\tb} 会粘成 {@code ab} 而改变参数含义。

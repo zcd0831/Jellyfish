@@ -3,7 +3,8 @@ package zcd.jellyfish.tui;
 import dev.tamboui.style.Style;
 import zcd.jellyfish.api.extension.CommandChoice;
 import zcd.jellyfish.infra.permission.ApprovalChannel;
-import zcd.jellyfish.tui.text.ControlChars;
+import zcd.jellyfish.infra.support.ControlChars;
+import zcd.jellyfish.infra.support.ToolArgumentsText;
 import zcd.jellyfish.tui.text.DisplayWidth;
 import zcd.jellyfish.tui.text.LineWrapper;
 import zcd.jellyfish.tui.text.StyledSegment;
@@ -29,8 +30,10 @@ import java.util.Map;
  * ——从两三个选项里挑一个并确认——因此不新写一套选择器，键位（{@code ↑}/{@code ↓}/{@code Enter}）
  * 也就不用新增。
  * <p>
- * <b>为什么敏感键要脱敏</b>：工具参数里可能带 apiKey、token 这类东西，而审批框是要给人看的、
- * 也常被截图贴出来。显示成 {@code ***} 只损失「确认具体值」的能力，而那个能力对审批没有帮助。
+ * <b>为什么参数不脱敏</b>：审批框要回答的是「放不放行这次调用」，而能回答它的只有参数原文——
+ * 把 {@code apiKey} 遮成 {@code ***} 既帮不了这个判断，又会漏掉真正要看的尾巴（长命令的后半段）。
+ * 口径与其余两个显示面（TUI 轨迹行、{@code -cli} 诊断行）共用，见 {@link ToolArgumentsText}——
+ * 同一条参数在屏幕上不能有两种面貌。
  * <p>
  * <b>为什么超长参数是折行 + 限量行数，而不是截断成一行</b>：审批框是「看清楚了再点批准」的地方，
  * 把一条长命令截断会让最危险的尾巴恰好落在看不见的部分。折行能显示多少是多少，
@@ -60,13 +63,6 @@ public final class ApprovalPrompt {
 
     /** 参数为空时的占位文本。 */
     private static final String NONE = "-";
-
-    /** 脱敏后的值。 */
-    private static final String MASKED = "\"***\"";
-
-    /** 看起来像密钥的参数名前缀/片段（小写比对）。 */
-    private static final String[] SENSITIVE_TOKENS = {
-            "apikey", "api_key", "token", "secret", "password", "passwd", "credential"};
 
     /** 标签样式。 */
     private static final Style LABEL_STYLE = Style.EMPTY.cyan().bold();
@@ -160,65 +156,16 @@ public final class ApprovalPrompt {
     }
 
     /**
-     * 把参数映射渲染成一行紧凑的 JSON 形态文本。
+     * 把参数映射渲染成一行紧凑的 JSON 形态文本（控制字符过滤，值照原样）。
      * <p>
-     * 键与值都过一遍过滤：它们来自模型，可能带控制字符。
+     * 口径归 {@link ToolArgumentsText}：轨迹行与 {@code -cli} 诊断行用的是同一个函数，
+     * 否则同一条参数会在不同界面上有不同面貌。
      *
      * @param arguments 参数映射，可为 {@code null}
      * @return 展示文本，保证非 {@code null}
      */
     static String argumentsOf(Map<String, Object> arguments) {
-        if (arguments == null || arguments.isEmpty()) {
-            return NONE;
-        }
-        StringBuilder sb = new StringBuilder("{");
-        boolean first = true;
-        for (Map.Entry<String, Object> entry : arguments.entrySet()) {
-            if (!first) {
-                sb.append(", ");
-            }
-            first = false;
-            sb.append('"').append(text(entry.getKey())).append("\": ");
-            if (isSensitive(entry.getKey())) {
-                sb.append(MASKED);
-            } else {
-                sb.append(valueOf(entry.getValue()));
-            }
-        }
-        return sb.append('}').toString();
-    }
-
-    /**
-     * 渲染单个参数值：字符串加引号，其余取 {@code String.valueOf}。
-     *
-     * @param value 参数值，可为 {@code null}
-     * @return 展示文本，保证非 {@code null}
-     */
-    private static String valueOf(Object value) {
-        if (value == null) {
-            return "null";
-        }
-        String rendered = text(String.valueOf(value));
-        return value instanceof String ? "\"" + rendered + "\"" : rendered;
-    }
-
-    /**
-     * 判断参数名是否看起来像密钥。
-     *
-     * @param key 参数名，可为 {@code null}
-     * @return 疑似密钥返回 {@code true}
-     */
-    private static boolean isSensitive(String key) {
-        if (key == null) {
-            return false;
-        }
-        String lower = key.toLowerCase();
-        for (String token : SENSITIVE_TOKENS) {
-            if (lower.contains(token)) {
-                return true;
-            }
-        }
-        return "key".equals(lower);
+        return ToolArgumentsText.text(arguments);
     }
 
     /**

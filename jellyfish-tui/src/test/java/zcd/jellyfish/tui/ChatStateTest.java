@@ -7,6 +7,7 @@ import org.junit.jupiter.api.function.Executable;
 import zcd.jellyfish.core.ReActTurn;
 import zcd.jellyfish.core.input.InputDirectiveRun;
 import zcd.jellyfish.infra.llm.LlmMessage;
+import zcd.jellyfish.infra.llm.LlmToolCall;
 import zcd.jellyfish.infra.session.SessionMessage;
 import zcd.jellyfish.tui.text.VisualLine;
 
@@ -401,6 +402,41 @@ class ChatStateTest {
 
         assertTrue(state.isThinkingExpanded());
         assertTrue(texts(view(thinkingMessages(), 20)).contains("      \u273b 先想一下"));
+    }
+
+    @Test
+    @DisplayName("工具参数默认封顶，展开开关必须重投影：否则缓存会把开关吃掉")
+    void view_should_reproject_when_toolArgumentsToggled() {
+        List<SessionMessage> messages = toolCallMessages();
+        List<String> collapsed = texts(view(messages, 20));
+        assertTrue(collapsed.contains(TranscriptProjector.TRACE_INDENT
+                + "\u2026 参数过长，已省略后续内容（Ctrl+E 展开）"), "实际：" + collapsed);
+
+        assertTrue(state.toggleToolArguments(), "首次切换后应为已展开");
+        List<String> expanded = texts(view(messages, 20));
+
+        assertFalse(expanded.contains("已省略后续内容"), "展开后应铺开，实际：" + expanded);
+        assertTrue(expanded.size() > collapsed.size(), "展开后行数应变多");
+
+        assertFalse(state.toggleToolArguments(), "再切换应回到折叠");
+        assertFalse(state.isToolArgumentsExpanded());
+    }
+
+    /**
+     * 构造一轮带长工具参数的会话：折叠态下参数必定超过行数上限。
+     *
+     * @return 消息列表
+     */
+    private static List<SessionMessage> toolCallMessages() {
+        StringBuilder command = new StringBuilder();
+        for (int i = 0; i < 400; i++) {
+            command.append('x');
+        }
+        LlmToolCall call = new LlmToolCall(0, "call_1", "shell",
+                "{\"command\":\"" + command + "\"}");
+        return Arrays.asList(
+                SessionMessage.of(LlmMessage.assistant("", Collections.singletonList(call))),
+                SessionMessage.of(LlmMessage.tool("call_1", "shell", "输出")));
     }
 
     /**

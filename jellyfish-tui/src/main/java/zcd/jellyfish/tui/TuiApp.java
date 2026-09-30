@@ -192,6 +192,10 @@ public final class TuiApp extends ToolkitApp {
     private static final CommandInfo THINKING_INFO = new CommandInfo(ShellCommand.THINKING_NAME,
             new CommandDescriptor("展开 / 折叠思考过程", null, null));
 
+    /** {@code /toolargs} 在补全清单里的条目。 */
+    private static final CommandInfo TOOL_ARGS_INFO = new CommandInfo(ShellCommand.TOOL_ARGS_NAME,
+            new CommandDescriptor("展开 / 折叠工具调用参数（Ctrl+E 同效）", null, null));
+
     /** {@code /mouse} 在补全清单里的条目。 */
     private static final CommandInfo MOUSE_INFO = new CommandInfo(MouseCommand.NAME,
             new CommandDescriptor("交还 / 收回鼠标（Ctrl+O 同效）", null, null));
@@ -555,6 +559,7 @@ public final class TuiApp extends ToolkitApp {
             infos.add(EXIT_INFO);
             infos.add(UI_INFO);
             infos.add(THINKING_INFO);
+            infos.add(TOOL_ARGS_INFO);
             infos.add(MOUSE_INFO);
             infos.sort(Comparator.comparing(CommandInfo::getName));
             return infos;
@@ -627,6 +632,8 @@ public final class TuiApp extends ToolkitApp {
         if (ShellCommand.isShellCommand(text)) {
             if (ShellCommand.isThinkingCommand(text)) {
                 toggleThinking();
+            } else if (ShellCommand.isToolArgsCommand(text)) {
+                toggleToolArguments();
             } else if (UiCommand.isUi(text)) {
                 executeUi(text);
             } else if (MouseCommand.isMouse(text)) {
@@ -720,6 +727,20 @@ public final class TuiApp extends ToolkitApp {
     private void toggleThinking() {
         boolean expanded = chatState.toggleThinking();
         chatState.appendNotice("思考过程：" + (expanded ? "已展开" : "已折叠"), ShellNotice.Kind.INFO);
+    }
+
+    /**
+     * 切换工具调用参数展开状态，并把新状态贴成一条外壳提示。
+     * <p>
+     * <b>为什么要回一条提示</b>：折叠态与展开态在屏幕上的差别只在「长参数占几行」，而屏幕上可能
+     * 压根没有工具调用（刚启动、或当前参数本来就不长）——那时按 {@code Ctrl+E} 屏幕毫无变化，
+     * 没有提示就与「按键没生效」无法区分。
+     * <p>
+     * 与 {@link #toggleThinking()} 一样：提示不进会话，也不建会话。
+     */
+    private void toggleToolArguments() {
+        boolean expanded = chatState.toggleToolArguments();
+        chatState.appendNotice("工具参数：" + (expanded ? "已展开" : "已折叠"), ShellNotice.Kind.INFO);
     }
 
     /**
@@ -1203,6 +1224,9 @@ public final class TuiApp extends ToolkitApp {
                     return EventResult.HANDLED;
                 case TOGGLE_THINKING:
                     toggleThinking();
+                    return EventResult.HANDLED;
+                case TOGGLE_TOOL_ARGS:
+                    toggleToolArguments();
                     return EventResult.HANDLED;
                 case QUIT:
                     exitShell();

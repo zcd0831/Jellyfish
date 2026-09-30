@@ -116,6 +116,7 @@ java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -tui
 | `--port <端口>` | 服务器端口（等价于 `-server` 的位置参数，缺省 `9096`） |
 | `--host <地址>` | 服务器绑定地址（缺省 `127.0.0.1`） |
 | `--show-thinking` | 展示模型的思考过程：`-cli` 打到 stderr，`-tui` 置为启动时展开 |
+| `--show-tool-args` | `-cli` 的工具轨迹行上打出调用参数（单行，过长截断；TUI 用 `Ctrl+E` / `/toolargs`） |
 | `--verbose` | 日志级别降到 DEBUG（也可用 `-Djellyfish.log.level=DEBUG`） |
 | `-h, --help` / `-V, --version` | 帮助 / 版本号 |
 
@@ -138,6 +139,13 @@ echo "/help" | java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -
 | `6` | 回合未收敛：达到最大轮次仍未给出最终回复 |
 
 单次模式里输入以 `/` 开头就走命令域（`/help` `/model` `/agent` `/new` …），否则走一次 LLM 对话。
+
+单次模式的工具轨迹默认只给「开始」与「结束」两行（`→ shell` / `← shell 完成（N 字符）`）；
+想看模型到底要跑什么，加 `--show-tool-args`，参数会以**单行、最多 200 字**的形式跟在其后
+（`→ shell {"command": "mvn -q test", "cwd": "/x"}`）。它只归 `-cli`：TUI 用运行期开关，
+`-server` 没有终端界面，两者带上它一律按用法错误退 `2`。**参数不脱敏**（与 Codex 的 `--verbose` 同口径）：
+外壳按参数名猜不出哪个是密钥，遮不住命令原文与写入正文这些真正会出事的地方，所以把
+「参数里可能有敏感信息」当作你自己知道的前提——`--show-tool-args` 的日志同样如此。
 
 ## TUI 用法
 
@@ -168,6 +176,7 @@ java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -tui
 | `Enter` | 换行（可写多行，输入框 1～6 行自适应） |
 | `Ctrl+C` | 退出 |
 | `Ctrl+T` | 展开 / 折叠思考过程（与 `/thinking` 等价） |
+| `Ctrl+E` | 展开 / 折叠工具调用参数（与 `/toolargs` 等价） |
 | `Ctrl+O` | 交还 / 收回鼠标（与 `/mouse` 等价）：交还后可直接拖选并复制 |
 | `Esc` | 中断当前回合（输入框内容保留） |
 | `PageUp` / `PageDown` | 消息区翻页 |
@@ -175,6 +184,7 @@ java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -tui
 | `/exit` | 退出（由外壳处理，不在 `/help` 列表里） |
 | `/ui` | 查看与切换插件的界面贡献（同样由外壳处理） |
 | `/thinking` | 展开 / 折叠思考过程（同样由外壳处理） |
+| `/toolargs` | 展开 / 折叠工具调用参数（同样由外壳处理） |
 | `/mouse` | 交还 / 收回鼠标（同样由外壳处理；`/mouse on` / `/mouse off` 显式指定） |
 
 **为什么发送不是 `Enter`**：终端 raw 模式下所有「带修饰的 Enter」都无法与普通 `Enter` 区分，因此「`Enter` 发送 +
@@ -183,9 +193,16 @@ java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -tui
 **思考过程默认折叠**：屏幕上只占一行（`✻ 思考过程（N 字，Ctrl+T 展开）`），流式期间是 `✻ 思考中…（N 字）`。
 `Ctrl+T` 是**全局**开关：要么所有思考都展开，要么都折叠。`--show-thinking` 让 TUI 启动时就是展开态。
 
+**工具轨迹行带调用参数**：轨迹行是 `⎿ 工具名 · 结果摘要 · 调用参数`，参数取自会话里 assistant 的
+`toolCalls`（**执行之前就已落库**），按 `toolCallId` 与结果配对——所以运行期、回合结束后、`-resume` 之后
+看到的是**同一份文本**，命令跑完不会消失。参数按显示列折行，折叠态最多占 8 行，超出以
+`… 参数过长，已省略后续内容（Ctrl+E 展开）` 收尾；`Ctrl+E` / `/toolargs` 把它展开到 200 行。
+**参数不脱敏**（与 Codex 的 `--verbose` 同口径）：按参数名猜遮不住真正会出事的地方（`command`、`content`），
+而外壳并不知道哪个参数是密钥——所以需要遮蔽时应该由工具或用户显式声明，而不是由外壳猜。
+
 **助手正文按 markdown 渲染**：标题、列表、引用、代码块、行内代码、加粗 / 斜体 / 删除线、链接、分隔线都会渲染；
-**表格降级为代码块**（终端里按列对齐中英混排要赌终端的字宽表，算错了比不对齐更误导）。**用户消息保持纯文本**，
-工具轨迹不变；图片与 HTML 原样显示源码。
+**表格降级为代码块**（终端里按列对齐中英混排要赌终端的字宽表，算错了比不对齐更误导）。**用户消息与工具轨迹保持纯文本**
+（只换行、不做行内样式），图片与 HTML 原样显示源码。
 
 **滚轮可用，代价是终端选择被应用截走**：滚轮要求应用捕获鼠标（默认开启），而捕获后终端的鼠标选择归应用，
 复制屏幕文本需按住修饰键（macOS 为 Option，而 Terminal.app 上的 Option 拖动是矩形选择，实际等于没有）。
@@ -233,8 +250,9 @@ java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -tui
 ╰────────────────────────────────────╯
 ```
 
-参数里的密钥（`apiKey`、`token` 等）显示为 `***`，超长参数折行显示并在截断处写明省略了几行；
-`Esc` 是「拒绝**并**中断回合」——只拒绝的话模型往往会换个方式接着试。等不到答复（缺省 120 秒）同样按拒绝处理。
+参数**原样显示**（含 `apiKey` 这类键的值）：审批要回答的是「放不放行这次调用」，而能回答它的只有原文。
+超长参数折行显示并在截断处写明省略了几行；`Esc` 是「拒绝**并**中断回合」——只拒绝的话模型往往会换个方式接着试。
+等不到答复（缺省 120 秒）同样按拒绝处理。
 
 ### 插件面板
 
@@ -287,7 +305,7 @@ java -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=5005 \
 | `/compact [preview]` | | 把更早的对话压成摘要（需压缩策略插件） |
 | `/reload` | | 重新加载配置（模型 / agent / 插件） |
 
-`-tui` 另有四个由外壳处理的命令，不在 `/help` 列表里：`/exit`、`/ui`、`/thinking`、`/mouse`。
+`-tui` 另有五个由外壳处理的命令，不在 `/help` 列表里：`/exit`、`/ui`、`/thinking`、`/toolargs`、`/mouse`。
 **插件会带来更多命令**（例如待办插件的 `/todo`），装了就出现在 `/help` 里。
 
 **离线可用**：`/help` `/session` `/status` `/model` `/compact preview` 这些命令**不需要模型配置**，可以拿来验证安装是否正常。
@@ -329,11 +347,13 @@ java -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=5005 \
 主会话用的哪个模型），因此**任务描述必须自足**；**`allowedTools` 只随委派生效**（只给它只读工具，它既看不到也调不了写类工具）；
 **子代理不继承主会话的模型**（用自己的 `model`，没配则落到全局默认，想在探索上省钱就在定义里写个便宜模型）。
 
-屏幕上你能看到的：子代理在跑时工具轨迹出现 `⎿ task`，下面缩进两格跟着它的每一步工具调用（`  · read_file`）；完成之后收成一行
+屏幕上你能看到的：子代理在跑时工具轨迹出现 `⎿ task`，下面缩进两格跟着它的每一步工具调用（`  · read_file`）；完成之后收成一行：
 
 ```
-      ⎿ task · 子代理 scout · 3 轮 · 123456 tok
+      ⎿ task · 子代理 scout · 3 轮 · 123456 tok · {"prompt": "…"}
 ```
+
+末尾那段 `task.prompt` 就是你委派给它的原文（参数过长时折行并按上限收尾，按 `Ctrl+E` 展开）。
 
 它花掉的 token **计入父会话**（`/usage` 看得到），但子代理的会话不留痕（不落盘、不进 `/session` 列表）。
 递归有两道上限：`subAgent.maxDepth`（一条链多深）与 `subAgent.maxSpawnsPerTurn`（一层扇出多少）。

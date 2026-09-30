@@ -60,6 +60,13 @@ class InputKeyMapperTest {
     }
 
     @Test
+    @DisplayName("Ctrl+E 应判定为工具参数折叠开关")
+    void map_should_returnToggleToolArgs_when_ctrlE() {
+        assertEquals(InputAction.TOGGLE_TOOL_ARGS, InputKeyMapper.map(ctrl('e')));
+        assertEquals(InputAction.TOGGLE_TOOL_ARGS, InputKeyMapper.map(ctrl('E')));
+    }
+
+    @Test
     @DisplayName("无修饰的 o 不得被当成鼠标开关：它是正文里的普通字符")
     void map_should_notReturnToggleMouse_when_plainO() {
         assertEquals(InputAction.EDIT, InputKeyMapper.map(KeyEvent.ofChar('o')));

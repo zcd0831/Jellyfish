@@ -87,24 +87,20 @@ class ApprovalPromptTest {
     }
 
     @Test
-    @DisplayName("敏感键脱敏：apiKey / token 只显示 ***")
-    void render_should_maskSensitiveArguments() {
+    @DisplayName("参数原样显示：键名像密钥也不打码（审批要能看清真正要跑的东西）")
+    void render_should_showArgumentsVerbatim() {
         // Given
         Map<String, Object> arguments = new LinkedHashMap<String, Object>();
         arguments.put("apiKey", "sk-real-secret");
-        arguments.put("Authorization-Token", "bearer-abc");
-        arguments.put("key", "plain-key");
         arguments.put("path", "a.txt");
 
         // When
         String body = String.join("\n", texts(render(pending("bash", arguments, null), activePicker())));
 
         // Then
-        assertFalse(body.contains("sk-real-secret"), body);
-        assertFalse(body.contains("bearer-abc"), body);
-        assertFalse(body.contains("plain-key"), body);
-        assertTrue(body.contains("***"), body);
-        assertTrue(body.contains("a.txt"), "非敏感参数必须照常显示");
+        assertTrue(body.contains("sk-real-secret"), body);
+        assertTrue(body.contains("a.txt"), body);
+        assertFalse(body.contains("***"), body);
     }
 
     @Test

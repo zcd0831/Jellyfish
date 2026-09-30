@@ -24,6 +24,7 @@ import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.model.ModelManager;
 import zcd.jellyfish.infra.model.SessionModelResolver;
 import zcd.jellyfish.core.compact.ConversationCompactor;
+import zcd.jellyfish.core.prompt.PromptAssembler;
 import zcd.jellyfish.core.input.InputDirectives;
 import zcd.jellyfish.infra.config.RuntimeConfig;
 import zcd.jellyfish.infra.permission.ApprovalChannel;
@@ -54,6 +55,13 @@ import static org.mockito.Mockito.when;
  */
 @ExtendWith(MockitoExtension.class)
 class LauncherTest {
+
+    /**
+     * 提示词组装器：本用例只验启动模式的选择，压缩的请求怎么拼与它无关，
+     * 因此给一个未打桩的 mock（{@code buildFork} 返回 {@code null}）。
+     */
+    @Mock
+    private PromptAssembler promptAssembler;
 
     @Mock
     private JellyfishComponent component;
@@ -130,7 +138,8 @@ class LauncherTest {
         session = sessions.createDefault();
         sessions.switchTo(session.getSessionId());
 conversationCompactor = new ConversationCompactor(sessions, models, runtimeConfig,
-                new ExtensionRegistry(new TypeRegistry()), events, new SessionModelResolver(models, agents));
+                new ExtensionRegistry(new TypeRegistry()), events, new SessionModelResolver(models, agents),
+                promptAssembler);
         launcher = new Launcher(component, console);
     }
 

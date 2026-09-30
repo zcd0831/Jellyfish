@@ -20,6 +20,7 @@ import zcd.jellyfish.api.extension.SessionRestoreRequest;
 import zcd.jellyfish.api.extension.SessionRestoreResult;
 import zcd.jellyfish.api.extension.SessionSnapshot;
 import zcd.jellyfish.core.prompt.ContextUsage;
+import zcd.jellyfish.core.prompt.PromptAssembler;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.config.Model;
 import zcd.jellyfish.infra.config.Provider;
@@ -54,9 +55,13 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
@@ -108,6 +113,16 @@ class ConversationCompactorTest {
     @Mock
     private LlmClient client;
 
+    /**
+     * 提示词组装器。
+     * <p>
+     * 用 mock 而不是真货：未打桩时 {@code buildFork} 返回 {@code null}，于是本类全部既有用例
+     * 走的都是<b>回退路径</b>（把待压段渲染成正文），断言一个字都不用改。fork 本身的构造逻辑
+     * 在 {@code PromptAssemblerTest} 里单独覆盖，这里只验证「用了它」与「什么时候回退」。
+     */
+    @Mock
+    private PromptAssembler promptAssembler;
+
     /** 真实会话域服务。 */
     private SessionManager sessionManager;
 
@@ -143,7 +158,7 @@ class ConversationCompactorTest {
         // 换一个干净注册表：模拟「一个压缩插件都没装」
         ConversationCompactor bare = new ConversationCompactor(sessionManager, modelManager, runtimeConfig,
                 new ExtensionRegistry(new TypeRegistry()), events,
-                new SessionModelResolver(modelManager, agentManager), executor);
+                new SessionModelResolver(modelManager, agentManager), promptAssembler, executor);
 
         assertFalse(bare.isAvailable());
         CompactionUnavailableException error = assertThrows(CompactionUnavailableException.class,
@@ -160,7 +175,7 @@ class ConversationCompactorTest {
         silent.contribute("silent", CompactionStrategyRequest.class, null,
                 request -> CompactionStrategy.none(), RegisterOptions.DEFAULT);
         ConversationCompactor bare = new ConversationCompactor(sessionManager, modelManager, runtimeConfig,
-                silent, events, new SessionModelResolver(modelManager, agentManager), executor);
+                silent, events, new SessionModelResolver(modelManager, agentManager), promptAssembler, executor);
 
         assertTrue(bare.isAvailable());
         CompactionUnavailableException error = assertThrows(CompactionUnavailableException.class,
@@ -176,7 +191,7 @@ class ConversationCompactorTest {
         lenient().when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
         ConversationCompactor bare = new ConversationCompactor(sessionManager, modelManager, runtimeConfig,
                 new ExtensionRegistry(new TypeRegistry()), events,
-                new SessionModelResolver(modelManager, agentManager), executor);
+                new SessionModelResolver(modelManager, agentManager), promptAssembler, executor);
         ContextUsage usage = new ContextUsage(900, 1000, false);
 
         assertFalse(bare.autoCompactIfNeeded(createdSessionId, usage));
@@ -185,6 +200,50 @@ class ConversationCompactorTest {
         // 一次 WARN + 一次 ConfigWarningEvent：多了会把日志刷满，少了用户不知道历史正在被裁掉
         verify(events, times(1)).publish(any(ConfigWarningEvent.class));
         verify(client, never()).chat(any(LlmRequest.class));
+    }
+
+    @Test
+    @DisplayName("待压范围在父请求里时走 cache-safe fork：请求就是父请求的前缀加一条指令")
+    void plan_should_preferCacheSafeFork_when_parentCoversRange() {
+        sessionWithMessages(6);
+        givenModel(128_000, 4_000);
+        LlmRequest forkRequest = LlmRequest.builder("gpt-4o")
+                .messages(Collections.singletonList(LlmMessage.user("fork")))
+                .toolChoice("none").build();
+        when(promptAssembler.buildFork(any(Session.class), any(ResolvedModel.class), anyInt(), anyInt(),
+                anyString())).thenReturn(forkRequest);
+
+        CompactionPlan plan = compactor.plan(createdSessionId);
+
+        assertSame(forkRequest, plan.getRequest());
+        assertTrue(plan.isForked(), "计划必须告诉外壳走的是哪条路径（两条路的钱差一个数量级）");
+        // 保留最近 3 条 → 待压从下标 0 开始，父请求末尾要丢掉 3 条（那段将来保留原文）
+        verify(promptAssembler).buildFork(any(Session.class), any(ResolvedModel.class), eq(0), eq(3),
+                anyString());
+        assertEquals(3, plan.getCompressedCount());
+        // fork 路径下没有「丢弃」可言：发出去的正是父请求刚发过、且装得下的那一段
+        assertFalse(plan.hasDropped());
+        assertEquals(0, plan.getDroppedCount());
+    }
+
+    @Test
+    @DisplayName("fork 造不出来时回退旧路径：把待压段渲染成正文发出去")
+    void plan_should_fallBack_when_forkUnavailable() {
+        sessionWithMessages(6);
+        givenModel(128_000, 4_000);
+        when(promptAssembler.buildFork(any(Session.class), any(ResolvedModel.class), anyInt(), anyInt(),
+                anyString())).thenReturn(null);
+
+        CompactionPlan plan = compactor.plan(createdSessionId);
+
+        // 回退路径的标志：system prompt 就是摘要指令，消息只有渲染出来的那一条正文
+        verify(promptAssembler).buildFork(any(Session.class), any(ResolvedModel.class), anyInt(), anyInt(),
+                anyString());
+        assertTrue(plan.getRequest().getSystemPrompt().contains("摘要"),
+                plan.getRequest().getSystemPrompt());
+        assertEquals(1, plan.getRequest().getMessages().size());
+        assertEquals(3, plan.getCompressedCount());
+        assertFalse(plan.isForked());
     }
 
     @Test
@@ -769,7 +828,7 @@ class ConversationCompactorTest {
      */
     private ConversationCompactor newCompactor(ExecutorService taskExecutor) {
         return new ConversationCompactor(sessionManager, modelManager, runtimeConfig, extensions,
-                events, new SessionModelResolver(modelManager, agentManager), taskExecutor);
+                events, new SessionModelResolver(modelManager, agentManager), promptAssembler, taskExecutor);
     }
 
     /**

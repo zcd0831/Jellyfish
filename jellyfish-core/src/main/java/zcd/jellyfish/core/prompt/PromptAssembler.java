@@ -74,6 +74,15 @@ public class PromptAssembler {
      */
     private static final int NO_CONTEXT_WINDOW = -1;
 
+    /**
+     * 压缩 fork 请求的工具选择策略。
+     * <p>
+     * 不带工具会让前缀从工具那一段起全部作废，带上工具又可能让模型去调工具而不是写摘要，
+     * 因此必须原样带工具 + 明确关掉工具调用。四家都支持该取值：OpenAI / DeepSeek 用
+     * {@code "none"}、Gemini 映射为 {@code mode: NONE}、Anthropic 映射为 {@code {"type":"none"}}。
+     */
+    private static final String TOOL_CHOICE_NONE = "none";
+
     /** agent 提示词。 */
     private final AgentManager agentManager;
 
@@ -155,13 +164,80 @@ public class PromptAssembler {
      * @return 请求与用量
      */
     public PromptAssembly assemble(Session session, ResolvedModel resolvedModel, ToolFilter toolFilter) {
+        Parent parent = parentOf(session, resolvedModel, toolFilter);
+        return new PromptAssembly(parent.getRequest(), parent.getUsage());
+    }
+
+    /**
+     * 构建一次「cache-safe fork」请求：与父请求共用<b>逐字节相同</b>的前缀，指令追加在最后。
+     * <p>
+     * <b>为什么这是压缩唯一值得做的省钱手段</b>：压缩的请求此前从第 0 个 token 就分叉（自己的指令做
+     * system prompt、渲染后的全文做消息、不带工具），于是<b>那次调用把整段对话按未命中价重发一遍</b>，
+     * 而它恰恰发生在会话最长的时候。改成取父请求的真前缀之后，整段对话按命中价（约 0.1×）计费，
+     * 只有末尾那条指令是新的。
+     * <p>
+     * <b>为什么必须切父请求的字节，而不能按会话下标重新装配</b>：机械裁剪会从最旧侧吞掉若干条，
+     * 重装一次拿到的前端就可能与父请求不同；缓存是逐位置比的，前端一错就全部落空。
+     * 因此这里只做一件事：把父请求的消息列表去掉末尾「本来就要保留的 {@code keepCount} 条」。
+     * <p>
+     * <b>工具要原样带上</b>：工具清单在多数厂商的模板里排在 messages 之前，省掉它等于把整条前缀
+     * 从工具那一段起全部作废。带上之后必须把工具调用关掉（{@code tool_choice: none}），
+     * 否则模型很可能去调工具而不是写摘要。
+     *
+     * @param session       会话运行态，不可为 {@code null}
+     * @param resolvedModel 已解析的模型，不可为 {@code null}
+     * @param fromIndex     待压范围的第一条消息对应的会话下标
+     * @param keepCount     父请求末尾要丢掉的消息条数（即将来保留原文的那一段）
+     * @param instruction   追加在末尾的指令，不可为空白
+     * @return fork 请求；待压范围已不在父请求里时返回 {@code null}，由调用方回退到旧路径
+     */
+    public LlmRequest buildFork(Session session, ResolvedModel resolvedModel, int fromIndex, int keepCount,
+                                String instruction) {
+        Parent parent = parentOf(session, resolvedModel, ToolFilter.none());
+        LlmRequest base = parent.getRequest();
+        if (parent.getFirstSessionIndex() < 0 || parent.getFirstSessionIndex() > fromIndex) {
+            // 待压的那一段已经不在父请求里（机械裁剪从最旧侧把它吞掉了）。此时 fork 出来的前缀会
+            // 缺一段内容，摘要将毫无依据；退回旧路径把该段渲染成正文发出去，按全价但正确。
+            // 实际情况是本就不该压：那一段根本没发给模型，推进边界只会白白换来一次前缀断裂
+            LOG.warn("待压范围已不在父请求中，压缩回退到旧路径: sessionId={} from={} parentStart={}",
+                    session.getSessionId(), fromIndex, parent.getFirstSessionIndex());
+            return null;
+        }
+        List<LlmMessage> messages = base.getMessages();
+        List<LlmMessage> forked = new ArrayList<LlmMessage>(
+                messages.subList(0, Math.max(0, messages.size() - keepCount)));
+        forked.add(LlmMessage.user(instruction));
+        LlmRequest.Builder builder = LlmRequest.builder(base.getModel())
+                .systemPrompt(base.getSystemPrompt())
+                .messages(forked)
+                .tools(base.getTools())
+                .toolChoice(TOOL_CHOICE_NONE);
+        if (base.getMaxTokens() != null) {
+            builder.maxTokens(base.getMaxTokens());
+        }
+        return builder.build();
+    }
+
+    /**
+     * 装配一次「父请求」，并带回「发出的第一条历史消息对应哪个会话下标」。
+     * <p>
+     * 那个下标是给 {@link #buildFork} 用的，理由见那里：cache-safe fork 只能切父请求自己的字节，
+     * 因此得知道父请求的消息列表对应会话的哪一段。
+     *
+     * @param session       会话运行态，不可为 {@code null}
+     * @param resolvedModel 已解析的模型，不可为 {@code null}
+     * @param toolFilter    工具清单过滤器，不可为 {@code null}
+     * @return 装配产物，保证非 {@code null}
+     */
+    private Parent parentOf(Session session, ResolvedModel resolvedModel, ToolFilter toolFilter) {
         Objects.requireNonNull(session, "session must not be null");
         Objects.requireNonNull(resolvedModel, "resolvedModel must not be null");
         Objects.requireNonNull(toolFilter, "toolFilter must not be null");
         int boundary = effectiveBoundary(session);
         String systemPrompt = systemPromptOf(session);
         LlmMessage summary = summaryMessageOf(session, boundary);
-        List<LlmMessage> history = toLlmMessages(session, boundary + 1);
+        int start = startIndexOf(session, boundary + 1);
+        List<LlmMessage> history = toLlmMessages(session, start);
         int budget = budgetOf(resolvedModel);
         // 老化仍排在裁剪之前：先把较早的大结果换成 stub，再让裁剪看到它真实的体积；
         // 反过来则会先把整组丢掉，连「内容在哪」都一起没了。
@@ -172,6 +248,10 @@ public class PromptAssembler {
         CropResult cropResult = crop(budget, systemPrompt, summary, aged);
         // 摘要拼在裁剪之后：它是「被裁掉的那段的精华」，让裁剪有机会丢掉它等于白压一次
         List<LlmMessage> messages = withSummary(summary, cropResult.getMessages());
+        // 机械裁剪只从最旧侧整组丢弃，因此发出去的历史必是会话历史的一段后缀，
+        // 「发出的第一条 ↔ 会话下标」这个换算才成立
+        int sentHistory = cropResult.getMessages().size();
+        int firstSessionIndex = sentHistory == 0 ? -1 : start + (aged.size() - sentHistory);
         List<LlmTool> tools = toolCatalog.tools(toolFilter);
         watchCacheBreak(session, systemPrompt, tools, messages);
         LlmRequest.Builder builder = LlmRequest.builder(resolvedModel.getModel().getId())
@@ -182,8 +262,66 @@ public class PromptAssembler {
         if (maxOutputTokens > 0) {
             builder.maxTokens(maxOutputTokens);
         }
-        return new PromptAssembly(builder.build(),
-                usageOf(systemPrompt, null, messages, cropResult.getBudget(), cropResult.isTruncated()));
+        return new Parent(builder.build(),
+                usageOf(systemPrompt, null, messages, cropResult.getBudget(), cropResult.isTruncated()),
+                firstSessionIndex);
+    }
+
+    /**
+     * 一次父请求的装配产物：请求本身、它的用量，以及「第一条历史消息对应的会话下标」。
+     * <p>
+     * {@code firstSessionIndex} 为 {@code -1} 表示本次没有发出任何历史消息。
+     */
+    private static final class Parent {
+
+        /** 已装配的请求。 */
+        private final LlmRequest request;
+
+        /** 上下文用量。 */
+        private final ContextUsage usage;
+
+        /** 请求里第一条历史消息对应的会话下标；{@code -1} 表示没有历史。 */
+        private final int firstSessionIndex;
+
+        /**
+         * 构造装配产物。
+         *
+         * @param request           已装配的请求
+         * @param usage             上下文用量
+         * @param firstSessionIndex 第一条历史消息的会话下标；{@code -1} 表示没有历史
+         */
+        Parent(LlmRequest request, ContextUsage usage, int firstSessionIndex) {
+            this.request = request;
+            this.usage = usage;
+            this.firstSessionIndex = firstSessionIndex;
+        }
+
+        /**
+         * 获取已装配的请求。
+         *
+         * @return 请求
+         */
+        LlmRequest getRequest() {
+            return request;
+        }
+
+        /**
+         * 获取上下文用量。
+         *
+         * @return 用量
+         */
+        ContextUsage getUsage() {
+            return usage;
+        }
+
+        /**
+         * 获取第一条历史消息的会话下标。
+         *
+         * @return 下标；{@code -1} 表示没有历史
+         */
+        int getFirstSessionIndex() {
+            return firstSessionIndex;
+        }
     }
 
     /**
@@ -600,6 +738,28 @@ public class PromptAssembler {
     }
 
     /**
+     * 求实际的第一条要发送的消息下标，并跳过开头的孤儿工具结果。
+     * <p>
+     * <b>为什么需要跳过</b>：出站序列必须满足工具调用配对约束（见 {@link ToolPairing}）。压缩已经对齐过
+     * 边界，但恢复出来的会话可能带着旧版本写的、或手工改过的边界，因此这里再兜一层——
+     * 以孤儿 {@code tool} 消息开头的请求会被厂商直接拒（400）。
+     * <p>
+     * 单独成方法是因为父请求装配要同时知道「发出去的历史从哪里开始」，见 {@link #parentOf}。
+     *
+     * @param session    会话运行态
+     * @param firstIndex 候选起点下标
+     * @return 实际起点下标，落在 {@code [0, size]} 内
+     */
+    private static int startIndexOf(Session session, int firstIndex) {
+        List<SessionMessage> messages = session.getMessages();
+        int start = Math.max(0, firstIndex);
+        while (start < messages.size() && ToolPairing.isToolResult(messages.get(start).getMessage())) {
+            start++;
+        }
+        return start;
+    }
+
+    /**
      * 把会话消息投影成厂商无关的消息列表，并跳过已被摘要覆盖的那一段。
      * <p>
      * <b>为什么在这里截断而不是删消息</b>：{@code /compact} 是非破坏式的——消息一条不删，
@@ -611,18 +771,11 @@ public class PromptAssembler {
      * 结尾是悬空的工具调用），两类都会让厂商以 400 拒掉整次请求，详见 {@link ToolPairing}。
      *
      * @param session    会话运行态
-     * @param firstIndex 第一条要发送的消息下标
+     * @param start      第一条要发送的消息下标（已跳过孤儿工具结果）
      * @return 不可修改的消息列表
      */
-    private static List<LlmMessage> toLlmMessages(Session session, int firstIndex) {
+    private static List<LlmMessage> toLlmMessages(Session session, int start) {
         List<SessionMessage> messages = session.getMessages();
-        int start = Math.max(0, firstIndex);
-        // 出站序列必须满足工具调用配对约束（见 ToolPairing）。压缩已经对齐过边界，
-        // 但恢复出来的会话可能带着旧版本写的、或手工改过的边界，因此这里再兜一层：
-        // 以孤儿 tool 消息开头的请求会被厂商直接拒（400）
-        while (start < messages.size() && ToolPairing.isToolResult(messages.get(start).getMessage())) {
-            start++;
-        }
         List<LlmMessage> llmMessages = new ArrayList<LlmMessage>(messages.size());
         for (int index = start; index < messages.size(); index++) {
             llmMessages.add(messages.get(index).getMessage());

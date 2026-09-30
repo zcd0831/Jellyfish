@@ -282,19 +282,25 @@ public class ClaudeLlmClient extends AbstractHttpLlmClient {
     /**
      * 把统一工具选择策略转换为 Anthropic 的 tool_choice 结构。
      * <p>
-     * {@code none} 表示不下发该字段；{@code required}/{@code any} 映射为 {@code any}；
-     * 其余非关键字取值视为具体工具名（保留原始大小写，仅去除首尾空白）。
+     * <b>{@code none} 映射为 {@code {"type":"none"}}</b>，而不是「不下发」：Anthropic 明确支持该取值
+     * 表示「不能用工具」。早先的实现把它当作「不下发」，那等于回到默认的 {@code auto}——
+     * 请求里带着一堆工具却没有禁用，模型很可能去调工具。压缩的 cache-safe fork 正是靠这个取值
+     * 保证「只输出文本摘要」（它必须原样带上工具清单才能命中缓存），因此这里不能含糊。
+     * {@code required}/{@code any} 映射为 {@code any}；其余非关键字取值视为具体工具名
+     * （保留原始大小写，仅去除首尾空白）。
      *
      * @param toolChoice 统一工具选择策略
-     * @return Anthropic tool_choice 结构，无需下发时返回空 Map
+     * @return Anthropic tool_choice 结构，未指定时返回空 Map
      */
     private static Map<String, Object> buildToolChoice(String toolChoice) {
         String choice = LlmClients.normalizeToolChoice(toolChoice);
-        if (choice.isEmpty() || "none".equals(choice)) {
+        if (choice.isEmpty()) {
             return Collections.emptyMap();
         }
         Map<String, Object> result = new LinkedHashMap<>();
-        if ("required".equals(choice) || "any".equals(choice)) {
+        if ("none".equals(choice)) {
+            result.put("type", "none");
+        } else if ("required".equals(choice) || "any".equals(choice)) {
             result.put("type", "any");
         } else if ("auto".equals(choice)) {
             result.put("type", "auto");

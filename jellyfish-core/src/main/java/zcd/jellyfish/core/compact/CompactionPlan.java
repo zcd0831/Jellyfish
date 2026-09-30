@@ -44,8 +44,20 @@ public final class CompactionPlan {
     /** 压完之后仍会随请求发出的消息条数。 */
     private final int keepCount;
 
-    /** 摘要输入（即 {@link #request} 里那条 user 消息）的估算 token 数。 */
+    /**
+     * 摘要输入里本次要按<b>未命中价</b>计费的 token 估算值。
+     * <p>
+     * <b>不是「输入的规模」</b>：走 cache-safe fork 时输入可能很长，但其中绝大部分与父请求逐字节
+     * 相同、按命中价计费，真正新增的只有末尾那条指令。反馈给用户的就是这个新增量。
+     */
     private final int estimatedTokens;
+
+    /**
+     * 本次是否走的是 cache-safe fork。
+     * <p>
+     * 两条路径的差别是数量级的（命中价与未命中价差约十倍），用户有权知道自己在花哪一种钱。
+     */
+    private final boolean forked;
 
     /**
      * 构造压缩计划。
@@ -55,16 +67,18 @@ public final class CompactionPlan {
      * @param compressedCount   本次覆盖的消息条数，保证为正
      * @param droppedCount      本次被直接丢弃的消息条数，非负
      * @param keepCount         压完后保留的原文条数
-     * @param estimatedTokens   摘要输入的估算 token 数
+     * @param estimatedTokens   本次要按未命中价计费的 token 估算值
+     * @param forked            是否走 cache-safe fork
      */
     CompactionPlan(LlmRequest request, String boundaryMessageId, int compressedCount, int droppedCount,
-                   int keepCount, int estimatedTokens) {
+                   int keepCount, int estimatedTokens, boolean forked) {
         this.request = request;
         this.boundaryMessageId = boundaryMessageId;
         this.compressedCount = compressedCount;
         this.droppedCount = droppedCount;
         this.keepCount = keepCount;
         this.estimatedTokens = estimatedTokens;
+        this.forked = forked;
     }
 
     /**
@@ -113,12 +127,21 @@ public final class CompactionPlan {
     }
 
     /**
-     * 获取摘要输入的估算 token 数。
+     * 获取本次要按未命中价计费的 token 估算值。
      *
      * @return 估算 token 数
      */
     public int getEstimatedTokens() {
         return estimatedTokens;
+    }
+
+    /**
+     * 判断本次是否走的是 cache-safe fork。
+     *
+     * @return 复用父请求前缀返回 {@code true}；回退到「渲染正文」路径返回 {@code false}
+     */
+    public boolean isForked() {
+        return forked;
     }
 
     /**

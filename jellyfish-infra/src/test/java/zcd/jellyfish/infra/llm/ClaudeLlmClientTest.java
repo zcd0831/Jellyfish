@@ -181,13 +181,28 @@ class ClaudeLlmClientTest {
     }
 
     @Test
-    void chat_should_omit_tool_choice_when_none() throws IOException {
+    void chat_should_map_none_tool_choice_to_type_none() throws IOException {
         // Given
         StubInterceptor stub = jsonStub("{\"content\":[]}");
         ClaudeLlmClient client = client(stub);
 
         // When
         client.chat(toolChoiceRequest("none"));
+
+        // Then：必须显式下发 {type: none}，而不是「不下发」——后者等于默认 auto，
+        // 带着工具却不禁用，模型很可能去调工具。压缩的 cache-safe fork 靠这个取值保证只出文本
+        assertEquals("none",
+                json(requestBody(stub.lastRequest())).path("tool_choice").path("type").asText());
+    }
+
+    @Test
+    void chat_should_omit_tool_choice_when_unset() throws IOException {
+        // Given
+        StubInterceptor stub = jsonStub("{\"content\":[]}");
+        ClaudeLlmClient client = client(stub);
+
+        // When：未指定策略时不下发该字段，走厂商自己的默认
+        client.chat(toolChoiceRequest(null));
 
         // Then
         assertFalse(json(requestBody(stub.lastRequest())).has("tool_choice"));

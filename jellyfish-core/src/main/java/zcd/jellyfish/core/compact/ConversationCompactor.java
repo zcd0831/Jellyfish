@@ -19,6 +19,7 @@ import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.extension.HandlerBinding;
 import zcd.jellyfish.infra.llm.LlmClient;
 import zcd.jellyfish.infra.llm.LlmMessage;
+import zcd.jellyfish.core.prompt.PromptAssembler;
 import zcd.jellyfish.infra.llm.LlmRequest;
 import zcd.jellyfish.infra.llm.LlmResponse;
 import zcd.jellyfish.infra.llm.LlmToolCall;
@@ -117,6 +118,15 @@ public class ConversationCompactor implements AutoCloseable {
     /** 同步扩展点策略：插件压缩策略的唯一来源。 */
     private final ExtensionRegistry extensions;
 
+    /**
+     * 提示词组装器：用来造 cache-safe fork 请求（见 {@code PromptAssembler#buildFork}）。
+     * <p>
+     * <b>这里为什么需要它</b>：fork 要求把父请求发出去的那串字节原样复用，而「父请求长什么样」
+     * 只有组装器知道（摘要合成消息、工具结果老化、机械裁剪、工具清单都在那里做）。
+     * 压缩机自己再拼一份，两端一定会漂。
+     */
+    private final PromptAssembler promptAssembler;
+
     /** 通知发布入口：只在「该压了却没有插件」时广播一条告警。 */
     private final EventPublisher events;
 
@@ -138,12 +148,15 @@ public class ConversationCompactor implements AutoCloseable {
      * @param extensions     同步扩展点策略
      * @param events         通知发布入口
      * @param sessionModelResolver 会话模型解析器
+     * @param promptAssembler 提示词组装器（造 cache-safe fork 请求）
      */
     @Inject
     public ConversationCompactor(SessionManager sessionManager, ModelManager modelManager,
                                  RuntimeConfig runtimeConfig, ExtensionRegistry extensions,
-                                 EventPublisher events, SessionModelResolver sessionModelResolver) {
-        this(sessionManager, modelManager, runtimeConfig, extensions, events, sessionModelResolver, createExecutor());
+                                 EventPublisher events, SessionModelResolver sessionModelResolver,
+                                 PromptAssembler promptAssembler) {
+        this(sessionManager, modelManager, runtimeConfig, extensions, events, sessionModelResolver,
+                promptAssembler, createExecutor());
     }
 
     /**
@@ -155,11 +168,13 @@ public class ConversationCompactor implements AutoCloseable {
      * @param extensions     同步扩展点策略
      * @param events         通知发布入口
      * @param sessionModelResolver 会话模型解析器
+     * @param promptAssembler 提示词组装器（造 cache-safe fork 请求）
      * @param executor       专用执行器
      */
     ConversationCompactor(SessionManager sessionManager, ModelManager modelManager, RuntimeConfig runtimeConfig,
                           ExtensionRegistry extensions, EventPublisher events,
-                          SessionModelResolver sessionModelResolver, ExecutorService executor) {
+                          SessionModelResolver sessionModelResolver, PromptAssembler promptAssembler,
+                          ExecutorService executor) {
         this.sessionManager = Objects.requireNonNull(sessionManager, "sessionManager must not be null");
         this.modelManager = Objects.requireNonNull(modelManager, "modelManager must not be null");
         this.runtimeConfig = Objects.requireNonNull(runtimeConfig, "runtimeConfig must not be null");
@@ -167,6 +182,7 @@ public class ConversationCompactor implements AutoCloseable {
         this.events = Objects.requireNonNull(events, "events must not be null");
         this.sessionModelResolver = Objects.requireNonNull(sessionModelResolver,
                 "sessionModelResolver must not be null");
+        this.promptAssembler = Objects.requireNonNull(promptAssembler, "promptAssembler must not be null");
         this.executor = Objects.requireNonNull(executor, "executor must not be null");
     }
 
@@ -377,11 +393,24 @@ public class ConversationCompactor implements AutoCloseable {
         // 走到这里非压不可，模型解析失败才是真的失败
         resolvedModel = resolvedModel == null ? resolveModel(session) : resolvedModel;
         int maxSummaryChars = maxSummaryCharsOf(strategy);
-        // 指令与表头也要占预算：它们和待压正文挤在同一个窗口里
         String instructions = renderInstructions(strategy.getSummaryPrompt(), maxSummaryChars);
+        String boundaryMessageId = messages.get(end - 1).getMessageId();
+        // 保留段实际有多少条：向后对齐工具调用组时 end 退过，因此这里可能多于 keepRecent
+        int retained = messages.size() - end;
+        // 首选 cache-safe fork：复用父请求的前缀，因此整段对话按命中价计费，
+        // 只有末尾那条指令是新的。它必须原样带上工具，所以同时要把工具调用关掉
+        LlmRequest fork = promptAssembler.buildFork(session, resolvedModel, from, retained, instructions);
+        if (fork != null) {
+            // 没有丢弃可言：发出去的正是父请求刚发过、且装得下的那一段
+            return new CompactionPlan(fork, boundaryMessageId, end - from, 0, keepRecent,
+                    TokenEstimator.estimate(instructions), true);
+        }
+        // 回退：待压范围已被机械裁剪吞掉，fork 出来的前缀会缺一段内容。
+        // 此时只能把该段渲染成正文发出去——按全价，但摘要至少建立在完整材料上。
+        // 这条路正常只出现在「用量已经超预算、裁剪正在丢历史」的现场，因此保留为后台而非常态
         String head = headerOf(previous);
-        long budget = inputBudget(resolvedModel);
-        long bodyBudget = budget - TokenEstimator.estimate(instructions) - TokenEstimator.estimate(head);
+        long bodyBudget = inputBudget(resolvedModel) - TokenEstimator.estimate(instructions)
+                - TokenEstimator.estimate(head);
         int start = selectStart(messages, from, end, bodyBudget);
         String body = head + renderMessages(messages, start, end - 1);
         LlmRequest.Builder builder = LlmRequest.builder(resolvedModel.getModel().getId())
@@ -391,8 +420,8 @@ public class ConversationCompactor implements AutoCloseable {
         if (modelMaxOutput > 0) {
             builder.maxTokens(modelMaxOutput);
         }
-        return new CompactionPlan(builder.build(), messages.get(end - 1).getMessageId(), end - start,
-                start - from, keepRecent, TokenEstimator.estimate(body));
+        return new CompactionPlan(builder.build(), boundaryMessageId, end - start,
+                start - from, keepRecent, TokenEstimator.estimate(body), false);
     }
 
     /**

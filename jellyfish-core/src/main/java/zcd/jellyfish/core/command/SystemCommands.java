@@ -661,8 +661,16 @@ public class SystemCommands {
             return CommandResult.ok(text.append("\n本次没有可压缩的历史（剩余条数不足或已全部压完）。").toString());
         }
         text.append("\n将压缩 ").append(plan.getCompressedCount()).append(" 条消息，保留最近 ")
-                .append(plan.getKeepCount()).append(" 条原文，摘要输入约 ")
-                .append(plan.getEstimatedTokens()).append(" token。");
+                .append(plan.getKeepCount()).append(" 条原文，");
+        if (plan.isForked()) {
+            // 说清「只需新增多少」：走 fork 时输入可能很长，但整段与上一条请求逐字节相同，
+            // 按命中价计费，真正新增的只有末尾那条指令
+            text.append("摘要调用复用当前上下文（只需新增约 ").append(plan.getEstimatedTokens())
+                    .append(" token）");
+        } else {
+            text.append("摘要输入约 ").append(plan.getEstimatedTokens()).append(" token");
+        }
+        text.append("。");
         if (plan.hasDropped()) {
             text.append("\n（其中最早的 ").append(plan.getDroppedCount())
                     .append(" 条超出摘要输入预算，不会进摘要也不再发送——它们的信息本次会真正丢失。）");

@@ -11,6 +11,7 @@ import zcd.jellyfish.api.event.RegisterOptions;
 import zcd.jellyfish.api.event.Subscription;
 import zcd.jellyfish.api.extension.CompactionStrategy;
 import zcd.jellyfish.api.extension.CompactionStrategyRequest;
+import zcd.jellyfish.core.prompt.PromptAssembler;
 import zcd.jellyfish.core.compact.ConversationCompactor;
 import zcd.jellyfish.infra.config.ConfigReloader;
 import zcd.jellyfish.infra.config.Model;
@@ -87,6 +88,16 @@ class SystemCommandsTest {
     @Mock
     private ConfigReloader configReloader;
 
+    /**
+     * 提示词组装器。
+     * <p>
+     * 用 mock：未打桩时 {@code buildFork} 返回 {@code null}，于是压缩走的是<b>回退路径</b>
+     * （把待压段渲染成正文）。命令层要验的是「文案把计划说清了」，不关心请求怎么拼；
+     * fork 与回退各自的构造分别在 {@code PromptAssemblerTest} 与 {@code ConversationCompactorTest}。
+     */
+    @Mock
+    private PromptAssembler promptAssembler;
+
     /** 真实会话压缩器：{@code /compact} 的执行体。 */
     private ConversationCompactor compactor;
 
@@ -118,7 +129,8 @@ class SystemCommandsTest {
                 request -> new CompactionStrategy("压成摘要，不超过 {maxSummaryChars} 字", null, null),
                 RegisterOptions.DEFAULT);
         compactor = new ConversationCompactor(sessionManager, modelManager, runtimeConfig,
-                strategyRegistry, events, new SessionModelResolver(modelManager, agentManager));
+                strategyRegistry, events, new SessionModelResolver(modelManager, agentManager),
+                promptAssembler);
         systemCommands = new SystemCommands(extensions, commandManager, sessionManager, modelManager, agentManager,
                 events, compactor, runtimeConfig, configReloader, sessionDefaults);
         systemCommands.register();

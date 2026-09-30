@@ -808,6 +808,102 @@ class PromptAssemblerTest {
         return text.toString();
     }
 
+    @Test
+    void buildFork_should_reuseParentPrefix_andAppendInstructionOnly() {
+        // Given：一段带工具调用的历史 + 一个真实工具
+        SessionManager sessions = newSessionManager();
+        Session session = sessions.createDefault();
+        String sessionId = session.getSessionId();
+        sessions.appendMessage(sessionId, LlmMessage.user("读一下 A"), null);
+        sessions.appendMessage(sessionId, assistantCalling("call-1"), null);
+        sessions.appendMessage(sessionId, LlmMessage.tool("call-1", "read_file", envelopeOf("A 的内容")), null);
+        sessions.appendMessage(sessionId, LlmMessage.user("继续"), null);
+        when(agentManager.systemPromptOf(null)).thenReturn("agent 提示词");
+        givenTools();
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+
+        // When：保留末尾 1 条，其余都压
+        LlmRequest parent = assembler.buildRequest(session, resolvedModel(128_000, 4096));
+        LlmRequest fork = assembler.buildFork(session, resolvedModel(128_000, 4096), 0, 1, "把历史压成摘要");
+
+        // Then：整条前缀逐字节相同。这正是压缩调用从「整段按未命中价重发」变成「整段命中」的原因
+        assertEquals(parent.getSystemPrompt(), fork.getSystemPrompt());
+        assertEquals(parent.getMaxTokens(), fork.getMaxTokens());
+        int keep = parent.getMessages().size() - 1;
+        for (int index = 0; index < keep; index++) {
+            assertEquals(wireOf(parent.getMessages().get(index)), wireOf(fork.getMessages().get(index)),
+                    "第 " + index + " 条与父请求不同，公共前缀会在那里断开");
+        }
+        // 而末尾只多出那条指令
+        assertEquals(keep + 1, fork.getMessages().size());
+        assertEquals("把历史压成摘要", fork.getMessages().get(keep).getContent());
+    }
+
+    @Test
+    void buildFork_should_keepTools_andDisableToolCalls() {
+        // Given
+        SessionManager sessions = newSessionManager();
+        Session session = sessions.createDefault();
+        sessions.appendMessage(session.getSessionId(), LlmMessage.user("一"), null);
+        givenTools();
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+
+        // When
+        LlmRequest fork = assembler.buildFork(session, resolvedModel(128_000, 4096), 0, 0, "写摘要");
+
+        // Then：工具必须原样带上——它在多数厂商的模板里排在 messages 之前，省掉它等于把整条前缀
+        // 从工具那一段起全部作废；带上之后又必须把工具调用关掉，否则模型很可能去调工具而不是写摘要
+        assertEquals(1, fork.getTools().size());
+        assertEquals("read_file", fork.getTools().get(0).getName());
+        assertEquals("none", fork.getToolChoice());
+    }
+
+    @Test
+    void buildFork_should_carryPreviousSummary_forFree() {
+        // Given：会话已经压过一次，摘要作为合成消息挂在消息区开头（P2b）
+        SessionManager sessions = newSessionManager();
+        Session session = sessions.createDefault();
+        String sessionId = session.getSessionId();
+        sessions.appendMessage(sessionId, LlmMessage.user("一"), null);
+        sessions.applyCompaction(sessionId, "早前对话的摘要", session.getMessages().get(0).getMessageId(), 0);
+        sessions.appendMessage(sessionId, LlmMessage.user("二"), null);
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+
+        // When
+        LlmRequest fork = assembler.buildFork(session, resolvedModel(128_000, 4096), 1, 0, "把历史压成摘要");
+
+        // Then：旧摘要不需要再单独拼一遍——它本来就在父请求的前缀里。P2b 把摘要挪出 system prompt、
+        // 挪进消息区，在这里顺带把「滚动摘要」的旧摘要传递一并免了
+        assertTrue(fork.getMessages().get(0).getContent().contains("早前对话的摘要"),
+                fork.getMessages().get(0).getContent());
+    }
+
+    @Test
+    void buildFork_should_returnNull_when_compactionRangeIsAlreadyCroppedAway() {
+        // Given：窗口小到机械裁剪从最旧侧把待压范围整段吞掉
+        SessionManager sessions = newSessionManager();
+        Session session = sessions.createDefault();
+        String sessionId = session.getSessionId();
+        for (int index = 0; index < 5; index++) {
+            sessions.appendMessage(sessionId, LlmMessage.user("第 " + index + " 条的正文"), null);
+        }
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+
+        // When：待压范围从头开始，但父请求的第一条历史已经不在下标 0
+        LlmRequest fork = assembler.buildFork(session, resolvedModel(40, 0), 0, 0, "写摘要");
+
+        // Then：fork 出来的前缀会缺一段内容，摘要将毫无依据，因此宁可回退到旧路径
+        assertNull(fork);
+    }
+
+    /**
+     * 给工具目录桩上一个工具。
+     */
+    private void givenTools() {
+        when(toolCatalog.tools(any())).thenReturn(Collections.singletonList(
+                new LlmTool("read_file", "读文件", null, null)));
+    }
+
     /**
      * 构造一份示例截断信封。
      *

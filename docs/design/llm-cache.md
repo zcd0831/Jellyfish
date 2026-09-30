@@ -562,13 +562,13 @@ sessionManager.appendMessage(sessionId, userMessage, null, null);
 `keepRecentMessages = 0` 即关闭老化（`ToolResultAger.age` 在 `<= 0` 时原样返回）。
 这是 R2 的零成本止损口，可用来在自己的环境里 A/B 验证。
 
-**新增**（`agingPercent` 已随 P3 落地；其余随 P4 / P5，因此那份 `jellyfish.json` 现在只认第一项）：
+**新增**（`agingPercent` 随 P3、`compactFork` 随 P4 已落地；其余随 P5）：
 
 ```json
 {
   "react": {
     "cache": {
-      "agingPercent": 0
+      "agingPercent": 70
     }
   }
 }
@@ -577,7 +577,7 @@ sessionManager.appendMessage(sessionId, userMessage, null, null);
 | 字段 | 缺省 | 状态 | 含义 |
 | --- | --- | --- | --- |
 | `cache.agingPercent` | `70` | ✅ P3 | `0` = 沿用旧行为（按距尾部条数、每轮重算）；`> 0` = 只在上下文用量达该百分比时老化，且**一个压缩周期内只推进一次** |
-| `cache.compactFork` | `true` | ⬜ P4 | 压缩请求复用父会话的 system prompt 与工具定义，指令追加在消息末尾 |
+| `cache.compactFork` | ~~`true`~~ | ✅ P4 | 压缩请求复用父会话的 system prompt 与工具定义，指令追加在消息末尾。**实现为恒开、没有开关**：它严格优于旧路径（同一次调用、同样的内容，只是前缀能命中），而唯一需要回退的情形已由代码自动判定（见 P4 的「dropped 路径从常态变成后备」）。原计划里的这个开关因此没有做 |
 | `cache.stableToolOrder` | `true` | ⬜ P5 | 工具清单按 `order` + 名称稳定排序，与会话、与插件加载顺序无关 |
 | `cache.breakWatch` | `true` | ⬜ | system prompt / 工具清单 / 消息前缀变化时记 WARN（P0b 已实现且恒开，只差把它变成可关的配置） |
 

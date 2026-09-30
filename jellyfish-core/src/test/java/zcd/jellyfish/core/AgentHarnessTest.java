@@ -9,6 +9,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import zcd.jellyfish.core.command.SystemCommands;
 import zcd.jellyfish.core.subagent.SubAgentTools;
 import zcd.jellyfish.core.compact.ConversationCompactor;
+import zcd.jellyfish.core.prompt.CacheKeepAlive;
 import zcd.jellyfish.core.input.InputDirectives;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.config.PluginsSettings;
@@ -43,6 +44,12 @@ import static org.mockito.Mockito.when;
 class AgentHarnessTest {
 
     /** 运行时配置门面。 */
+    /**
+     * 缓存保活器。用 mock：本用例验的是启动/关闭顺序，而真货在构造期就会起一个调度线程。
+     */
+    @Mock
+    private CacheKeepAlive cacheKeepAlive;
+
     @Mock
     private RuntimeConfig runtimeConfig;
 
@@ -193,6 +200,6 @@ class AgentHarnessTest {
     private AgentHarness newHarness() {
         return new AgentHarness(runtimeConfig, eventChannel, modelManager, agentManager, pluginRuntimeConfig,
                 pluginManager, reActLooper, systemCommands, subAgentTools, sessionManager, conversationCompactor,
-                inputDirectives, metricsSubscriber, metricsRegistry, healthCheck);
+                inputDirectives, cacheKeepAlive, metricsSubscriber, metricsRegistry, healthCheck);
     }
 }

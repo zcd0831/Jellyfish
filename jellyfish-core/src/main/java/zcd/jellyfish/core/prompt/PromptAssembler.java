@@ -193,13 +193,54 @@ public class PromptAssembler {
      */
     public LlmRequest buildFork(Session session, ResolvedModel resolvedModel, int fromIndex, int keepCount,
                                 String instruction) {
+        LlmRequest fork = reuseOf(session, resolvedModel, fromIndex, keepCount, instruction, null);
+        if (fork == null) {
+            // 待压的那一段已经不在父请求里。此时 fork 出来的前缀会缺一段内容、摘要将毫无依据，
+            // 因此只能退回旧路径把该段渲染成正文发出去——按全价，但摘要至少建立在完整材料上。
+            // 实际情况是本就不该压：那一段根本没发给模型，推进边界只会白白换来一次前缀断裂
+            LOG.warn("待压范围已不在父请求中，压缩回退到旧路径: sessionId={} from={}",
+                    session.getSessionId(), fromIndex);
+        }
+        return fork;
+    }
+
+    /**
+     * 构建一次「缓存保活」请求：整段前缀原样复用，只要求输出一个 token。
+     * <p>
+     * <b>与 {@link #buildFork} 是同一件事的两种用处</b>：都靠「前缀与父请求逐字节相同」拿到命中价，
+     * 区别只在末尾那条指令与输出上限。保活要的不是内容，而是<b>碰一下缓存、把它的 TTL 续上</b>，
+     * 因此输出上限钉成 1——不钉的话模型可能真的写出一大段回答，那笔钱就白花了。
+     * <p>
+     * <b>任何一处不能原样复现就返回 {@code null}</b>：保活是「锦上添花」，宁可不做也不该发一个
+     * 前缀不同、按 1× 计费的请求——那比不保活更贵。
+     *
+     * @param session       会话运行态，不可为 {@code null}
+     * @param resolvedModel 已解析的模型，不可为 {@code null}
+     * @param instruction   追加在末尾的指令，不可为空白
+     * @return 保活请求；前缀无法原样复现时返回 {@code null}
+     */
+    public LlmRequest buildKeepAlive(Session session, ResolvedModel resolvedModel, String instruction) {
+        return reuseOf(session, resolvedModel, 0, 0, instruction, Integer.valueOf(1));
+    }
+
+    /**
+     * 构建一次「只复用前缀」的请求：与父请求逐字节同前缀，末尾追加一条指令。
+     *
+     * @param session         会话运行态
+     * @param resolvedModel   已解析的模型
+     * @param fromIndex       待压范围的第一条消息对应的会话下标（保活传 {@code 0}，即不裁）
+     * @param keepCount       父请求末尾要丢掉的消息条数（保活传 {@code 0}，即全要）
+     * @param instruction     追加在末尾的指令
+     * @param maxOutputTokens 输出上限定死值；{@code null} 表示沿用父请求的
+     * @return 请求；前缀无法原样复现时返回 {@code null}
+     */
+    private LlmRequest reuseOf(Session session, ResolvedModel resolvedModel, int fromIndex, int keepCount,
+                               String instruction, Integer maxOutputTokens) {
         Parent parent = parentOf(session, resolvedModel, ToolFilter.none());
         LlmRequest base = parent.getRequest();
         if (parent.getFirstSessionIndex() < 0 || parent.getFirstSessionIndex() > fromIndex) {
-            // 待压的那一段已经不在父请求里（机械裁剪从最旧侧把它吞掉了）。此时 fork 出来的前缀会
-            // 缺一段内容，摘要将毫无依据；退回旧路径把该段渲染成正文发出去，按全价但正确。
-            // 实际情况是本就不该压：那一段根本没发给模型，推进边界只会白白换来一次前缀断裂
-            LOG.warn("待压范围已不在父请求中，压缩回退到旧路径: sessionId={} from={} parentStart={}",
+            // 复现不出父请求的前缀。调用方各自决定怎么办：压缩回退到旧路径，保活直接放弃
+            LOG.debug("前缀无法原样复现: sessionId={} from={} parentStart={}",
                     session.getSessionId(), fromIndex, parent.getFirstSessionIndex());
             return null;
         }
@@ -211,9 +252,13 @@ public class PromptAssembler {
                 .systemPrompt(base.getSystemPrompt())
                 .messages(forked)
                 .tools(base.getTools())
-                .toolChoice(TOOL_CHOICE_NONE);
-        if (base.getMaxTokens() != null) {
-            builder.maxTokens(base.getMaxTokens());
+                .toolChoice(TOOL_CHOICE_NONE)
+                // 路由键必须跟着父请求：fork 的全部意义就是命中父请求建立的缓存，
+                // 而路由键决定它落到哪台机器上。丢了它，整个 fork 可能刚好落到没有那份缓存的机器上
+                .cacheKey(base.getCacheKey());
+        Integer output = maxOutputTokens == null ? base.getMaxTokens() : maxOutputTokens;
+        if (output != null) {
+            builder.maxTokens(output);
         }
         return builder.build();
     }
@@ -258,6 +303,11 @@ public class PromptAssembler {
                 .systemPrompt(systemPrompt)
                 .messages(messages)
                 .tools(tools);
+        if (resolvedModel.getProvider().getCache().isPromptCacheKey()) {
+            // 缓存路由键取会话标识：同一个会话必须一直用同一个值，否则它的请求会被散到不同机器上
+            // 各建一份缓存。只影响命中率，不影响正确性
+            builder.cacheKey(session.getSessionId());
+        }
         int maxOutputTokens = resolvedModel.getModel().getMaxOutputTokens();
         if (maxOutputTokens > 0) {
             builder.maxTokens(maxOutputTokens);

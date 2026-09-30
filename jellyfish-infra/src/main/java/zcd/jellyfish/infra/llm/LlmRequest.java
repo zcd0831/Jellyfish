@@ -41,6 +41,14 @@ public final class LlmRequest {
     private final String toolChoice;
 
     /**
+     * 缓存路由键，取值由各厂商约定（OpenAI 系为 {@code prompt_cache_key}）。
+     * <p>
+     * <b>它不参与内容，因此不影响正确性，只影响命中率</b>：厂商用它把请求路由到持有相同前缀的机器上。
+     * 同一会话应当一直用同一个值（内核用会话标识），这样它的请求才不会被散到不同机器上各建一份缓存。
+     */
+    private final String cacheKey;
+
+    /**
      * 由 builder 构造请求，并对所有集合做防御性拷贝。
      *
      * @param builder 请求构建器
@@ -59,6 +67,7 @@ public final class LlmRequest {
                 ? Collections.<LlmTool>emptyList()
                 : Collections.unmodifiableList(new ArrayList<>(builder.tools));
         this.toolChoice = builder.toolChoice;
+        this.cacheKey = builder.cacheKey;
     }
 
     /**
@@ -153,6 +162,15 @@ public final class LlmRequest {
     }
 
     /**
+     * 获取缓存路由键。
+     *
+     * @return 缓存路由键，未设置时为 {@code null}
+     */
+    public String getCacheKey() {
+        return cacheKey;
+    }
+
+    /**
      * 判断本次请求是否声明了工具。
      *
      * @return 声明了工具时返回 {@code true}
@@ -194,6 +212,9 @@ public final class LlmRequest {
 
         /** 工具选择策略。 */
         private String toolChoice;
+
+        /** 缓存路由键。 */
+        private String cacheKey;
 
         /**
          * 构造构建器。
@@ -304,6 +325,20 @@ public final class LlmRequest {
          */
         public Builder toolChoice(String toolChoice) {
             this.toolChoice = toolChoice;
+            return this;
+        }
+
+        /**
+         * 设置缓存路由键。
+         * <p>
+         * <b>空串归一成 {@code null}</b>：调用方常常直接拿一个可能为空的标识来设，而「设了一个空值」
+         * 与「没设」在厂商侧是两回事（前者会下发一个空字段）。归一之后只留一种含义。
+         *
+         * @param cacheKey 缓存路由键，可为 {@code null}
+         * @return 当前构建器
+         */
+        public Builder cacheKey(String cacheKey) {
+            this.cacheKey = cacheKey == null || cacheKey.trim().isEmpty() ? null : cacheKey.trim();
             return this;
         }
 

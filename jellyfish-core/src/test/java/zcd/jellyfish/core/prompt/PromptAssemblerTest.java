@@ -22,6 +22,7 @@ import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.config.Model;
 import zcd.jellyfish.infra.config.Provider;
+import zcd.jellyfish.infra.config.ProviderCacheSettings;
 import zcd.jellyfish.infra.config.ReactCacheSettings;
 import zcd.jellyfish.infra.config.ReactSettings;
 import zcd.jellyfish.infra.config.RuntimeConfig;
@@ -898,6 +899,52 @@ class PromptAssemblerTest {
         assertNull(fork);
     }
 
+    @Test
+    void buildRequest_should_carryCacheKey_whenProviderEnablesIt() {
+        // Given：provider 打开了缓存路由键
+        SessionManager sessions = newSessionManager();
+        Session session = sessions.createDefault();
+        sessions.appendMessage(session.getSessionId(), LlmMessage.user("你好"), null);
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+
+        // When
+        LlmRequest request = assembler.buildRequest(session,
+                resolvedModel(128_000, 4096, new ProviderCacheSettings(true, 0)));
+
+        // Then：取会话标识，且同一会话必须一直用同一个值——否则请求会被散到不同机器上各建一份缓存
+        assertEquals(session.getSessionId(), request.getCacheKey());
+    }
+
+    @Test
+    void buildRequest_should_omitCacheKey_byDefault() {
+        // Given：provider 没配这一项（也是缺省）
+        Session session = newSession();
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+
+        // When
+        LlmRequest request = assembler.buildRequest(session, resolvedModel(128_000, 4096));
+
+        // Then：不下发——老模型/老端点收到不认识的字段可能直接报错
+        assertNull(request.getCacheKey());
+    }
+
+    @Test
+    void buildFork_should_carryCacheKey_fromParent() {
+        // Given：provider 打开了缓存路由键
+        SessionManager sessions = newSessionManager();
+        Session session = sessions.createDefault();
+        sessions.appendMessage(session.getSessionId(), LlmMessage.user("一"), null);
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        ResolvedModel model = resolvedModel(128_000, 4096, new ProviderCacheSettings(true, 0));
+
+        // When
+        LlmRequest fork = assembler.buildFork(session, model, 0, 0, "写摘要");
+
+        // Then：路由键必须跟着父请求——fork 的全部意义就是命中父请求建立的缓存，
+        // 而路由键决定它落到哪台机器上
+        assertEquals(assembler.buildRequest(session, model).getCacheKey(), fork.getCacheKey());
+    }
+
     /**
      * 给工具目录桩上一个工具。
      */
@@ -950,7 +997,20 @@ class PromptAssemblerTest {
      * @return 解析结果
      */
     private static ResolvedModel resolvedModel(int contextLength, int maxOutputTokens) {
-        Provider provider = new Provider("openai", "openai", null, null, null);
+        return resolvedModel(contextLength, maxOutputTokens, new ProviderCacheSettings());
+    }
+
+    /**
+     * 构造带缓存设置的解析后模型。
+     *
+     * @param contextLength  上下文窗口长度
+     * @param maxOutputTokens 最大输出 token 数
+     * @param cache          缓存治理段
+     * @return 解析结果
+     */
+    private static ResolvedModel resolvedModel(int contextLength, int maxOutputTokens,
+                                               ProviderCacheSettings cache) {
+        Provider provider = new Provider("openai", "openai", null, null, null, cache);
         Model model = new Model("gpt-4o", "gpt-4o", contextLength, maxOutputTokens);
         return new ResolvedModel(provider, model);
     }

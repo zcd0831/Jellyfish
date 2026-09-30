@@ -5,6 +5,7 @@ import org.slf4j.LoggerFactory;
 
 import zcd.jellyfish.core.command.SystemCommands;
 import zcd.jellyfish.core.compact.ConversationCompactor;
+import zcd.jellyfish.core.prompt.CacheKeepAlive;
 import zcd.jellyfish.core.input.InputDirectives;
 import zcd.jellyfish.core.subagent.SubAgentTools;
 import zcd.jellyfish.infra.agent.AgentManager;
@@ -80,6 +81,15 @@ public class AgentHarness {
     /** 会话压缩器：{@code /compact} 的执行体，关闭时要先停掉它的线程池。 */
     private final ConversationCompactor conversationCompactor;
 
+    /**
+     * 缓存保活器：空闲时续厂商侧缓存 TTL（缺省关闭）。
+     * <p>
+     * 它不需要任何人调用——构造期就把扫描排进了自己的守护线程。本类持有它<b>只是为了两件事</b>：
+     * 一是在 Dagger 图里可达（没人注入的 {@code @Singleton} 根本不会被创建），
+     * 二是关闭时能把那个线程收干净。
+     */
+    private final CacheKeepAlive cacheKeepAlive;
+
     /** 输入指令服务：关闭时要先停掉它的线程池并取消在途命令。 */
     private final InputDirectives inputDirectives;
 
@@ -110,6 +120,7 @@ public class AgentHarness {
      * @param sessionManager       会话域服务
      * @param conversationCompactor 会话压缩器
      * @param inputDirectives      输入指令服务
+     * @param cacheKeepAlive       缓存保活器
      * @param metricsSubscriber    指标订阅者
      * @param metricsRegistry      指标注册表
      * @param healthCheck          健康检查
@@ -120,6 +131,7 @@ public class AgentHarness {
                         PF4JPluginManager pluginManager, ReActLooper reActLooper, SystemCommands systemCommands,
                         SubAgentTools subAgentTools, SessionManager sessionManager,
                         ConversationCompactor conversationCompactor, InputDirectives inputDirectives,
+                        CacheKeepAlive cacheKeepAlive,
                         MetricsSubscriber metricsSubscriber, MetricsRegistry metricsRegistry,
                         HealthCheck healthCheck) {
         this.runtimeConfig = runtimeConfig;
@@ -134,6 +146,7 @@ public class AgentHarness {
         this.sessionManager = sessionManager;
         this.conversationCompactor = conversationCompactor;
         this.inputDirectives = inputDirectives;
+        this.cacheKeepAlive = cacheKeepAlive;
         this.metricsSubscriber = metricsSubscriber;
         this.metricsRegistry = metricsRegistry;
         this.healthCheck = healthCheck;
@@ -198,6 +211,9 @@ public class AgentHarness {
             // 它内部会取消在途命令，否则关闭会被一条长命令拖到它自己的超时
             inputDirectives.close();
             conversationCompactor.close();
+            // 保活扫描要组装请求、要连厂商，因此和上面两个同类：先停掉它，再谈落盘与摘插件。
+            // 它本是守护线程，不关也不会拖住退出；但显式关掉能让「关闭之后不再有新请求」成为事实
+            cacheKeepAlive.close();
             // 必须先于 pluginManager.close()：落盘要经扩展点派发给插件
             sessionManager.flushAll();
         } finally {

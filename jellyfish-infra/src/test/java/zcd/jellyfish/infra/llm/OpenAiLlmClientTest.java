@@ -140,6 +140,36 @@ class OpenAiLlmClientTest {
     }
 
     @Test
+    void chat_should_send_prompt_cache_key_when_set() throws IOException {
+        // Given
+        StubInterceptor stub = jsonStub("{\"choices\":[{\"message\":{\"content\":\"ok\"}}]}");
+        OpenAiLlmClient client = client(stub);
+        LlmRequest request = LlmRequest.builder("gpt-4o")
+                .message(LlmMessage.user("hello"))
+                .cacheKey("s-1")
+                .build();
+
+        // When
+        client.chat(request);
+
+        // Then：让同一会话的请求尽量落到持有相同前缀的那台机器上
+        assertEquals("s-1", json(requestBody(stub.lastRequest())).path("prompt_cache_key").asText());
+    }
+
+    @Test
+    void chat_should_omit_prompt_cache_key_when_unset() throws IOException {
+        // Given：缺省就是不下发（老模型/老端点收到不认识的字段可能直接报错）
+        StubInterceptor stub = jsonStub("{\"choices\":[{\"message\":{\"content\":\"ok\"}}]}");
+        OpenAiLlmClient client = client(stub);
+
+        // When
+        client.chat(LlmRequest.builder("gpt-4o").message(LlmMessage.user("hello")).build());
+
+        // Then
+        assertFalse(json(requestBody(stub.lastRequest())).has("prompt_cache_key"));
+    }
+
+    @Test
     void chat_should_parse_tool_calls_when_response_contains_them() {
         // Given
         StubInterceptor stub = jsonStub("{\"choices\":[{\"message\":{\"tool_calls\":[{\"id\":\"call-1\","

@@ -33,6 +33,25 @@ public class Provider {
     /** 该 provider 下可用模型列表，不可变；未配置时为空列表而非 {@code null}。 */
     private final List<Model> models;
 
+    /** 缓存治理段，不可为 {@code null}。 */
+    private final ProviderCacheSettings cache;
+
+    /**
+     * 兼容旧调用点的便捷构造器：缓存段按缺省值处理。
+     * <p>
+     * 保留它是因为绝大多数调用点（测试与运行期）不关心 {@code cache}，而它的缺省值恰好就是
+     * 「两项都关」，因此让它们多写一个 {@code null} 只是噪音。
+     *
+     * @param name    provider 名，可为 {@code null}（由合并阶段按配置 key 回填）
+     * @param type    provider 类型
+     * @param apiKey  访问密钥
+     * @param baseUrl 服务地址
+     * @param models  模型列表，可为 {@code null}
+     */
+    public Provider(String name, String type, String apiKey, String baseUrl, List<Model> models) {
+        this(name, type, apiKey, baseUrl, models, null);
+    }
+
     /**
      * 反序列化与合并共用的构造器。
      *
@@ -41,13 +60,15 @@ public class Provider {
      * @param apiKey  访问密钥
      * @param baseUrl 服务地址
      * @param models  模型列表，可为 {@code null}
+     * @param cache   缓存治理段，{@code null} 按缺省值处理
      */
     @JsonCreator
     public Provider(@JsonProperty("name") String name,
                     @JsonProperty("type") String type,
                     @JsonProperty("apiKey") String apiKey,
                     @JsonProperty("baseUrl") String baseUrl,
-                    @JsonProperty("models") List<Model> models) {
+                    @JsonProperty("models") List<Model> models,
+                    @JsonProperty("cache") ProviderCacheSettings cache) {
         this.name = name;
         this.type = type;
         this.apiKey = apiKey;
@@ -55,6 +76,7 @@ public class Provider {
         this.models = models == null
                 ? Collections.<Model>emptyList()
                 : Collections.unmodifiableList(new ArrayList<>(models));
+        this.cache = cache == null ? new ProviderCacheSettings() : cache;
     }
 
     /**
@@ -103,12 +125,21 @@ public class Provider {
     }
 
     /**
+     * 获取缓存治理段。
+     *
+     * @return 缓存设置，保证非 {@code null}
+     */
+    public ProviderCacheSettings getCache() {
+        return cache;
+    }
+
+    /**
      * 用给定的 provider 名产生一个副本，用于把配置文件的 key 回填为 provider 名而不改动原对象。
      *
      * @param newName 新的 provider 名
      * @return 除 name 外与当前对象完全一致的新实例
      */
     public Provider withName(String newName) {
-        return new Provider(newName, type, apiKey, baseUrl, models);
+        return new Provider(newName, type, apiKey, baseUrl, models, cache);
     }
 }

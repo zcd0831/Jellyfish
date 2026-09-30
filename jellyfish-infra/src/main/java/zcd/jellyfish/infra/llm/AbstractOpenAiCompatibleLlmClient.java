@@ -143,6 +143,11 @@ public abstract class AbstractOpenAiCompatibleLlmClient extends AbstractHttpLlmC
                 body.put("tool_choice", request.getToolChoice().trim());
             }
         }
+        if (LlmClients.isNotBlank(request.getCacheKey())) {
+            // 让同一会话的请求尽量落到持有相同前缀的那台机器上。
+            // 只下发、不解释：是否认这个字段由厂商决定，不认的端点会忽略它
+            body.put("prompt_cache_key", request.getCacheKey());
+        }
         return body;
     }
 

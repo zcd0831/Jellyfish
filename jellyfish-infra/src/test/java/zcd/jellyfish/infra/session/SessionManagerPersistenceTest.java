@@ -575,6 +575,6 @@ class SessionManagerPersistenceTest {
                 null, null, null, null);
         return SessionSnapshot.of(sessionId, 1L, 2L, "标题", "coder", "openai", "gpt-4o",
                 PermissionMode.NORMAL, Collections.singletonList(message),
-                new SessionUsageSnapshot(0L, 0L, 0L, 0L));
+                new SessionUsageSnapshot(0L, 0L, 0L, 0L, 0L, 0L));
     }
 }

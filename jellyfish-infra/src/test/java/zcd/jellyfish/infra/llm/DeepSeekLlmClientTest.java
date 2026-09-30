@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static zcd.jellyfish.infra.llm.LlmClientTestSupport.StubInterceptor;
 import static zcd.jellyfish.infra.llm.LlmClientTestSupport.directExecutor;
@@ -43,5 +44,25 @@ class DeepSeekLlmClientTest {
 
         // Then
         assertTrue(client.defaultBaseUrl().contains("deepseek.com"));
+    }
+
+    @Test
+    void chat_should_parse_cache_hit_tokens_when_provider_reports_them() throws IOException {
+        // Given：DeepSeek 的 prompt_tokens 已经包含命中部分（官方文档原话：prompt_tokens
+        // “equals prompt_cache_hit_tokens + prompt_cache_miss_tokens”），因此不需要归一化
+        StubInterceptor stub = jsonStub("{\"choices\":[{\"message\":{\"content\":\"ok\"}}],"
+                + "\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":7,\"total_tokens\":107,"
+                + "\"prompt_cache_hit_tokens\":80,\"prompt_cache_miss_tokens\":20}}");
+        DeepSeekLlmClient client = new DeepSeekLlmClient(
+                provider("deepseek", "key", null), stub.client(), directExecutor());
+
+        // When
+        LlmResponse response = client.chat(
+                LlmRequest.builder("deepseek-chat").message(LlmMessage.user("hi")).build());
+
+        // Then：总输入沿用厂商给的 prompt_tokens，命中数单独带出；命中率 = 80/100
+        assertEquals(100, response.getUsage().getPromptTokens());
+        assertEquals(80, response.getUsage().getCacheReadTokens());
+        assertEquals(0.8d, response.getUsage().getCacheHitRate(), 1e-9);
     }
 }

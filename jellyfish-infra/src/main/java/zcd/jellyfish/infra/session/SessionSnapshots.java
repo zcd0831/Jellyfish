@@ -110,7 +110,8 @@ public final class SessionSnapshots {
             return SessionUsage.EMPTY;
         }
         return new SessionUsage(snapshot.getPromptTokens(), snapshot.getCompletionTokens(),
-                snapshot.getTotalTokens(), snapshot.getLlmCalls());
+                snapshot.getTotalTokens(), snapshot.getLlmCalls(),
+                snapshot.getCacheReadTokens(), snapshot.getCacheWriteTokens());
     }
 
     /**
@@ -153,7 +154,8 @@ public final class SessionSnapshots {
      */
     private static SessionUsageSnapshot captureUsage(SessionUsage usage) {
         return new SessionUsageSnapshot(usage.getPromptTokens(), usage.getCompletionTokens(),
-                usage.getTotalTokens(), usage.getLlmCalls());
+                usage.getTotalTokens(), usage.getLlmCalls(),
+                usage.getCacheReadTokens(), usage.getCacheWriteTokens());
     }
 
     /**

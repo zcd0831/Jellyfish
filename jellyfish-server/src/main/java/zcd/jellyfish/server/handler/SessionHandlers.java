@@ -185,7 +185,8 @@ public final class SessionHandlers {
     private static SessionSummary summarize(Session session) {
         SessionUsage usage = session.getUsage();
         SessionUsageSnapshot usageSnapshot = usage == null ? null : new SessionUsageSnapshot(
-                usage.getPromptTokens(), usage.getCompletionTokens(), usage.getTotalTokens(), usage.getLlmCalls());
+                usage.getPromptTokens(), usage.getCompletionTokens(), usage.getTotalTokens(), usage.getLlmCalls(),
+                usage.getCacheReadTokens(), usage.getCacheWriteTokens());
         return new SessionSummary(session.getSessionId(), session.getTitle(), session.getAgentId(),
                 session.getProvider(), session.getModel(), session.getPermissionMode(), session.getCreatedAt(),
                 session.getUpdatedAt(), session.size(), usageSnapshot);

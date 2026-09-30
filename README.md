@@ -282,7 +282,7 @@ java -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=5005 \
 | `/agent [agentId]` | `/a` | 查看或切换 agent |
 | `/mode [plan\|normal]` | | 查看或切换权限模式 |
 | `/status` | | 显示当前会话概要 |
-| `/usage` | `/cost` | 显示当前会话 token 用量 |
+| `/usage` | `/cost` | 显示当前会话 token 用量与缓存命中率 |
 | `/delete <sessionId>` | `/rm` | 删除会话（含持久化文件） |
 | `/compact [preview]` | | 把更早的对话压成摘要（需压缩策略插件） |
 | `/reload` | | 重新加载配置（模型 / agent / 插件） |

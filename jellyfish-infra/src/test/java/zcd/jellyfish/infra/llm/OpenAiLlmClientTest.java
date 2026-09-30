@@ -281,6 +281,24 @@ class OpenAiLlmClientTest {
         assertThrows(JellyfishException.class, () -> client.embedding("text"));
     }
 
+    @Test
+    void chat_should_parse_cached_tokens_from_prompt_tokens_details() throws IOException {
+        // Given：OpenAI 把命中数放在 prompt_tokens_details.cached_tokens，且 prompt_tokens 已含它
+        StubInterceptor stub = jsonStub("{\"choices\":[{\"message\":{\"role\":\"assistant\","
+                + "\"content\":\"hi\"},\"finish_reason\":\"stop\"}],"
+                + "\"usage\":{\"prompt_tokens\":1024,\"completion_tokens\":8,\"total_tokens\":1032,"
+                + "\"prompt_tokens_details\":{\"cached_tokens\":896}}}");
+        OpenAiLlmClient client = client(stub);
+
+        // When
+        LlmResponse response = client.chat(LlmRequest.builder("gpt-4o")
+                .message(LlmMessage.user("hello")).build());
+
+        // Then：总输入沿用 prompt_tokens，命中数是它的子集
+        assertEquals(1024, response.getUsage().getPromptTokens());
+        assertEquals(896, response.getUsage().getCacheReadTokens());
+    }
+
     /**
      * 构造指向离线拦截器的 OpenAI 客户端。
      *

@@ -453,13 +453,20 @@ public class GeminiLlmClient extends AbstractHttpLlmClient {
     }
 
     /**
-     * 解析 usageMetadata 节点。三个计数字段全为 0 时视为厂商未返回。
+     * 解析 Gemini 的 usageMetadata 节点。
+     * <p>
+     * <b>不需要归一化输入</b>：{@code promptTokenCount} 已是总输入，
+     * {@code cachedContentTokenCount} 是它的子集。
      *
      * @param usage usageMetadata JSON 节点
      * @return token 使用量，厂商未返回时为 {@code null}
      */
     private static LlmUsage parseUsage(JsonNode usage) {
-        return parseUsage(usage, "promptTokenCount", "candidatesTokenCount", "totalTokenCount");
+        if (isMissingUsage(usage)) {
+            return null;
+        }
+        return usageOf(intField(usage, "promptTokenCount", 0), intField(usage, "candidatesTokenCount", 0),
+                intField(usage, "totalTokenCount", 0), intField(usage, "cachedContentTokenCount", 0), 0);
     }
 
     // ------------------------------------------------------------------

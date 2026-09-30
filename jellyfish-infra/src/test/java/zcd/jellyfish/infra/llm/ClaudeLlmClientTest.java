@@ -302,6 +302,50 @@ class ClaudeLlmClientTest {
                 .build();
     }
 
+    @Test
+    void chat_should_normalize_input_tokens_when_cache_fields_are_reported() throws IOException {
+        // Given：Anthropic 的三个输入字段是互斥划分——input_tokens 只计「新增、未命中、未建缓存」的
+        // 部分，缓存命中数单独给（这个形状与 OpenAI/DeepSeek 相反）
+        StubInterceptor stub = jsonStub("{\"content\":[{\"type\":\"text\",\"text\":\"ok\"}],"
+                + "\"usage\":{\"input_tokens\":3,\"output_tokens\":5,"
+                + "\"cache_read_input_tokens\":180000,\"cache_creation_input_tokens\":8000}}");
+        ClaudeLlmClient client = client(stub);
+
+        // When
+        LlmResponse response = client.chat(LlmRequest.builder("claude-3-5-sonnet")
+                .message(LlmMessage.user("hi")).build());
+
+        // Then：总输入要把三部分加起来。不加回去的话，缓存一旦生效就会把绝大部分输入漏掉，
+        // 而缓存命中恰恰是「输入很多、新增很少」的场景
+        assertEquals(188003, response.getUsage().getPromptTokens());
+        assertEquals(180000, response.getUsage().getCacheReadTokens());
+        assertEquals(8000, response.getUsage().getCacheWriteTokens());
+    }
+
+    @Test
+    void chatStream_should_normalize_input_tokens_when_cache_fields_are_reported() {
+        // Given：三个输入字段只在 message_start 里给一次（流式路径有自己的一套累加）
+        String sse = "event: message_start\n"
+                + "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":3,"
+                + "\"cache_read_input_tokens\":900,\"cache_creation_input_tokens\":100}}}\n\n"
+                + "event: message_delta\n"
+                + "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},"
+                + "\"usage\":{\"output_tokens\":5}}\n\n"
+                + "event: message_stop\n"
+                + "data: {\"type\":\"message_stop\"}\n\n";
+        ClaudeLlmClient client = client(sseStub(sse));
+        RecordingListener listener = new RecordingListener();
+
+        // When
+        client.chatStream(LlmRequest.builder("claude-3-5-sonnet")
+                .message(LlmMessage.user("hi")).build(), listener);
+
+        // Then：流式路径与同步路径必须算出同一个口径，否则同一个会话的命中率会随调用方式跳变
+        assertEquals(1003, listener.completed.getUsage().getPromptTokens());
+        assertEquals(900, listener.completed.getUsage().getCacheReadTokens());
+        assertEquals(100, listener.completed.getUsage().getCacheWriteTokens());
+    }
+
     /**
      * 构造指向离线拦截器的 Claude 客户端。
      *

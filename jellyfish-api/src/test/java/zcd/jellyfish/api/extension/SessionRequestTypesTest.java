@@ -77,7 +77,7 @@ class SessionRequestTypesTest {
     @Test
     void usageSnapshots_should_keepValues() {
         TokenUsageSnapshot token = new TokenUsageSnapshot(1, 2, 3);
-        SessionUsageSnapshot session = new SessionUsageSnapshot(10L, 20L, 30L, 4L);
+        SessionUsageSnapshot session = new SessionUsageSnapshot(10L, 20L, 30L, 4L, 5L, 6L);
 
         assertEquals(1, token.getPromptTokens());
         assertEquals(2, token.getCompletionTokens());

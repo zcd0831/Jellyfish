@@ -257,6 +257,23 @@ class GeminiLlmClientTest {
         assertNull(listener.error);
     }
 
+    @Test
+    void chat_should_parse_cached_content_tokens_when_reported() throws IOException {
+        // Given：cachedContentTokenCount 是 promptTokenCount 的子集，不需要归一化
+        StubInterceptor stub = jsonStub("{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ok\"}]}}],"
+                + "\"usageMetadata\":{\"promptTokenCount\":1024,\"candidatesTokenCount\":2,"
+                + "\"totalTokenCount\":1026,\"cachedContentTokenCount\":768}}");
+        GeminiLlmClient client = client(stub);
+
+        // When
+        LlmResponse response = client.chat(
+                LlmRequest.builder("gemini-pro").message(LlmMessage.user("hi")).build());
+
+        // Then
+        assertEquals(1024, response.getUsage().getPromptTokens());
+        assertEquals(768, response.getUsage().getCacheReadTokens());
+    }
+
     /**
      * 构造指向离线拦截器的 Gemini 客户端。
      *

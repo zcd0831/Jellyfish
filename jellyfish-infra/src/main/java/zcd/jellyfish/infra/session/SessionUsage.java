@@ -9,6 +9,12 @@ import zcd.jellyfish.infra.llm.LlmUsage;
  * 既没有累加语义、也会在长会话里溢出。本类用 {@code long} 承载累计值，并额外记录调用次数
  * （{@code llmCalls}），让「这个会话花了几次调用、多少 token」成为 O(1) 可读的会话属性，
  * 而不必遍历消息列表。
+ * <p>
+ * <b>缓存计数是累计值，命中率由两个累计量现算</b>：{@link #getCacheHitRate()} 用「累计命中 / 累计输入」
+ * 而不是「每次命中率的平均」——前者才是这个会话真实的缓存利用率，后者会被短调用（分母小）带偏。
+ * 输入的口径（总输入、缓存部分是其子集）与厂商差异的归一化见 {@link LlmUsage}。
+ * <p>
+ * 不可变，可安全跨线程传递。
  *
  * @author zcd
  */
@@ -17,7 +23,7 @@ public final class SessionUsage {
     /** 零用量的初始快照。 */
     public static final SessionUsage EMPTY = new SessionUsage(0L, 0L, 0L, 0L);
 
-    /** 累计输入 token 数。 */
+    /** 累计输入 token 总数（含缓存命中与建缓存的部分）。 */
     private final long promptTokens;
 
     /** 累计输出 token 数。 */
@@ -29,6 +35,12 @@ public final class SessionUsage {
     /** 累计 LLM 调用次数（含未返回用量的调用）。 */
     private final long llmCalls;
 
+    /** 累计命中缓存的输入 token 数。 */
+    private final long cacheReadTokens;
+
+    /** 累计写入缓存的输入 token 数。 */
+    private final long cacheWriteTokens;
+
     /**
      * 构造用量快照。
      *
@@ -38,16 +50,33 @@ public final class SessionUsage {
      * @param llmCalls         累计调用次数
      */
     public SessionUsage(long promptTokens, long completionTokens, long totalTokens, long llmCalls) {
+        this(promptTokens, completionTokens, totalTokens, llmCalls, 0L, 0L);
+    }
+
+    /**
+     * 构造用量快照。
+     *
+     * @param promptTokens     累计输入 token 总数（含缓存命中与建缓存的部分）
+     * @param completionTokens 累计输出 token 数
+     * @param totalTokens      累计总 token 数
+     * @param llmCalls         累计调用次数
+     * @param cacheReadTokens  累计命中缓存的输入 token 数
+     * @param cacheWriteTokens 累计写入缓存的输入 token 数
+     */
+    public SessionUsage(long promptTokens, long completionTokens, long totalTokens, long llmCalls,
+                        long cacheReadTokens, long cacheWriteTokens) {
         this.promptTokens = promptTokens;
         this.completionTokens = completionTokens;
         this.totalTokens = totalTokens;
         this.llmCalls = llmCalls;
+        this.cacheReadTokens = cacheReadTokens;
+        this.cacheWriteTokens = cacheWriteTokens;
     }
 
     /**
      * 累加一次调用的用量。
      * <p>
-     * {@code usage} 为 {@code null} 时（厂商未返回用量）只累加调用次数，token 三个字段保持不变：
+     * {@code usage} 为 {@code null} 时（厂商未返回用量）只累加调用次数，token 字段保持不变：
      * 「未返回」不等于「用了 0 token」，计数仍然要涨，否则调用次数会漏。
      *
      * @param usage 一次调用的 token 用量，可为 {@code null}
@@ -55,12 +84,15 @@ public final class SessionUsage {
      */
     public SessionUsage plus(LlmUsage usage) {
         if (usage == null) {
-            return new SessionUsage(promptTokens, completionTokens, totalTokens, llmCalls + 1L);
+            return new SessionUsage(promptTokens, completionTokens, totalTokens, llmCalls + 1L,
+                    cacheReadTokens, cacheWriteTokens);
         }
         return new SessionUsage(promptTokens + usage.getPromptTokens(),
                 completionTokens + usage.getCompletionTokens(),
                 totalTokens + usage.getTotalTokens(),
-                llmCalls + 1L);
+                llmCalls + 1L,
+                cacheReadTokens + usage.getCacheReadTokens(),
+                cacheWriteTokens + usage.getCacheWriteTokens());
     }
 
     /**
@@ -82,13 +114,15 @@ public final class SessionUsage {
         return new SessionUsage(promptTokens + other.promptTokens,
                 completionTokens + other.completionTokens,
                 totalTokens + other.totalTokens,
-                llmCalls + other.llmCalls);
+                llmCalls + other.llmCalls,
+                cacheReadTokens + other.cacheReadTokens,
+                cacheWriteTokens + other.cacheWriteTokens);
     }
 
     /**
      * 获取累计输入 token 数。
      *
-     * @return 累计输入 token 数
+     * @return 累计输入 token 总数，含缓存命中与建缓存的部分
      */
     public long getPromptTokens() {
         return promptTokens;
@@ -122,6 +156,36 @@ public final class SessionUsage {
     }
 
     /**
+     * 获取累计命中缓存的输入 token 数。
+     *
+     * @return 累计命中缓存的输入 token 数，厂商不上报时为 0
+     */
+    public long getCacheReadTokens() {
+        return cacheReadTokens;
+    }
+
+    /**
+     * 获取累计写入缓存的输入 token 数。
+     *
+     * @return 累计写入缓存的输入 token 数，厂商不上报时为 0
+     */
+    public long getCacheWriteTokens() {
+        return cacheWriteTokens;
+    }
+
+    /**
+     * 获取本会话的缓存命中率：累计命中除以累计输入。
+     * <p>
+     * 用两个累计量相除，而不是把每次调用的命中率取平均——后者会让一次 3 token 的调用与一次
+     * 100000 token 的调用等权，算出来的数不代表这个会话真实的缓存利用率。
+     *
+     * @return 命中率，落在 {@code [0,1]}；累计输入为 0 时返回 0
+     */
+    public double getCacheHitRate() {
+        return promptTokens <= 0L ? 0.0d : (double) cacheReadTokens / (double) promptTokens;
+    }
+
+    /**
      * 返回用量快照的可读表示，便于日志排查。
      *
      * @return 描述字符串
@@ -133,6 +197,8 @@ public final class SessionUsage {
                 ", completionTokens=" + completionTokens +
                 ", totalTokens=" + totalTokens +
                 ", llmCalls=" + llmCalls +
+                ", cacheReadTokens=" + cacheReadTokens +
+                ", cacheWriteTokens=" + cacheWriteTokens +
                 '}';
     }
 }

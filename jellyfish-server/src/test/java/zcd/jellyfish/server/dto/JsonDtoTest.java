@@ -98,7 +98,7 @@ class JsonDtoTest {
     @Test
     void sessionSummary_should_serialize_expected_field_names_when_serialized() {
         SessionSummary summary = new SessionSummary("s1", "标题", "coder", "openai", "gpt-4o",
-                PermissionMode.NORMAL, 1000L, 2000L, 3, new SessionUsageSnapshot(1L, 2L, 3L, 4L));
+                PermissionMode.NORMAL, 1000L, 2000L, 3, new SessionUsageSnapshot(1L, 2L, 3L, 4L, 5L, 6L));
 
         String json = ObjectMapperWrapper.writeValueAsString(summary);
 

@@ -336,29 +336,55 @@ public abstract class AbstractHttpLlmClient implements LlmClient {
     }
 
     /**
-     * 解析厂商各异的 usage 节点，统一「字段名不同」的差异。
+     * 从 usage（或它的某个子节点）读一个计数；字段缺失、非数字或为 {@code null} 时取缺省值。
      * <p>
-     * 三个计数字段全为 0 时视为厂商未返回；{@code totalField} 为 {@code null} 表示厂商不提供总量，
-     * 此时由 {@link LlmUsage} 按输入 + 输出自行相加。
+     * <b>为什么用 {@code isNumber} 而不是靠 {@code asInt} 兜底</b>：{@code asInt} 对非数字节点也返回 0，
+     * 于是「厂商把字段写成了字符串」与「字段真的缺失」会得到同一个结果——而那正是判断
+     * 「厂商到底有没有返回用量」时最容易出错的地方。这里把两者分开：非数字视为没有这份信息。
      *
-     * @param usage           usage JSON 节点
-     * @param promptField     输入 token 字段名
-     * @param completionField 输出 token 字段名
-     * @param totalField      总 token 字段名，为 {@code null} 表示厂商不提供
+     * @param node     承载计数的节点，可为 {@code null}
+     * @param field    字段名，不可为 {@code null}
+     * @param fallback 缺省值
+     * @return 计数；字段缺失或非数字时返回 {@code fallback}
+     */
+    protected static int intField(JsonNode node, String field, int fallback) {
+        if (node == null) {
+            return fallback;
+        }
+        JsonNode value = node.get(field);
+        return value != null && value.isNumber() ? value.asInt() : fallback;
+    }
+
+    /**
+     * 判断 usage 节点是否代表「厂商根本没有返回用量」。
+     *
+     * @param usage usage JSON 节点，可为 {@code null}
+     * @return 节点缺失或为空返回 {@code true}
+     */
+    protected static boolean isMissingUsage(JsonNode usage) {
+        return usage == null || usage.isMissingNode() || usage.isNull();
+    }
+
+    /**
+     * 构造一次调用的用量；全部计数都为 0 时视为厂商未返回用量，返回 {@code null}。
+     * <p>
+     * <b>调用方传入的 {@code prompt} 必须是「总输入」</b>（含缓存命中与建缓存的部分）。各厂商的口径并
+     * 不一致——Anthropic 的 {@code input_tokens} 与两个缓存字段是互斥划分，而 OpenAI / DeepSeek /
+     * Gemini 的输入字段本就已经包含缓存部分——归一化在各自的 {@code parseUsage} 里完成，
+     * 本方法只负责判空与兜底。口径的完整说明见 {@link LlmUsage}。
+     *
+     * @param prompt     输入 token 总数
+     * @param completion 输出 token 数
+     * @param total      总 token 数，厂商不提供时传 0（由 {@link LlmUsage} 相加兜底）
+     * @param cacheRead  命中缓存的输入 token 数，厂商不提供时传 0
+     * @param cacheWrite 写入缓存的输入 token 数，厂商不提供时传 0
      * @return token 使用量，厂商未返回时为 {@code null}
      */
-    protected static LlmUsage parseUsage(JsonNode usage, String promptField, String completionField,
-                                         String totalField) {
-        if (usage == null || usage.isMissingNode() || usage.isNull()) {
+    protected static LlmUsage usageOf(int prompt, int completion, int total, int cacheRead, int cacheWrite) {
+        if (prompt == 0 && completion == 0 && total == 0 && cacheRead == 0 && cacheWrite == 0) {
             return null;
         }
-        int prompt = usage.path(promptField).asInt(0);
-        int completion = usage.path(completionField).asInt(0);
-        int total = totalField == null ? 0 : usage.path(totalField).asInt(0);
-        if (prompt == 0 && completion == 0 && total == 0) {
-            return null;
-        }
-        return new LlmUsage(prompt, completion, total);
+        return new LlmUsage(prompt, completion, total, cacheRead, cacheWrite);
     }
 
     /**

@@ -291,16 +291,36 @@ LlmRequest.Builder builder = LlmRequest.builder(modelId)
 
 #### P0 · 先度量（内核，无扩展点）
 
-- `LlmUsage` 增加 `cacheReadTokens` / `cacheWriteTokens`（保留 `totalTokens` 兜底逻辑）。
-- 各厂商客户端解析：
-  - OpenAI / DeepSeek：`prompt_tokens_details.cached_tokens`、`prompt_cache_hit_tokens`、`prompt_cache_miss_tokens`；
-  - Anthropic：`cache_read_input_tokens` / `cache_creation_input_tokens`；
-  - Gemini：`cachedContentTokenCount`。
-- `SessionUsage` 增累计字段；`/usage` 与 TUI 状态栏显示命中率；`MetricsRegistry` 出 gauge。
-- **缓存断裂告警**：内核每轮记录 `system prompt 哈希` + `工具清单哈希` + `第一条变动的消息下标`，
-  与上一轮比对，变了就 WARN（可归因到「哪个插件贡献块变了」）。
+**已落地（P0a：把数字算出来并显示出来）**：
 
-> 这一步不改行为，但它把「我猜」变成「我看到」，也是后续每一步的验收依据。
+- `LlmUsage` 增加 `cacheReadTokens` / `cacheWriteTokens` 与 `getCacheHitRate()`；输入口径统一为
+  **「总输入」**，即缓存计数恒为它的子集。
+- 各厂商客户端按自己的口径解析并**当场归一化**：
+  - OpenAI / DeepSeek：`prompt_tokens_details.cached_tokens` 或 `prompt_cache_hit_tokens`
+    （两家 `prompt_tokens` 本已包含缓存部分）；
+  - Gemini：`cachedContentTokenCount`（`promptTokenCount` 的子集）；
+  - Anthropic：`cache_read_input_tokens` + `cache_creation_input_tokens`，且
+    **总输入 = `input_tokens` + 两者**（三个字段是互斥划分，同步与流式两条路径都要加回去）。
+- `SessionUsage` 增累计字段，命中率**按累计量现算**（累计命中 / 累计输入），不取每次命中率的平均；
+  会话级累计随会话落盘（`SessionUsageSnapshot`），`/resume` 之后不归零。
+- `/usage` 与 `/status` 给出「命中 H / 输入 N（P%）」。
+
+> **一处行为变更（修正而非回归）**：Anthropic 的输入总数会变大——它此前把缓存部分**整个漏掉**
+> （有缓存活动时，会话用量少算的恰好是最大那一块）。OpenAI / DeepSeek / Gemini 的展示数字不变。
+
+**待做（P0b：持续观测与自动告警）**：
+
+- `MetricsRegistry` 出缓存命中计数。**不能直接加**：本项目指标只从事件派生（`MetricsSubscriber`），
+  而当前没有携带 `LlmUsage` 的事件，因此需要先加一个「一次模型调用完成」的通知类型。
+- **缓存断裂告警**：内核每轮记录 `system prompt 哈希` + `工具清单哈希` + `第一条变动的消息下标`，
+  与上一轮比对，变了就 WARN（可归因到「哪个插件贡献块变了」）。需要在 `PromptAssembler` 上挂每会话状态。
+- TUI 状态栏显示命中率（目前只有输入 / 输出）。
+
+#### 验收方式
+
+改前 / 改后各跑一段同构对话，把 `/usage` 的命中率与 DeepSeek 平台的
+`prompt_cache_hit_tokens / (hit + miss)` 对账。两者口径现在已经一致（都是「命中 / 总输入」），
+因此差异应当很小——差异大就说明解析或累加有问题，而不是厂商在说谎。
 
 #### P1 · 立即可用的配置止损（零代码）
 

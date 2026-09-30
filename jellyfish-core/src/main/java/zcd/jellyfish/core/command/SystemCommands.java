@@ -37,6 +37,7 @@ import zcd.jellyfish.infra.session.Session;
 import zcd.jellyfish.infra.session.SessionCompaction;
 import zcd.jellyfish.infra.session.SessionDefaults;
 import zcd.jellyfish.infra.session.SessionManager;
+import zcd.jellyfish.infra.session.SessionUsage;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
@@ -44,6 +45,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 
 /**
@@ -719,7 +721,8 @@ public class SystemCommands {
                 + "\n  压缩：" + compactionLabel(session)
                 + "\n  token：" + session.getUsage().getTotalTokens()
                 + "（输入 " + session.getUsage().getPromptTokens()
-                + " / 输出 " + session.getUsage().getCompletionTokens() + "）");
+                + " / 输出 " + session.getUsage().getCompletionTokens() + "）"
+                + "\n  缓存：" + cacheLabel(session.getUsage()));
     }
 
     /**
@@ -736,7 +739,26 @@ public class SystemCommands {
         return CommandResult.ok("本会话 token 累计：" + session.getUsage().getTotalTokens()
                 + "（输入 " + session.getUsage().getPromptTokens()
                 + "，输出 " + session.getUsage().getCompletionTokens()
-                + "，调用 " + session.getUsage().getLlmCalls() + " 次）");
+                + "，调用 " + session.getUsage().getLlmCalls() + " 次）"
+                + "\n缓存：" + cacheLabel(session.getUsage()));
+    }
+
+    /**
+     * 渲染缓存命中片段。
+     * <p>
+     * <b>为什么命中数与输入数都写出来，而不只给一个百分比</b>：比例给判断、绝对值给量级。
+     * 一次 3 token 的调用命中 100% 与一次十万 token 的调用命中 100% 是完全不同的两件事，
+     * 而只写「100%」把它们抹成了同一件。
+     * <p>
+     * <b>0 的读法</b>：命中为 0 既可能是「确实没命中」，也可能是「厂商不上报缓存字段」——
+     * 当前接入的四家在有缓存活动时都会带上这些字段，因此实务上按前者读。
+     *
+     * @param usage 会话累计用量，不可为 {@code null}
+     * @return 形如「命中 12345 / 输入 67890（18.2%）」的片段
+     */
+    private static String cacheLabel(SessionUsage usage) {
+        return "命中 " + usage.getCacheReadTokens() + " / 输入 " + usage.getPromptTokens()
+                + "（" + String.format(Locale.ROOT, "%.1f%%", usage.getCacheHitRate() * 100.0d) + "）";
     }
 
     /**

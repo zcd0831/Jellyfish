@@ -91,25 +91,83 @@ class SessionUsageTest {
     @Test
     void toString_should_render_all_counters() {
         // Given
-        SessionUsage usage = new SessionUsage(1L, 2L, 3L, 4L);
+        SessionUsage usage = new SessionUsage(1L, 2L, 3L, 4L, 5L, 6L);
 
         // When / Then
-        assertEquals("SessionUsage{promptTokens=1, completionTokens=2, totalTokens=3, llmCalls=4}",
-                usage.toString());
+        assertEquals("SessionUsage{promptTokens=1, completionTokens=2, totalTokens=3, llmCalls=4, "
+                + "cacheReadTokens=5, cacheWriteTokens=6}", usage.toString());
+    }
+
+    @Test
+    void plus_should_accumulate_cache_counts_from_single_usage() {
+        // Given：会话已有累计，再加入一次「总输入 100、命中 25、建缓存 5」的调用
+        SessionUsage usage = new SessionUsage(10L, 2L, 12L, 1L, 3L, 1L);
+
+        // When
+        SessionUsage accumulated = usage.plus(new LlmUsage(100, 7, 107, 25, 5));
+
+        // Then
+        assertEquals(110L, accumulated.getPromptTokens());
+        assertEquals(28L, accumulated.getCacheReadTokens());
+        assertEquals(6L, accumulated.getCacheWriteTokens());
+    }
+
+    @Test
+    void plus_should_keep_cache_counts_when_usage_is_absent() {
+        // Given：厂商没返回用量
+        SessionUsage usage = new SessionUsage(10L, 2L, 12L, 1L, 3L, 1L);
+
+        // When：显式转型——plus 的两个重载都能接受 null，不转型是编译错误
+        SessionUsage accumulated = usage.plus((LlmUsage) null);
+
+        // Then：调用次数要涨，而 token 与缓存累计一个都不能被清掉
+        assertEquals(2L, accumulated.getLlmCalls());
+        assertEquals(10L, accumulated.getPromptTokens());
+        assertEquals(3L, accumulated.getCacheReadTokens());
+    }
+
+    @Test
+    void plus_should_accumulate_cache_counts_when_merging_sessions() {
+        // Given：子代理的用量并入父会话
+        SessionUsage parent = new SessionUsage(10L, 2L, 12L, 1L, 3L, 1L);
+        SessionUsage child = new SessionUsage(100L, 5L, 105L, 2L, 40L, 0L);
+
+        // When
+        SessionUsage merged = parent.plus(child);
+
+        // Then
+        assertEquals(43L, merged.getCacheReadTokens());
+        assertEquals(1L, merged.getCacheWriteTokens());
+        assertEquals(3L, merged.getLlmCalls());
+    }
+
+    @Test
+    void getCacheHitRate_should_use_accumulated_totals_not_average_of_rates() {
+        // Given：一次「3 token 全命中」（单次 100%）与一次「1000 token 全未命中」（单次 0%）
+        SessionUsage usage = SessionUsage.EMPTY
+                .plus(new LlmUsage(3, 1, 4, 3, 0))
+                .plus(new LlmUsage(1000, 1, 1001, 0, 0));
+
+        // Then：按累计量算是 3/1003，而不是两次比率取平均的 50%——
+        // 短调用不该与长调用等权，否则「命中率」会被大量无信息的小调用抬起来
+        assertEquals(3.0d / 1003.0d, usage.getCacheHitRate(), 1e-9);
     }
 
     @Test
     void plus_should_return_new_instance_when_accumulated() {
         // Given
-        SessionUsage usage = new SessionUsage(1L, 2L, 3L, 1L);
+        SessionUsage usage = new SessionUsage(1L, 2L, 3L, 1L, 4L, 5L);
 
         // When
         SessionUsage accumulated = usage.plus(new LlmUsage(1, 1, 2));
 
-        // Then：原实例不被修改
+        // Then：原实例不被修改（含缓存累计）
         assertNotSame(usage, accumulated);
         assertEquals(1L, usage.getPromptTokens());
         assertEquals(3L, usage.getTotalTokens());
         assertEquals(1L, usage.getLlmCalls());
+        assertEquals(4L, usage.getCacheReadTokens());
+        assertEquals(5L, usage.getCacheWriteTokens());
+        assertEquals(2L, accumulated.getPromptTokens());
     }
 }

@@ -293,13 +293,26 @@ public abstract class AbstractOpenAiCompatibleLlmClient extends AbstractHttpLlmC
     }
 
     /**
-     * 解析 usage 节点。三个计数字段全为 0 时视为厂商未返回。
+     * 解析 OpenAI 兼容协议的 usage 节点。
+     * <p>
+     * <b>不需要归一化输入</b>：{@code prompt_tokens} 本就已经包含缓存命中部分。但缓存字段名两家不同——
+     * OpenAI 放在 {@code prompt_tokens_details.cached_tokens}，DeepSeek 直接给
+     * {@code prompt_cache_hit_tokens}（官方文档：{@code prompt_tokens} = 命中 + 未命中）。
+     * 两个都看一眼、取有值的那个：比为每家在子类里各写一份解析便宜，也不会因为某家换字段而静默漏读。
      *
      * @param usage usage JSON 节点
      * @return token 使用量，厂商未返回时为 {@code null}
      */
     protected static LlmUsage parseUsage(JsonNode usage) {
-        return parseUsage(usage, "prompt_tokens", "completion_tokens", "total_tokens");
+        if (isMissingUsage(usage)) {
+            return null;
+        }
+        JsonNode details = usage.path("prompt_tokens_details");
+        int cacheRead = Math.max(intField(usage, "prompt_cache_hit_tokens", 0),
+                intField(details, "cached_tokens", 0));
+        return usageOf(intField(usage, "prompt_tokens", 0), intField(usage, "completion_tokens", 0),
+                intField(usage, "total_tokens", 0), cacheRead,
+                intField(details, "cache_write_tokens", 0));
     }
 
     // ------------------------------------------------------------------

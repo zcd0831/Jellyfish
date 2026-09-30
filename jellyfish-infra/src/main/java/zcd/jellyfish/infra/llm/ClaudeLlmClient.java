@@ -355,13 +355,23 @@ public class ClaudeLlmClient extends AbstractHttpLlmClient {
     }
 
     /**
-     * 解析 usage 节点。输入与输出 token 均为 0 时视为厂商未返回。
+     * 解析 Anthropic 的 usage 节点。
+     * <p>
+     * <b>三个输入字段是互斥划分</b>：{@code input_tokens} 只计「新增、未命中、未建缓存」的部分，
+     * 因此总输入要把命中与建缓存加回去。不加的后果不是小数：缓存命中恰恰是「输入很多、新增很少」的
+     * 场景，漏掉就等于把会话用量最大的那一块整个丢掉。
      *
      * @param usage usage JSON 节点
      * @return token 使用量，厂商未返回时为 {@code null}
      */
     private static LlmUsage parseUsage(JsonNode usage) {
-        return parseUsage(usage, "input_tokens", "output_tokens", null);
+        if (isMissingUsage(usage)) {
+            return null;
+        }
+        int cacheRead = intField(usage, "cache_read_input_tokens", 0);
+        int cacheWrite = intField(usage, "cache_creation_input_tokens", 0);
+        return usageOf(intField(usage, "input_tokens", 0) + cacheRead + cacheWrite,
+                intField(usage, "output_tokens", 0), 0, cacheRead, cacheWrite);
     }
 
     // ------------------------------------------------------------------
@@ -387,8 +397,14 @@ public class ClaudeLlmClient extends AbstractHttpLlmClient {
         /** 参数已完整、可输出的工具调用。 */
         private final List<LlmToolCall> completedToolCalls = new ArrayList<>();
 
-        /** 输入 token 数。 */
+        /** 输入 token 数（{@code input_tokens}，不含缓存命中与建缓存的部分）。 */
         private int inputTokens;
+
+        /** 输入中命中缓存的部分（{@code cache_read_input_tokens}）。 */
+        private int cacheReadTokens;
+
+        /** 输入中写入缓存的部分（{@code cache_creation_input_tokens}）。 */
+        private int cacheWriteTokens;
 
         /** 输出 token 数。 */
         private int outputTokens;
@@ -414,7 +430,11 @@ public class ClaudeLlmClient extends AbstractHttpLlmClient {
             }
             switch (type) {
                 case "message_start":
-                    inputTokens = root.path("message").path("usage").path("input_tokens").asInt(inputTokens);
+                    // 三个输入字段都在 message_start 里一次性给出，且是互斥划分（归一化见 buildResponse）
+                    JsonNode startUsage = root.path("message").path("usage");
+                    inputTokens = intField(startUsage, "input_tokens", inputTokens);
+                    cacheReadTokens = intField(startUsage, "cache_read_input_tokens", cacheReadTokens);
+                    cacheWriteTokens = intField(startUsage, "cache_creation_input_tokens", cacheWriteTokens);
                     break;
                 case "content_block_start":
                     handleBlockStart(root);
@@ -520,11 +540,13 @@ public class ClaudeLlmClient extends AbstractHttpLlmClient {
          */
         @Override
         public LlmResponse buildResponse() {
-            LlmUsage usage = inputTokens == 0 && outputTokens == 0
-                    ? null
-                    : new LlmUsage(inputTokens, outputTokens, inputTokens + outputTokens);
+            // 归一化成「总输入」：Anthropic 的三个输入字段互斥，不把缓存部分加回去就会少算绝大部分输入。
+            // 全零时 usageOf 返回 null，因此不必再自己判「厂商没给用量」
             return new LlmResponse(LlmClients.nullableString(content), LlmClients.nullableString(thinking),
-                    completedToolCalls, usage, stopReason);
+                    completedToolCalls,
+                    usageOf(inputTokens + cacheReadTokens + cacheWriteTokens, outputTokens, 0,
+                            cacheReadTokens, cacheWriteTokens),
+                    stopReason);
         }
     }
 

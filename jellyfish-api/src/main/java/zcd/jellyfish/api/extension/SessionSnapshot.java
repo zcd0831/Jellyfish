@@ -58,6 +58,24 @@ public final class SessionSnapshot {
     private final SessionCompactionSnapshot compaction;
 
     /**
+     * 会话种类。
+     * <p>
+     * <b>它就是「是不是子代理会话」的判定来源</b>（{@code parentSessionId} 只是追溯信息）。
+     * 老快照没有这个字段，恢复时按 {@code parentSessionId} 是否存在补出来，见
+     * {@link SessionKind}。
+     */
+    private final SessionKind kind;
+
+    /** 派生该会话的父会话标识，根会话为 {@code null}。 */
+    private final String parentSessionId;
+
+    /** 分支点消息标识（含），非分支会话为 {@code null}。 */
+    private final String forkPointMessageId;
+
+    /** 插件挂在会话上的扩展条目，无条目时为空列表。 */
+    private final List<SessionExtensionEntry> extensionEntries;
+
+    /**
      * 构造会话快照。
      * <p>
      * <b>为什么这里只有唯一一个构造器</b>：本类型靠 Jackson 的「隐式属性构造器」反序列化
@@ -78,12 +96,17 @@ public final class SessionSnapshot {
      * @param messages       消息列表，可为 {@code null}
      * @param usage          累计用量，可为 {@code null}
      * @param compaction     压缩摘要，可为 {@code null}
+     * @param kind           会话种类，可为 {@code null}（按 {@link SessionKind#NORMAL} 处理）
+     * @param parentSessionId 派生该会话的父会话标识，可为 {@code null}
+     * @param forkPointMessageId 分支点消息标识，可为 {@code null}
+     * @param extensionEntries 扩展条目，可为 {@code null}（等价空列表）
      * @throws JellyfishException 会话标识为空白或权限模式为 {@code null} 时抛出
      */
     public SessionSnapshot(String sessionId, long createdAt, long updatedAt, String title, String agentId,
                            String provider, String model, PermissionMode permissionMode,
                            List<SessionMessageSnapshot> messages, SessionUsageSnapshot usage,
-                           SessionCompactionSnapshot compaction) {
+                           SessionCompactionSnapshot compaction, SessionKind kind, String parentSessionId,
+                           String forkPointMessageId, List<SessionExtensionEntry> extensionEntries) {
         if (sessionId == null || sessionId.trim().isEmpty()) {
             throw new JellyfishException("session id must not be blank");
         }
@@ -101,14 +124,21 @@ public final class SessionSnapshot {
         this.messages = copyMessages(messages);
         this.usage = usage;
         this.compaction = compaction;
+        this.kind = kind;
+        this.parentSessionId = parentSessionId;
+        this.forkPointMessageId = forkPointMessageId;
+        this.extensionEntries = copyEntries(extensionEntries);
     }
 
     /**
-     * 构造不含压缩摘要的会话快照（旧签名的兼容入口）。
+     * 构造不含压缩摘要、会话种类与扩展条目的会话快照（旧签名的兼容入口）。
      * <p>
      * 与构造器等价，只是不能写成构造器重载（见
      * {@link #SessionSnapshot(String, long, long, String, String, String, String, PermissionMode, List,
-     * SessionUsageSnapshot, SessionCompactionSnapshot)}）。
+     * SessionUsageSnapshot, SessionCompactionSnapshot, SessionKind, String, String, List)}）。
+     * <p>
+     * <b>缺的那四个字段按「普通根会话、无扩展条目」补</b>：老快照没有它们，这就是它们的含义——
+     * 分支会话不会走到这条入口，因为它总是带着 {@link SessionKind#FORKED} 从恢复路径回来。
      *
      * @param sessionId      会话标识，不可为空白
      * @param createdAt      创建时间戳（epoch millis）
@@ -128,7 +158,7 @@ public final class SessionSnapshot {
                                      PermissionMode permissionMode, List<SessionMessageSnapshot> messages,
                                      SessionUsageSnapshot usage) {
         return new SessionSnapshot(sessionId, createdAt, updatedAt, title, agentId, provider, model,
-                permissionMode, messages, usage, null);
+                permissionMode, messages, usage, null, SessionKind.NORMAL, null, null, null);
     }
 
     /**
@@ -232,7 +262,74 @@ public final class SessionSnapshot {
 
     @Override
     public String toString() {
-        return "SessionSnapshot{sessionId=" + sessionId + ", messages=" + messages.size() + '}';
+        return "SessionSnapshot{sessionId=" + sessionId + ", kind=" + getKind()
+                + ", messages=" + messages.size() + '}';
+    }
+
+    /**
+     * 获取会话种类。
+     * <p>
+     * <b>缺字段时按「是否为子代理会话」补</b>：老快照里根本没有 {@code kind}，而那时
+     * {@code parentSessionId} 非空只可能是子代理会话（分支能力是后加的）。反过来把
+     * 空值当 {@code NORMAL} 会让一个子代理会话被当成普通会话<b>落盘并进列表</b>，
+     * 而那正是「一字段两用」带来的静默数据丢失。
+     *
+     * @return 会话种类，保证非 {@code null}
+     */
+    public SessionKind getKind() {
+        if (kind != null) {
+            return kind;
+        }
+        return parentSessionId == null ? SessionKind.NORMAL : SessionKind.EPHEMERAL;
+    }
+
+    /**
+     * 获取派生该会话的父会话标识。
+     * <p>
+     * <b>它只是追溯信息，不是判定依据</b>：判定这个会话是不是子代理会话请用 {@link #getKind()}。
+     *
+     * @return 父会话标识；根会话为 {@code null}
+     */
+    public String getParentSessionId() {
+        return parentSessionId;
+    }
+
+    /**
+     * 获取分支点消息标识。
+     *
+     * @return 分支点消息标识，非分支会话为 {@code null}
+     */
+    public String getForkPointMessageId() {
+        return forkPointMessageId;
+    }
+
+    /**
+     * 获取扩展条目。
+     *
+     * @return 不可变列表，保证非 {@code null}
+     */
+    public List<SessionExtensionEntry> getExtensionEntries() {
+        return extensionEntries;
+    }
+
+    /**
+     * 复制扩展条目列表并拒绝 {@code null} 元素。
+     *
+     * @param entries 原始列表，可为 {@code null}
+     * @return 不可变列表，保证非 {@code null}
+     */
+    private static List<SessionExtensionEntry> copyEntries(List<SessionExtensionEntry> entries) {
+        if (entries == null || entries.isEmpty()) {
+            return Collections.emptyList();
+        }
+        List<SessionExtensionEntry> copy = new ArrayList<SessionExtensionEntry>(entries.size());
+        for (SessionExtensionEntry entry : entries) {
+            if (entry == null) {
+                throw new JellyfishException("session extension entry must not be null");
+            }
+            copy.add(entry);
+        }
+        return Collections.unmodifiableList(copy);
     }
 
     /**

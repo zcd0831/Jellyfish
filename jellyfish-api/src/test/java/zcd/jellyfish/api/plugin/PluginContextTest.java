@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import zcd.jellyfish.api.RuntimeInfo;
 import zcd.jellyfish.api.action.ActionHandle;
 import zcd.jellyfish.api.action.PluginAction;
+import zcd.jellyfish.api.extension.SessionExtensionEntry;
 import zcd.jellyfish.api.event.JellyfishEvent;
 import zcd.jellyfish.api.event.RegisterOptions;
 import zcd.jellyfish.api.event.Subscription;
@@ -237,6 +238,21 @@ class PluginContextTest {
             // 桩类只保留「有这个方法」这一点形状；投递语义（入队、失败回报、停止后抛错）
             // 由 PluginContextImplTest 与 ActionQueueTest 覆盖
             throw new UnsupportedOperationException("submit is not part of this stub");
+        }
+
+        @Override
+        public void putExtensionEntry(String sessionId, String key, java.util.Map<String, Object> value) {
+            throw new UnsupportedOperationException("putExtensionEntry is not part of this stub");
+        }
+
+        @Override
+        public void removeExtensionEntry(String sessionId, String key) {
+            throw new UnsupportedOperationException("removeExtensionEntry is not part of this stub");
+        }
+
+        @Override
+        public java.util.List<SessionExtensionEntry> extensionEntries(String sessionId) {
+            throw new UnsupportedOperationException("extensionEntries is not part of this stub");
         }
     }
 }

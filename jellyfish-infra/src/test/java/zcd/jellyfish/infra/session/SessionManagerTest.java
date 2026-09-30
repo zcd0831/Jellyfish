@@ -18,6 +18,9 @@ import zcd.jellyfish.api.extension.ExtensionHandler;
 import zcd.jellyfish.api.extension.LifecycleVerdict;
 import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.api.extension.SessionBeforeCloseRequest;
+import zcd.jellyfish.api.extension.SessionBeforeForkRequest;
+import zcd.jellyfish.api.extension.SessionKind;
+import zcd.jellyfish.api.extension.SessionSnapshot;
 import zcd.jellyfish.api.extension.SessionPersistRequest;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.config.AgentDefinition;
@@ -856,6 +859,359 @@ class SessionManagerTest {
 
         // When / Then
         assertThrows(UnsupportedOperationException.class, () -> manager.all().clear());
+    }
+
+    @Test
+    void fork_should_copy_messages_up_to_cut_and_mark_origin() {
+        // Given：user / assistant(tool_use) / tool / assistant
+        SessionManager manager = manager();
+        Session source = conversation(manager);
+        String cutMessageId = source.getMessages().get(3).getMessageId();
+
+        // When
+        Session forked = manager.fork(source.getSessionId(), cutMessageId, "换条路走");
+
+        // Then
+        assertEquals(4, forked.size());
+        assertEquals("换条路走", forked.getTitle());
+        assertEquals(SessionKind.FORKED, forked.getKind());
+        assertEquals(source.getSessionId(), forked.getParentSessionId());
+        assertEquals(cutMessageId, forked.getForkPointMessageId());
+        assertNotEquals(source.getSessionId(), forked.getSessionId());
+    }
+
+    @Test
+    void fork_should_align_cut_forward_when_pointing_at_tool_group_member() {
+        // Given：指定 assistant(tool_use)（下标 1），而它的工具结果在后面
+        SessionManager manager = manager();
+        Session source = conversation(manager);
+
+        // When
+        Session forked = manager.fork(source.getSessionId(),
+                source.getMessages().get(1).getMessageId(), null);
+
+        // Then：切点推到这一组工具结果的末尾（下标 2），而不是停在 1
+        // ——停在 1 会得到一条没有结果的 assistant(tool_use)，而内核在组装请求时会把那种结尾丢掉，
+        // 于是那条消息「在历史里在、模型永远看不到」
+        assertEquals(3, forked.size());
+        assertEquals("call_1", forked.getMessages().get(2).getMessage().getToolCallId());
+    }
+
+    @Test
+    void fork_should_keep_cut_when_pointing_at_last_tool_result_already() {
+        SessionManager manager = manager();
+        Session source = conversation(manager);
+
+        Session forked = manager.fork(source.getSessionId(),
+                source.getMessages().get(2).getMessageId(), null);
+
+        assertEquals(3, forked.size());
+    }
+
+    @Test
+    void fork_should_not_copy_usage() {
+        // 那是源会话花掉的钱；带过去会把成本重复计入
+        SessionManager manager = manager();
+        Session source = conversation(manager);
+        manager.recordUsage(source.getSessionId(), new LlmUsage(100, 50, 150, 10, 20));
+
+        Session forked = manager.fork(source.getSessionId(), null, null);
+
+        assertEquals(0, forked.getUsage().getTotalTokens());
+        assertEquals(0, forked.getUsage().getLlmCalls());
+    }
+
+    @Test
+    void fork_should_carry_compaction_when_boundary_is_within_copied_range() {
+        SessionManager manager = manager();
+        Session source = conversation(manager);
+        String boundary = source.getMessages().get(0).getMessageId();
+        manager.applyCompaction(source.getSessionId(), "摘要", boundary, 1);
+
+        Session forked = manager.fork(source.getSessionId(), null, null);
+
+        // 边界在复制范围内：摘要仍代表被丢出上下文的那一段
+        assertNotNull(forked.getCompaction());
+        assertEquals("摘要", forked.getCompaction().getSummary());
+    }
+
+    @Test
+    void fork_should_drop_compaction_when_boundary_is_beyond_the_cut() {
+        SessionManager manager = manager();
+        Session source = conversation(manager);
+        // 边界指向最后一条，而切点落在它之前
+        String boundary = source.getMessages().get(3).getMessageId();
+        manager.applyCompaction(source.getSessionId(), "摘要", boundary, 1);
+        String cut = source.getMessages().get(0).getMessageId();
+
+        Session forked = manager.fork(source.getSessionId(), cut, null);
+
+        // 那一刻本来还没压过，不带才是准确复原
+        assertNull(forked.getCompaction());
+    }
+
+    @Test
+    void fork_should_persist_and_list_forked_session() {
+        // fork 出来的是用户的正常会话，不是子代理的临时工作区
+        SessionManager manager = manager();
+        AtomicInteger persists = countingPersistHandler();
+        Session source = conversation(manager);
+        int before = persists.get();
+
+        Session forked = manager.fork(source.getSessionId(), null, null);
+
+        assertTrue(persists.get() > before);
+        assertTrue(manager.all().stream().anyMatch(s -> s.getSessionId().equals(forked.getSessionId())));
+    }
+
+    @Test
+    void fork_should_throw_when_plugin_vetoes() {
+        SessionManager manager = manager();
+        Session source = conversation(manager);
+        extensions.contribute("guard", SessionBeforeForkRequest.class, null,
+                request -> LifecycleVerdict.cancel("工作区有未提交的改动"), RegisterOptions.DEFAULT);
+
+        JellyfishException error = assertThrows(JellyfishException.class,
+                () -> manager.fork(source.getSessionId(), null, null));
+
+        // 否决一定被采纳：拦下了就什么都不复制
+        assertTrue(error.getMessage().contains("工作区有未提交的改动"), error.getMessage());
+        assertEquals(1, manager.all().size());
+    }
+
+    @Test
+    void fork_should_pass_aligned_cut_to_hook() {
+        // 插件看到的必须是内核真正要复制的范围，而不是调用方原始指定的那一条
+        SessionManager manager = manager();
+        Session source = conversation(manager);
+        List<Integer> cuts = new ArrayList<Integer>();
+        extensions.contribute("probe", SessionBeforeForkRequest.class, null,
+                (ExtensionHandler<SessionBeforeForkRequest, LifecycleVerdict>) request -> {
+                    cuts.add(request.getCutIndex());
+                    cuts.add(request.getMessageCount());
+                    return LifecycleVerdict.proceed();
+                }, RegisterOptions.DEFAULT);
+
+        manager.fork(source.getSessionId(), source.getMessages().get(1).getMessageId(), null);
+
+        assertEquals(Arrays.asList(2, 3), cuts);
+    }
+
+    @Test
+    void fork_should_throw_when_cut_message_not_found() {
+        SessionManager manager = manager();
+        Session source = conversation(manager);
+
+        assertThrows(JellyfishException.class,
+                () -> manager.fork(source.getSessionId(), "ghost", null));
+    }
+
+    @Test
+    void fork_should_throw_when_no_history() {
+        SessionManager manager = manager();
+        Session source = manager.create(CODER, null, null, null);
+
+        assertThrows(JellyfishException.class, () -> manager.fork(source.getSessionId(), null, null));
+    }
+
+    @Test
+    void fork_should_default_title_when_absent() {
+        SessionManager manager = manager();
+        Session source = conversation(manager);
+        manager.updateTitle(source.getSessionId(), "重构登录");
+
+        Session forked = manager.fork(source.getSessionId(), null, null);
+
+        assertTrue(forked.getTitle().contains("重构登录"), forked.getTitle());
+    }
+
+    @Test
+    void putExtensionEntry_should_write_and_read_back_under_owner_namespace() {
+        SessionManager manager = manager();
+        Session session = manager.create(CODER, null, null, null);
+
+        manager.putExtensionEntry(session.getSessionId(), "plugin-a", "plugin-a::checked",
+                java.util.Collections.singletonMap("files", 3));
+
+        assertEquals(1, manager.extensionEntries(session.getSessionId()).size());
+        assertEquals(1, manager.extensionEntriesOf(session.getSessionId(), "plugin-a").size());
+        // 前缀匹配必须带分隔符：plugin-a 不能看到 plugin-ab 的东西
+        assertEquals(0, manager.extensionEntriesOf(session.getSessionId(), "plugin-ab").size());
+        assertEquals(3, manager.extensionEntries(session.getSessionId()).get(0).getValue().get("files"));
+    }
+
+    @Test
+    void putExtensionEntry_should_replace_existing_without_growing_count() {
+        SessionManager manager = manager();
+        Session session = manager.create(CODER, null, null, null);
+        manager.putExtensionEntry(session.getSessionId(), "plugin-a", "plugin-a::k", null);
+
+        manager.putExtensionEntry(session.getSessionId(), "plugin-a", "plugin-a::k",
+                java.util.Collections.singletonMap("v", 2));
+
+        assertEquals(1, manager.extensionEntries(session.getSessionId()).size());
+    }
+
+    @Test
+    void putExtensionEntry_should_reject_value_over_limit() {
+        SessionManager manager = manager();
+        Session session = manager.create(CODER, null, null, null);
+        StringBuilder huge = new StringBuilder();
+        for (int index = 0; index < SessionManager.EXTENSION_VALUE_MAX_BYTES + 100; index++) {
+            huge.append('x');
+        }
+
+        JellyfishException error = assertThrows(JellyfishException.class,
+                () -> manager.putExtensionEntry(session.getSessionId(), "plugin-a", "plugin-a::big",
+                        java.util.Collections.singletonMap("payload", huge.toString())));
+
+        // 超限拒写而不截断：截断会留下「看起来完整、实际缺字段」的数据
+        assertTrue(error.getMessage().contains("plugin-a"), error.getMessage());
+        assertTrue(manager.extensionEntries(session.getSessionId()).isEmpty());
+    }
+
+    @Test
+    void putExtensionEntry_should_reject_too_many_entries() {
+        SessionManager manager = manager();
+        Session session = manager.create(CODER, null, null, null);
+        for (int index = 0; index < SessionManager.EXTENSION_ENTRY_MAX_COUNT; index++) {
+            manager.putExtensionEntry(session.getSessionId(), "plugin-a", "plugin-a::k" + index, null);
+        }
+
+        JellyfishException error = assertThrows(JellyfishException.class,
+                () -> manager.putExtensionEntry(session.getSessionId(), "plugin-a", "plugin-a::extra", null));
+
+        assertTrue(error.getMessage().contains("上限"), error.getMessage());
+        assertEquals(SessionManager.EXTENSION_ENTRY_MAX_COUNT,
+                manager.extensionEntries(session.getSessionId()).size());
+    }
+
+    @Test
+    void putExtensionEntry_should_reject_too_long_key() {
+        SessionManager manager = manager();
+        Session session = manager.create(CODER, null, null, null);
+        StringBuilder key = new StringBuilder("plugin-a::");
+        while (key.length() <= SessionManager.EXTENSION_KEY_MAX_CHARS) {
+            key.append('k');
+        }
+
+        assertThrows(JellyfishException.class, () -> manager.putExtensionEntry(
+                session.getSessionId(), "plugin-a", key.toString(), null));
+    }
+
+    @Test
+    void removeExtensionEntry_should_be_noop_when_absent() {
+        SessionManager manager = manager();
+        Session session = manager.create(CODER, null, null, null);
+
+        manager.removeExtensionEntry(session.getSessionId(), "plugin-a::ghost");
+
+        assertTrue(manager.extensionEntries(session.getSessionId()).isEmpty());
+    }
+
+    @Test
+    void removeExtensionEntry_should_drop_entry() {
+        SessionManager manager = manager();
+        Session session = manager.create(CODER, null, null, null);
+        manager.putExtensionEntry(session.getSessionId(), "plugin-a", "plugin-a::k", null);
+
+        manager.removeExtensionEntry(session.getSessionId(), "plugin-a::k");
+
+        assertTrue(manager.extensionEntries(session.getSessionId()).isEmpty());
+    }
+
+    @Test
+    void putExtensionEntry_should_persist_immediately_outside_turn() {
+        SessionManager manager = manager();
+        AtomicInteger persists = countingPersistHandler();
+        Session session = manager.create(CODER, null, null, null);
+        int before = persists.get();
+
+        manager.putExtensionEntry(session.getSessionId(), "plugin-a", "plugin-a::k", null);
+
+        assertTrue(persists.get() > before);
+    }
+
+    @Test
+    void putExtensionEntry_should_defer_persist_inside_turn() {
+        // 回合内只标脏：与消息追加同一纪律，不新增第三条落盘路径
+        SessionManager manager = manager();
+        AtomicInteger persists = countingPersistHandler();
+        Session session = manager.create(CODER, null, null, null);
+        manager.beginTurn(session.getSessionId());
+        int before = persists.get();
+
+        manager.putExtensionEntry(session.getSessionId(), "plugin-a", "plugin-a::k", null);
+        int duringTurn = persists.get();
+        manager.flush(session.getSessionId());
+
+        assertEquals(before, duringTurn);
+        assertTrue(persists.get() > duringTurn);
+    }
+
+    @Test
+    void fork_should_copy_extension_entries() {
+        SessionManager manager = manager();
+        Session source = conversation(manager);
+        manager.putExtensionEntry(source.getSessionId(), "plugin-a", "plugin-a::k",
+                java.util.Collections.singletonMap("v", 1));
+
+        Session forked = manager.fork(source.getSessionId(), null, null);
+
+        assertEquals(1, forked.getExtensionEntries().size());
+        assertEquals("plugin-a::k", forked.getExtensionEntries().get(0).getKey());
+    }
+
+    @Test
+    void snapshot_roundTrip_should_keep_kind_origin_and_extension_entries() {
+        // 快照往返是「漏了一个字段」唯一能被自动发现的地方
+        SessionManager manager = manager();
+        Session source = conversation(manager);
+        manager.putExtensionEntry(source.getSessionId(), "plugin-a", "plugin-a::k",
+                java.util.Collections.singletonMap("v", 1));
+        Session forked = manager.fork(source.getSessionId(), null, "分支");
+
+        SessionSnapshot first = SessionSnapshots.capture(forked);
+        Session restored = Session.restore(first);
+        SessionSnapshot second = SessionSnapshots.capture(restored);
+
+        assertEquals(SessionKind.FORKED, restored.getKind());
+        assertEquals(source.getSessionId(), restored.getParentSessionId());
+        assertNotNull(restored.getForkPointMessageId());
+        assertEquals(1, restored.getExtensionEntries().size());
+        assertEquals(first.getKind(), second.getKind());
+        assertEquals(first.getParentSessionId(), second.getParentSessionId());
+        assertEquals(first.getForkPointMessageId(), second.getForkPointMessageId());
+        assertEquals(first.getExtensionEntries().get(0).getKey(),
+                second.getExtensionEntries().get(0).getKey());
+    }
+
+    @Test
+    void restore_should_map_legacy_parent_to_ephemeral() {
+        // 老快照没有 kind 字段：那时 parentSessionId 非空只可能是子代理会话。
+        // 当成普通会话会让它被落盘并进列表——那正是「一字段两用」带来的静默数据丢失
+        SessionSnapshot legacy = new SessionSnapshot("s-legacy", 1L, 1L, null, CODER, null, null,
+                PermissionMode.NORMAL, null, null, null, null, "parent-1", null, null);
+
+        assertEquals(SessionKind.EPHEMERAL, legacy.getKind());
+        assertTrue(Session.restore(legacy).isEphemeral());
+    }
+
+    /**
+     * 造一段带工具调用的会话：user / assistant(tool_use) / tool / assistant。
+     *
+     * @param manager 会话域服务
+     * @return 源会话
+     */
+    private Session conversation(SessionManager manager) {
+        Session session = manager.create(CODER, "openai", "gpt-4o", PermissionMode.NORMAL);
+        manager.appendMessage(session.getSessionId(), LlmMessage.user("读文件"), null);
+        manager.appendMessage(session.getSessionId(), LlmMessage.assistant("好的",
+                java.util.Collections.singletonList(new zcd.jellyfish.infra.llm.LlmToolCall(0,
+                        "call_1", "read", "{}"))), null);
+        manager.appendMessage(session.getSessionId(), LlmMessage.tool("call_1", "read", "内容"), null);
+        manager.appendMessage(session.getSessionId(), LlmMessage.assistant("读完了"), null);
+        return session;
     }
 
     /**

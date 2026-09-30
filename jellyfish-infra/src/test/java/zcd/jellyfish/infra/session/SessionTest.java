@@ -3,6 +3,7 @@ package zcd.jellyfish.infra.session;
 import org.junit.jupiter.api.Test;
 import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.extension.PermissionMode;
+import zcd.jellyfish.api.extension.SessionKind;
 import zcd.jellyfish.infra.llm.LlmMessage;
 import zcd.jellyfish.infra.llm.LlmUsage;
 
@@ -70,7 +71,8 @@ class SessionTest {
     @Test
     void isEphemeral_should_return_true_when_parent_session_given() {
         // When
-        Session session = new Session("session-2", "scout", null, null, null, CREATED_AT, "session-1");
+        Session session = new Session("session-2", "scout", null, null, null, CREATED_AT,
+                SessionKind.EPHEMERAL, "session-1", null);
 
         // Then
         assertEquals("session-1", session.getParentSessionId());

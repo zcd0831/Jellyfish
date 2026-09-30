@@ -95,9 +95,9 @@ public final class ActionQueue {
      * {@link PluginAction.Kind#ABORT_TURN} 例外：它的语义就是「置一个取消标志」这样一个快动作，
      * 入队再等排空反而会让「中止」错过它想中止的那个回合。
      * <p>
-     * <b>失败一律回报而不抛异常</b>：拿不到在途回合、目标会话不存在、本内核尚未提供该能力，
-     * 都是插件可以预期的正常结果（见 {@link ActionStatus#FAILED}）。抛异常会把一条
-     * 「这次没赶上」变成必须 try/catch 的错误路径。
+     * <b>失败一律回报而不抛异常</b>：拿不到在途回合、本内核尚未提供该能力，都是插件可以预期的
+     * 正常结果（见 {@link ActionStatus#FAILED}）。抛异常会把一条「这次没赶上」变成必须 try/catch
+     * 的错误路径。
      *
      * @param owner  投递者的 owner 命名空间，不可为空白
      * @param action 动作，不可为 {@code null}
@@ -108,10 +108,8 @@ public final class ActionQueue {
         Handle handle = new Handle(action);
         String sessionId = action.getSessionId();
         switch (action.getKind()) {
-            case FORK_SESSION:
-                // 明说「尚未提供」而不是静默无效：插件据此可以不做重试，也不会以为自己分出了分支
-                return handle.onFailed("本内核尚未提供会话分支能力：forkSession 将在会话分支落地后可用");
             case REBUILD_TOOL_CATALOG:
+                // 明说「尚未提供」而不是静默无效：插件据此可以不做重试，也不会以为自己重建了清单
                 return handle.onFailed("本内核尚未提供工具清单缓存：rebuildToolCatalog 将在工具激活落地后可用");
             case ABORT_TURN:
                 return abort(handle, sessionId);

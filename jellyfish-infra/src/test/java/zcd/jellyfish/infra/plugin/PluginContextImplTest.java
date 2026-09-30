@@ -1,6 +1,7 @@
 package zcd.jellyfish.infra.plugin;
 
 import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
 import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.action.ActionHandle;
 import zcd.jellyfish.api.action.ActionStatus;
@@ -21,8 +22,10 @@ import zcd.jellyfish.infra.event.EventChannel;
 import zcd.jellyfish.infra.event.EventChannelOptions;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.registry.TypeRegistry;
+import zcd.jellyfish.infra.session.SessionManager;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -33,6 +36,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.verify;
 
 /**
  * {@link PluginContextImpl} 的单元测试：验证四个注册/发布入口都绑定 {@code pluginId}。
@@ -53,9 +57,12 @@ class PluginContextImplTest {
     /** 事件通道：用默认线程池，测试以闩锁等待异步投递。 */
     private final EventChannel events = new EventChannel(EventChannelOptions.defaults(), typeRegistry);
 
+    /** 会话域服务：桩，只为满足插件上下文的构造。 */
+    private final SessionManager sessions = Mockito.mock(SessionManager.class);
+
     /** 被测插件上下文。 */
     private final PluginContextImpl context = new PluginContextImpl(
-            PluginDeclaration.of("plugin-a"), extensions, events);
+            PluginDeclaration.of("plugin-a"), extensions, events, sessions);
 
     @Test
     void pluginId_should_come_from_declaration() {
@@ -78,7 +85,7 @@ class PluginContextImplTest {
         Map<String, Object> configuration = new LinkedHashMap<String, Object>();
         configuration.put("scriptsRoot", "scripts/python");
         PluginContextImpl configured = new PluginContextImpl(
-                PluginDeclaration.of("plugin-a", configuration), extensions, events);
+                PluginDeclaration.of("plugin-a", configuration), extensions, events, sessions);
 
         // When
         PluginContextImpl child = (PluginContextImpl) configured.subContext("jira");
@@ -131,7 +138,7 @@ class PluginContextImplTest {
         Map<String, Object> configuration = new LinkedHashMap<>();
         configuration.put("precision", 4);
         PluginContextImpl configured = new PluginContextImpl(
-                PluginDeclaration.of("plugin-b", configuration), extensions, events);
+                PluginDeclaration.of("plugin-b", configuration), extensions, events, sessions);
 
         // Then
         assertEquals(4, configured.configuration().get("precision"));
@@ -236,7 +243,7 @@ class PluginContextImplTest {
         // Given：注册窗口是插件存活期，停止之后一律拒绝——否则会留下幽灵注册
         ContextLifecycle lifecycle = new ContextLifecycle();
         PluginContextImpl closable = new PluginContextImpl(
-                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle, new RuntimeInfoHolder(), new ActionQueue());
+                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle, new RuntimeInfoHolder(), new ActionQueue(), sessions);
         lifecycle.close();
 
         // When / Then
@@ -250,7 +257,7 @@ class PluginContextImplTest {
         // Given
         ContextLifecycle lifecycle = new ContextLifecycle();
         PluginContextImpl closable = new PluginContextImpl(
-                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle, new RuntimeInfoHolder(), new ActionQueue());
+                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle, new RuntimeInfoHolder(), new ActionQueue(), sessions);
         lifecycle.close();
 
         // When / Then
@@ -264,7 +271,7 @@ class PluginContextImplTest {
         // Given
         ContextLifecycle lifecycle = new ContextLifecycle();
         PluginContextImpl closable = new PluginContextImpl(
-                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle, new RuntimeInfoHolder(), new ActionQueue());
+                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle, new RuntimeInfoHolder(), new ActionQueue(), sessions);
         lifecycle.close();
 
         // When / Then
@@ -279,7 +286,7 @@ class PluginContextImplTest {
         // Given
         ContextLifecycle lifecycle = new ContextLifecycle();
         PluginContextImpl closable = new PluginContextImpl(
-                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle, new RuntimeInfoHolder(), new ActionQueue());
+                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle, new RuntimeInfoHolder(), new ActionQueue(), sessions);
         lifecycle.close();
 
         // When / Then：停止之后的发布同样属于幽灵行为，不能静默丢掉了事
@@ -292,7 +299,7 @@ class PluginContextImplTest {
         ContextLifecycle lifecycle = new ContextLifecycle();
         PluginContextImpl closable = new PluginContextImpl(
                 PluginDeclaration.of("plugin-a"), extensions, events, lifecycle,
-                new RuntimeInfoHolder(), new ActionQueue());
+                new RuntimeInfoHolder(), new ActionQueue(), sessions);
         lifecycle.close();
 
         // When / Then
@@ -305,7 +312,7 @@ class PluginContextImplTest {
         // Given：正常存活的上下文，但目标会话没有在途回合
         ActionQueue actions = new ActionQueue();
         PluginContextImpl alive = new PluginContextImpl(PluginDeclaration.of("plugin-a"), extensions,
-                events, new ContextLifecycle(), new RuntimeInfoHolder(), actions);
+                events, new ContextLifecycle(), new RuntimeInfoHolder(), actions, sessions);
 
         // When
         ActionHandle handle = alive.submit(
@@ -321,7 +328,7 @@ class PluginContextImplTest {
         // Given：子上下文也握着注册能力，若它们各有一份标记，回收根上下文就管不住它们
         ContextLifecycle lifecycle = new ContextLifecycle();
         PluginContextImpl parent = new PluginContextImpl(
-                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle, new RuntimeInfoHolder(), new ActionQueue());
+                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle, new RuntimeInfoHolder(), new ActionQueue(), sessions);
         PluginContextImpl child = (PluginContextImpl) parent.subContext("jira");
 
         // When
@@ -333,11 +340,68 @@ class PluginContextImplTest {
     }
 
     @Test
+    void putExtensionEntry_should_prefix_key_with_plugin_namespace() {
+        // 前缀恒从当前身份派生：插件无法写到别人的命名空间里，也无法不写前缀
+        context.putExtensionEntry("s1", "checked", Collections.singletonMap("files", 3));
+
+        verify(sessions).putExtensionEntry("s1", "plugin-a", "plugin-a::checked",
+                Collections.singletonMap("files", 3));
+    }
+
+    @Test
+    void putExtensionEntry_should_prefix_with_child_namespace_when_sub_context() {
+        context.subContext("jira").putExtensionEntry("s1", "issue", null);
+
+        verify(sessions).putExtensionEntry("s1", "plugin-a::jira", "plugin-a::jira::issue", null);
+    }
+
+    @Test
+    void putExtensionEntry_should_reject_key_with_separator() {
+        // 否则 plugin-a::a::b 读不出来它到底是「子上下文 a 写的 key b」还是
+        // 「根上下文写的 key a::b」，诊断输出就失去了可归因性
+        assertThrows(JellyfishException.class,
+                () -> context.putExtensionEntry("s1", "a::b", null));
+    }
+
+    @Test
+    void putExtensionEntry_should_reject_blank_key() {
+        assertThrows(JellyfishException.class, () -> context.putExtensionEntry("s1", "  ", null));
+    }
+
+    @Test
+    void removeExtensionEntry_should_prefix_key() {
+        context.removeExtensionEntry("s1", "checked");
+
+        verify(sessions).removeExtensionEntry("s1", "plugin-a::checked");
+    }
+
+    @Test
+    void extensionEntries_should_read_only_own_namespace() {
+        // 读取与写入的命名空间隔离对称：看不到别人的条目
+        context.extensionEntries("s1");
+
+        verify(sessions).extensionEntriesOf("s1", "plugin-a");
+    }
+
+    @Test
+    void extensionEntries_should_fail_when_context_already_closed() {
+        ContextLifecycle lifecycle = new ContextLifecycle();
+        PluginContextImpl closable = new PluginContextImpl(
+                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle,
+                new RuntimeInfoHolder(), new ActionQueue(), sessions);
+        lifecycle.close();
+
+        assertThrows(JellyfishException.class, () -> closable.putExtensionEntry("s1", "k", null));
+        assertThrows(JellyfishException.class, () -> closable.removeExtensionEntry("s1", "k"));
+        assertThrows(JellyfishException.class, () -> closable.extensionEntries("s1"));
+    }
+
+    @Test
     void handle_should_still_work_before_context_closed() {
         // Given：上一条的反面 —— 失效只在关闭之后生效，关闭之前照常注册
         ContextLifecycle lifecycle = new ContextLifecycle();
         PluginContextImpl closable = new PluginContextImpl(
-                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle, new RuntimeInfoHolder(), new ActionQueue());
+                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle, new RuntimeInfoHolder(), new ActionQueue(), sessions);
 
         // When
         closable.handle(ToolCallRequest.class, "calc", request -> new ToolCallResult("calc", "ok"));

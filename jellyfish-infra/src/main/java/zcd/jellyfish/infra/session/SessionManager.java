@@ -16,12 +16,16 @@ import zcd.jellyfish.api.extension.ExtensionHandler;
 import zcd.jellyfish.api.extension.LifecycleVerdict;
 import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.api.extension.SessionBeforeCloseRequest;
+import zcd.jellyfish.api.extension.SessionBeforeForkRequest;
 import zcd.jellyfish.api.extension.SessionDeleteRequest;
+import zcd.jellyfish.api.extension.SessionExtensionEntry;
+import zcd.jellyfish.api.extension.SessionKind;
 import zcd.jellyfish.api.extension.SessionPersistRequest;
 import zcd.jellyfish.api.extension.SessionRestoreRequest;
 import zcd.jellyfish.api.extension.SessionRestoreResult;
 import zcd.jellyfish.api.extension.SessionSnapshot;
 import zcd.jellyfish.api.extension.TokenUsageSnapshot;
+import zcd.jellyfish.api.plugin.PluginOwnerNamespace;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.config.AgentDefinition;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
@@ -29,6 +33,7 @@ import zcd.jellyfish.infra.extension.HandlerBinding;
 import zcd.jellyfish.infra.llm.LlmHttpException;
 import zcd.jellyfish.infra.llm.LlmMessage;
 import zcd.jellyfish.infra.llm.LlmUsage;
+import zcd.jellyfish.infra.support.ObjectMapperWrapper;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
@@ -95,6 +100,15 @@ public class SessionManager {
 
     /** 日志。 */
     private static final Logger LOG = LoggerFactory.getLogger(SessionManager.class);
+
+    /** 单条扩展条目的值上限（字节，按内核的规范编码量）。 */
+    public static final int EXTENSION_VALUE_MAX_BYTES = 64 * 1024;
+
+    /** 每会话扩展条目数上限。 */
+    public static final int EXTENSION_ENTRY_MAX_COUNT = 64;
+
+    /** 扩展条目 key 长度上限（字符）。 */
+    public static final int EXTENSION_KEY_MAX_CHARS = 256;
 
     /** agent 门面，仅用于会话创建时解析默认 agent。 */
     private final AgentManager agentManager;
@@ -231,10 +245,318 @@ public class SessionManager {
         }
         String boundAgentId = StringUtils.isBlank(agentId) ? resolveDefaultAgentId() : agentId;
         Session session = new Session(UUID.randomUUID().toString(), boundAgentId, provider, model,
-                permissionMode, System.currentTimeMillis(), parentSessionId);
+                permissionMode, System.currentTimeMillis(), SessionKind.EPHEMERAL, parentSessionId, null);
         sessions.put(session.getSessionId(), session);
         publish(new SessionCreatedEvent(boundAgentId, session.getSessionId(), parentSessionId));
         return session;
+    }
+
+    /**
+     * 从已有会话的某一点分出一条新会话。
+     * <p>
+     * <b>v1 只做单向 fork，不做完整会话树</b>：完整树要动会话的核心表示、TUI 的导航交互、
+     * 压缩边界语义与配对规则，风险与收益不成比例；而「从某一步复制出一条新会话」已经能覆盖
+     * 绝大多数真实需求（检查点、A/B 对比、改坏了回退重来）。
+     * <p>
+     * <b>切点必须落在工具调用组的边界上</b>：{@code messageId} 指到一条工具结果时，切点会沿连续的
+     * 工具结果<b>向后推</b>到这一组的末尾。两个方向都能避开「半组工具」，但只有向后能保证
+     * <b>复制范围一定包含被指定的那条消息</b>；向前退会静默丢掉它，而且落点是一条没有结果的
+     * {@code assistant(tool_use)}——内核在组装请求时本来就会把那种结尾当成无效消息丢掉
+     * （见 {@code PromptAssembler.dropTrailingDanglingToolCalls}），于是那条消息「在历史里在、
+     * 模型永远看不到」。
+     * <p>
+     * <b>为什么不复制用量</b>：那是源会话花掉的钱。fork 之后要花新钱，带过去会把成本重复计入。
+     * <p>
+     * <b>压缩摘要按「边界是否落在复制范围内」取舍</b>：在范围内就原样带过去（它仍然代表被丢出
+     * 上下文的那一段），不在范围内就丢弃（那一刻本来还没压过）。压缩是非破坏式的（消息一条不删），
+     * 因此两种情况都不丢数据，两种都精确复原了源会话在那一刻的状态。
+     * <p>
+     * <b>扩展条目照带</b>：它们是「会话在那一刻的状态」的一部分（插件写的检查点、已扫过的文件……），
+     * 丢了它们，「回退到某一步」会得到一个自身标记全无的会话。
+     * <p>
+     * <b>新会话的种类是 {@link SessionKind#FORKED}</b>：它与普通会话同等对待（进会话列表、
+     * 落盘、可被 {@code /resume} 与 {@code /delete}），而不是子代理的临时工作区。
+     * 因此它<b>当场落盘</b>：fork 是一个显式动作，不属于「创建不落盘」那个例外。
+     *
+     * @param sessionId 源会话标识，不可为空白
+     * @param messageId 分支点消息标识，可为 {@code null}（表示从末尾分支）
+     * @param title     新会话标题，可为 {@code null}（继承源会话标题）
+     * @return 新建的分支会话运行态
+     * @throws JellyfishException 源会话不存在、消息标识不存在、空会话，或插件拦下了本次 fork 时抛出
+     */
+    public Session fork(String sessionId, String messageId, String title) {
+        Session source = require(sessionId);
+        int cutIndex = resolveCutIndex(source, messageId);
+        if (cutIndex < 0) {
+            throw new JellyfishException("没有可复制的历史，无法分支: sessionId=" + sessionId);
+        }
+        // 否决钩子排在复制之前：拦下了就什么都不复制、不落盘，因此不存在「一半的新会话」
+        LifecycleVerdict verdict = beforeFork(source, messageId, cutIndex);
+        if (verdict.isCancelled()) {
+            throw new JellyfishException("会话分支被插件拦下：" + reasonOf(verdict.getReason()));
+        }
+        List<SessionMessage> copied = source.getMessages().subList(0, cutIndex + 1);
+        Session forked = new Session(UUID.randomUUID().toString(), source.getAgentId(), source.getProvider(),
+                source.getModel(), source.getPermissionMode(), System.currentTimeMillis(),
+                SessionKind.FORKED, sessionId, copied.get(cutIndex).getMessageId());
+        forked.setTitle(title == null ? forkTitleOf(source) : title);
+        // 复制消息但<b>不累加它们的 token 用量</b>：那是源会话花掉的钱，
+        // fork 之后要花新钱，带过去会把成本重复计入
+        forked.copyMessagesWithoutUsage(copied);
+        forked.setCompaction(copiedCompaction(source, cutIndex));
+        // 扩展条目也要带：它们是「会话在那一刻的状态」的一部分（插件写的检查点、已扫过的文件……），
+        // 而 fork 的语义就是精确复原那一刻。丢了它们，「回退到某一步」会得到一个自身标记全无的会话
+        for (SessionExtensionEntry entry : source.getExtensionEntries()) {
+            forked.putExtensionEntry(entry);
+        }
+        sessions.put(forked.getSessionId(), forked);
+        publish(new SessionCreatedEvent(forked.getAgentId(), forked.getSessionId(), sessionId));
+        persist(forked);
+        LOG.info("已分支会话: source={} forked={} messages={}", sessionId, forked.getSessionId(), forked.size());
+        return forked;
+    }
+
+    /**
+     * 解析并对齐分支切点。
+     * <p>
+     * 对齐规则：指定的那条是工具结果时，沿连续的同类消息向后推到这一组的末尾。
+     * 向前退会得到一条没有结果的 {@code assistant(tool_use)}，而内核在组装请求时会把那种结尾丢掉。
+     *
+     * @param source    源会话
+     * @param messageId 分支点消息标识，可为 {@code null}
+     * @return 切点下标（含）；空会话或消息不存在时返回 {@code -1}
+     * @throws JellyfishException 消息标识存在但找不到时抛出
+     */
+    private int resolveCutIndex(Session source, String messageId) {
+        List<SessionMessage> messages = source.getMessages();
+        if (messages.isEmpty()) {
+            return -1;
+        }
+        if (messageId == null) {
+            return messages.size() - 1;
+        }
+        int index = source.indexOfMessage(messageId);
+        if (index < 0) {
+            throw new JellyfishException("分支点消息不存在: messageId=" + messageId);
+        }
+        while (index + 1 < messages.size() && isToolResult(messages.get(index + 1))) {
+            index++;
+        }
+        return index;
+    }
+
+    /**
+     * 判断一条消息是不是工具结果。
+     * <p>
+     * <b>为什么没有直接用 core 的 {@code ToolPairing}</b>：本类在 infra，而 core 依赖 infra，
+     * 反过来不成立。判定本身只有一个事实（角色是 {@code tool}），而「为什么要对齐」的完整说明在
+     * {@code ToolPairing} 那里；「往哪边对齐」在 {@link #resolveCutIndex} 上。
+     *
+     * @param message 会话消息，不可为 {@code null}
+     * @return 工具结果返回 {@code true}
+     */
+    private static boolean isToolResult(SessionMessage message) {
+        return LlmMessage.ROLE_TOOL.equals(message.getMessage().getRole());
+    }
+
+    /**
+     * 复制源会话的压缩摘要。
+     * <p>
+     * <b>判定必须在切点对齐之后</b>：对齐能把切点往后推，而边界与切点的先后关系决定了该不该带。
+     *
+     * @param source   源会话
+     * @param cutIndex 对齐后的切点下标（含）
+     * @return 应当带过去的摘要；不该带时为 {@code null}
+     */
+    private static SessionCompaction copiedCompaction(Session source, int cutIndex) {
+        SessionCompaction compaction = source.getCompaction();
+        if (compaction == null) {
+            return null;
+        }
+        int boundary = source.indexOfMessage(compaction.getBoundaryMessageId());
+        if (boundary < 0 || boundary > cutIndex) {
+            // 边界不在复制范围内：那一刻本来还没压过，不带才是准确复原
+            return null;
+        }
+        return compaction;
+    }
+
+    /**
+     * 取分支会话的缺省标题：源会话标题加一个后缀，没标题时用源会话标识。
+     *
+     * @param source 源会话
+     * @return 标题，保证非空白
+     */
+    private static String forkTitleOf(Session source) {
+        String base = StringUtils.isBlank(source.getTitle()) ? source.getSessionId() : source.getTitle();
+        return base + " (分支)";
+    }
+
+    /**
+     * 跑一遗会话分支前钩子链，返回最终裁定。
+     * <p>
+     * <b>链式语义与关闭前钩子同口径</b>（写在调用点的 {@code for} 循环里，注册表不参与）：
+     * 第一个 {@code cancel} 短路，没有任何处理器时直接放行。
+     *
+     * @param source    源会话
+     * @param messageId 调用方原始指定的分支点，可为 {@code null}
+     * @param cutIndex  对齐后的切点下标（含）
+     * @return 裁定结果，保证非 {@code null}
+     */
+    private LifecycleVerdict beforeFork(Session source, String messageId, int cutIndex) {
+        List<HandlerBinding<SessionBeforeForkRequest, LifecycleVerdict>> bindings =
+                extensions.bindings(SessionBeforeForkRequest.class, null);
+        if (bindings.isEmpty()) {
+            return LifecycleVerdict.proceed();
+        }
+        SessionBeforeForkRequest request = new SessionBeforeForkRequest(source.getSessionId(),
+                source.getAgentId(), messageId, cutIndex, cutIndex + 1);
+        for (HandlerBinding<SessionBeforeForkRequest, LifecycleVerdict> binding : bindings) {
+            LifecycleVerdict verdict;
+            try {
+                verdict = extensions.invoke(binding.getHandler(), request);
+            } catch (RuntimeException e) {
+                // 处理器抛错按「放行」处理：与其余生命周期钩子同口径，一个坏插件不该让用户分不出分支
+                LOG.warn("会话分支前钩子抛错，按放行处理: owner={} sessionId={}",
+                        binding.getOwner(), source.getSessionId(), e);
+                continue;
+            }
+            if (verdict != null && verdict.isCancelled()) {
+                return verdict;
+            }
+        }
+        return LifecycleVerdict.proceed();
+    }
+
+    /**
+     * 写入（或替换）一条会话扩展条目。
+     * <p>
+     * <b>它走既有的「唯一变更入口 + 标脏 + flush 落盘」机制</b>，不新增第三条落盘路径：
+     * 回合内只标脏，回合终结时与消息一起落一次。
+     * <p>
+     * <b>key 的 owner 前缀由调用方给全</b>：插件侧入口（{@code PluginContext}）把
+     * {@code pluginId} 或 {@code pluginId::子标识} 拼在前面，本方法不猜。这样「谁在写」在
+     * 上限报错与诊断输出里都是明确的，也不会因为两个调用方各拼一次而分叉。
+     * <p>
+     * <b>上限是硬的，超限拒写而不截断</b>：截断一个映射会留下「看起来完整、实际缺字段」
+     * 的数据；静默淘汰则会让插件「写成功、重启后没了」。两者都比当场报错难排查得多。
+     *
+     * @param sessionId 会话标识，不可为空白
+     * @param owner     写入方的 owner 命名空间，不可为空白，仅用于报错归因
+     * @param key       完整 key（含 owner 前缀），不可为空白
+     * @param value     值，可为 {@code null}（等价空映射）
+     * @return 写入后的会话运行态
+     * @throws JellyfishException 会话不存在、会话标识 / owner / key 为空白，或超限时抛出
+     */
+    public Session putExtensionEntry(String sessionId, String owner, String key, Map<String, Object> value) {
+        Session session = require(sessionId);
+        if (StringUtils.isBlank(owner)) {
+            throw new JellyfishException("extension entry owner must not be blank");
+        }
+        if (StringUtils.isBlank(key)) {
+            throw new JellyfishException("extension entry key must not be blank: owner=" + owner);
+        }
+        if (key.length() > EXTENSION_KEY_MAX_CHARS) {
+            throw new JellyfishException("扩展条目的 key 过长（上限 " + EXTENSION_KEY_MAX_CHARS
+                    + " 字符）: owner=" + owner + " keyLength=" + key.length());
+        }
+        SessionExtensionEntry existing = session.extensionEntry(key);
+        if (existing == null && session.getExtensionEntries().size() >= EXTENSION_ENTRY_MAX_COUNT) {
+            throw new JellyfishException("会话的扩展条目已达上限（" + EXTENSION_ENTRY_MAX_COUNT
+                    + " 条），请先删旧条目: owner=" + owner + " sessionId=" + sessionId);
+        }
+        SessionExtensionEntry entry = new SessionExtensionEntry(key, value, System.currentTimeMillis());
+        int bytes = extensionEntryBytes(entry);
+        if (bytes > EXTENSION_VALUE_MAX_BYTES) {
+            throw new JellyfishException("扩展条目的值过大（上限 " + EXTENSION_VALUE_MAX_BYTES
+                    + " 字节）: owner=" + owner + " key=" + key + " bytes=" + bytes);
+        }
+        session.putExtensionEntry(entry);
+        markDirtyOrPersist(session);
+        return session;
+    }
+
+    /**
+     * 删除一条会话扩展条目。
+     * <p>
+     * 删不存在的 key 不算失败：调用的意图「这条不在」已经达成了。
+     *
+     * @param sessionId 会话标识，不可为空白
+     * @param key       完整 key（含 owner 前缀），不可为空白
+     * @return 写入后的会话运行态
+     * @throws JellyfishException 会话不存在或会话标识 / key 为空白时抛出
+     */
+    public Session removeExtensionEntry(String sessionId, String key) {
+        Session session = require(sessionId);
+        if (StringUtils.isBlank(key)) {
+            throw new JellyfishException("extension entry key must not be blank");
+        }
+        if (session.removeExtensionEntry(key)) {
+            markDirtyOrPersist(session);
+        }
+        return session;
+    }
+
+    /**
+     * 取某会话的全部扩展条目（含所有 owner）。
+     *
+     * @param sessionId 会话标识，不可为空白
+     * @return 不可修改列表，可能为空但不会为 {@code null}
+     * @throws JellyfishException 会话不存在时抛出
+     */
+    public List<SessionExtensionEntry> extensionEntries(String sessionId) {
+        return require(sessionId).getExtensionEntries();
+    }
+
+    /**
+     * 取某会话在某个 owner 命名空间下的扩展条目：{@code owner} 自身与 {@code owner::*} 一并命中。
+     * <p>
+     * 前缀匹配必须带分隔符：否则 {@code plugin-a} 会把 {@code plugin-ab} 的条目一起看到。
+     *
+     * @param sessionId 会话标识，不可为空白
+     * @param owner     owner 命名空间根，不可为空白
+     * @return 不可修改列表，可能为空但不会为 {@code null}
+     * @throws JellyfishException 会话不存在或 owner 为空白时抛出
+     */
+    public List<SessionExtensionEntry> extensionEntriesOf(String sessionId, String owner) {
+        if (StringUtils.isBlank(owner)) {
+            throw new JellyfishException("extension entry owner must not be blank");
+        }
+        String prefix = owner + PluginOwnerNamespace.SEPARATOR;
+        List<SessionExtensionEntry> visible = new ArrayList<SessionExtensionEntry>();
+        for (SessionExtensionEntry entry : require(sessionId).getExtensionEntries()) {
+            if (entry.getKey().startsWith(prefix)) {
+                visible.add(entry);
+            }
+        }
+        return Collections.unmodifiableList(visible);
+    }
+
+    /**
+     * 量一条条目的规范编码字节数。
+     * <p>
+     * <b>为何是「内核的规范编码」而不是「序列化后」</b>：文件格式由持久化插件决定，内核无从得知。
+     * 上限的目的是「别让一个坏插件撑爆会话文件」，因此一个确定、可测、与真实编码同量级的度量就够了；
+     * 写死成某个插件的格式反而会让本类依赖它。
+     *
+     * @param entry 条目，不可为 {@code null}
+     * @return 字节数
+     */
+    private static int extensionEntryBytes(SessionExtensionEntry entry) {
+        return ObjectMapperWrapper.writeValueAsBytes(entry.getValue()).length;
+    }
+
+    /**
+     * 按延迟落盘的现有纪律落一步：回合内只标脏，否则当场落。
+     *
+     * @param session 刚被改过的会话
+     */
+    private void markDirtyOrPersist(Session session) {
+        if (deferred.contains(session.getSessionId())) {
+            dirty.add(session.getSessionId());
+        } else {
+            persist(session);
+        }
     }
 
     /**

@@ -4,11 +4,13 @@ import zcd.jellyfish.api.RuntimeInfo;
 import zcd.jellyfish.api.action.ActionHandle;
 import zcd.jellyfish.api.action.PluginAction;
 import zcd.jellyfish.api.event.JellyfishEvent;
+import zcd.jellyfish.api.extension.SessionExtensionEntry;
 import zcd.jellyfish.api.event.RegisterOptions;
 import zcd.jellyfish.api.event.Subscription;
 import zcd.jellyfish.api.extension.ExtensionHandler;
 import zcd.jellyfish.api.extension.ExtensionRequest;
 
+import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
@@ -267,6 +269,56 @@ public interface PluginContext {
      * @see ActionHandle
      */
     ActionHandle submit(PluginAction action);
+
+    /**
+     * 往目标会话写入一条扩展条目。
+     * <p>
+     * <b>解决什么问题</b>：插件想在会话里存自己的状态（「这次会话已经检查过哪些文件」
+     * 「当前工作流的这一步是第几次」）时，此前只能塞进工具结果的元数据，因此必须先把状态
+     * 伪装成一次工具调用。本方法给它一个正当的位置。
+     * <p>
+     * <b>key 会被加上本插件的前缀</b>（{@code pluginId} 或 {@code pluginId::子标识}），因此：
+     * 插件之间互相看不见对方的条目，也无法写到别人的命名空间里；读回来看得到的是完整 key，
+     * 可以据此判断哪一层写的。本插件调 {@code put} 时请传<b>不带前缀</b>的 key。
+     * <p>
+     * <b>它不进模型上下文</b>：与工具结果的元数据同口径——模型不需要它，界面与插件需要。
+     * 但它是会话的一部分，会随会话一起落盘，因此<b>有上限</b>（单条 64 KiB、每会话 64 条、
+     * key 256 字符，按内核的规范编码计算）。超限当场抛 {@link zcd.jellyfish.api.JellyfishException}
+     * 且<b>不写入</b>：截断一个映射会留下「看起来完整、实际缺字段」的数据，而静默淘汰会让插件
+     * 「写成功、重启后没了」。
+     * <p>
+     * <b>与注册不同，停止之后它不失效</b>：已落盘的条目是用户的会话数据，插件卸载后仍然保留，
+     * 重新装回来还能读到。但{@code stop()} 之后本方法同样当场抛
+     * {@link zcd.jellyfish.api.JellyfishException}——写入仍需存活。
+     *
+     * @param sessionId 目标会话标识，不可为空白
+     * @param key       不含 owner 前缀的条目名称，不可为空白
+     * @param value     值，可为 {@code null}（等价空映射）
+     * @throws zcd.jellyfish.api.JellyfishException 会话不存在、key 或会话标识为空白、超限，
+     *                                              或插件上下文已失效时抛出
+     */
+    void putExtensionEntry(String sessionId, String key, Map<String, Object> value);
+
+    /**
+     * 删除本插件命名空间下的一条扩展条目。
+     *
+     * @param sessionId 目标会话标识，不可为空白
+     * @param key       不含 owner 前缀的条目名称，不可为空白
+     * @throws zcd.jellyfish.api.JellyfishException 会话不存在或插件上下文已失效时抛出
+     */
+    void removeExtensionEntry(String sessionId, String key);
+
+    /**
+     * 列出<b>本插件命名空间下</b>的全部扩展条目。
+     * <p>
+     * <b>看不到别人的条目</b>：与写入的命名空间隔离对称。需要诊断「谁挂了东西」请看内核的
+     * 会话快照（它有全部条目），不是在这里。
+     *
+     * @param sessionId 目标会话标识，不可为空白
+     * @return 不可变列表，未写过时为空列表；key 是完整 key
+     * @throws zcd.jellyfish.api.JellyfishException 会话不存在或插件上下文已失效时抛出
+     */
+    List<SessionExtensionEntry> extensionEntries(String sessionId);
 
     /**
      * 订阅内核通知。

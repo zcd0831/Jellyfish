@@ -1,6 +1,7 @@
 package zcd.jellyfish.infra.plugin;
 
 import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
 import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.action.ActionHandle;
 import zcd.jellyfish.api.action.ActionStatus;
@@ -20,6 +21,7 @@ import zcd.jellyfish.infra.event.EventChannel;
 import zcd.jellyfish.infra.event.EventChannelOptions;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.registry.TypeRegistry;
+import zcd.jellyfish.infra.session.SessionManager;
 
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -46,8 +48,11 @@ class PluginContextFactoryTest {
     /** 动作队列：与注册同一时刻按 owner 回收。 */
     private final ActionQueue actions = new ActionQueue();
 
+    /** 会话域服务：桩，只为满足插件上下文的构造；扩展条目的真实语义由 SessionManagerTest 覆盖。 */
+    private final SessionManager sessions = Mockito.mock(SessionManager.class);
+
     /** 被测工厂。 */
-    private final PluginContextFactory factory = new PluginContextFactory(extensions, events, registry, new RuntimeInfoHolder(), actions);
+    private final PluginContextFactory factory = new PluginContextFactory(extensions, events, registry, new RuntimeInfoHolder(), actions, sessions);
 
     @Test
     void create_should_bind_plugin_id_as_owner() {
@@ -178,13 +183,13 @@ class PluginContextFactoryTest {
     void factory_should_reject_null_dependencies() {
         // When / Then
         assertThrows(NullPointerException.class,
-                () -> new PluginContextFactory(null, events, registry, new RuntimeInfoHolder(), new ActionQueue()));
+                () -> new PluginContextFactory(null, events, registry, new RuntimeInfoHolder(), new ActionQueue(), sessions));
         assertThrows(NullPointerException.class,
-                () -> new PluginContextFactory(extensions, null, registry, new RuntimeInfoHolder(), new ActionQueue()));
+                () -> new PluginContextFactory(extensions, null, registry, new RuntimeInfoHolder(), new ActionQueue(), sessions));
         assertThrows(NullPointerException.class,
-                () -> new PluginContextFactory(extensions, events, null, new RuntimeInfoHolder(), new ActionQueue()));
+                () -> new PluginContextFactory(extensions, events, null, new RuntimeInfoHolder(), new ActionQueue(), sessions));
         assertThrows(NullPointerException.class,
-                () -> new PluginContextFactory(extensions, events, registry, null, new ActionQueue()));
+                () -> new PluginContextFactory(extensions, events, registry, null, new ActionQueue(), sessions));
     }
 
     @Test

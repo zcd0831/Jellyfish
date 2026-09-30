@@ -1,13 +1,17 @@
 package zcd.jellyfish.infra.session;
 
 import zcd.jellyfish.api.extension.PermissionMode;
+import zcd.jellyfish.api.extension.SessionExtensionEntry;
+import zcd.jellyfish.api.extension.SessionKind;
 import zcd.jellyfish.api.extension.SessionMessageSnapshot;
 import zcd.jellyfish.api.extension.SessionSnapshot;
 import zcd.jellyfish.infra.llm.LlmUsage;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 一次会话的运行态聚合根。
@@ -24,9 +28,10 @@ import java.util.List;
  * 派发都挂在那一个入口上；本类只保证「单会话内的原子性与快照安全」，因此它<b>不感知</b>事件通道、
  * 扩展层与配置。
  * <p>
- * <b>子代理会话靠 {@link #getParentSessionId()} 识别</b>：它同样是一个真实会话（有标识、有消息、
- * 有事件），只是不落盘、不进会话列表；「临时的」这个性质完全由「谁生的它」推导而来，
- * 因此不需要第二个布尔字段——两个字段就有两套真相。
+ * <b>子代理会话靠 {@link #getKind()} 识别</b>：它同样是一个真实会话（有标识、有消息、
+ * 有事件），只是不落盘、不进会话列表；{@link #getParentSessionId()} 只是「派生自哪个会话」的
+ * 追溯信息，<b>不是判定依据</b>——两者合一曾让分支（fork）会话被误判成子代理会话，
+ * 而那意味着它不落盘，即静默的数据丢失。
  * <p>
  * 线程安全策略：所有读写都在实例锁内（方法级 {@code synchronized}），读方法返回防御性快照——
  * 调用方拿到的列表不会被后续追加改动，遍历时也不会出现并发修改。会话之间互不影响，跨会话隔离由
@@ -45,10 +50,19 @@ public final class Session {
     /**
      * 派生该会话的父会话标识，创建后不可变。
      * <p>
-     * {@code null} 表示根会话（用户开的对话）；非 {@code null} 表示这是某个根会话派出去的
-     * 子代理会话，因此<b>不落盘、不进会话列表</b>，但生命周期事件照发（携带本字段供订阅者归位）。
+     * {@code null} 表示没有「父」；非 {@code null} 时它是<b>追溯信息</b>：子代理会话记录它被
+     * 哪次委派生出来，分支会话记录它从哪个会话分出来。
+     * <p>
+     * <b>它不是判定依据</b>：是不是子代理会话看 {@link #getKind()}。两者合并成一个字段时，
+     * 分支会话会被误判成子代理会话，后果是它不落盘——静默的数据丢失。
      */
     private final String parentSessionId;
+
+    /** 会话种类，创建后不可变；它才是「是不是子代理会话」的判定来源。 */
+    private final SessionKind kind;
+
+    /** 分支点消息标识（含），非分支会话为 {@code null}。 */
+    private final String forkPointMessageId;
 
     /** 消息列表，按追加顺序排列。 */
     private final List<SessionMessage> messages = new ArrayList<SessionMessage>();
@@ -98,7 +112,19 @@ public final class Session {
     private SessionCompaction compaction;
 
     /**
-     * 构造会话运行态，仅供 {@link SessionManager} 调用。
+     * 扩展条目：完整 key（含 owner 前缀）→ 条目。
+     * <p>
+     * 用 {@link LinkedHashMap} 是为了让读取顺序稳定：它是「当前有哪些条目」的展示来源，
+     * 而一个随哈希变动的顺序会让界面每次刷新都在跳。
+     */
+    private final Map<String, SessionExtensionEntry> extensionEntries =
+            new LinkedHashMap<String, SessionExtensionEntry>();
+
+    /**
+     * 构造会话运行态（根会话），仅供 {@link SessionManager} 调用。
+     * <p>
+     * 它与下面的全参构造器不是重载关系而是便捷入口：绝大多数会话都是普通根会话，
+     * 让调用点被迫多写两个 {@code null} 只会把噪音扩散出去。
      *
      * @param sessionId      会话唯一标识
      * @param agentId        初始 agentId，可为 {@code null}
@@ -109,11 +135,12 @@ public final class Session {
      */
     Session(String sessionId, String agentId, String provider, String model,
             PermissionMode permissionMode, long createdAt) {
-        this(sessionId, agentId, provider, model, permissionMode, createdAt, null);
+        this(sessionId, agentId, provider, model, permissionMode, createdAt,
+                SessionKind.NORMAL, null, null);
     }
 
     /**
-     * 构造会话运行态（含父会话标识），仅供 {@link SessionManager} 调用。
+     * 构造会话运行态（含种类与来源），仅供 {@link SessionManager} 调用。
      *
      * @param sessionId       会话唯一标识
      * @param agentId         初始 agentId，可为 {@code null}
@@ -121,10 +148,13 @@ public final class Session {
      * @param model           初始 model，可为 {@code null}
      * @param permissionMode  初始权限模式，{@code null} 按 {@link PermissionMode#NORMAL} 处理
      * @param createdAt       创建时间戳（epoch millis）
-     * @param parentSessionId 派生该会话的父会话标识，{@code null} 表示根会话
+     * @param kind            会话种类，{@code null} 按 {@link SessionKind#NORMAL} 处理
+     * @param parentSessionId 派生该会话的父会话标识，可为 {@code null}
+     * @param forkPointMessageId 分支点消息标识，可为 {@code null}
      */
     Session(String sessionId, String agentId, String provider, String model,
-            PermissionMode permissionMode, long createdAt, String parentSessionId) {
+            PermissionMode permissionMode, long createdAt, SessionKind kind, String parentSessionId,
+            String forkPointMessageId) {
         this.sessionId = sessionId;
         this.agentId = agentId;
         this.provider = provider;
@@ -132,7 +162,9 @@ public final class Session {
         this.permissionMode = permissionMode == null ? PermissionMode.NORMAL : permissionMode;
         this.createdAt = createdAt;
         this.updatedAt = createdAt;
+        this.kind = kind == null ? SessionKind.NORMAL : kind;
         this.parentSessionId = parentSessionId;
+        this.forkPointMessageId = forkPointMessageId;
     }
 
     /**
@@ -147,13 +179,17 @@ public final class Session {
      */
     static Session restore(SessionSnapshot snapshot) {
         Session session = new Session(snapshot.getSessionId(), snapshot.getAgentId(), snapshot.getProvider(),
-                snapshot.getModel(), snapshot.getPermissionMode(), snapshot.getCreatedAt());
+                snapshot.getModel(), snapshot.getPermissionMode(), snapshot.getCreatedAt(),
+                snapshot.getKind(), snapshot.getParentSessionId(), snapshot.getForkPointMessageId());
         session.title = snapshot.getTitle();
         session.updatedAt = snapshot.getUpdatedAt();
         session.usage = SessionSnapshots.toSessionUsage(snapshot.getUsage());
         session.compaction = SessionSnapshots.toCompaction(snapshot.getCompaction());
         for (SessionMessageSnapshot message : snapshot.getMessages()) {
             session.messages.add(SessionSnapshots.toMessage(message));
+        }
+        for (SessionExtensionEntry entry : snapshot.getExtensionEntries()) {
+            session.extensionEntries.put(entry.getKey(), entry);
         }
         return session;
     }
@@ -169,24 +205,43 @@ public final class Session {
 
     /**
      * 获取派生该会话的父会话标识。
+     * <p>
+     * <b>它只是追溯信息，不是判定依据</b>：判定这个会话是不是子代理会话请用 {@link #getKind()}。
      *
-     * @return 父会话标识；根会话返回 {@code null}
+     * @return 父会话标识；没有父时返回 {@code null}
      */
     public String getParentSessionId() {
         return parentSessionId;
     }
 
     /**
+     * 获取会话种类。
+     *
+     * @return 会话种类，保证非 {@code null}
+     */
+    public SessionKind getKind() {
+        return kind;
+    }
+
+    /**
+     * 获取分支点消息标识。
+     *
+     * @return 分支点消息标识，非分支会话为 {@code null}
+     */
+    public String getForkPointMessageId() {
+        return forkPointMessageId;
+    }
+
+    /**
      * 判断是否为子代理会话。
      * <p>
-     * 包级可见：只有 {@link SessionManager} 需要据此决定「落不落盘、进不进列表」，
-     * 外部一律读 {@link #getParentSessionId()}——那是同一个事实，但不会让调用方误以为
-     * 它只是一条参考信息。
+     * 包级可见：只有 {@link SessionManager} 需要据此决定「落不落盘、进不进列表」；
+     * 外部要判断时读 {@link #getKind()}。
      *
      * @return 子代理会话返回 {@code true}
      */
     boolean isEphemeral() {
-        return parentSessionId != null;
+        return kind == SessionKind.EPHEMERAL;
     }
 
     /**
@@ -407,6 +462,65 @@ public final class Session {
         this.provider = provider;
         this.model = model;
         this.updatedAt = System.currentTimeMillis();
+    }
+
+    /**
+     * 取扩展条目的不可修改快照。
+     *
+     * @return 不可修改列表，可能为空但不会为 {@code null}
+     */
+    public synchronized List<SessionExtensionEntry> getExtensionEntries() {
+        return Collections.unmodifiableList(new ArrayList<SessionExtensionEntry>(extensionEntries.values()));
+    }
+
+    /**
+     * 定位一条扩展条目。
+     *
+     * @param key 完整 key（含 owner 前缀）
+     * @return 条目；不存在时返回 {@code null}
+     */
+    synchronized SessionExtensionEntry extensionEntry(String key) {
+        return extensionEntries.get(key);
+    }
+
+    /**
+     * 写入（或替换）一条扩展条目。
+     * <p>
+     * 包级可见：与消息追加同理，只有 {@link SessionManager} 能改会话，
+     * 标脏与落盘派发在那一个入口上统一发生。
+     *
+     * @param entry 条目，不可为 {@code null}
+     */
+    synchronized void putExtensionEntry(SessionExtensionEntry entry) {
+        extensionEntries.put(entry.getKey(), entry);
+        updatedAt = System.currentTimeMillis();
+    }
+
+    /**
+     * 删除一条扩展条目。
+     *
+     * @param key 完整 key（含 owner 前缀）
+     * @return 确实删掉了一条返回 {@code true}
+     */
+    synchronized boolean removeExtensionEntry(String key) {
+        SessionExtensionEntry removed = extensionEntries.remove(key);
+        if (removed == null) {
+            return false;
+        }
+        updatedAt = System.currentTimeMillis();
+        return true;
+    }
+
+    /**
+     * 批量放入已存在的消息，<b>不累加它们的 token 用量</b>，也不改变更时间戳。
+     * <p>
+     * 包级可见，只供 fork 复制历史用：那些消息的用量已经在源会话里记过账，
+     * 带过去会把成本重复计入——fork 出来的会话要从零开始计费。
+     *
+     * @param copied 已存在的消息列表，不可为 {@code null}
+     */
+    synchronized void copyMessagesWithoutUsage(List<SessionMessage> copied) {
+        messages.addAll(copied);
     }
 
     /**

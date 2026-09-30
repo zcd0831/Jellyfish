@@ -9,6 +9,7 @@ import zcd.jellyfish.infra.action.ActionQueue;
 import zcd.jellyfish.infra.event.EventChannel;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.registry.TypeRegistry;
+import zcd.jellyfish.infra.session.SessionManager;
 
 import javax.inject.Inject;
 import java.util.Map;
@@ -59,6 +60,9 @@ public final class PluginContextFactory {
     /** 动作队列：插件主动动作的入站队列，与注册同时刻按 owner 回收。 */
     private final ActionQueue actions;
 
+    /** 会话域服务：会话扩展条目的唯一写入入口。 */
+    private final SessionManager sessions;
+
     /** 根 {@code pluginId} → 存活标记；停止时据此让该插件的全部上下文失效。 */
     private final Map<String, ContextLifecycle> lifecycles = new ConcurrentHashMap<String, ContextLifecycle>();
 
@@ -70,15 +74,17 @@ public final class PluginContextFactory {
      * @param registry    共用注册表，不可为 {@code null}
      * @param runtimeInfo 运行时信息持有者，不可为 {@code null}
      * @param actions     动作队列，不可为 {@code null}
+     * @param sessions    会话域服务，不可为 {@code null}
      */
     @Inject
     public PluginContextFactory(ExtensionRegistry extensions, EventChannel events, TypeRegistry registry,
-                               RuntimeInfoHolder runtimeInfo, ActionQueue actions) {
+                               RuntimeInfoHolder runtimeInfo, ActionQueue actions, SessionManager sessions) {
         this.extensions = Objects.requireNonNull(extensions, "extensions must not be null");
         this.events = Objects.requireNonNull(events, "events must not be null");
         this.registry = Objects.requireNonNull(registry, "registry must not be null");
         this.runtimeInfo = Objects.requireNonNull(runtimeInfo, "runtimeInfo must not be null");
         this.actions = Objects.requireNonNull(actions, "actions must not be null");
+        this.sessions = Objects.requireNonNull(sessions, "sessions must not be null");
     }
 
     /**
@@ -97,7 +103,7 @@ public final class PluginContextFactory {
             LOG.warn("插件上下文被重复创建，已关闭上一条生命周期: pluginId={}", declaration.getPluginId());
             previous.close();
         }
-        return new PluginContextImpl(declaration, extensions, events, lifecycle, runtimeInfo, actions);
+        return new PluginContextImpl(declaration, extensions, events, lifecycle, runtimeInfo, actions, sessions);
     }
 
     /**

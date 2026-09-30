@@ -9,13 +9,16 @@ import zcd.jellyfish.api.event.RegisterOptions;
 import zcd.jellyfish.api.event.Subscription;
 import zcd.jellyfish.api.extension.ExtensionHandler;
 import zcd.jellyfish.api.extension.ExtensionRequest;
+import zcd.jellyfish.api.extension.SessionExtensionEntry;
 import zcd.jellyfish.api.plugin.PluginContext;
 import zcd.jellyfish.api.plugin.PluginDeclaration;
 import zcd.jellyfish.api.plugin.PluginOwnerNamespace;
 import zcd.jellyfish.infra.action.ActionQueue;
 import zcd.jellyfish.infra.event.EventChannel;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
+import zcd.jellyfish.infra.session.SessionManager;
 
+import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
@@ -68,6 +71,9 @@ public final class PluginContextImpl implements PluginContext {
     /** 动作队列：插件主动动作的入站队列，同一个根插件下的子上下文共用。 */
     private final ActionQueue actions;
 
+    /** 会话域服务：仅用于会话扩展条目的读写。 */
+    private final SessionManager sessions;
+
     /**
      * 构造一个<b>自持有存活标记</b>的插件上下文。
      * <p>
@@ -83,8 +89,10 @@ public final class PluginContextImpl implements PluginContext {
      * @param extensions  同步扩展点策略，不可为 {@code null}
      * @param events      事件通道，不可为 {@code null}
      */
-    public PluginContextImpl(PluginDeclaration declaration, ExtensionRegistry extensions, EventChannel events) {
-        this(declaration, extensions, events, new ContextLifecycle(), new RuntimeInfoHolder(), new ActionQueue());
+    public PluginContextImpl(PluginDeclaration declaration, ExtensionRegistry extensions, EventChannel events,
+                             SessionManager sessions) {
+        this(declaration, extensions, events, new ContextLifecycle(), new RuntimeInfoHolder(), new ActionQueue(),
+                sessions);
     }
 
     /**
@@ -96,15 +104,18 @@ public final class PluginContextImpl implements PluginContext {
      * @param lifecycle   存活标记，不可为 {@code null}；子上下文必须复用父上下文的同一个实例
      * @param runtimeInfo 运行时信息持有者，不可为 {@code null}；子上下文同样复用它
      * @param actions     动作队列，不可为 {@code null}；子上下文同样复用它
+     * @param sessions    会话域服务，不可为 {@code null}；子上下文同样复用它
      */
     PluginContextImpl(PluginDeclaration declaration, ExtensionRegistry extensions, EventChannel events,
-                      ContextLifecycle lifecycle, RuntimeInfoHolder runtimeInfo, ActionQueue actions) {
+                      ContextLifecycle lifecycle, RuntimeInfoHolder runtimeInfo, ActionQueue actions,
+                      SessionManager sessions) {
         this.declaration = declaration;
         this.extensions = extensions;
         this.events = events;
         this.lifecycle = lifecycle;
         this.runtimeInfo = runtimeInfo;
         this.actions = actions;
+        this.sessions = sessions;
     }
 
     @Override
@@ -132,7 +143,7 @@ public final class PluginContextImpl implements PluginContext {
         // 本方法刻意不做存活检查——它不产生任何注册，真正需要被拦住的是注册那一刻。
         // 运行时信息持有者也一并复用：外壳是进程级事实，子单元与父单元看到的必须一致
         return new PluginContextImpl(PluginDeclaration.of(childPluginId, declaration.getConfiguration()),
-                extensions, events, lifecycle, runtimeInfo, actions);
+                extensions, events, lifecycle, runtimeInfo, actions, sessions);
     }
 
     @Override
@@ -168,6 +179,48 @@ public final class PluginContextImpl implements PluginContext {
     public ActionHandle submit(PluginAction action) {
         requireAlive("submit action");
         return actions.submit(pluginId(), action);
+    }
+
+    @Override
+    public void putExtensionEntry(String sessionId, String key, Map<String, Object> value) {
+        requireAlive("write session extension entry");
+        sessions.putExtensionEntry(sessionId, pluginId(), namespaced(key), value);
+    }
+
+    @Override
+    public void removeExtensionEntry(String sessionId, String key) {
+        requireAlive("remove session extension entry");
+        sessions.removeExtensionEntry(sessionId, namespaced(key));
+    }
+
+    @Override
+    public List<SessionExtensionEntry> extensionEntries(String sessionId) {
+        requireAlive("read session extension entries");
+        return sessions.extensionEntriesOf(sessionId, pluginId());
+    }
+
+    /**
+     * 把插件给的 key 拼上本上下文的全限定 owner 前缀。
+     * <p>
+     * <b>前缀恒从当前身份派生</b>，插件没有任何入口能写别人的命名空间。
+     * <p>
+     * <b>key 里不得含命名空间分隔符</b>：否则 {@code plugin-a::a::b} 读不出来它到底是「子上下文 a 写的
+     * key b」还是「根上下文写的 key a::b」，诊断输出就失去了可归因性。需要层级就用别的字符。
+     *
+     * @param key 插件给的不含前缀的 key
+     * @return 带前缀的完整 key
+     * @throws JellyfishException key 为空白或含命名空间分隔符时抛出
+     */
+    private String namespaced(String key) {
+        if (key == null || key.trim().isEmpty()) {
+            throw new JellyfishException("session extension entry key must not be blank: pluginId="
+                    + pluginId());
+        }
+        if (key.contains(PluginOwnerNamespace.SEPARATOR)) {
+            throw new JellyfishException("会话扩展条目的 key 不得含 \"" + PluginOwnerNamespace.SEPARATOR
+                    + "\": pluginId=" + pluginId());
+        }
+        return pluginId() + PluginOwnerNamespace.SEPARATOR + key;
     }
 
     /**

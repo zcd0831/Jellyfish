@@ -3,6 +3,7 @@ package zcd.jellyfish.infra.plugin;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
 import org.junit.jupiter.api.io.TempDir;
 import org.pf4j.PluginState;
 import zcd.jellyfish.api.JellyfishException;
@@ -18,6 +19,7 @@ import zcd.jellyfish.infra.event.EventChannelOptions;
 import zcd.jellyfish.infra.config.PluginsSettings;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.registry.TypeRegistry;
+import zcd.jellyfish.infra.session.SessionManager;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -47,6 +49,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class PF4JPluginManagerTest {
 
+    /** 会话域服务：桩，只为满足插件上下文的构造。 */
+    private final SessionManager sessions = Mockito.mock(SessionManager.class);
+
     /** 测试用插件根目录。 */
     @TempDir
     Path pluginsRoot;
@@ -73,7 +78,7 @@ class PF4JPluginManagerTest {
         extensions = new ExtensionRegistry(registry);
         eventChannel = new EventChannel(EventChannelOptions.defaults(), registry);
         eventChannel.start();
-        contexts = new PluginContextFactory(extensions, eventChannel, registry, new RuntimeInfoHolder(), new ActionQueue());
+        contexts = new PluginContextFactory(extensions, eventChannel, registry, new RuntimeInfoHolder(), new ActionQueue(), sessions);
     }
 
     @AfterEach

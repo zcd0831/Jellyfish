@@ -79,7 +79,7 @@ class SessionSnapshotTest {
         SessionSnapshot snapshot = SessionSnapshot.of("s-1", 0L, 0L, null, null, null, null,
                 PermissionMode.NORMAL, Collections.singletonList(message("m-1")), null);
 
-        assertEquals("SessionSnapshot{sessionId=s-1, messages=1}", snapshot.toString());
+        assertEquals("SessionSnapshot{sessionId=s-1, kind=NORMAL, messages=1}", snapshot.toString());
     }
 
     @Test
@@ -98,10 +98,31 @@ class SessionSnapshotTest {
 
         // When
         SessionSnapshot snapshot = new SessionSnapshot("s-1", 0L, 0L, null, null, null, null,
-                PermissionMode.NORMAL, null, null, compaction);
+                PermissionMode.NORMAL, null, null, compaction, SessionKind.FORKED, "s-0", "m-9", null);
 
         // Then
         assertEquals(compaction, snapshot.getCompaction());
+    }
+
+    @Test
+    void constructor_should_default_kind_to_normal_when_absent() {
+        // 老快照没有 kind 字段：Jackson 传进来的是 null，此时按普通会话处理
+        SessionSnapshot snapshot = new SessionSnapshot("s-1", 0L, 0L, null, null, null, null,
+                PermissionMode.NORMAL, null, null, null, null, null, null, null);
+
+        assertEquals(SessionKind.NORMAL, snapshot.getKind());
+        assertNull(snapshot.getParentSessionId());
+        assertNull(snapshot.getForkPointMessageId());
+        assertTrue(snapshot.getExtensionEntries().isEmpty());
+    }
+
+    @Test
+    void constructor_should_reject_null_extension_entry() {
+        List<SessionExtensionEntry> entries = new ArrayList<SessionExtensionEntry>();
+        entries.add(null);
+
+        assertThrows(JellyfishException.class, () -> new SessionSnapshot("s-1", 0L, 0L, null, null, null, null,
+                PermissionMode.NORMAL, null, null, null, SessionKind.NORMAL, null, null, entries));
     }
 
     @Test

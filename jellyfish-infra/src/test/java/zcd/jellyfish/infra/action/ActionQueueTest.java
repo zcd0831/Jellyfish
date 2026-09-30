@@ -206,16 +206,25 @@ class ActionQueueTest {
     }
 
     @Test
-    void submit_should_fail_when_capability_not_available() {
+    void submit_should_queue_fork_when_capability_available() {
+        // fork 已随会话分支能力落地：与其他改会话集合的动作一样在回合边界排空
         queue.beginTurn("s1", () -> {
         });
 
         ActionHandle fork = queue.submit("plugin-a", PluginAction.forkSession("s1", "m1", "分支"));
+
+        assertEquals(ActionStatus.QUEUED, fork.getStatus());
+        assertEquals(1, queue.takeTurnBoundary("s1").size());
+    }
+
+    @Test
+    void submit_should_fail_when_capability_not_available() {
+        queue.beginTurn("s1", () -> {
+        });
+
         ActionHandle rebuild = queue.submit("plugin-a", PluginAction.rebuildToolCatalog("s1", "插件变了"));
 
         // 尚未提供的能力在投递时就说清楚，而不是静默无效——插件据此可以不做重试
-        assertEquals(ActionStatus.FAILED, fork.getStatus());
-        assertTrue(fork.getResult().contains("会话分支"), fork.getResult());
         assertEquals(ActionStatus.FAILED, rebuild.getStatus());
         assertTrue(rebuild.getResult().contains("工具清单"), rebuild.getResult());
     }

@@ -12,6 +12,7 @@ import zcd.jellyfish.api.extension.CompactionTrigger;
 import zcd.jellyfish.core.compact.ConversationCompactor;
 import zcd.jellyfish.infra.action.ActionQueue;
 import zcd.jellyfish.infra.llm.LlmMessage;
+import zcd.jellyfish.infra.session.Session;
 import zcd.jellyfish.infra.session.SessionManager;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -144,6 +145,20 @@ class ActionDispatcherTest {
         assertEquals(ActionStatus.FAILED, broken.getStatus());
         assertTrue(broken.getResult().contains("模型不认识"), broken.getResult());
         assertEquals(ActionStatus.DONE, healthy.getStatus());
+    }
+
+    @Test
+    void drainTurnBoundary_should_fork_session() {
+        Session forked = mock(Session.class);
+        when(forked.getSessionId()).thenReturn("s2");
+        when(sessionManager.fork("s1", "m7", "分支")).thenReturn(forked);
+        ActionHandle handle = queue.submit("plugin-a", PluginAction.forkSession("s1", "m7", "分支"));
+
+        dispatcher.drainTurnBoundary("s1", true);
+
+        // 新会话 id 写在结果里：不为插件把当前会话切过去，那是外壳的主权
+        assertEquals(ActionStatus.DONE, handle.getStatus());
+        assertTrue(handle.getResult().contains("s2"), handle.getResult());
     }
 
     @Test

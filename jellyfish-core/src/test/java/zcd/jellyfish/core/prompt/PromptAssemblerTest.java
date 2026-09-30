@@ -19,6 +19,7 @@ import zcd.jellyfish.api.extension.SessionCompactionSnapshot;
 import zcd.jellyfish.api.extension.SessionMessageSnapshot;
 import zcd.jellyfish.api.extension.SessionRestoreRequest;
 import zcd.jellyfish.api.extension.SessionRestoreResult;
+import zcd.jellyfish.api.extension.SessionKind;
 import zcd.jellyfish.api.extension.SessionSnapshot;
 import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.infra.agent.AgentManager;
@@ -1155,7 +1156,8 @@ class PromptAssemblerTest {
                 null, null, null, null);
         return new SessionSnapshot("s-1", 1L, 2L, null, null, null, null, PermissionMode.NORMAL,
                 Collections.singletonList(message), null,
-                SessionCompactionSnapshot.of("孤儿摘要", "ghost", 3L));
+                SessionCompactionSnapshot.of("孤儿摘要", "ghost", 3L),
+                SessionKind.NORMAL, null, null, null);
     }
 
     /**

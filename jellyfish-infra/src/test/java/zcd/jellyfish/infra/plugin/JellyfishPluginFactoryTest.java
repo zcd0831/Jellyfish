@@ -2,6 +2,7 @@ package zcd.jellyfish.infra.plugin;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
 import org.junit.jupiter.api.io.TempDir;
 import org.pf4j.Plugin;
 import org.pf4j.PluginManager;
@@ -17,6 +18,7 @@ import zcd.jellyfish.infra.event.EventChannel;
 import zcd.jellyfish.infra.event.EventChannelOptions;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.registry.TypeRegistry;
+import zcd.jellyfish.infra.session.SessionManager;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -45,13 +47,17 @@ class JellyfishPluginFactoryTest {
     @TempDir
     Path pluginsRoot;
 
+    /** 会话域服务：桩，只为满足插件上下文的构造。 */
+    private final SessionManager sessions = Mockito.mock(SessionManager.class);
+
     /** 插件上下文工厂，用于创建插件上下文。 */
     private final PluginContextFactory contexts = new PluginContextFactory(
             new ExtensionRegistry(new TypeRegistry()),
             new EventChannel(EventChannelOptions.defaults(), new TypeRegistry()),
             new TypeRegistry(),
             new RuntimeInfoHolder(),
-            new ActionQueue());
+            new ActionQueue(),
+            sessions);
 
     /** 记录插件生命周期回调。 */
     private static final List<String> RECORDED = new ArrayList<>();

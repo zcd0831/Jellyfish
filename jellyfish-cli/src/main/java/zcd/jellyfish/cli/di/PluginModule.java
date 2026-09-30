@@ -11,6 +11,7 @@ import zcd.jellyfish.infra.plugin.PluginContextFactory;
 import zcd.jellyfish.infra.plugin.PluginRuntimeConfig;
 import zcd.jellyfish.infra.plugin.RuntimeInfoHolder;
 import zcd.jellyfish.infra.registry.TypeRegistry;
+import zcd.jellyfish.infra.session.SessionManager;
 
 import javax.inject.Singleton;
 
@@ -60,6 +61,7 @@ public final class PluginModule {
      * @param registry    共用注册表，用于按 owner 一次性回收
      * @param runtimeInfo 运行时信息持有者（外壳启动期写入）
      * @param actions     动作队列
+     * @param sessions    会话域服务
      * @return 插件上下文工厂
      */
     @Provides
@@ -67,8 +69,8 @@ public final class PluginModule {
     static PluginContextFactory providePluginContextFactory(ExtensionRegistry extensions, EventChannel events,
                                                             TypeRegistry registry,
                                                             RuntimeInfoHolder runtimeInfo,
-                                                            ActionQueue actions) {
-        return new PluginContextFactory(extensions, events, registry, runtimeInfo, actions);
+                                                            ActionQueue actions, SessionManager sessions) {
+        return new PluginContextFactory(extensions, events, registry, runtimeInfo, actions, sessions);
     }
 
     /**

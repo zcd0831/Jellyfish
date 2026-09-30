@@ -110,7 +110,7 @@ class PluginModuleTest {
 
         // When
         PluginContextFactory factory = PluginModule.providePluginContextFactory(extensions, events, registry,
-                new RuntimeInfoHolder(), new ActionQueue());
+                new RuntimeInfoHolder(), new ActionQueue(), org.mockito.Mockito.mock(zcd.jellyfish.infra.session.SessionManager.class));
         PluginContext context = factory.create(PluginDeclaration.of("plugin-a"));
         Subscription subscription = context.observe(ConfigWarningEvent.class, event -> {
                     // 仅用于产生一条订阅
@@ -130,7 +130,7 @@ class PluginModuleTest {
                 new ExtensionRegistry(registry),
                 new EventChannel(EventChannelOptions.defaults(), registry),
                 registry,
-                new RuntimeInfoHolder(), new ActionQueue());
+                new RuntimeInfoHolder(), new ActionQueue(), org.mockito.Mockito.mock(zcd.jellyfish.infra.session.SessionManager.class));
 
         // When
         PF4JPluginManager manager = PluginModule.providePluginManager(factory,

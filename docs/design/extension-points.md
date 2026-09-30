@@ -584,10 +584,23 @@ public final class SessionExtensionEntry   // 恰好一个可见构造器
 **`SessionManager` 新增入口**
 
 ```java
-public Session putExtensionEntry(String sessionId, String key, Map<String, Object> value);
+public Session putExtensionEntry(String sessionId, String owner, String key, Map<String, Object> value);
 public Session removeExtensionEntry(String sessionId, String key);
 public List<SessionExtensionEntry> extensionEntries(String sessionId);
+public List<SessionExtensionEntry> extensionEntriesOf(String sessionId, String owner);
 ```
+
+**落地时的两点修订**（P4 定稿）：
+
+1. **`owner` 作为显式参数**：上限报错与诊断输出要能说清「谁在写」，而从已拼好的 key 里反推 owner
+   属于猜。两个列表入口也拆成两个：`extensionEntries` 给内核（全部 owner），
+   `extensionEntriesOf` 给插件侧（前缀过滤，与写入的命名空间隔离对称）。
+2. **插件侧入口在 `PluginContext` 上，不在 `SessionManager` 上**：插件拿不到 `SessionManager`，
+   而 §6.1 的动机恰恰是「插件想在会话里存自己的状态」。因此新增
+   `PluginContext.putExtensionEntry / removeExtensionEntry / extensionEntries` 三个方法，
+   由它把 `pluginId` 或 `pluginId::子标识` 拼在 key 前面，并**拒绝含命名空间分隔符的 key**——
+   否则 `plugin-a::a::b` 读不出来它到底是「子上下文 `a` 写的 key `b`」还是
+   「根上下文写的 key `a::b`」，诊断输出就失去了可归因性。
 
 - 走既有「唯一变更入口 + 标脏 + `flush` 落盘」机制，**不新增第三条落盘路径**。
 - 值类型用 `Map<String, Object>`（与 `SessionMessageSnapshot.metadata` 同口径），
@@ -600,10 +613,17 @@ public List<SessionExtensionEntry> extensionEntries(String sessionId);
 
 | 项 | 缺省 | 超限行为 |
 | --- | --- | --- |
-| 单条 `value` 序列化后字节数 | 64 KiB | **抛 `JellyfishException`，拒绝写入** |
+| 单条 `value` 字节数 | 64 KiB | **抛 `JellyfishException`，拒绝写入** |
 | 每会话条目总数 | 64 | 同上，错误信息给出「先删旧条目」的下一步 |
 | `key` 长度 | 256 字符 | 同上 |
 | 关闭整个能力 | — | 配 `0` 表示禁用（逃生门） |
+
+**「字节数」是内核的规范编码**（`ObjectMapperWrapper` 序列化后的 UTF-8 字节数），不是
+「插件写进文件后的字节数」——文件格式由持久化插件决定，内核无从得知。上限的目的是
+「别让一个坏插件撑爆会话文件」，一个确定、可测、与真实编码同量级的度量就够了；
+反过来写死成某个插件的格式会让 `SessionManager` 依赖它。
+（初稿写的「配 `0` 关闭」未落地：目前上限是 `SessionManager` 上的三个常量，
+要开放配置就连同 `configuration.md` 一起改。）
 
 - **不截断**：截断一个 `Map` 会留下「看起来完整、实际缺字段」的数据——与 `read_file`
   「单行超限就报错、不切短」是同一条已经拍过板的理由
@@ -614,9 +634,16 @@ public List<SessionExtensionEntry> extensionEntries(String sessionId);
 - 配额粒度 v1 取**每会话总量**而不是每插件——要保护的对象是会话文件大小，总量直接对应它；
   **每插件配额**列为后续项（多个插件互相挤压时才需要）。
 
-**快照 schema**：`SessionSnapshot` 新增 `extensionEntries` 字段。
-按既有规则**不加兼容构造器**——用新静态工厂，老文件缺少该字段时反序列化为空列表，
+**快照 schema**：`SessionSnapshot` 新增 `extensionEntries`、`kind`、`parentSessionId`、
+`forkPointMessageId` 四个字段（构造器从 11 参变 15 参）。
+按既有规则**不加兼容构造器**——用新静态工厂，老文件缺少该字段时反序列化为空列表 / 空值，
 并补一条**往返测试**（`SessionSnapshots` 的既有测试口径）。
+
+**老快照没有 `kind` 字段的映射放在 `SessionSnapshot.getKind()` 里**（而不在恢复路径上）：
+`kind` 为空时看 `parentSessionId`，非空则补 `EPHEMERAL`、否则 `NORMAL`。
+这样连「插件自己产出的、缺字段的快照」也走同一条映射。
+注意实际上这条映射**几乎走不到**：老快照连 `parentSessionId` 都没有（它是本次新加的），
+因此真实历史快照总是落到 `NORMAL`；它守的是「中间状态的快照」。
 
 ### 6.3 分支与检查点（动作部分）
 
@@ -624,11 +651,25 @@ public List<SessionExtensionEntry> extensionEntries(String sessionId);
 TUI 的 `/tree` 导航交互、压缩边界语义与配对规则，风险与收益不成比例；
 而「从某一步复制出一条新会话」能覆盖绝大多数真实需求（检查点、A/B、回退重来）。
 
-**动作**（走 §9 的通道，插件与外壳都能发起）：
+**动作**（走 §9 的通道，内核内部也可直接调 `SessionManager.fork`）：
 
 ```java
-SessionForkAction(sessionId, messageId，title, deliverAs)
+PluginAction.forkSession(sessionId, messageId, title)
 ```
+
+**落地时的两点修订**（P4 定稿）：
+
+1. **初稿的 `deliverAs` 去掉了**：P3 已定「动作只投进正在跑的回合、内核不起回合」，
+   而 `deliverAs` 要表达的是「fork 完之后要不要往新会话里投点什么」——那需要起回合。
+   新会话标识写在 `ActionHandle.result()` 里，插件也可以订阅 `SessionCreatedEvent` 自行跟踪。
+   fork 在**回合边界**排空（与 `SWITCH_MODEL` 同点：两者都改会话集合类状态）。
+2. **切点对齐往「后」推，而不是往「前」退**（推翻了 §12.3 的措辞）。直接套用压缩的对齐
+   （向小下标退到 `assistant(tool_use)`）会得到一条**没有结果的** `assistant(tool_use)` 结尾，
+   而 `PromptAssembler.dropTrailingDanglingToolCalls` 已经把这种结尾当成无效并从每次请求里丢掉
+   ——于是那条消息「在历史里在、模型永远看不到」。更关键的是：往前退会**静默丢掉被指定的那条消息**，
+   而按「点哪条就从哪条分」的直觉，复制范围必须包含它。往前进还不需要额外判断「这组结果齐不齐」
+   （取消的回合已由 `appendNotRunResults` 补齐，崩溃留下的不齐组本来就在结尾）。
+   判定顺序不变：**压缩记录的取舍必须在配对对齐之后**。
 
 **语义**：
 
@@ -637,6 +678,8 @@ SessionForkAction(sessionId, messageId，title, deliverAs)
   直接复用 `core/prompt/ToolPairing` 的对齐规则，否则新会话一开头就是孤儿 `tool` 消息，
   厂商会以 400 拒绝整次请求（这是既有约束，不是新问题）；
 - 复制 `agentId` / `permissionMode` / `provider` / `model`；
+- **扩展条目照带**：它们是「会话在那一刻的状态」的一部分（插件写的检查点、已扫过的文件……）。
+  丢了它们，「回退到某一步」会得到一个自身标记全无的会话。
 - **不复制 `usage`**（那是源会话花掉的钱，fork 之后要花新钱；复制会重复计入成本账）；
 - **`compaction` 按「边界是否落在复制范围内」取舍**（已决）：
   `indexOf(boundaryMessageId) <= indexOf(切点)` 就带，否则丢弃。
@@ -644,12 +687,17 @@ SessionForkAction(sessionId, messageId，title, deliverAs)
   - 边界在范围内 → 摘要仍代表被丢出上下文的那段，原样带过去；
   - 边界不在范围内 → 那一刻本来还没压缩，不带才是准确复原。
   因此**不需要**「另有 N 条未纳入摘要」这类提示。
-- **判定顺序（容易写错的一条）**：配对对齐会把切点**向前退**到工具组开头，可能因此跨到边界之前。
+- **判定顺序（容易写错的一条）**：配对对齐会把切点沿工具结果**向后推**，可能因此跨到边界之后。
   所以**压缩记录的取舍必须在配对对齐之后判定**，不能在之前。
 - 新会话立刻落盘（`fork` 是一次显式的用户/插件动作，不属于「创建不落盘」那个例外）。
+- **不把新会话切为当前会话**：切换当前会话是外壳的主权，插件替用户跳过去会让屏幕在用户
+  没操作的情况下换掉。
 
 **配套否决钩子**：`SessionBeforeForkRequest` → `LifecycleVerdict`（同 §2 的形状），
-调用点在复制之前，让插件能拦下「脏仓库状态下 fork」这类场景。
+调用点在复制之前、`SessionManager.fork` 里（与 `SessionBeforeCloseRequest` 同一处纪律），
+让插件能拦下「脏仓库状态下 fork」这类场景。与关闭前钩子不同，**这里的否决一定被采纳**——
+fork 是一条显式动作，不是进程收尾路径，不存在「否决只会把资源留在表里」的顾虑。
+请求里给的是**对齐之后的切点**：插件看到的必须是内核真正要复制的范围。
 
 ### 6.4 与既有 `parentSessionId` 的冲突（必须先解决）
 
@@ -1091,7 +1139,7 @@ Server 的那一期还需要一个后台触发点，那是它的真实代价。
 | **P1** | §1 工具管道 + §4 `RuntimeInfo` | P0 | 中（动 `ToolExecutor` 的唯一执行点，必须有无插件回归测试） |
 | **P2** | §3 输入改写 + §2 三个生命周期钩子 | P0 | 中（否决语义会牵动外壳的展示与退出码） |
 | **P3** | §9 动作通道 | P0 | **高**（线程模型与生命周期，必须先写测试再改） |
-| **P4** | §6 会话扩展条目与分支（含 `SessionKind` 迁移） | P3 | **高**（快照 schema + `parentSessionId` 语义迁移） |
+| **P4** | §6 会话扩展条目与分支（含 `SessionKind` 迁移） | P3 | **高**（快照 schema + `parentSessionId` 语义迁移）**已完成** |
 | **P5** | §5 模型 / 厂商可插拔 | P0 | 中（凭据处理与 adapter 转换） |
 | **P6** | §7 工具激活 + §8 UI 深度 | P3（§7.3） | 低（§8）／中（§7 与缓存前缀保证的交互） |
 
@@ -1163,6 +1211,9 @@ Server 的那一期还需要一个后台触发点，那是它的真实代价。
 
 - **决定**：`indexOf(boundaryMessageId) <= indexOf(切点)` 就带，否则丢弃；
   **判定必须在配对对齐之后**；不需要「另有 N 条未纳入摘要」这类提示。
+  **【P4 落地时修订】**对齐方向改为**向后推**（见 §6.3 的落地修订）：初稿的「向前退到工具组开头」
+  会留下一条没有结果的 `assistant(tool_use)` 结尾，而且会静默丢掉被指定的那条消息。
+  本条的其余部分（判定顺序、取舍规则、不丢数据）不变——把「对齐后的切点」代入即可。
 - **推导**：压缩是非破坏式的（消息一条不删，只记 `boundaryMessageId`），所以两种情况都不丢数据，
   且都精确复原了源会话在那一刻的状态（边界不在范围内时，那一刻本来还没压缩）。
   配对对齐会把切点向前退到工具组开头、可能跨到边界之前，因此顺序不能反。

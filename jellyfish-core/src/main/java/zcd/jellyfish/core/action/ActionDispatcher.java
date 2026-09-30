@@ -7,6 +7,7 @@ import zcd.jellyfish.api.extension.CompactionTrigger;
 import zcd.jellyfish.core.compact.ConversationCompactor;
 import zcd.jellyfish.infra.action.ActionQueue;
 import zcd.jellyfish.infra.llm.LlmMessage;
+import zcd.jellyfish.infra.session.Session;
 import zcd.jellyfish.infra.session.SessionManager;
 
 import javax.inject.Inject;
@@ -154,12 +155,33 @@ public class ActionDispatcher {
             case SWITCH_MODEL:
                 return switchModel(sessionId, entry, (PluginAction.SwitchModel) action);
             case FORK_SESSION:
+                return fork(sessionId, entry, (PluginAction.ForkSession) action);
             case REBUILD_TOOL_CATALOG:
             default:
                 // 投递时已经拦过（见 ActionQueue.submit），这里只是不让 switch 有遗漏分支
                 entry.fail("本内核尚未提供该能力：" + action.getKind());
                 return 0;
         }
+    }
+
+    /**
+     * 从当前会话的某一点分出一条新会话。
+     * <p>
+     * <b>不把新会话切为当前会话</b>：切换当前会话是外壳的主权（用户在界面上做的选择），
+     * 插件替用户跳过去会让屏幕在用户没操作的情况下换掉。新会话标识写在句柄的结果里，
+     * 插件也可以订阅 {@code SessionCreatedEvent} 自行跟踪。
+     * <p>
+     * 新会话<b>当场落盘</b>：fork 是一条显式动作，不属于「创建不落盘」那个例外。
+     *
+     * @param sessionId 源会话标识
+     * @param entry     待执行动作
+     * @param action    分支动作
+     * @return 恒为 0（分支不注入消息）
+     */
+    private int fork(String sessionId, ActionQueue.Pending entry, PluginAction.ForkSession action) {
+        Session forked = sessionManager.fork(sessionId, action.getMessageId(), action.getTitle());
+        entry.succeed("已分支出新会话：" + forked.getSessionId());
+        return 0;
     }
 
     /**

@@ -2,6 +2,7 @@ package zcd.jellyfish.infra.plugin;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
 import zcd.jellyfish.api.RuntimeInfo;
 import zcd.jellyfish.api.plugin.PluginContext;
 import zcd.jellyfish.api.plugin.PluginDeclaration;
@@ -10,6 +11,7 @@ import zcd.jellyfish.infra.event.EventChannel;
 import zcd.jellyfish.infra.event.EventChannelOptions;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.registry.TypeRegistry;
+import zcd.jellyfish.infra.session.SessionManager;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -30,6 +32,9 @@ class RuntimeInfoHolderTest {
 
     /** 真实事件通道。 */
     private final EventChannel events = new EventChannel(EventChannelOptions.defaults(), new TypeRegistry());
+
+    /** 会话域服务：桩，只为满足插件上下文的构造。 */
+    private final SessionManager sessions = Mockito.mock(SessionManager.class);
 
     @Test
     void snapshot_should_default_to_unknown_shell() {
@@ -64,7 +69,7 @@ class RuntimeInfoHolderTest {
         // Given：装配根在 bootstrap 之前写入，插件在 start() 里就会读
         RuntimeInfoHolder holder = new RuntimeInfoHolder();
         holder.set(RuntimeInfo.server(false));
-        PluginContext context = new PluginContextFactory(extensions, events, new TypeRegistry(), holder, new ActionQueue())
+        PluginContext context = new PluginContextFactory(extensions, events, new TypeRegistry(), holder, new ActionQueue(), sessions)
                 .create(PluginDeclaration.of("plugin-a"));
 
         // When
@@ -78,7 +83,7 @@ class RuntimeInfoHolderTest {
     @Test
     void pluginContext_should_expose_unknown_when_not_assembled_by_factory() {
         // Given：走不依赖工厂的公开构造路径（测试与嵌入式集成）
-        PluginContextImpl context = new PluginContextImpl(PluginDeclaration.of("plugin-a"), extensions, events);
+        PluginContextImpl context = new PluginContextImpl(PluginDeclaration.of("plugin-a"), extensions, events, sessions);
 
         // When / Then
         assertEquals(RuntimeInfo.unknown(), context.runtimeInfo());
@@ -89,7 +94,7 @@ class RuntimeInfoHolderTest {
         // Given：外壳是进程级事实，子单元与父单元看到的必须一致
         RuntimeInfoHolder holder = new RuntimeInfoHolder();
         holder.set(RuntimeInfo.tui(true));
-        PluginContext parent = new PluginContextFactory(extensions, events, new TypeRegistry(), holder, new ActionQueue())
+        PluginContext parent = new PluginContextFactory(extensions, events, new TypeRegistry(), holder, new ActionQueue(), sessions)
                 .create(PluginDeclaration.of("plugin-a"));
 
         // When：持有者在派生子上下文之后被改写

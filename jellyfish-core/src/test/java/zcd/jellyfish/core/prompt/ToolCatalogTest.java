@@ -117,6 +117,53 @@ class ToolCatalogTest {
         assertThrows(NullPointerException.class, () -> new ToolCatalog(newRegistry()).tools(null));
     }
 
+    @Test
+    void tools_should_orderByOrderThenName_independentOfRegistrationOrder() {
+        // Given：两份注册表，注册顺序正好相反（模拟插件加载顺序不同）
+        ExtensionRegistry first = newRegistry();
+        register(first, "b_write", new ToolDescriptor("b_write", "写文件"), RegisterOptions.order(5));
+        register(first, "a_read", new ToolDescriptor("a_read", "读文件"), RegisterOptions.order(5));
+        ExtensionRegistry second = newRegistry();
+        register(second, "a_read", new ToolDescriptor("a_read", "读文件"), RegisterOptions.order(5));
+        register(second, "b_write", new ToolDescriptor("b_write", "写文件"), RegisterOptions.order(5));
+
+        // When
+        List<String> namesOfFirst = namesOf(new ToolCatalog(first).tools());
+        List<String> namesOfSecond = namesOf(new ToolCatalog(second).tools());
+
+        // Then：同序时按名称，因此与「谁先加载」无关。工具清单在多数厂商的模板里排在 messages
+        // 之前，顺序一变整段请求连同全部历史就作废——这正是 R5
+        assertEquals(Arrays.asList("a_read", "b_write"), namesOfFirst);
+        assertEquals(namesOfFirst, namesOfSecond);
+    }
+
+    @Test
+    void tools_should_let_orderWin_overName() {
+        // Given：若只看名称会得到 a_read 在前，但 order 更小的 b_write 应当排在它之前——
+        // order 是扩展系统声明的排序机制，不能被静默忽略
+        ExtensionRegistry extensions = newRegistry();
+        register(extensions, "a_read", new ToolDescriptor("a_read", "读文件"), RegisterOptions.order(9));
+        register(extensions, "b_write", new ToolDescriptor("b_write", "写文件"), RegisterOptions.order(1));
+
+        // When / Then
+        assertEquals(Arrays.asList("b_write", "a_read"),
+                namesOf(new ToolCatalog(extensions).tools()));
+    }
+
+    /**
+     * 取出工具名列表。
+     *
+     * @param tools 工具清单
+     * @return 名称列表，保持清单顺序
+     */
+    private static List<String> namesOf(List<LlmTool> tools) {
+        List<String> names = new java.util.ArrayList<String>(tools.size());
+        for (LlmTool tool : tools) {
+            names.add(tool.getName());
+        }
+        return names;
+    }
+
     /**
      * 注册一个工具处理器。
      *
@@ -125,7 +172,20 @@ class ToolCatalogTest {
      * @param descriptor 工具描述符
      */
     private static void register(ExtensionRegistry extensions, String name, ToolDescriptor descriptor) {
-        extensions.handle("p1", ToolCallRequest.class, name, descriptor, noOp(), RegisterOptions.DEFAULT);
+        register(extensions, name, descriptor, RegisterOptions.DEFAULT);
+    }
+
+    /**
+     * 注册一个带调用顺序的工具处理器。
+     *
+     * @param extensions 同步扩展点策略
+     * @param name       工具名
+     * @param descriptor 工具描述符
+     * @param options    注册选项（含 {@code order}）
+     */
+    private static void register(ExtensionRegistry extensions, String name, ToolDescriptor descriptor,
+                                RegisterOptions options) {
+        extensions.handle("p1", ToolCallRequest.class, name, descriptor, noOp(), options);
     }
 
     /**

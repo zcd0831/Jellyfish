@@ -29,20 +29,31 @@ public final class DescriptorBinding<D> {
     private final D descriptor;
 
     /**
+     * 注册时声明的调用顺序（{@code order}）。
+     * <p>
+     * 带上它，是为了让「需要清单稳定」的调用点能按 {@code (order, 名称)} 自己重排：注册表给的顺序是
+     * {@code order} 升序 + <b>注册顺序</b>，而后者就等于插件加载顺序——同序的两项谁先谁后因此会随
+     * 加载时机变化。工具清单尤其在意这一点：它进的是缓存前缀里一个很靠前的位置。
+     */
+    private final int order;
+
+    /**
      * 构造描述符绑定。
      *
      * @param owner      来源，不可为空白
      * @param routeKey   路由键，可为 {@code null}（类型级注册）
      * @param descriptor 描述符，可为 {@code null}
+     * @param order      注册时声明的调用顺序
      * @throws JellyfishException 来源为空白时抛出
      */
-    public DescriptorBinding(String owner, String routeKey, D descriptor) {
+    public DescriptorBinding(String owner, String routeKey, D descriptor, int order) {
         if (owner == null || owner.trim().isEmpty()) {
             throw new JellyfishException("descriptor binding owner must not be blank");
         }
         this.owner = owner;
         this.routeKey = routeKey;
         this.descriptor = descriptor;
+        this.order = order;
     }
 
     /**
@@ -70,6 +81,15 @@ public final class DescriptorBinding<D> {
      */
     public D getDescriptor() {
         return descriptor;
+    }
+
+    /**
+     * 获取注册时声明的调用顺序。
+     *
+     * @return 调用顺序
+     */
+    public int getOrder() {
+        return order;
     }
 
     @Override

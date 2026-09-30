@@ -227,7 +227,7 @@ public final class ExtensionRegistry {
                                 + " for " + registration);
             }
             bindings.add(new DescriptorBinding<D>(registration.getOwner(), registration.getRouteKey(),
-                    descriptor == null ? null : descriptorType.cast(descriptor)));
+                    descriptor == null ? null : descriptorType.cast(descriptor), registration.getOrder()));
         }
         return Collections.unmodifiableList(bindings);
     }

@@ -31,6 +31,11 @@
   指出断在哪一层（system prompt / 工具清单 / 第几条消息起）。从稳定变为断裂的那一轮记 WARN，
   持续期间降到 DEBUG，恢复后再断会重新告警。
 
+- **工具清单在一个会话内既不换顺序、也不换集合**：它进的是缓存前缀里一个很靠前的位置（多数厂商的模板把它排在 messages 之前），因此它一变，整段请求连同全部历史都作废。
+  - **顺序**：`ToolCatalog` 按 `order` + **名称**排，不用注册顺序——后者就是插件加载顺序，同序的两项谁先谁后会随加载时机变化。这也是 `ToolCatalog` 自己再排一次而不沿用注册表顺序的唯一原因。
+  - **集合**：会话期间不得增删工具。**Plan 模式已经符合，且值得保持**——它走的是权限白名单（`ReadOnlyTools`）而**不是**替换工具集，因此模型看到的清单与平时逐字节相同，只是写操作会被拦下。换工具集能省几个 token，却会让那一轮之后的前缀全部失效。
+  - **已知残余缺口**：`MCP` 插件在启动等待窗口（`startupWaitSeconds`）超时后才连上的 server、以及 server 主动报 `tools/list_changed` 时，确实会在会话中途改变工具集。修复方向未定，见本文末的「未决」一节。
+
 ## 上下文裁剪
 
 - **裁剪只裁本次请求**：`ContextWindow` 按 `contextLength - maxOutputTokens - contextReserveTokens` 从最旧
@@ -89,6 +94,13 @@
   由内核替换，缺占位符只告警不失败。
 - **插件上下文只走 system prompt**：`PromptContributionRequest` 按 order 用 `\n\n` 拼接，
   **不追加进 messages**；单个处理器抛错只记 WARN 跳过。
+
+## 未决
+
+- **MCP 的会话中途工具集变化（P5 遗留，需定方向）**：两条路都会改变工具集——① 启动等待窗口
+  （`startupWaitSeconds`，缺省 5 秒）超时后才连上的 server；② server 主动报 `tools/list_changed`。
+  设计文档里写的「先注册轻量 stub」**在当前形态下无法直接实现**：连上之前根本不知道工具名。
+  可选方向见 `docs/design/llm-cache.md` 的 P5 与未决项。
 
 ## 子代理（嵌套回合）
 

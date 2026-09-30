@@ -48,7 +48,8 @@ class JellyfishPluginFactoryTest {
     private final PluginContextFactory contexts = new PluginContextFactory(
             new ExtensionRegistry(new TypeRegistry()),
             new EventChannel(EventChannelOptions.defaults(), new TypeRegistry()),
-            new TypeRegistry());
+            new TypeRegistry(),
+            new RuntimeInfoHolder());
 
     /** 记录插件生命周期回调。 */
     private static final List<String> RECORDED = new ArrayList<>();

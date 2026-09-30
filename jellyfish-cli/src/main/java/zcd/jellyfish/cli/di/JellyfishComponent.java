@@ -14,6 +14,7 @@ import zcd.jellyfish.infra.metrics.HealthCheck;
 import zcd.jellyfish.infra.model.ModelManager;
 import zcd.jellyfish.infra.permission.ApprovalChannel;
 import zcd.jellyfish.infra.permission.PermissionManager;
+import zcd.jellyfish.infra.plugin.RuntimeInfoHolder;
 import zcd.jellyfish.infra.session.SessionDefaults;
 import zcd.jellyfish.infra.session.SessionManager;
 
@@ -152,6 +153,16 @@ public interface JellyfishComponent {
      * @return EventChannel
      */
     EventChannel eventChannel();
+
+    /**
+     * 获取运行时信息持有者。
+     * <p>
+     * 调用点是 {@code Launcher}：外壳种类只有在选完运行模式之后才知道，因此由装配根在
+     * {@code bootstrap()} 之前写入，插件在 {@code start()} 里就能读到最终值。
+     *
+     * @return RuntimeInfoHolder
+     */
+    RuntimeInfoHolder runtimeInfoHolder();
 
     /**
      * 获取健康检查汇总。

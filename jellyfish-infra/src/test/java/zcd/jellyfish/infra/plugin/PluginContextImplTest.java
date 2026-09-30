@@ -231,7 +231,7 @@ class PluginContextImplTest {
         // Given：注册窗口是插件存活期，停止之后一律拒绝——否则会留下幽灵注册
         ContextLifecycle lifecycle = new ContextLifecycle();
         PluginContextImpl closable = new PluginContextImpl(
-                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle);
+                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle, new RuntimeInfoHolder());
         lifecycle.close();
 
         // When / Then
@@ -245,7 +245,7 @@ class PluginContextImplTest {
         // Given
         ContextLifecycle lifecycle = new ContextLifecycle();
         PluginContextImpl closable = new PluginContextImpl(
-                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle);
+                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle, new RuntimeInfoHolder());
         lifecycle.close();
 
         // When / Then
@@ -259,7 +259,7 @@ class PluginContextImplTest {
         // Given
         ContextLifecycle lifecycle = new ContextLifecycle();
         PluginContextImpl closable = new PluginContextImpl(
-                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle);
+                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle, new RuntimeInfoHolder());
         lifecycle.close();
 
         // When / Then
@@ -274,7 +274,7 @@ class PluginContextImplTest {
         // Given
         ContextLifecycle lifecycle = new ContextLifecycle();
         PluginContextImpl closable = new PluginContextImpl(
-                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle);
+                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle, new RuntimeInfoHolder());
         lifecycle.close();
 
         // When / Then：停止之后的发布同样属于幽灵行为，不能静默丢掉了事
@@ -286,7 +286,7 @@ class PluginContextImplTest {
         // Given：子上下文也握着注册能力，若它们各有一份标记，回收根上下文就管不住它们
         ContextLifecycle lifecycle = new ContextLifecycle();
         PluginContextImpl parent = new PluginContextImpl(
-                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle);
+                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle, new RuntimeInfoHolder());
         PluginContextImpl child = (PluginContextImpl) parent.subContext("jira");
 
         // When
@@ -302,7 +302,7 @@ class PluginContextImplTest {
         // Given：上一条的反面 —— 失效只在关闭之后生效，关闭之前照常注册
         ContextLifecycle lifecycle = new ContextLifecycle();
         PluginContextImpl closable = new PluginContextImpl(
-                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle);
+                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle, new RuntimeInfoHolder());
 
         // When
         closable.handle(ToolCallRequest.class, "calc", request -> new ToolCallResult("calc", "ok"));

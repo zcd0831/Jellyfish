@@ -3,6 +3,7 @@ package zcd.jellyfish.cli.mode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import zcd.jellyfish.api.JellyfishException;
+import zcd.jellyfish.api.RuntimeInfo;
 import zcd.jellyfish.cli.ExitCodes;
 import zcd.jellyfish.cli.StartupOptions;
 import zcd.jellyfish.cli.console.ConsoleIO;
@@ -90,6 +91,12 @@ public final class ServerRunMode implements RunMode {
         this.approvals = Objects.requireNonNull(approvals, "approvals must not be null");
         this.healthCheck = Objects.requireNonNull(healthCheck, "healthCheck must not be null");
         this.console = Objects.requireNonNull(console, "console must not be null");
+    }
+
+    @Override
+    public RuntimeInfo.Shell shell() {
+        // HTTP 服务：没有可交互界面，但具备审批通道（审批走 HTTP 桥）
+        return RuntimeInfo.Shell.SERVER;
     }
 
     @Override

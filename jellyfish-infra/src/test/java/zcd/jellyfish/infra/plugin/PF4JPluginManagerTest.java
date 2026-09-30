@@ -72,7 +72,7 @@ class PF4JPluginManagerTest {
         extensions = new ExtensionRegistry(registry);
         eventChannel = new EventChannel(EventChannelOptions.defaults(), registry);
         eventChannel.start();
-        contexts = new PluginContextFactory(extensions, eventChannel, registry);
+        contexts = new PluginContextFactory(extensions, eventChannel, registry, new RuntimeInfoHolder());
     }
 
     @AfterEach

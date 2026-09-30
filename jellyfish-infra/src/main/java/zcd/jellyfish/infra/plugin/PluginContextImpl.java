@@ -1,6 +1,7 @@
 package zcd.jellyfish.infra.plugin;
 
 import zcd.jellyfish.api.JellyfishException;
+import zcd.jellyfish.api.RuntimeInfo;
 import zcd.jellyfish.api.event.JellyfishEvent;
 import zcd.jellyfish.api.event.RegisterOptions;
 import zcd.jellyfish.api.event.Subscription;
@@ -58,35 +59,43 @@ public final class PluginContextImpl implements PluginContext {
     /** 存活标记：与全部子上下文共享，关闭后拒绝一切注册、订阅与发布。 */
     private final ContextLifecycle lifecycle;
 
+    /** 运行时信息持有者：外壳在启动期写入，这里只读快照。 */
+    private final RuntimeInfoHolder runtimeInfo;
+
     /**
      * 构造一个<b>自持有存活标记</b>的插件上下文。
      * <p>
      * 不经过 {@link PluginContextFactory} 的装配（例如单元测试）用它：标记由本上下文独占，
      * 没有任何入口能让它失效。生产装配一律走工厂的
      * {@link PluginContextFactory#create(PluginDeclaration)}，那条路径才会登记标记以便停止时关闭。
+     * <p>
+     * 运行时信息用缺省的「未知外壳」：这条路得不到外壳启动流程写入的值，
+     * 而给一个保守的缺省比让调用方被迫伪造一个外壳要好。
      *
      * @param declaration 插件声明，不可为 {@code null}
      * @param extensions  同步扩展点策略，不可为 {@code null}
      * @param events      事件通道，不可为 {@code null}
      */
     public PluginContextImpl(PluginDeclaration declaration, ExtensionRegistry extensions, EventChannel events) {
-        this(declaration, extensions, events, new ContextLifecycle());
+        this(declaration, extensions, events, new ContextLifecycle(), new RuntimeInfoHolder());
     }
 
     /**
-     * 构造插件上下文，共用调用方给定的存活标记。
+     * 构造插件上下文，共用调用方给定的存活标记与运行时信息持有者。
      *
      * @param declaration 插件声明，不可为 {@code null}
      * @param extensions  同步扩展点策略，不可为 {@code null}
      * @param events      事件通道，不可为 {@code null}
      * @param lifecycle   存活标记，不可为 {@code null}；子上下文必须复用父上下文的同一个实例
+     * @param runtimeInfo 运行时信息持有者，不可为 {@code null}；子上下文同样复用它
      */
     PluginContextImpl(PluginDeclaration declaration, ExtensionRegistry extensions, EventChannel events,
-                      ContextLifecycle lifecycle) {
+                      ContextLifecycle lifecycle, RuntimeInfoHolder runtimeInfo) {
         this.declaration = declaration;
         this.extensions = extensions;
         this.events = events;
         this.lifecycle = lifecycle;
+        this.runtimeInfo = runtimeInfo;
     }
 
     @Override
@@ -100,15 +109,21 @@ public final class PluginContextImpl implements PluginContext {
     }
 
     @Override
+    public RuntimeInfo runtimeInfo() {
+        return runtimeInfo.snapshot();
+    }
+
+    @Override
     public PluginContext subContext(String childId) {
         // 身份从「当前」身份派生而非从根插件标识派生：子上下文再派生子上下文就会自然形成
         // a::b::c 这样的层级，而回收侧的前缀匹配本就支持任意深度，无需特殊处理
         String childPluginId = pluginId() + PluginOwnerNamespace.SEPARATOR
                 + PluginOwnerNamespace.requireChildId(childId);
         // 子上下文复用父上下文的存活标记：否则回收根上下文管不住子上下文，幽灵注册会从这条缝回来。
-        // 本方法刻意不做存活检查——它不产生任何注册，真正需要被拦住的是注册那一刻
+        // 本方法刻意不做存活检查——它不产生任何注册，真正需要被拦住的是注册那一刻。
+        // 运行时信息持有者也一并复用：外壳是进程级事实，子单元与父单元看到的必须一致
         return new PluginContextImpl(PluginDeclaration.of(childPluginId, declaration.getConfiguration()),
-                extensions, events, lifecycle);
+                extensions, events, lifecycle, runtimeInfo);
     }
 
     @Override

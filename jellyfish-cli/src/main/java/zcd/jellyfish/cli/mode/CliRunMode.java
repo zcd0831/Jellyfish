@@ -3,6 +3,7 @@ package zcd.jellyfish.cli.mode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import zcd.jellyfish.api.JellyfishException;
+import zcd.jellyfish.api.RuntimeInfo;
 import zcd.jellyfish.api.extension.CommandResult;
 import zcd.jellyfish.cli.ExitCodes;
 import zcd.jellyfish.cli.StartupOptions;
@@ -65,6 +66,12 @@ public final class CliRunMode implements RunMode {
         this.commands = Objects.requireNonNull(commands, "commands must not be null");
         this.sessions = Objects.requireNonNull(sessions, "sessions must not be null");
         this.console = Objects.requireNonNull(console, "console must not be null");
+    }
+
+    @Override
+    public RuntimeInfo.Shell shell() {
+        // 单次调用、不交互：没有可交互界面，也没有审批者（需要审批的调用一律按拒绝处理）
+        return RuntimeInfo.Shell.CLI;
     }
 
     @Override

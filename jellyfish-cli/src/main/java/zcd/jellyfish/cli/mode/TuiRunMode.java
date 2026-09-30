@@ -3,6 +3,7 @@ package zcd.jellyfish.cli.mode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import zcd.jellyfish.api.JellyfishException;
+import zcd.jellyfish.api.RuntimeInfo;
 import zcd.jellyfish.cli.ExitCodes;
 import zcd.jellyfish.cli.StartupOptions;
 import zcd.jellyfish.cli.console.ConsoleIO;
@@ -145,6 +146,12 @@ public final class TuiRunMode implements RunMode {
     @Override
     public Optional<String> checkEnvironment(StartupOptions options) {
         return TuiTerminal.unsupportedReason();
+    }
+
+    @Override
+    public RuntimeInfo.Shell shell() {
+        // 交互式界面：有可交互界面，也是三种外壳里唯一会 attach 审批者的
+        return RuntimeInfo.Shell.TUI;
     }
 
     @Override

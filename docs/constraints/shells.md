@@ -17,6 +17,21 @@
   加 `--show-tool-args` 后参数**单行、200 码点封顶**地跟在工具名后（`stderr` 会被重定向、进 CI 日志，
   不能像 TUI 那样折行，也不能无界）；在该旗标的说明里**点明可能含敏感信息**（不脱敏，与 Codex 一致）；
   该旗标只被 `-cli` 接受，`-tui` / `-server` 退 `2`（与 `-p` / `--agent` 同口径）。
+- **外壳种类是插件可见的进程级事实**：`Launcher` 在 `bootstrap()` **之前**把 `RuntimeInfo` 写进
+  `RuntimeInfoHolder`（插件在 `start()` 里就会读它），取值如下表。**写入必须早于 bootstrap**，
+  晚一步插件读到的就是缺省的「未知外壳」。
+
+  | 外壳 | `shell` | `hasUI` | `supportsApproval` | `interactive` |
+  | --- | --- | --- | --- | --- |
+  | `-cli` | `CLI` | `false` | `false` | `System.console() != null` |
+  | `-tui` | `TUI` | `true` | `true` | `System.console() != null` |
+  | `-server` | `SERVER` | `false` | `true` | `System.console() != null` |
+
+  **`supportsApproval` 是静态语义**（「外壳**具备**审批通道吗」），不表示此刻有审批者在线；
+  进程内它是常量，因此不为它配 `RuntimeInfoChangedEvent`。不经过外壳启动流程的用法（测试、嵌入式集成）
+  拿到的是 `RuntimeInfo.unknown()`（外壳记作 `CLI`、其余全 `false`）而不是 `null`——
+  给一个保守的缺省比让调用方伪造一个外壳要好。
+  它**不打开会话与工作目录**：四个字段全是进程级事实，`sessionId` / `agentId` / `cwd` 仍然拿不到。
 
 ## TUI
 

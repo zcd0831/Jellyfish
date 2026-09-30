@@ -39,7 +39,7 @@ class PluginContextFactoryTest {
     private final EventChannel events = new EventChannel(EventChannelOptions.defaults(), registry);
 
     /** 被测工厂。 */
-    private final PluginContextFactory factory = new PluginContextFactory(extensions, events, registry);
+    private final PluginContextFactory factory = new PluginContextFactory(extensions, events, registry, new RuntimeInfoHolder());
 
     @Test
     void create_should_bind_plugin_id_as_owner() {
@@ -169,9 +169,14 @@ class PluginContextFactoryTest {
     @Test
     void factory_should_reject_null_dependencies() {
         // When / Then
-        assertThrows(NullPointerException.class, () -> new PluginContextFactory(null, events, registry));
-        assertThrows(NullPointerException.class, () -> new PluginContextFactory(extensions, null, registry));
-        assertThrows(NullPointerException.class, () -> new PluginContextFactory(extensions, events, null));
+        assertThrows(NullPointerException.class,
+                () -> new PluginContextFactory(null, events, registry, new RuntimeInfoHolder()));
+        assertThrows(NullPointerException.class,
+                () -> new PluginContextFactory(extensions, null, registry, new RuntimeInfoHolder()));
+        assertThrows(NullPointerException.class,
+                () -> new PluginContextFactory(extensions, events, null, new RuntimeInfoHolder()));
+        assertThrows(NullPointerException.class,
+                () -> new PluginContextFactory(extensions, events, registry, null));
     }
 
     @Test

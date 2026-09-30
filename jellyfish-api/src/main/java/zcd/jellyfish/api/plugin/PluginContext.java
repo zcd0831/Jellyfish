@@ -1,5 +1,6 @@
 package zcd.jellyfish.api.plugin;
 
+import zcd.jellyfish.api.RuntimeInfo;
 import zcd.jellyfish.api.event.JellyfishEvent;
 import zcd.jellyfish.api.event.RegisterOptions;
 import zcd.jellyfish.api.event.Subscription;
@@ -81,6 +82,20 @@ public interface PluginContext {
      * @return 不可变配置映射，未配置时为空映射而非 {@code null}
      */
     Map<String, Object> configuration();
+
+    /**
+     * 获取运行时信息只读快照：本进程跑在哪种外壳里、有没有可交互界面、能不能弹审批。
+     * <p>
+     * <b>用途是优雅降级</b>：只在某一种外壳里有意义的贡献，插件应当据此前置判断，而不是先注册再指望
+     * 「没人看得见也不出问题」。{@link RuntimeInfo#supportsApproval()} <b>不表示</b>此刻有审批者在线
+     * （见该类型的注释），因此它只能用于「要不要提供这个能力」，不能用于安全判定。
+     * <p>
+     * <b>它不开放会话与工作目录</b>：四个字段都是进程级事实，插件仍然拿不到
+     * {@code sessionId}、{@code agentId}、{@code cwd} 与请求内容。
+     *
+     * @return 快照，保证非 {@code null}；外壳未写入时是 {@link RuntimeInfo#unknown()}
+     */
+    RuntimeInfo runtimeInfo();
 
     /**
      * 注册唯一处理器：同一「请求类型 + 路由键」至多一个。

@@ -8,6 +8,7 @@ import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.plugin.PF4JPluginManager;
 import zcd.jellyfish.infra.plugin.PluginContextFactory;
 import zcd.jellyfish.infra.plugin.PluginRuntimeConfig;
+import zcd.jellyfish.infra.plugin.RuntimeInfoHolder;
 import zcd.jellyfish.infra.registry.TypeRegistry;
 
 import javax.inject.Singleton;
@@ -53,16 +54,18 @@ public final class PluginModule {
     /**
      * 提供插件上下文工厂：把 {@code pluginId} 绑定为 owner，并作为插件侧唯一回收入口。
      *
-     * @param extensions 同步扩展点策略
-     * @param events     事件通道
-     * @param registry   共用注册表，用于按 owner 一次性回收
+     * @param extensions  同步扩展点策略
+     * @param events      事件通道
+     * @param registry    共用注册表，用于按 owner 一次性回收
+     * @param runtimeInfo 运行时信息持有者（外壳启动期写入）
      * @return 插件上下文工厂
      */
     @Provides
     @Singleton
     static PluginContextFactory providePluginContextFactory(ExtensionRegistry extensions, EventChannel events,
-                                                            TypeRegistry registry) {
-        return new PluginContextFactory(extensions, events, registry);
+                                                            TypeRegistry registry,
+                                                            RuntimeInfoHolder runtimeInfo) {
+        return new PluginContextFactory(extensions, events, registry, runtimeInfo);
     }
 
     /**

@@ -7,6 +7,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import zcd.jellyfish.api.JellyfishException;
+import zcd.jellyfish.api.RuntimeInfo;
 import zcd.jellyfish.api.event.EventPublisher;
 import zcd.jellyfish.api.extension.CommandResult;
 import zcd.jellyfish.cli.console.RecordingConsoleIO;
@@ -28,10 +29,13 @@ import zcd.jellyfish.core.prompt.PromptAssembler;
 import zcd.jellyfish.core.input.InputDirectives;
 import zcd.jellyfish.infra.config.RuntimeConfig;
 import zcd.jellyfish.infra.permission.ApprovalChannel;
+import zcd.jellyfish.infra.plugin.RuntimeInfoHolder;
 import zcd.jellyfish.infra.registry.TypeRegistry;
 import zcd.jellyfish.infra.session.Session;
 import zcd.jellyfish.infra.session.SessionDefaults;
 import zcd.jellyfish.infra.session.SessionManager;
+
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -39,8 +43,10 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -82,6 +88,13 @@ class LauncherTest {
 
     /** 真实审批通道，仅为满足 TUI / Server 装配（未挂审批者，因此不会真的等答复）。 */
     private final ApprovalChannel approvalChannel = new ApprovalChannel();
+
+    /**
+     * 真实运行时信息持有者：外壳种类由 {@code Launcher} 写入，本用例据此断言「写在了 bootstrap 之前」。
+     * <p>
+     * 刻意不用 mock：写入是断言的一部分，用 mock 就只能验「调过 set」而验不了「写进去的是什么」。
+     */
+    private final RuntimeInfoHolder runtimeInfoHolder = new RuntimeInfoHolder();
 
     /** 真实健康检查汇总，仅为满足 Server 装配。 */
     private final zcd.jellyfish.infra.metrics.HealthCheck healthCheck =
@@ -169,6 +182,41 @@ conversationCompactor = new ConversationCompactor(sessions, models, runtimeConfi
                 StartupOptions.builder(StartupOptions.Mode.SERVER).port(9096).build());
 
         assertTrue(mode instanceof ServerRunMode);
+    }
+
+    @Test
+    void shell_should_match_selected_mode() {
+        // Given：两个模式构造器都会对与自己相关的门面做非空校验，因此需要它们各自的桩
+        givenTuiCollaborators();
+        givenServerCollaborators();
+
+        assertEquals(RuntimeInfo.Shell.CLI,
+                launcher.modeFor(StartupOptions.builder(StartupOptions.Mode.CLI).build()).shell());
+        assertEquals(RuntimeInfo.Shell.TUI,
+                launcher.modeFor(StartupOptions.builder(StartupOptions.Mode.TUI).build()).shell());
+        assertEquals(RuntimeInfo.Shell.SERVER,
+                launcher.modeFor(StartupOptions.builder(StartupOptions.Mode.SERVER).port(9096).build()).shell());
+    }
+
+    @Test
+    void launch_should_write_runtime_info_before_bootstrap() {
+        // Given：插件在 start() 里就会读运行时信息（据此前置决定要不要注册需要审批的能力），
+        // 因此写入必须早于 bootstrap，否则插件读到的是缺省的「未知外壳」
+        givenComponentCollaborators();
+        when(commands.isCommand("/help")).thenReturn(true);
+        when(commands.execute("/help", session.getSessionId())).thenReturn(CommandResult.ok("帮助"));
+        AtomicReference<RuntimeInfo> atBootstrap = new AtomicReference<RuntimeInfo>();
+        doAnswer(invocation -> {
+            atBootstrap.set(runtimeInfoHolder.snapshot());
+            return null;
+        }).when(harness).bootstrap();
+
+        // When
+        launcher.launch(StartupOptions.builder(StartupOptions.Mode.CLI).prompt("/help").build());
+
+        // Then：bootstrap 那一刻已经是最终值；-cli 没有审批通道，插件据此可以优雅降级
+        assertEquals(RuntimeInfo.Shell.CLI, atBootstrap.get().getShell());
+        assertFalse(atBootstrap.get().supportsApproval());
     }
 
     @Test
@@ -265,11 +313,16 @@ conversationCompactor = new ConversationCompactor(sessions, models, runtimeConfi
      * <p>
      * 刻意按用例需要的最小集桩：Mockito 的严格模式会把「桩了但没用到」当成失败，
      * 这也正好挡住「为了省事一次桩全套」的写法。
+     * <p>
+     * 运行时信息持有者是唯一的例外，用 {@code lenient()}：它只在 {@code launch} 且环境自检通过之后
+     * 才被读写，而「选模式」与「环境不满足」两类用例根本走不到那一步——
+     * 那是用例刻意不走路径，不是多余的桩。
      */
     private void givenRunModeCollaborators() {
         when(component.agentHarness()).thenReturn(harness);
         when(component.commandManager()).thenReturn(commands);
         when(component.sessionManager()).thenReturn(sessions);
+        lenient().when(component.runtimeInfoHolder()).thenReturn(runtimeInfoHolder);
     }
 
     /**

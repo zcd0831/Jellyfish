@@ -3,6 +3,7 @@ package zcd.jellyfish.cli;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import zcd.jellyfish.api.JellyfishException;
+import zcd.jellyfish.api.RuntimeInfo;
 import zcd.jellyfish.cli.console.ConsoleIO;
 import zcd.jellyfish.cli.di.JellyfishComponent;
 import zcd.jellyfish.cli.mode.CliRunMode;
@@ -78,6 +79,11 @@ public final class Launcher {
             console.writeErrLine("错误：" + problem.get());
             return ExitCodes.STARTUP_ERROR;
         }
+        // 运行时信息必须在 bootstrap 之前写入：插件在 start() 里就会读它
+        // （例如「没有审批通道就不注册需要写权限的工具」），晚一步插件拿到的就是缺省值。
+        // 它只依赖「选了哪个模式」与「有没有终端」两件事，因此在环境自检通过后写一次就定下来了
+        component.runtimeInfoHolder().set(
+                RuntimeInfo.forShell(mode.shell(), System.console() != null));
         AgentHarness harness = component.agentHarness();
         Thread hook = new Thread(harness::shutdown, SHUTDOWN_HOOK_NAME);
         Runtime.getRuntime().addShutdownHook(hook);

@@ -52,21 +52,27 @@ public final class PluginContextFactory {
     /** 共用注册表，用于按 owner 一次性回收。 */
     private final TypeRegistry registry;
 
+    /** 运行时信息持有者：外壳启动期写入，插件上下文只读快照。 */
+    private final RuntimeInfoHolder runtimeInfo;
+
     /** 根 {@code pluginId} → 存活标记；停止时据此让该插件的全部上下文失效。 */
     private final Map<String, ContextLifecycle> lifecycles = new ConcurrentHashMap<String, ContextLifecycle>();
 
     /**
      * 构造工厂。
      *
-     * @param extensions 同步扩展点策略，不可为 {@code null}
-     * @param events     事件通道，不可为 {@code null}
-     * @param registry   共用注册表，不可为 {@code null}
+     * @param extensions  同步扩展点策略，不可为 {@code null}
+     * @param events      事件通道，不可为 {@code null}
+     * @param registry    共用注册表，不可为 {@code null}
+     * @param runtimeInfo 运行时信息持有者，不可为 {@code null}
      */
     @Inject
-    public PluginContextFactory(ExtensionRegistry extensions, EventChannel events, TypeRegistry registry) {
+    public PluginContextFactory(ExtensionRegistry extensions, EventChannel events, TypeRegistry registry,
+                               RuntimeInfoHolder runtimeInfo) {
         this.extensions = Objects.requireNonNull(extensions, "extensions must not be null");
         this.events = Objects.requireNonNull(events, "events must not be null");
         this.registry = Objects.requireNonNull(registry, "registry must not be null");
+        this.runtimeInfo = Objects.requireNonNull(runtimeInfo, "runtimeInfo must not be null");
     }
 
     /**
@@ -85,7 +91,7 @@ public final class PluginContextFactory {
             LOG.warn("插件上下文被重复创建，已关闭上一条生命周期: pluginId={}", declaration.getPluginId());
             previous.close();
         }
-        return new PluginContextImpl(declaration, extensions, events, lifecycle);
+        return new PluginContextImpl(declaration, extensions, events, lifecycle, runtimeInfo);
     }
 
     /**

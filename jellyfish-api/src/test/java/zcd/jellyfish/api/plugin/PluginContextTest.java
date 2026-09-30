@@ -1,6 +1,7 @@
 package zcd.jellyfish.api.plugin;
 
 import org.junit.jupiter.api.Test;
+import zcd.jellyfish.api.RuntimeInfo;
 import zcd.jellyfish.api.event.JellyfishEvent;
 import zcd.jellyfish.api.event.RegisterOptions;
 import zcd.jellyfish.api.event.Subscription;
@@ -175,6 +176,13 @@ class PluginContextTest {
         @Override
         public Map<String, Object> configuration() {
             return java.util.Collections.emptyMap();
+        }
+
+        @Override
+        public RuntimeInfo runtimeInfo() {
+            // 桩类只保留「有这个方法」这一点形状；取值语义（三种外壳、缺省未知）由 RuntimeInfoTest
+            // 与 RuntimeInfoHolderTest 覆盖
+            return RuntimeInfo.unknown();
         }
 
         @Override

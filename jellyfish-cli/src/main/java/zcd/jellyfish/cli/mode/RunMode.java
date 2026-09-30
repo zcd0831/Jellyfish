@@ -1,5 +1,6 @@
 package zcd.jellyfish.cli.mode;
 
+import zcd.jellyfish.api.RuntimeInfo;
 import zcd.jellyfish.cli.StartupOptions;
 
 import java.util.Optional;
@@ -32,6 +33,17 @@ public interface RunMode {
     default Optional<String> checkEnvironment(StartupOptions options) {
         return Optional.empty();
     }
+
+    /**
+     * 声明本模式对应的外壳种类。
+     * <p>
+     * <b>为什么由模式自己回答</b>：外壳种类决定插件看到的 {@link RuntimeInfo}（有没有可交互界面、
+     * 能不能弹审批），而这三个事实完全由模式决定。收在实现类里之后，装配根只负责把结果写进持有者，
+     * 不需要自己维护一份「启动参数 → 外壳」的映射。
+     *
+     * @return 外壳种类，保证非 {@code null}
+     */
+    RuntimeInfo.Shell shell();
 
     /**
      * 以本模式运行。

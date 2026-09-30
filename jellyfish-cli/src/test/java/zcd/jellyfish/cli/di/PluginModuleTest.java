@@ -22,6 +22,7 @@ import zcd.jellyfish.infra.plugin.PF4JPluginManager;
 import zcd.jellyfish.infra.plugin.PluginContextFactory;
 import zcd.jellyfish.infra.plugin.PluginProperties;
 import zcd.jellyfish.infra.plugin.PluginRuntimeConfig;
+import zcd.jellyfish.infra.plugin.RuntimeInfoHolder;
 import zcd.jellyfish.infra.registry.TypeRegistry;
 
 import java.io.IOException;
@@ -107,7 +108,8 @@ class PluginModuleTest {
         EventChannel events = new EventChannel(EventChannelOptions.defaults(), registry);
 
         // When
-        PluginContextFactory factory = PluginModule.providePluginContextFactory(extensions, events, registry);
+        PluginContextFactory factory = PluginModule.providePluginContextFactory(extensions, events, registry,
+                new RuntimeInfoHolder());
         PluginContext context = factory.create(PluginDeclaration.of("plugin-a"));
         Subscription subscription = context.observe(ConfigWarningEvent.class, event -> {
                     // 仅用于产生一条订阅
@@ -126,7 +128,8 @@ class PluginModuleTest {
         PluginContextFactory factory = PluginModule.providePluginContextFactory(
                 new ExtensionRegistry(registry),
                 new EventChannel(EventChannelOptions.defaults(), registry),
-                registry);
+                registry,
+                new RuntimeInfoHolder());
 
         // When
         PF4JPluginManager manager = PluginModule.providePluginManager(factory,

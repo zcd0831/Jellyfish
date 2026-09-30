@@ -148,6 +148,11 @@ public abstract class AbstractOpenAiCompatibleLlmClient extends AbstractHttpLlmC
             // 只下发、不解释：是否认这个字段由厂商决定，不认的端点会忽略它
             body.put("prompt_cache_key", request.getCacheKey());
         }
+        if (LlmClients.isNotBlank(request.getCacheRetention())) {
+            // 保留策略：取值由厂商约定（OpenAI 系为 in_memory / 24h），内核原样下发。
+            // 缺省不下发的理由见 LlmRequest#cacheRetention——猜错就是一次 400
+            body.put("prompt_cache_retention", request.getCacheRetention());
+        }
         return body;
     }
 

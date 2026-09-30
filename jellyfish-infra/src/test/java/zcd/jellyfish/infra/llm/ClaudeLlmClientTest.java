@@ -122,7 +122,8 @@ class ClaudeLlmClientTest {
         assertEquals("key", httpRequest.header("x-api-key"));
         assertEquals("2023-06-01", httpRequest.header("anthropic-version"));
         JsonNode body = json(requestBody(httpRequest));
-        assertEquals("sys", body.path("system").asText());
+        // system 现在是块数组而不是字符串：只有内容块才能挂 cache_control（详见请求体构造处的说明）
+        assertEquals("sys", body.path("system").get(0).path("text").asText());
         assertEquals(100, body.path("max_tokens").asInt());
         assertEquals(0.5, body.path("temperature").asDouble());
         assertEquals(0.9, body.path("top_p").asDouble());
@@ -162,7 +163,7 @@ class ClaudeLlmClientTest {
 
         // Then
         JsonNode body = json(requestBody(stub.lastRequest()));
-        assertEquals("prompt\nextra", body.path("system").asText());
+        assertEquals("prompt\nextra", body.path("system").get(0).path("text").asText());
         assertEquals(1, body.path("messages").size());
     }
 
@@ -301,6 +302,155 @@ class ClaudeLlmClientTest {
 
         // Then
         assertTrue(listener.error instanceof JellyfishException);
+    }
+
+
+    @Test
+    void chat_should_mark_system_block_and_last_message_by_default() throws IOException {
+        // Given：什么都不声明，用内核缺省（两个断点）
+        StubInterceptor stub = jsonStub("{\"content\":[]}");
+        ClaudeLlmClient client = client(stub);
+
+        // When
+        client.chat(LlmRequest.builder("claude-3-5-sonnet")
+                .systemPrompt("sys")
+                .message(LlmMessage.user("hi"))
+                .build());
+
+        // Then：前端断点在最后一个 system 块上（它排在工具之后，一个标记同时护住两段），
+        // 尾部断点在最后一条消息上（它随对话增长前移，使每轮只需 prefill 新增部分）
+        JsonNode body = json(requestBody(stub.lastRequest()));
+        assertEquals("ephemeral", body.path("system").get(0).path("cache_control").path("type").asText());
+        JsonNode lastMessage = body.path("messages").get(body.path("messages").size() - 1);
+        assertEquals("ephemeral", lastMessage.path("content").get(0).path("cache_control").path("type").asText());
+        assertEquals("hi", lastMessage.path("content").get(0).path("text").asText());
+    }
+
+    @Test
+    void chat_should_mark_last_tool_when_system_prompt_absent() throws IOException {
+        // Given：没有 system prompt，前端断点只能落在最后一个工具定义上
+        StubInterceptor stub = jsonStub("{\"content\":[]}");
+        ClaudeLlmClient client = client(stub);
+
+        // When
+        client.chat(LlmRequest.builder("claude-3-5-sonnet")
+                .message(LlmMessage.user("hi"))
+                .tools(Arrays.asList(new LlmTool("a", "甲", null, null), new LlmTool("b", "乙", null, null)))
+                .build());
+
+        // Then
+        JsonNode tools = json(requestBody(stub.lastRequest())).path("tools");
+        assertFalse(tools.get(0).has("cache_control"));
+        assertEquals("ephemeral", tools.get(1).path("cache_control").path("type").asText());
+    }
+
+    @Test
+    void chat_should_mark_only_system_block_when_breakpoints_is_one() throws IOException {
+        // Given
+        StubInterceptor stub = jsonStub("{\"content\":[]}");
+        ClaudeLlmClient client = client(stub);
+
+        // When
+        client.chat(LlmRequest.builder("claude-3-5-sonnet")
+                .systemPrompt("sys")
+                .message(LlmMessage.user("hi"))
+                .cacheBreakpoints(Integer.valueOf(1))
+                .build());
+
+        // Then：只护住稳定前端。历史被改写时它不受影响，但那一段本来也常变。
+        // 尾部不标则消息内容保持纯字符串形式——为一个断点改写结构没有意义
+        JsonNode body = json(requestBody(stub.lastRequest()));
+        assertTrue(body.path("system").get(0).has("cache_control"));
+        assertTrue(body.path("messages").get(0).path("content").isTextual());
+    }
+
+    @Test
+    void chat_should_not_mark_anything_when_breakpoints_is_zero() throws IOException {
+        // Given
+        StubInterceptor stub = jsonStub("{\"content\":[]}");
+        ClaudeLlmClient client = client(stub);
+
+        // When
+        client.chat(LlmRequest.builder("claude-3-5-sonnet")
+                .systemPrompt("sys")
+                .message(LlmMessage.user("hi"))
+                .cacheBreakpoints(Integer.valueOf(0))
+                .build());
+
+        // Then：关闭时连 system 也回到字符串形式——不留一个多余的块数组
+        JsonNode body = json(requestBody(stub.lastRequest()));
+        assertEquals("sys", body.path("system").asText());
+        assertTrue(body.path("messages").get(0).path("content").isTextual());
+    }
+
+    @Test
+    void chat_should_put_ttl_into_cache_control_when_retention_set() throws IOException {
+        // Given：Anthropic 的 TTL 就是 cache_control.ttl
+        StubInterceptor stub = jsonStub("{\"content\":[]}");
+        ClaudeLlmClient client = client(stub);
+
+        // When
+        client.chat(LlmRequest.builder("claude-3-5-sonnet")
+                .systemPrompt("sys")
+                .message(LlmMessage.user("hi"))
+                .cacheRetention("1h")
+                .build());
+
+        // Then
+        JsonNode body = json(requestBody(stub.lastRequest()));
+        JsonNode cacheControl = body.path("system").get(0).path("cache_control");
+        assertEquals("ephemeral", cacheControl.path("type").asText());
+        assertEquals("1h", cacheControl.path("ttl").asText());
+    }
+
+    @Test
+    void chat_should_omit_ttl_when_retention_unset() throws IOException {
+        // Given：Anthropic 的缺省 TTL 是 5m，内核不替调用方猜，因此不下发该字段
+        StubInterceptor stub = jsonStub("{\"content\":[]}");
+        ClaudeLlmClient client = client(stub);
+
+        // When
+        client.chat(LlmRequest.builder("claude-3-5-sonnet").systemPrompt("sys")
+                .message(LlmMessage.user("hi")).build());
+
+        // Then
+        JsonNode cacheControl = json(requestBody(stub.lastRequest()))
+                .path("system").get(0).path("cache_control");
+        assertFalse(cacheControl.has("ttl"));
+    }
+
+    @Test
+    void chat_should_mark_last_tool_result_block_when_last_message_is_tool_results() throws IOException {
+        // Given：最后一条是工具结果（它本来就已经是块数组）
+        StubInterceptor stub = jsonStub("{\"content\":[]}");
+        ClaudeLlmClient client = client(stub);
+
+        // When
+        client.chat(LlmRequest.builder("claude-3-5-sonnet")
+                .message(LlmMessage.user("hi"))
+                .message(new LlmMessage(LlmMessage.ROLE_TOOL, "r1", "call-1", null, null))
+                .message(new LlmMessage(LlmMessage.ROLE_TOOL, "r2", "call-2", null, null))
+                .build());
+
+        // Then：两个结果合并进同一条 user 消息，断点落在后一个 block 上
+        JsonNode messages = json(requestBody(stub.lastRequest())).path("messages");
+        JsonNode last = messages.get(messages.size() - 1);
+        assertEquals(2, last.path("content").size());
+        assertFalse(last.path("content").get(0).has("cache_control"));
+        assertTrue(last.path("content").get(1).has("cache_control"));
+    }
+
+    @Test
+    void chat_should_not_mark_empty_text_block_when_last_message_blank() throws IOException {
+        // Given：Anthropic 不接受空文本块，为一个断点把请求弄成非法不值得
+        StubInterceptor stub = jsonStub("{\"content\":[]}");
+        ClaudeLlmClient client = client(stub);
+
+        // When
+        client.chat(LlmRequest.builder("claude-3-5-sonnet").message(LlmMessage.user("  ")).build());
+
+        // Then
+        assertEquals("  ", json(requestBody(stub.lastRequest())).path("messages").get(0).path("content").asText());
     }
 
     /**

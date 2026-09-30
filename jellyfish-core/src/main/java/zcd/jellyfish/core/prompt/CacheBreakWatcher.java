@@ -1,5 +1,9 @@
 package zcd.jellyfish.core.prompt;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import zcd.jellyfish.api.event.EventPublisher;
+import zcd.jellyfish.api.event.notification.CachePrefixChangedEvent;
 import zcd.jellyfish.infra.llm.LlmMessage;
 import zcd.jellyfish.infra.llm.LlmTool;
 import zcd.jellyfish.infra.llm.LlmToolCall;
@@ -34,6 +38,11 @@ import java.util.Objects;
  * <b>只比较、不改请求</b>：本类在组装路径上被调用，只读入参、只写自己的观察状态，
  * 不碰 {@link LlmMessage} 也不碰会话——与 {@link ContextWindow} / {@link ToolResultAger} 同一口径。
  * <p>
+ * <b>结论会广播出去</b>：除了日志，断裂还会发一条 {@link CachePrefixChangedEvent}，让插件能据此做
+ * 阈值守卫、告警与趋势统计。两者的节流口径<b>刻意不同</b>：日志里的 WARN 断裂持续时只报一次
+ * （刷屏会让日志不可读），而事件逐轮发——下一轮的前缀如果仍与这一轮不连续，那就是又一次真实的
+ * 缓存损失，计数型订阅方需要看到每一次。
+ * <p>
  * <b>为什么按会话而不是全局</b>：跨会话的相同前缀当然也能共享缓存，但「有没有断裂」只有在同一个
  * 会话的相邻两轮之间才有意义；混在一起看，只会得到一份读不出因果的统计。
  * <p>
@@ -55,14 +64,23 @@ public class CacheBreakWatcher {
     /** 最多同时观察多少个会话。 */
     private static final int MAX_SESSIONS = 64;
 
+    /** 日志。 */
+    private static final Logger LOG = LoggerFactory.getLogger(CacheBreakWatcher.class);
+
+    /** 事件通道：把断裂广播给包括插件在内的订阅方。 */
+    private final EventPublisher eventPublisher;
+
     /** 会话标识 → 上一轮的指纹，按访问顺序淘汰。 */
     private final Map<String, Snapshot> snapshots = new LruSnapshots();
 
     /**
      * 构造观察器。
+     *
+     * @param eventPublisher 事件通道，不可为 {@code null}
      */
     @Inject
-    public CacheBreakWatcher() {
+    public CacheBreakWatcher(EventPublisher eventPublisher) {
+        this.eventPublisher = Objects.requireNonNull(eventPublisher, "eventPublisher must not be null");
     }
 
     /**
@@ -86,7 +104,32 @@ public class CacheBreakWatcher {
             Snapshot previous = snapshots.get(sessionId);
             Report report = Report.between(previous, current, previous != null && previous.broken);
             snapshots.put(sessionId, current.withBroken(report.isBroken()));
+            publish(sessionId, report);
             return report;
+        }
+    }
+
+    /**
+     * 广播一条断裂事件，不该报时什么都不做。
+     * <p>
+     * <b>订阅方出错不能影响请求</b>：本类是诊断设施，一个坏订阅方不该让整轮对话发不出去——
+     * 与「插件贡献块失败只记告警」是同一种取舍。
+     *
+     * @param sessionId 会话标识，不可为 {@code null}
+     * @param report    本轮结论
+     */
+    private void publish(String sessionId, Report report) {
+        if (!report.isBroken() || report.isFirstObservation()) {
+            // 首次观察没有基线，无从判断有没有断，因此不该报（否则每个新会话都白报一次）
+            return;
+        }
+        try {
+            eventPublisher.publish(new CachePrefixChangedEvent(sessionId, report.firstBrokenLayer(),
+                    report.reusableMessages, report.previousMessages, report.currentMessages,
+                    report.systemPromptLengthDelta));
+        } catch (RuntimeException e) {
+            LOG.warn("缓存断裂事件广播失败（已忽略，不影响对话）: sessionId={} reason={}",
+                    sessionId, e.getMessage());
         }
     }
 
@@ -335,6 +378,24 @@ public class CacheBreakWatcher {
                 index++;
             }
             return index;
+        }
+
+        /**
+         * 取断裂起始层。
+         * <p>
+         * <b>只报第一个断点</b>：断裂是累积的，第 0 个 token 变了，它后面的内容再变不变都无所谓，
+         * 整段请求本来就要重算。因此缓存的真实语义只有一个断点。
+         *
+         * @return 断裂起始层；{@link #isBroken()} 为 {@code false} 时返回 {@code null}
+         */
+        CachePrefixChangedEvent.Layer firstBrokenLayer() {
+            if (systemPromptChanged) {
+                return CachePrefixChangedEvent.Layer.SYSTEM_PROMPT;
+            }
+            if (toolsChanged) {
+                return CachePrefixChangedEvent.Layer.TOOLS;
+            }
+            return historyRewritten ? CachePrefixChangedEvent.Layer.HISTORY : null;
         }
 
         /**

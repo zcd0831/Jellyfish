@@ -11,6 +11,8 @@ import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.api.extension.PromptContribution;
 import zcd.jellyfish.api.extension.PromptContributionRequest;
 import zcd.jellyfish.api.extension.PromptPlacement;
+import zcd.jellyfish.api.extension.RequestTuning;
+import zcd.jellyfish.api.extension.RequestTuningRequest;
 import zcd.jellyfish.api.extension.TurnContext;
 import zcd.jellyfish.api.extension.TurnContextRequest;
 import zcd.jellyfish.api.extension.SessionCompactionSnapshot;
@@ -44,6 +46,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -95,7 +98,7 @@ class PromptAssemblerTest {
         // 工具结果老化器在有些用例里不会被走到，用 lenient 预置缺省 React 段，避免严格桩误报
         lenient().when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
         assembler = new PromptAssembler(agentManager, toolCatalog, runtimeConfig, extensions,
-                new ToolResultAger(runtimeConfig), new CacheBreakWatcher());
+                new ToolResultAger(runtimeConfig, extensions), new CacheBreakWatcher(events));
     }
 
     @Test
@@ -698,7 +701,7 @@ class PromptAssemblerTest {
     private AgingRun runAging(int agingPercent) {
         configureAging(2, agingPercent);
         PromptAssembler fresh = new PromptAssembler(agentManager, toolCatalog, runtimeConfig, extensions,
-                new ToolResultAger(runtimeConfig), new CacheBreakWatcher());
+                new ToolResultAger(runtimeConfig, extensions), new CacheBreakWatcher(events));
         SessionManager sessions = newSessionManager();
         Session session = sessions.createDefault();
         String sessionId = session.getSessionId();
@@ -943,6 +946,137 @@ class PromptAssemblerTest {
         // Then：路由键必须跟着父请求——fork 的全部意义就是命中父请求建立的缓存，
         // 而路由键决定它落到哪台机器上
         assertEquals(assembler.buildRequest(session, model).getCacheKey(), fork.getCacheKey());
+    }
+
+    @Test
+    void buildRequest_should_applyTuning_fromPlugin() {
+        // Given：插件表态三个缓存旋钮
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        Session session = newSession();
+        extensions.contribute("tuner", RequestTuningRequest.class, null,
+                request -> new RequestTuning("自定义键", "1h", Integer.valueOf(1)),
+                RegisterOptions.DEFAULT);
+
+        // When
+        LlmRequest request = assembler.buildRequest(session, resolvedModel(128_000, 4096));
+
+        // Then
+        assertEquals("自定义键", request.getCacheKey());
+        assertEquals("1h", request.getCacheRetention());
+        assertEquals(Integer.valueOf(1), request.getCacheBreakpoints());
+    }
+
+    @Test
+    void buildRequest_should_mergeTuning_fieldWiseByOrder() {
+        // Given：两个插件各表一部分态度，注册顺序即 order
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        Session session = newSession();
+        extensions.contribute("先", RequestTuningRequest.class, null,
+                request -> new RequestTuning("键甲", null, null), RegisterOptions.DEFAULT);
+        extensions.contribute("后", RequestTuningRequest.class, null,
+                request -> new RequestTuning("键乙", "24h", Integer.valueOf(2)), RegisterOptions.DEFAULT);
+
+        // When
+        LlmRequest request = assembler.buildRequest(session, resolvedModel(128_000, 4096));
+
+        // Then：逐字段取 order 最小的非空值，而不是拼接或取极值
+        assertEquals("键甲", request.getCacheKey());
+        assertEquals("24h", request.getCacheRetention());
+        assertEquals(Integer.valueOf(2), request.getCacheBreakpoints());
+    }
+
+    @Test
+    void buildRequest_should_clampBreakpoints_fromPlugin() {
+        // Given：插件写出荒谬的断点数
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        Session session = newSession();
+        extensions.contribute("越界", RequestTuningRequest.class, null,
+                request -> new RequestTuning(null, null, Integer.valueOf(99)), RegisterOptions.DEFAULT);
+
+        // When
+        LlmRequest request = assembler.buildRequest(session, resolvedModel(128_000, 4096));
+
+        // Then：钳到上限——插件写出荒谬的值不该让整个请求发不出去
+        assertEquals(Integer.valueOf(RequestTuning.MAX_CACHE_BREAKPOINTS), request.getCacheBreakpoints());
+    }
+
+    @Test
+    void buildRequest_should_clampNegativeBreakpoints_toZero() {
+        // Given：0 是「关闭该厂商的缓存」这个有意义的取值，负数则只可能是笔误
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        Session session = newSession();
+        extensions.contribute("负", RequestTuningRequest.class, null,
+                request -> new RequestTuning(null, null, Integer.valueOf(-5)), RegisterOptions.DEFAULT);
+
+        // When
+        LlmRequest request = assembler.buildRequest(session, resolvedModel(128_000, 4096));
+
+        // Then
+        assertEquals(Integer.valueOf(0), request.getCacheBreakpoints());
+    }
+
+    @Test
+    void buildRequest_should_fallBackToDefaults_whenTuningHandlerFails() {
+        // Given：调优是锦上添花，一个坏插件不该让整轮对话发不出去
+        SessionManager sessions = newSessionManager();
+        Session session = sessions.createDefault();
+        sessions.appendMessage(session.getSessionId(), LlmMessage.user("你好"), null);
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        extensions.contribute("坏", RequestTuningRequest.class, null, request -> {
+            throw new JellyfishException("调优器挂了");
+        }, RegisterOptions.DEFAULT);
+
+        // When
+        LlmRequest request = assembler.buildRequest(session,
+                resolvedModel(128_000, 4096, new ProviderCacheSettings(true, 0)));
+
+        // Then：退回内核缺省——路由键仍按 provider 配置取会话标识，其余不表态
+        assertEquals(session.getSessionId(), request.getCacheKey());
+        assertNull(request.getCacheRetention());
+        assertNull(request.getCacheBreakpoints());
+    }
+
+    @Test
+    void buildRequest_should_passProviderAndCounts_toTuningHandler() {
+        // Given：插件要靠 provider 类型与模型判断该厂商认哪些字段
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        Session session = newSession();
+        final RequestTuningRequest[] seen = new RequestTuningRequest[1];
+        extensions.contribute("记", RequestTuningRequest.class, null, request -> {
+            seen[0] = request;
+            return RequestTuning.empty();
+        }, RegisterOptions.DEFAULT);
+
+        // When
+        assembler.buildRequest(session, resolvedModel(128_000, 4096));
+
+        // Then
+        assertNotNull(seen[0]);
+        assertEquals("openai", seen[0].getProviderType());
+        assertEquals("gpt-4o", seen[0].getModelId());
+        assertEquals(session.getSessionId(), seen[0].getSessionId());
+    }
+
+    @Test
+    void buildFork_should_carryAllCacheKnobs_fromParent() {
+        // Given：插件让请求带上了全部三个缓存旋钮
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        SessionManager sessions = newSessionManager();
+        Session session = sessions.createDefault();
+        sessions.appendMessage(session.getSessionId(), LlmMessage.user("一"), null);
+        extensions.contribute("调优", RequestTuningRequest.class, null,
+                request -> new RequestTuning("键", "1h", Integer.valueOf(1)), RegisterOptions.DEFAULT);
+        ResolvedModel model = resolvedModel(128_000, 4096);
+
+        // When
+        LlmRequest parent = assembler.buildRequest(session, model);
+        LlmRequest fork = assembler.buildFork(session, model, 0, 0, "写摘要");
+
+        // Then：三个旋钮都得跟着走——它们决定缓存落在哪、能不能写、写多久，
+        // 丢掉任何一个，这次 fork 可能就白花了
+        assertEquals(parent.getCacheKey(), fork.getCacheKey());
+        assertEquals(parent.getCacheRetention(), fork.getCacheRetention());
+        assertEquals(parent.getCacheBreakpoints(), fork.getCacheBreakpoints());
     }
 
     /**

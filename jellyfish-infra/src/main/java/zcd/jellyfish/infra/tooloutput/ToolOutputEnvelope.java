@@ -1,6 +1,7 @@
 package zcd.jellyfish.infra.tooloutput;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import zcd.jellyfish.api.extension.AgingStrategy;
 import com.fasterxml.jackson.databind.node.TextNode;
 import zcd.jellyfish.infra.support.ObjectMapperWrapper;
 
@@ -306,6 +307,24 @@ public final class ToolOutputEnvelope {
     }
 
     /**
+     * 内核缺省的 stub 模板。
+     * <p>
+     * <b>与插件模板是同一套占位符</b>：内核默认值不搞特殊语法，插件看到的契约与自己写的完全一致。
+     */
+    static final String DEFAULT_STUB_TEMPLATE = "[工具结果已省略] tool=" + AgingStrategy.TOOL_PLACEHOLDER
+            + " 原始 " + AgingStrategy.CHARS_PLACEHOLDER + " 字符" + AgingStrategy.FIRST_LINE_PLACEHOLDER
+            + AgingStrategy.RECOVERY_PLACEHOLDER;
+
+    /**
+     * 生成上下文里替换整条结果的短占位（用内核缺省模板）。
+     *
+     * @return 一行 stub 文本
+     */
+    public String stub() {
+        return stub(null);
+    }
+
+    /**
      * 生成上下文里替换整条结果的短占位。
      * <p>
      * <b>保留路径是重点</b>：模型只要知道完整内容在哪，就仍能按需回查；把路径也省掉，
@@ -314,24 +333,38 @@ public final class ToolOutputEnvelope {
      * <b>还要保留预览首行</b>：工具把结论（退出码、终止原因、cwd）放在正文首行，而落盘文件里
      * 只有正文之后的输出——丢了这一行，一条老化后的命令结果就再也回答不了「它成没成」，
      * 而这正是模型最常需要的那一个答案。
+     * <p>
+     * <b>{@code {firstLine}} 与 {@code {recovery}} 带着自己的前导分隔符</b>：两者都可能为空，
+     * 也可能是一整段话（后者内含落盘失败/不完整/正常三种分支），把分隔符留给调用方去拼，
+     * 模板作者就得自己判断「上一个占位符出没出现」——那是它做不到的事。
      *
+     * @param template stub 模板；{@code null} 或空白时用 {@link #DEFAULT_STUB_TEMPLATE}
      * @return 一行 stub 文本
      */
-    public String stub() {
-        StringBuilder text = new StringBuilder("[工具结果已省略] tool=").append(toolName)
-                .append(" 原始 ").append(totalChars).append(" 字符");
+    public String stub(String template) {
+        String pattern = template == null || template.trim().isEmpty() ? DEFAULT_STUB_TEMPLATE : template;
         String head = previewFirstLine();
-        if (!head.isEmpty()) {
-            text.append(" · 首行：").append(head);
-        }
+        String rendered = pattern.replace(AgingStrategy.TOOL_PLACEHOLDER, toolName)
+                .replace(AgingStrategy.CHARS_PLACEHOLDER, Integer.toString(totalChars))
+                .replace(AgingStrategy.LINES_PLACEHOLDER, Integer.toString(totalLines))
+                .replace(AgingStrategy.FIRST_LINE_PLACEHOLDER, head.isEmpty() ? "" : " · 首行：" + head)
+                .replace(AgingStrategy.RECOVERY_PLACEHOLDER, recoveryText());
+        return rendered;
+    }
+
+    /**
+     * 拼接「怎么找回内容」那一整段后缀，含前导分隔符。
+     *
+     * @return 后缀文本，保证非空白
+     */
+    private String recoveryText() {
         if (path == null) {
-            text.append("，且落盘失败，内容已不可恢复");
-        } else if (partial) {
-            text.append("，且落盘内容不完整（超出落盘上限的部分未捕获）：").append(path);
-        } else {
-            text.append("，完整内容：").append(path).append("（需细节用 read_file 或 grep_files 回查该文件）");
+            return "，且落盘失败，内容已不可恢复";
         }
-        return text.toString();
+        if (partial) {
+            return "，且落盘内容不完整（超出落盘上限的部分未捕获）：" + path;
+        }
+        return "，完整内容：" + path + "（需细节用 read_file 或 grep_files 回查该文件）";
     }
 
     /**

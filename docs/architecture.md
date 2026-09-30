@@ -42,8 +42,8 @@ jellyfish-tui（TUI 外壳）  jellyfish-server（HTTP 外壳）  →  jellyfish
 
 | 通道 | 形态 | 用途 |
 | --- | --- | --- |
-| 同步扩展点（`ExtensionRegistry`） | 有返回值、同步派发、**不可丢弃** | 工具、命令、提示词贡献、回合上下文、权限拦截、会话持久化 / 恢复、压缩策略、UI 贡献、输入指令 |
-| 异步事件通道（`EventChannel`） | `void`、异步派发、**可丢弃** | 轮次与会话等通知、可观测性 |
+| 同步扩展点（`ExtensionRegistry`） | 有返回值、同步派发、**不可丢弃** | 工具、命令、提示词贡献、回合上下文、权限拦截、会话持久化 / 恢复、压缩策略、**请求调优**、**老化策略**、UI 贡献、输入指令 |
+| 异步事件通道（`EventChannel`） | `void`、异步派发、**可丢弃** | 轮次与会话等通知、可观测性（含**缓存前缀断裂**） |
 
 **可丢与不可丢不能合成一条路**：一次工具调用没有返回值就是功能坏了，而一条统计通知丢了只是少一个数字。合成之后
 「这条通知到底能不能丢」会变成一个需要逐条判断的字段，而判断错了要么拖慢主链路（把通知按同步等待处理），
@@ -51,6 +51,12 @@ jellyfish-tui（TUI 外壳）  jellyfish-server（HTTP 外壳）  →  jellyfish
 
 权限只能收紧不能放宽：插件拦截是三态（`ABSTAIN` / `ASK` / `DENY`），**没有 `ALLOW`**。只读白名单 = 工具描述符声明
 ∪ `plugins.configurations.<pluginId>.readOnlyTools`，也就是说**用户只能往里追加**，插件无法自称某个写操作是只读的。
+
+**缓存相关的两个扩展点只开放「旋钮」，不开放「内容」**：`RequestTuningRequest` 的结果类型只有缓存路由键、
+保留策略、断点数三个字段，`AgingStrategyRequest` 只给两个阈值与 stub 文案——两者的返回类型里**都没有**
+`systemPrompt` / `messages` / `tools` / `model` 这类字段，插件在编译期即无法改写请求内容。理由：prompt 缓存是
+前缀匹配，而「前缀不变」是**全局**性质，取决于所有组装决策的合取，任何一处被改坏整条前缀就作废（详见
+[design/llm-cache.md](design/llm-cache.md)）。因此这类能力只能由内核独占。
 
 **插件拿不到会话与工作目录**，只拿得到 `PluginContext`（handle / contribute / observe / emit）；工具的相对路径按
 进程工作目录解析。这是「插件是一条扩展线，不是一个可以到处伸手的进程内脚本」的落地方式。

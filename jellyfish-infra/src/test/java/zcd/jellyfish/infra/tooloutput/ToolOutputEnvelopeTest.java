@@ -130,6 +130,63 @@ class ToolOutputEnvelopeTest {
     }
 
     @Test
+    @DisplayName("stub 模板：占位符被替换，不留下花括号")
+    void stub_should_replacePlaceholders_when_templateGiven() {
+        // Given
+        ToolOutputEnvelope envelope = ToolOutputEnvelope.text("shell", 5000, 10, "/tmp/spill.txt", "hint",
+                "exit: 0\n正文");
+
+        // When
+        String stub = envelope.stub("{tool}|{chars}|{lines}|{firstLine}|{recovery}");
+
+        // Then
+        assertTrue(stub.startsWith("shell|5000|10| · 首行：exit: 0|"), stub);
+        assertTrue(stub.contains("/tmp/spill.txt"), stub);
+        assertFalse(stub.contains("{"), stub);
+    }
+
+    @Test
+    @DisplayName("stub 模板：没有首行时该段为空，不会留下一个孤立的分隔符")
+    void stub_should_renderEmptyFirstLine_when_previewIsStructured() {
+        // Given：结构化预览没有「结论行」这个概念
+        ToolOutputEnvelope envelope = ToolOutputEnvelope.structured("jira", 5000, "/tmp/spill.json", "hint",
+                ObjectMapperWrapper.readTree("[1,2,3]"), false);
+
+        // When
+        String stub = envelope.stub("头{tool}-{firstLine}-尾");
+
+        // Then
+        assertEquals("头jira--尾", stub);
+    }
+
+    @Test
+    @DisplayName("stub 模板：空白模板退回内核缺省，而不是产出一行空话")
+    void stub_should_fallBackToDefault_when_templateBlank() {
+        // Given
+        ToolOutputEnvelope envelope = ToolOutputEnvelope.text("read_file", 1000, 1, "/tmp/spill.txt", "hint", "x");
+
+        // When
+        String blank = envelope.stub("   ");
+
+        // Then
+        assertEquals(envelope.stub(), blank);
+        assertTrue(blank.contains("[工具结果已省略]"), blank);
+    }
+
+    @Test
+    @DisplayName("stub 模板：不认识的花括号原样保留，不报错")
+    void stub_should_keepUnknownPlaceholders_asIs() {
+        // Given：为一个多写的花括号就让整行文案不可用，不值得
+        ToolOutputEnvelope envelope = ToolOutputEnvelope.text("read_file", 1000, 1, "/tmp/spill.txt", "hint", "x");
+
+        // When
+        String stub = envelope.stub("{tool} {未知}");
+
+        // Then
+        assertEquals("read_file {未知}", stub);
+    }
+
+    @Test
     @DisplayName("结构化预览没有「结论行」这个概念，stub 不取首行")
     void stub_should_notKeepFirstLine_when_previewIsStructured() {
         // Given

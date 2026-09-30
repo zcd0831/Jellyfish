@@ -49,6 +49,23 @@ public final class LlmRequest {
     private final String cacheKey;
 
     /**
+     * 缓存保留策略；取值由各厂商约定（Anthropic 为 {@code cache_control.ttl}，OpenAI 系为
+     * {@code prompt_cache_retention}）。
+     * <p>
+     * <b>内核不替调用方猜缺省值</b>：同一概念在不同厂商、乃至同一厂商的不同模型上取值都不一样
+     * （且会随换代改变），猜错就是一次 400。因此未设置时<b>不下发该字段</b>。
+     */
+    private final String cacheRetention;
+
+    /**
+     * 缓存断点数：需要显式标注断点的厂商（Anthropic）用它决定要不要打断点、打几个。
+     * <p>
+     * {@code null} 表示未设置，由客户端按 {@code DEFAULT} 语义处理；{@code 0} 表示关闭该厂商的缓存。
+     * 按前缀自动缓存的厂商（DeepSeek、OpenAI 系）忽略本字段。
+     */
+    private final Integer cacheBreakpoints;
+
+    /**
      * 由 builder 构造请求，并对所有集合做防御性拷贝。
      *
      * @param builder 请求构建器
@@ -68,6 +85,8 @@ public final class LlmRequest {
                 : Collections.unmodifiableList(new ArrayList<>(builder.tools));
         this.toolChoice = builder.toolChoice;
         this.cacheKey = builder.cacheKey;
+        this.cacheRetention = builder.cacheRetention;
+        this.cacheBreakpoints = builder.cacheBreakpoints;
     }
 
     /**
@@ -171,6 +190,24 @@ public final class LlmRequest {
     }
 
     /**
+     * 获取缓存保留策略。
+     *
+     * @return 保留策略，未设置时为 {@code null}
+     */
+    public String getCacheRetention() {
+        return cacheRetention;
+    }
+
+    /**
+     * 获取缓存断点数。
+     *
+     * @return 断点数，未设置时为 {@code null}
+     */
+    public Integer getCacheBreakpoints() {
+        return cacheBreakpoints;
+    }
+
+    /**
      * 判断本次请求是否声明了工具。
      *
      * @return 声明了工具时返回 {@code true}
@@ -215,6 +252,12 @@ public final class LlmRequest {
 
         /** 缓存路由键。 */
         private String cacheKey;
+
+        /** 缓存保留策略。 */
+        private String cacheRetention;
+
+        /** 缓存断点数。 */
+        private Integer cacheBreakpoints;
 
         /**
          * 构造构建器。
@@ -339,6 +382,32 @@ public final class LlmRequest {
          */
         public Builder cacheKey(String cacheKey) {
             this.cacheKey = cacheKey == null || cacheKey.trim().isEmpty() ? null : cacheKey.trim();
+            return this;
+        }
+
+        /**
+         * 设置缓存保留策略。
+         * <p>
+         * <b>空串归一成 {@code null}</b>：与 {@link #cacheKey(String)} 同理，「设了一个空值」与
+         * 「没设」在厂商侧是两回事。
+         *
+         * @param cacheRetention 保留策略，可为 {@code null}
+         * @return 当前构建器
+         */
+        public Builder cacheRetention(String cacheRetention) {
+            this.cacheRetention = cacheRetention == null || cacheRetention.trim().isEmpty()
+                    ? null : cacheRetention.trim();
+            return this;
+        }
+
+        /**
+         * 设置缓存断点数。
+         *
+         * @param cacheBreakpoints 断点数，可为 {@code null}（未设置）
+         * @return 当前构建器
+         */
+        public Builder cacheBreakpoints(Integer cacheBreakpoints) {
+            this.cacheBreakpoints = cacheBreakpoints;
             return this;
         }
 

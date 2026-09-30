@@ -148,7 +148,7 @@ class ReActLooperTest {
         extensions = new ExtensionRegistry(new TypeRegistry());
         sessionManager = new SessionManager(agentManager, events, extensions, new SessionDefaults());
         promptAssembler = new PromptAssembler(agentManager, new ToolCatalog(extensions), runtimeConfig, extensions,
-                new ToolResultAger(runtimeConfig), new CacheBreakWatcher());
+                new ToolResultAger(runtimeConfig, extensions), new CacheBreakWatcher(events));
         outputLimiter = new ToolOutputLimiter(runtimeConfig, new ToolOutputStore(runtimeConfig));
         runScopes = new RunScopes();
         // 这两个桩是共享前置条件：个别用例（会话不存在 / 提前取消）走不到这两步，用 lenient 避免误报

@@ -6,6 +6,8 @@ import org.slf4j.LoggerFactory;
 import zcd.jellyfish.api.extension.PromptContribution;
 import zcd.jellyfish.api.extension.PromptContributionRequest;
 import zcd.jellyfish.api.extension.PromptPlacement;
+import zcd.jellyfish.api.extension.RequestTuning;
+import zcd.jellyfish.api.extension.RequestTuningRequest;
 import zcd.jellyfish.api.extension.TurnContext;
 import zcd.jellyfish.api.extension.TurnContextRequest;
 import zcd.jellyfish.infra.agent.AgentManager;
@@ -253,9 +255,11 @@ public class PromptAssembler {
                 .messages(forked)
                 .tools(base.getTools())
                 .toolChoice(TOOL_CHOICE_NONE)
-                // 路由键必须跟着父请求：fork 的全部意义就是命中父请求建立的缓存，
-                // 而路由键决定它落到哪台机器上。丢了它，整个 fork 可能刚好落到没有那份缓存的机器上
-                .cacheKey(base.getCacheKey());
+                // 缓存旋钮必须跟着父请求：fork 与保活的全部意义就是命中父请求建立的缓存，
+                // 而它们决定缓存落在哪、能不能写、写多久。丢掉任何一个，那次调用可能就白花了
+                .cacheKey(base.getCacheKey())
+                .cacheRetention(base.getCacheRetention())
+                .cacheBreakpoints(base.getCacheBreakpoints());
         Integer output = maxOutputTokens == null ? base.getMaxTokens() : maxOutputTokens;
         if (output != null) {
             builder.maxTokens(output);
@@ -303,11 +307,13 @@ public class PromptAssembler {
                 .systemPrompt(systemPrompt)
                 .messages(messages)
                 .tools(tools);
-        if (resolvedModel.getProvider().getCache().isPromptCacheKey()) {
-            // 缓存路由键取会话标识：同一个会话必须一直用同一个值，否则它的请求会被散到不同机器上
-            // 各建一份缓存。只影响命中率，不影响正确性
-            builder.cacheKey(session.getSessionId());
-        }
+        // 缓存相关的出站字段在最后统一确定：插件优先于 provider 配置，钳制后落到请求上
+        String defaultCacheKey = resolvedModel.getProvider().getCache().isPromptCacheKey()
+                ? session.getSessionId() : null;
+        RequestTuning tuning = tuningOf(session, resolvedModel, defaultCacheKey, messages.size(), tools.size());
+        builder.cacheKey(tuning.getCacheKey() == null ? defaultCacheKey : tuning.getCacheKey())
+                .cacheRetention(tuning.getCacheRetention())
+                .cacheBreakpoints(clampBreakpoints(tuning.getCacheBreakpoints()));
         int maxOutputTokens = resolvedModel.getModel().getMaxOutputTokens();
         if (maxOutputTokens > 0) {
             builder.maxTokens(maxOutputTokens);
@@ -688,6 +694,86 @@ public class PromptAssembler {
      * @return 可用预算；模型没配上下文窗口时返回 {@link #NO_CONTEXT_WINDOW}
      *         （与「预算恰好为 0」区分开）
      */
+    /**
+     * 询问各插件本轮要不要调整出站缓存参数，按 {@code order} 升序逐字段取第一个非空。
+     * <p>
+     * <b>为什么逐字段取而不是拼接</b>：与压缩策略同一理由——拼接会拼出一份谁也没写过的调优，
+     * 而在「哪些字段能下发」这场博弈里，猜错就是一次 400。
+     * <p>
+     * <b>处理器失败只记告警并跳过</b>：调优是锦上添花，一个坏插件不该让整轮对话发不出去。
+     *
+     * @param session         会话运行态
+     * @param resolvedModel   已解析的模型
+     * @param defaultCacheKey 内核按缺省规则打算用的缓存路由键，可为 {@code null}
+     * @param messageCount    本次请求的消息条数
+     * @param toolCount       本次请求的工具条数
+     * @return 合并后的调优，保证非 {@code null}
+     */
+    private RequestTuning tuningOf(Session session, ResolvedModel resolvedModel, String defaultCacheKey,
+                                   int messageCount, int toolCount) {
+        List<HandlerBinding<RequestTuningRequest, RequestTuning>> bindings =
+                extensions.bindings(RequestTuningRequest.class, null);
+        if (bindings.isEmpty()) {
+            return RequestTuning.empty();
+        }
+        // 同一个请求对象复用给全部处理器：载荷只有标识与计数，处理器只读
+        RequestTuningRequest request = new RequestTuningRequest(session.getSessionId(),
+                resolvedModel.getProvider().getType(), resolvedModel.getModel().getId(), defaultCacheKey,
+                messageCount, toolCount);
+        String cacheKey = null;
+        String retention = null;
+        Integer breakpoints = null;
+        for (HandlerBinding<RequestTuningRequest, RequestTuning> binding : bindings) {
+            RequestTuning tuning = tuningOf(binding, request);
+            if (tuning == null) {
+                continue;
+            }
+            if (cacheKey == null && StringUtils.isNotBlank(tuning.getCacheKey())) {
+                cacheKey = tuning.getCacheKey().trim();
+            }
+            if (retention == null && StringUtils.isNotBlank(tuning.getCacheRetention())) {
+                retention = tuning.getCacheRetention().trim();
+            }
+            if (breakpoints == null && tuning.getCacheBreakpoints() != null) {
+                breakpoints = tuning.getCacheBreakpoints();
+            }
+        }
+        return new RequestTuning(cacheKey, retention, breakpoints);
+    }
+
+    /**
+     * 调用一个调优处理器，把异常折成 {@code null}。
+     *
+     * @param binding 处理器绑定
+     * @param request 请求载荷
+     * @return 处理器结果；它失败时返回 {@code null}
+     */
+    private RequestTuning tuningOf(HandlerBinding<RequestTuningRequest, RequestTuning> binding,
+                                   RequestTuningRequest request) {
+        try {
+            return extensions.invoke(binding.getHandler(), request);
+        } catch (Exception e) {
+            LOG.warn("请求调优处理器执行失败，已跳过: owner={} reason={}", binding.getOwner(), e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * 把插件声明的断点数钳制到合法区间。
+     * <p>
+     * <b>为什么要钳制</b>：目前只有两个位置可放断点，声明 99 个只会让厂商报错。插件写出荒谬的值
+     * 不该让整个请求发不出去——这是内核对自己保命机制的把关，不是对插件的不信任。
+     *
+     * @param declared 插件声明的断点数，可为 {@code null}
+     * @return 断点数，落在 {@code [0, MAX_CACHE_BREAKPOINTS]}；未声明时为 {@code null}
+     */
+    private static Integer clampBreakpoints(Integer declared) {
+        if (declared == null) {
+            return null;
+        }
+        return Math.max(0, Math.min(declared, RequestTuning.MAX_CACHE_BREAKPOINTS));
+    }
+
     private int budgetOf(ResolvedModel resolvedModel) {
         int contextLength = resolvedModel.getModel().getContextLength();
         if (contextLength <= 0) {

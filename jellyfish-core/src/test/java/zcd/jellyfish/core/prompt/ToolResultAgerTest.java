@@ -6,18 +6,27 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import zcd.jellyfish.api.JellyfishException;
+import zcd.jellyfish.api.event.RegisterOptions;
+import zcd.jellyfish.api.extension.AgingStrategy;
+import zcd.jellyfish.api.extension.AgingStrategyRequest;
 import zcd.jellyfish.infra.config.ReactCacheSettings;
 import zcd.jellyfish.infra.config.ReactSettings;
 import zcd.jellyfish.infra.config.RuntimeConfig;
 import zcd.jellyfish.infra.config.ToolOutputSettings;
+import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.llm.LlmMessage;
+import zcd.jellyfish.infra.registry.TypeRegistry;
 import zcd.jellyfish.infra.tooloutput.ToolOutputEnvelope;
 
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.when;
@@ -42,12 +51,16 @@ class ToolResultAgerTest {
     @Mock
     private RuntimeConfig runtimeConfig;
 
+    /** 扩展注册表：用真货，便于直接注册老化策略处理器。 */
+    private ExtensionRegistry extensions;
+
     /** 被测老化器。 */
     private ToolResultAger ager;
 
     @BeforeEach
     void setUp() {
-        ager = new ToolResultAger(runtimeConfig);
+        extensions = new ExtensionRegistry(new TypeRegistry());
+        ager = new ToolResultAger(runtimeConfig, extensions);
     }
 
     // ==================== 旧口径（agingPercent = 0，按距尾部条数） ====================
@@ -214,6 +227,158 @@ class ToolResultAgerTest {
 
         // Then：按当前 size 老化到保留窗口
         assertTrue(aged.get(2).getContent().contains("/tmp/spill.txt"), aged.get(2).getContent());
+    }
+
+    @Test
+    void age_should_useStubTemplate_fromPlugin() {
+        // Given：插件为自己那类输出写了更贴切的措辞
+        configure(1, 0);
+        extensions.contribute("tools", AgingStrategyRequest.class, null,
+                request -> new AgingStrategy(null, null,
+                        "【旧输出】{tool} 共 {chars} 字符/{lines} 行{firstLine}{recovery}",
+                        null), RegisterOptions.DEFAULT);
+        LlmMessage oldTool = LlmMessage.tool("c1", "read", envelope());
+
+        // When
+        List<LlmMessage> aged = ager.age(SESSION, NO_BOUNDARY, usage(0),
+                Arrays.asList(oldTool, LlmMessage.tool("c2", "read", envelope())));
+
+        // Then：占位符被换成真实数字，而不是留下花括号
+        String content = aged.get(0).getContent();
+        assertTrue(content.startsWith("【旧输出】read 共 1000 字符/1 行"), content);
+        assertTrue(content.contains("首行：preview"), content);
+        assertTrue(content.contains("/tmp/spill.txt"), content);
+    }
+
+    @Test
+    void age_should_preferPerToolStubTemplate_overGenericOne() {
+        // Given：同一条文案对「读文件」与「跑命令」的贴切程度不一样
+        configure(1, 0);
+        Map<String, String> byTool = new HashMap<String, String>();
+        byTool.put("read", "【读文件】{tool}");
+        extensions.contribute("tools", AgingStrategyRequest.class, null,
+                request -> new AgingStrategy(null, null, "【通用】{tool}", byTool), RegisterOptions.DEFAULT);
+        LlmMessage oldTool = LlmMessage.tool("c1", "read", envelope());
+
+        // When
+        List<LlmMessage> aged = ager.age(SESSION, NO_BOUNDARY, usage(0),
+                Arrays.asList(oldTool, LlmMessage.tool("c2", "read", envelope())));
+
+        // Then
+        assertEquals("【读文件】read", aged.get(0).getContent());
+    }
+
+    @Test
+    void age_should_fallBackToGenericStubTemplate_whenToolNotOverridden() {
+        // Given：只覆盖了一个工具，另一个仍走通用模板
+        configure(1, 0);
+        Map<String, String> byTool = new HashMap<String, String>();
+        byTool.put("shell", "【跑命令】{tool}");
+        extensions.contribute("tools", AgingStrategyRequest.class, null,
+                request -> new AgingStrategy(null, null, "【通用】{tool}", byTool), RegisterOptions.DEFAULT);
+        LlmMessage oldTool = LlmMessage.tool("c1", "read", envelope());
+
+        // When
+        List<LlmMessage> aged = ager.age(SESSION, NO_BOUNDARY, usage(0),
+                Arrays.asList(oldTool, LlmMessage.tool("c2", "read", envelope())));
+
+        // Then
+        assertEquals("【通用】read", aged.get(0).getContent());
+    }
+
+    @Test
+    void age_should_keepKernelDefaultStub_whenPluginSilent() {
+        // Given：插件只调数量、不管文案
+        configure(1, 0);
+        extensions.contribute("tools", AgingStrategyRequest.class, null,
+                request -> new AgingStrategy(Integer.valueOf(1), null, null, null), RegisterOptions.DEFAULT);
+        LlmMessage oldTool = LlmMessage.tool("c1", "read", envelope());
+
+        // When
+        List<LlmMessage> aged = ager.age(SESSION, NO_BOUNDARY, usage(0),
+                Arrays.asList(oldTool, LlmMessage.tool("c2", "read", envelope())));
+
+        // Then
+        assertTrue(aged.get(0).getContent().startsWith("[工具结果已省略] tool=read"), aged.get(0).getContent());
+    }
+
+    @Test
+    void age_should_letPluginOverrideThresholds() {
+        // Given：配置说保留最近 1 条，插件说保留最近 3 条
+        configure(1, 0);
+        extensions.contribute("tuner", AgingStrategyRequest.class, null,
+                request -> new AgingStrategy(Integer.valueOf(3), null, null, null), RegisterOptions.DEFAULT);
+        List<LlmMessage> messages = Arrays.asList(
+                LlmMessage.tool("c1", "read", envelope()),
+                LlmMessage.tool("c2", "read", envelope()),
+                LlmMessage.tool("c3", "read", envelope()),
+                LlmMessage.tool("c4", "read", envelope()));
+
+        // When
+        List<LlmMessage> aged = ager.age(SESSION, NO_BOUNDARY, usage(0), messages);
+
+        // Then：只老化第一条
+        assertTrue(aged.get(0).getContent().startsWith("[工具结果已省略]"));
+        assertTrue(aged.get(1).getContent().startsWith("{"));
+        assertTrue(aged.get(3).getContent().startsWith("{"));
+    }
+
+    @Test
+    void age_should_clampPluginThresholds() {
+        // Given：插件写出荒谬的保留条数
+        configure(1, 0);
+        extensions.contribute("越界", AgingStrategyRequest.class, null,
+                request -> new AgingStrategy(Integer.valueOf(999), null, null, null), RegisterOptions.DEFAULT);
+        List<LlmMessage> messages = Arrays.asList(
+                LlmMessage.tool("c1", "read", envelope()),
+                LlmMessage.tool("c2", "read", envelope()));
+
+        // When
+        List<LlmMessage> aged = ager.age(SESSION, NO_BOUNDARY, usage(0), messages);
+
+        // Then：钳到消息条数，等于「一条都不老化」——荒谬的值不该让老化失控
+        assertTrue(aged.get(0).getContent().startsWith("{"));
+        assertTrue(aged.get(1).getContent().startsWith("{"));
+    }
+
+    @Test
+    void age_should_fallBackToConfig_whenStrategyHandlerFails() {
+        // Given
+        configure(1, 0);
+        extensions.contribute("坏", AgingStrategyRequest.class, null, request -> {
+            throw new JellyfishException("策略器挂了");
+        }, RegisterOptions.DEFAULT);
+        LlmMessage oldTool = LlmMessage.tool("c1", "read", envelope());
+
+        // When
+        List<LlmMessage> aged = ager.age(SESSION, NO_BOUNDARY, usage(0),
+                Arrays.asList(oldTool, LlmMessage.tool("c2", "read", envelope())));
+
+        // Then：退回配置口径，该老化的照常老化
+        assertTrue(aged.get(0).getContent().startsWith("[工具结果已省略]"));
+    }
+
+    @Test
+    void age_should_passUsageAndDefaults_toStrategyHandler() {
+        // Given：插件要靠用量与缺省值判断该不该介入
+        configure(2, 70);
+        final AgingStrategyRequest[] seen = new AgingStrategyRequest[1];
+        extensions.contribute("记", AgingStrategyRequest.class, null, request -> {
+            seen[0] = request;
+            return AgingStrategy.none();
+        }, RegisterOptions.DEFAULT);
+
+        // When
+        ager.age(SESSION, 5, usage(80), Collections.singletonList(LlmMessage.tool("c1", "read", envelope())));
+
+        // Then
+        assertNotNull(seen[0]);
+        assertEquals(1, seen[0].getMessageCount());
+        assertEquals(5, seen[0].getCompressionBoundary());
+        assertEquals(2, seen[0].getDefaultKeepRecentMessages());
+        assertEquals(70, seen[0].getDefaultAgingPercent());
+        assertEquals(80, seen[0].getUsedTokens());
+        assertEquals(SESSION, seen[0].getSessionId());
     }
 
     /**

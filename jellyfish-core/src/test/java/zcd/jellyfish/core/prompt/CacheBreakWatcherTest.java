@@ -3,10 +3,16 @@ package zcd.jellyfish.core.prompt;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import zcd.jellyfish.api.event.JellyfishEvent;
+import zcd.jellyfish.api.event.notification.CachePrefixChangedEvent;
+import zcd.jellyfish.api.event.EventPublisher;
+import zcd.jellyfish.api.event.JellyfishEvent;
+import zcd.jellyfish.api.event.notification.CachePrefixChangedEvent;
 import zcd.jellyfish.infra.llm.LlmMessage;
 import zcd.jellyfish.infra.llm.LlmTool;
 import zcd.jellyfish.infra.llm.LlmToolCall;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
@@ -41,9 +47,18 @@ class CacheBreakWatcherTest {
     /** 被测观察器。 */
     private CacheBreakWatcher watcher;
 
+    /** 收到的断裂事件。 */
+    private List<CachePrefixChangedEvent> published;
+
     @BeforeEach
     void setUp() {
-        watcher = new CacheBreakWatcher();
+        published = new ArrayList<CachePrefixChangedEvent>();
+        watcher = new CacheBreakWatcher(new EventPublisher() {
+            @Override
+            public void publish(JellyfishEvent event) {
+                published.add((CachePrefixChangedEvent) event);
+            }
+        });
     }
 
     @Test
@@ -242,6 +257,105 @@ class CacheBreakWatcherTest {
         // Then
         assertNotNull(report.toString());
         assertTrue(report.toString().contains("broken=false"));
+    }
+
+    @Test
+    @DisplayName("只追加不广播：缓存唯一健康的形态不该报")
+    void observe_should_notPublish_whenOnlyAppended() {
+        // Given
+        watcher.observe(SESSION, SYSTEM, TOOLS, messages("a"));
+
+        // When
+        watcher.observe(SESSION, SYSTEM, TOOLS, messages("a", "b"));
+
+        // Then
+        assertTrue(published.isEmpty(), "只追加就是健康的");
+    }
+
+    @Test
+    @DisplayName("首次观察不广播：没有基线就说断是编出来的")
+    void observe_should_notPublish_onFirstObservation() {
+        // When
+        watcher.observe(SESSION, SYSTEM, TOOLS, messages("a"));
+
+        // Then
+        assertTrue(published.isEmpty());
+    }
+
+    @Test
+    @DisplayName("system prompt 变了：报在第一层，并带上长度变化")
+    void observe_should_publish_systemPromptLayer() {
+        // Given
+        watcher.observe(SESSION, SYSTEM, TOOLS, messages("a"));
+
+        // When
+        watcher.observe(SESSION, SYSTEM + "！", TOOLS, messages("a", "b"));
+
+        // Then
+        assertEquals(1, published.size());
+        assertEquals(CachePrefixChangedEvent.Layer.SYSTEM_PROMPT, published.get(0).getLayer());
+        assertEquals(1, published.get(0).getSystemPromptLengthDelta());
+        assertEquals(SESSION, published.get(0).getSessionId());
+    }
+
+    @Test
+    @DisplayName("工具清单变了：报在第二层")
+    void observe_should_publish_toolsLayer() {
+        // Given
+        watcher.observe(SESSION, SYSTEM, TOOLS, messages("a"));
+
+        // When
+        watcher.observe(SESSION, SYSTEM, Collections.<LlmTool>emptyList(), messages("a", "b"));
+
+        // Then
+        assertEquals(1, published.size());
+        assertEquals(CachePrefixChangedEvent.Layer.TOOLS, published.get(0).getLayer());
+    }
+
+    @Test
+    @DisplayName("历史被改写：报在第三层，并带上可复用条数")
+    void observe_should_publish_historyLayer_withReusableCount() {
+        // Given
+        watcher.observe(SESSION, SYSTEM, TOOLS, messages("a", "b", "c"));
+
+        // When：第一条被改写，长度不变
+        watcher.observe(SESSION, SYSTEM, TOOLS, messages("改过的", "b", "c"));
+
+        // Then
+        assertEquals(1, published.size());
+        CachePrefixChangedEvent event = published.get(0);
+        assertEquals(CachePrefixChangedEvent.Layer.HISTORY, event.getLayer());
+        assertEquals(0, event.getReusableMessages());
+        assertEquals(3, event.getPreviousMessages());
+        assertEquals(3, event.getCurrentMessages());
+    }
+
+    @Test
+    @DisplayName("同时断多层时报最靠前那一层：后面的反正已经作废了")
+    void observe_should_publish_earliestBrokenLayer() {
+        // Given
+        watcher.observe(SESSION, SYSTEM, TOOLS, messages("a", "b"));
+
+        // When：三层一起变
+        watcher.observe(SESSION, SYSTEM + "！", Collections.<LlmTool>emptyList(), messages("全新的"));
+
+        // Then
+        assertEquals(1, published.size());
+        assertEquals(CachePrefixChangedEvent.Layer.SYSTEM_PROMPT, published.get(0).getLayer());
+    }
+
+    @Test
+    @DisplayName("断裂逐轮广播：每一轮不连续都是真实的一次损失")
+    void observe_should_publish_everyBrokenTurn() {
+        // Given
+        watcher.observe(SESSION, SYSTEM, TOOLS, messages("a", "b"));
+
+        // When：连续两轮都在改写历史中段
+        watcher.observe(SESSION, SYSTEM, TOOLS, messages("a", "c"));
+        watcher.observe(SESSION, SYSTEM, TOOLS, messages("a", "d"));
+
+        // Then：WARN 会节流，事件不节流——计数型订阅方需要看到每一次
+        assertEquals(2, published.size());
     }
 
     /**

@@ -170,6 +170,36 @@ class OpenAiLlmClientTest {
     }
 
     @Test
+    void chat_should_send_prompt_cache_retention_when_set() throws IOException {
+        // Given
+        StubInterceptor stub = jsonStub("{\"choices\":[{\"message\":{\"content\":\"ok\"}}]}");
+        OpenAiLlmClient client = client(stub);
+        LlmRequest request = LlmRequest.builder("gpt-4o")
+                .message(LlmMessage.user("hello"))
+                .cacheRetention("24h")
+                .build();
+
+        // When
+        client.chat(request);
+
+        // Then：取值由厂商约定，内核原样下发——它不替调用方猜，因为猜错就是一次 400
+        assertEquals("24h", json(requestBody(stub.lastRequest())).path("prompt_cache_retention").asText());
+    }
+
+    @Test
+    void chat_should_omit_prompt_cache_retention_when_unset() throws IOException {
+        // Given：缺省不下发（各厂商取值与支持情况都不同）
+        StubInterceptor stub = jsonStub("{\"choices\":[{\"message\":{\"content\":\"ok\"}}]}");
+        OpenAiLlmClient client = client(stub);
+
+        // When
+        client.chat(LlmRequest.builder("gpt-4o").message(LlmMessage.user("hello")).build());
+
+        // Then
+        assertFalse(json(requestBody(stub.lastRequest())).has("prompt_cache_retention"));
+    }
+
+    @Test
     void chat_should_parse_tool_calls_when_response_contains_them() {
         // Given
         StubInterceptor stub = jsonStub("{\"choices\":[{\"message\":{\"tool_calls\":[{\"id\":\"call-1\","

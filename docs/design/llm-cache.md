@@ -498,6 +498,43 @@ A（直接忽略 `tools/list_changed`，只告警）作为更小改动也站得�
 > **仍未实测**：`keepAliveSeconds` 该设多少、以及它到底能不能把命中率抬上去，取决于真实的空闲节奏，
 > 而那正是本节开头说的「按实际间隔实测后再定」。配置文档里给了一个起手值（OpenAI 内存缓存约 5–10 分钟，
 > 取 `240`）与验证方法（看 `/usage` 的命中率是否抬升、以及输入 token 总量涨了多少）；没抬上去就关掉它。
+>
+> **它对 DeepSeek 基本无用**：DeepSeek 的磁盘缓存要「几小时到几天」不用才清理，按分钟级续它没有意义。
+> 它是给 OpenAI 那种 5–10 分钟内存缓存准备的——DeepSeek 配置里保持 `0`。
+
+#### P7 · Anthropic 的 `cache_control` 断点 —— 已落地
+
+**这是一个与 P2–P6 完全无关的独立缺口**：DeepSeek 默认就按前缀缓存、OpenAI 系前缀够长就自动缓存，
+而 **Anthropic 必须显式用 `cache_control` 标出断点，不标就一个字节都不缓存**。此前 Jellyfish 一个断点
+都没打——**所以 Claude 上的命中率不是「低」，而是恒等于 0**，前面所有「让前缀稳定」的工作在那里
+没有任何回报。
+
+**断点放在哪、为什么**：任意 Anthropic 请求的渲染顺序是 `tools → system → messages`，而一个断点的
+含义是「把**它及它之前的全部内容**缓存起来」。于是两个位置刚好对应两件事：
+
+1. **最后一个 system 块**——它排在全部工具定义之后，因此**一个断点同时护住工具与 system**。
+   这两段是最贵的共享前缀，无论后面的历史怎么被改写（老化、压缩），它们都还在缓存里；
+2. **最后一条消息的最后一个块**——盖住整段历史，随对话增长而前移，于是每一次新增都只是
+   「上一轮前缀 + 一段新内容」。
+
+**为什么不用顶层的自动缓存**：Anthropic 提供「顶层 `cache_control` 自动放置断点」这一形式，但它
+**并非所有平台/端点都支持**（不支持的端点直接拒收该字段）。显式标块则是从第一天就有的形式。
+
+**两个已知边界**（都不是客户端能自行解决的，已在 `ClaudeLlmClient` 的类注释里留档）：
+
+- **前缀低于模型的最小可缓存长度时静默不缓存**——不报错，只是 `cache_creation_input_tokens` 为 0。
+  因此短对话打断点是**无害的空操作**，不会把请求弄坏。这也是本项可以缺省打开的原因；
+- **单轮新增超过 20 个块位置时，回看窗口可能找不到上一轮的条目**，尾部断点于是静默落空
+  （连续 `tool_use` 或 `tool_result` 各自只算一个位置，因此并行工具调用不受影响）。
+  前端断点不受影响，因此最贵的共享前缀仍然命中。
+
+**成本口径的变化要说清楚**：断点开启后，新增的那一段会按「缓存写入价」（约 `1.25×`）计费，
+换来的是整段前缀按「缓存读取价」（约 `0.1×`）读回。这是标准做法，也意味着**账单结构变了而不是单纯变了**——
+验证时要看的是命中率与总开销，不是单看某一项。
+
+**顺带修掉一个真实缺陷**：`ClaudeLlmClient.buildToolChoice` 原把 `toolChoice = "none"` 处理成「不下发」，
+那等于回到默认的 `auto`；Anthropic 明确支持 `{"type":"none"}`。这是 P4 的前置修复（fork 必须带工具
+且禁用工具调用），已在 P4 那一节记过。
 
 ### 5.3 扩展点设计
 
@@ -596,6 +633,55 @@ sessionManager.appendMessage(sessionId, userMessage, null, null);
 **todo 插件迁移**：从 system prompt 挪到 `TurnContextRequest`；保留 `TodoText.confirmation`
 在 tool 结果里的既有行为。**待办改变的那一轮本来就有新 token，把它塞在尾部几乎是免费的。**
 
+#### 5.3.3 请求调优（缓存旋钮的白名单）—— 已落地
+
+`RequestTuningRequest` → `RequestTuning`，逐请求询问插件「这一次的缓存参数要不要改」。
+
+**白名单由类型本身承担**：结果类型只有三个字段——`cacheKey`、`cacheRetention`、`cacheBreakpoints`，
+**没有** `systemPrompt` / `messages` / `tools` / `model`。插件因此在**编译期**就无法改写请求内容。
+
+| 字段 | 含义 | 缺省 |
+| --- | --- | --- |
+| `cacheKey` | 缓存路由键（OpenAI 系为 `prompt_cache_key`） | 内核按 `providers.<n>.cache.promptCacheKey` 决定 |
+| `cacheRetention` | 保留策略，**取值由厂商约定、原样下发**（Anthropic 走 `cache_control.ttl`，OpenAI 系走 `prompt_cache_retention`） | 不下发 |
+| `cacheBreakpoints` | 断点数，`[0, 2]` 钳制，按「由前到后」取前 N 个 | `2`（稳定前端 + 会话尾部） |
+
+`cacheRetention` **内核刻意不给缺省值**：同一概念在 Anthropic 是 `5m`/`1h`、在 OpenAI 系是
+`in_memory`/`24h`，而且会随模型换代改变（OpenAI 已把 `prompt_cache_retention` 在新模型上弃用，
+改推 `prompt_cache_ttl`）——猜错就是一次 400。内核提供管道，厂商知识归插件，请求载荷里给了
+`providerType` 与 `modelId` 供它分支。
+
+**为什么只给「数量」不给「位置」**：位置（断点落在哪个块上）决定了前缀从哪里开始可复用，那是必须由
+内核独占的算法。数量则只是「用几个」。
+
+#### 5.3.4 老化策略与 stub 文案 —— 已落地
+
+`AgingStrategyRequest` → `AgingStrategy`，两个阈值（`keepRecentMessages` / `agingPercent`）加 stub 文案。
+
+**为什么 stub 文案值得开放**：老化后的那一行是整个旧结果**唯一还留在上下文里的线索**——它决定模型是
+「知道这里曾经有个结果、也知道去哪找回来」，还是彻底失忆。这句话该怎么写是**领域知识**：写工具插件的
+作者比内核更清楚自己的输出长什么样。内核给通用措辞，插件给贴切措辞。
+
+模板占位符：`{tool}` / `{chars}` / `{lines}` / `{firstLine}` / `{recovery}`（后两者**自带前导分隔符**，
+因为 `{recovery}` 内含「落盘失败 / 落盘不完整 / 正常」三种分支，模板没有条件语法）。另有
+`stubTextsByTool` 按工具名覆盖——同一条文案对「读文件」与「跑命令」的贴切程度不一样。
+
+**边界算法不出内核**：老化到哪一条为止、一个压缩周期内推进几次，全部留在内核。理由与 5.3.3 同——
+那套算法是前缀不变量的守卫。
+
+#### 5.3.5 缓存断裂事件 —— 已落地
+
+`CachePrefixChangedEvent`，异步广播，插件可订阅做阈值守卫、告警与趋势统计。
+
+**只报「从哪一层开始断」**：断裂是**累积**的——第 0 个 token 变了，它后面的内容再变不变都无所谓。
+报「哪几层变了」会把已经作废的观测混进来，订阅方还得自己推出谁是第一个。层枚举即
+`SYSTEM_PROMPT` → `TOOLS` → `HISTORY`。
+
+**事件不节流，而日志 WARN 节流**：下一轮的前缀如果**仍然**与这一轮不连续，那就是又一次真实的缓存损失，
+计数型订阅方需要看到每一次；而逐轮 WARN 会把日志刷满。两者口径刻意不同。
+
+**首次观察不发**：没有基线就说断是编出来的。
+
 ### 5.4 配置项设计
 
 **立即可用（已存在，无需改代码）**：
@@ -632,7 +718,7 @@ sessionManager.appendMessage(sessionId, userMessage, null, null);
 | `cache.stableToolOrder` | ~~`true`~~ | ✅ P5 | 工具清单按 `order` + 名称稳定排序，与会话、与插件加载顺序无关。**实现为恒开、没有开关**：它严格优于旧行为（注册顺序本就不是内容的一部分），没有需要关掉它的场景 |
 | `providers.<name>.cache.promptCacheKey` | `false` | ✅ P6 | 把会话标识作为缓存路由键下发（OpenAI 系为 `prompt_cache_key`）。**在 provider 段而不是这里**：它与具体厂商的缓存实现绑死 |
 | `providers.<name>.cache.keepAliveSeconds` | `0` | ✅ P6 | 空闲时每隔这么多秒续一次缓存 TTL，每个空闲期最多三次。**它是要花钱的**，因此缺省关闭。同样在 provider 段 |
-| `cache.breakWatch` | `true` | ⬜ | system prompt / 工具清单 / 消息前缀变化时记 WARN（P0b 已实现且恒开，只差把它变成可关的配置） |
+| `cache.breakWatch` | `true` | ⬜ | system prompt / 工具清单 / 消息前缀变化时记 WARN 并广播 `CachePrefixChangedEvent`（P0b 已实现，事件见 5.3.5；**恒开且不打算做成开关**——它的成本只是一次内存比对，而关掉它等于把「缓存断裂完全静默」这个原始问题放回来） |
 
 **调参要点（非显然的一条）**：压缩的**次数**就是缓存**重置的次数**，每次重置都要重建整个前缀。
 因此「压缩阈值偏高 + 每次压得更狠（`compactKeepRecentMessages` 偏小）」比「频繁小幅压缩」更省缓存。

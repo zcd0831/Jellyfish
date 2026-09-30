@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import zcd.jellyfish.api.JellyfishException;
+import zcd.jellyfish.api.extension.RequestTuning;
 import zcd.jellyfish.infra.config.Provider;
 import zcd.jellyfish.infra.support.LlmClients;
 import zcd.jellyfish.infra.support.ObjectMapperWrapper;
@@ -17,6 +18,31 @@ import java.util.concurrent.ExecutorService;
 
 /**
  * Anthropic Claude 原生实现（Messages API）。
+ * <p>
+ * <b>缓存需要显式打断点，而这是本类与其余三家的最大区别</b>：DeepSeek 默认就按前缀缓存、
+ * OpenAI 系前缀够长就自动缓存，而 Anthropic 必须在请求里用 {@code cache_control} 标出断点，
+ * <b>不标就一个字节都不缓存</b>——命中率不是低，而是恒等于 0。因此本类必须主动标注，
+ * 否则前面所有「让前缀稳定」的工作在 Claude 上没有任何回报。
+ * <p>
+ * <b>断点放在哪、为什么</b>：任意请求的渲染顺序是 {@code tools → system → messages}，
+ * 而一个断点的含义是「把<b>它及它之前的全部内容</b>缓存起来」。于是两个位置刚好对应两件事：
+ * <ol>
+ *     <li><b>最后一个 system 块</b>——它排在全部工具定义之后，因此一个断点同时护住工具与 system。
+ *     这两段是本会话最贵的共享前缀，无论后面的历史怎么被改写（老化、压缩），它们都还在缓存里；</li>
+ *     <li><b>最后一条消息的最后一个块</b>——盖住整段历史。它随着对话增长而前移，
+ *     于是每一次新增都只是「上一轮前缀 + 一段新内容」，上一轮那一段按命中价读回。</li>
+ * </ol>
+ * <b>为什么不用顶层的自动缓存</b>：Anthropic 提供「顶层 {@code cache_control} 自动放置断点」这一形式，
+ * 但它<b>并非所有平台/端点都支持</b>（不支持的端点直接拒收该字段）。显式标块则是从第一天就有的形式，
+ * 因此本类选显式。两者不能混用的坑也因此不存在（混用时的 400 条件之一就是两处 TTL 不一致）。
+ * <p>
+ * <b>两个已知边界</b>（都不是本类能自行解决的）：
+ * <ul>
+ *     <li><b>前缀低于模型的最小可缓存长度时静默不缓存</b>——不报错，只是
+ *     {@code cache_creation_input_tokens} 为 0。因此短对话打断点是无害的空操作，不是错误；</li>
+ *     <li><b>单轮新增超过 20 个块位置时，回看窗口可能找不到上一轮的条目</b>，尾部断点于是静默落空。
+ *     前端断点不受影响，因此最贵的共享前缀仍然命中。</li>
+ * </ul>
  *
  * @author zcd
  */
@@ -135,18 +161,117 @@ public class ClaudeLlmClient extends AbstractHttpLlmClient {
             body.put("stop_sequences", request.getStop());
         }
         String system = collectSystemPrompt(request);
+        int breakpoints = breakpointsOf(request);
+        Map<String, Object> cacheControl = cacheControlOf(request);
+        // 前端断点优先落在最后一个 system 块上：它排在全部工具定义之后，一个断点护住两段。
+        // 没有 system prompt 时只能落在最后一个工具定义上（工具渲染在最前）
+        boolean systemMarked = breakpoints >= 1 && LlmClients.isNotBlank(system);
         if (LlmClients.isNotBlank(system)) {
-            body.put("system", system);
+            body.put("system", systemMarked ? systemBlocks(system, cacheControl) : system);
         }
-        body.put("messages", buildMessages(request));
+        List<Map<String, Object>> messages = buildMessages(request);
+        if (breakpoints >= 2) {
+            // 尾部断点盖住整段历史，随对话增长而前移
+            markLastBlock(messages, cacheControl);
+        }
+        body.put("messages", messages);
         if (request.hasTools()) {
-            body.put("tools", buildTools(request.getTools()));
+            boolean markTools = breakpoints >= 1 && !systemMarked;
+            body.put("tools", buildTools(request.getTools(), markTools ? cacheControl : null));
             Map<String, Object> toolChoice = buildToolChoice(request.getToolChoice());
             if (!toolChoice.isEmpty()) {
                 body.put("tool_choice", toolChoice);
             }
         }
         return body;
+    }
+
+    /**
+     * 取本次生效的断点数。
+     * <p>
+     * 未声明时用 {@link RequestTuning#DEFAULT_CACHE_BREAKPOINTS}。{@code 0} 表示关闭该厂商的缓存
+     * （适合「前缀本来每次都变、加了标记也命中不了」的会话）。
+     *
+     * @param request 统一请求模型
+     * @return 断点数
+     */
+    private static int breakpointsOf(LlmRequest request) {
+        Integer declared = request.getCacheBreakpoints();
+        return declared == null ? RequestTuning.DEFAULT_CACHE_BREAKPOINTS : declared;
+    }
+
+    /**
+     * 构造 {@code cache_control} 值。
+     * <p>
+     * TTL 只在调用方显式下发保留策略时带上：Anthropic 只认 {@code 5m} 与 {@code 1h}，
+     * 而缺省值（{@code 5m}）已经够好，因此不必替调用方猜。
+     *
+     * @param request 统一请求模型
+     * @return cache_control 字段值
+     */
+    private static Map<String, Object> cacheControlOf(LlmRequest request) {
+        Map<String, Object> cacheControl = new LinkedHashMap<>();
+        cacheControl.put("type", "ephemeral");
+        if (LlmClients.isNotBlank(request.getCacheRetention())) {
+            cacheControl.put("ttl", request.getCacheRetention());
+        }
+        return cacheControl;
+    }
+
+    /**
+     * 把 system prompt 包成带断点的块数组。
+     * <p>
+     * {@code cache_control} 只能挂在内容块上，因此要打断点就必须从「一个字符串」改成「一个块数组」。
+     *
+     * @param system       system prompt 正文
+     * @param cacheControl cache_control 值
+     * @return system 块数组
+     */
+    private static List<Map<String, Object>> systemBlocks(String system, Map<String, Object> cacheControl) {
+        Map<String, Object> block = new LinkedHashMap<>();
+        block.put("type", "text");
+        block.put("text", system);
+        block.put("cache_control", cacheControl);
+        return Collections.singletonList(block);
+    }
+
+    /**
+     * 给最后一条消息的最后一个块挂上断点。
+     * <p>
+     * 纯文本消息在这时改写成单块数组：{@code cache_control} 只能挂在内容块上。
+     * <b>空文本不标</b>：Anthropic 不接受空文本块，为了标一个断点把消息弄成非法请求不值得。
+     *
+     * @param messages     已构建的消息列表，就地修改
+     * @param cacheControl cache_control 值
+     */
+    private static void markLastBlock(List<Map<String, Object>> messages, Map<String, Object> cacheControl) {
+        if (messages.isEmpty()) {
+            return;
+        }
+        Map<String, Object> message = messages.get(messages.size() - 1);
+        Object content = message.get("content");
+        if (content instanceof List) {
+            List<?> blocks = (List<?>) content;
+            if (blocks.isEmpty()) {
+                return;
+            }
+            Object last = blocks.get(blocks.size() - 1);
+            if (last instanceof Map) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> block = (Map<String, Object>) last;
+                block.put("cache_control", cacheControl);
+            }
+            return;
+        }
+        String text = content == null ? "" : content.toString();
+        if (text.trim().isEmpty()) {
+            return;
+        }
+        Map<String, Object> block = new LinkedHashMap<>();
+        block.put("type", "text");
+        block.put("text", text);
+        block.put("cache_control", cacheControl);
+        message.put("content", Collections.singletonList(block));
     }
 
     /**
@@ -258,10 +383,11 @@ public class ClaudeLlmClient extends AbstractHttpLlmClient {
     /**
      * 把统一工具定义转换为 Anthropic tools 数组。
      *
-     * @param tools 工具定义
+     * @param tools        工具定义
+     * @param cacheControl 要挂在最后一个工具上的 cache_control；{@code null} 表示不标
      * @return Anthropic tools 数组
      */
-    private static List<Map<String, Object>> buildTools(List<LlmTool> tools) {
+    private static List<Map<String, Object>> buildTools(List<LlmTool> tools, Map<String, Object> cacheControl) {
         List<Map<String, Object>> result = new ArrayList<>(tools.size());
         for (LlmTool tool : tools) {
             Map<String, Object> inputSchema = new LinkedHashMap<>();
@@ -275,6 +401,11 @@ public class ClaudeLlmClient extends AbstractHttpLlmClient {
             entry.put("description", tool.getDescription());
             entry.put("input_schema", inputSchema);
             result.add(entry);
+        }
+        if (cacheControl != null && !result.isEmpty()) {
+            // 断点只能落在最后一个工具定义上：它排在全部工具之后，因此一个标记护住整套工具清单。
+            // 工具定义本身是 cache_control 的合法目标（与 system 块、消息块同级）
+            result.get(result.size() - 1).put("cache_control", cacheControl);
         }
         return result;
     }

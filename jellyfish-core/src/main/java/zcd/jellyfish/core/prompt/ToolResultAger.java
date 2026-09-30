@@ -1,7 +1,14 @@
 package zcd.jellyfish.core.prompt;
 
+import org.apache.commons.lang3.StringUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import zcd.jellyfish.api.extension.AgingStrategy;
+import zcd.jellyfish.api.extension.AgingStrategyRequest;
 import zcd.jellyfish.infra.config.ReactSettings;
 import zcd.jellyfish.infra.config.RuntimeConfig;
+import zcd.jellyfish.infra.extension.ExtensionRegistry;
+import zcd.jellyfish.infra.extension.HandlerBinding;
 import zcd.jellyfish.infra.llm.LlmMessage;
 import zcd.jellyfish.infra.tooloutput.ToolOutputEnvelope;
 
@@ -51,6 +58,10 @@ import java.util.Map;
  * <b>状态按会话有界</b>：只保留最近 {@value #MAX_SESSIONS} 个会话的边界，按访问顺序淘汰。
  * 淘汰的代价是「这个会话多断一次」，而不是算错——边界丢了就是从零重新累计。
  * <p>
+ * <b>两个数量阈值与 stub 文案可以向插件要</b>（见 {@link AgingStrategyRequest}）：插件优先于
+ * {@code react} 配置，内核只负责钳制与执行。而<b>边界算法本身不出内核</b>：它是前缀不变量的守卫，
+ * 而前缀不变量是全局性质，改坏它就等于每轮都白花一次钱。
+ * <p>
  * 线程安全：{@code react} 池线程会并发组装不同会话，因此边界状态的读写全部同步。
  *
  * @author zcd
@@ -61,8 +72,14 @@ public class ToolResultAger {
     /** 最多同时记录多少个会话的老化边界。 */
     private static final int MAX_SESSIONS = 64;
 
+    /** 日志。 */
+    private static final Logger LOG = LoggerFactory.getLogger(ToolResultAger.class);
+
     /** 运行时配置门面：各项参数现读，热更新后下一轮生效。 */
     private final RuntimeConfig runtimeConfig;
+
+    /** 扩展注册表：向插件询问本次的老化策略。 */
+    private final ExtensionRegistry extensions;
 
     /** 会话标识 → 该会话当前压缩周期内的老化边界，按访问顺序淘汰。 */
     private final Map<String, Frontier> frontiers = new LruFrontiers();
@@ -71,10 +88,12 @@ public class ToolResultAger {
      * 构造老化器。
      *
      * @param runtimeConfig 运行时配置门面，不可为 {@code null}
+     * @param extensions    扩展注册表，不可为 {@code null}
      */
     @Inject
-    public ToolResultAger(RuntimeConfig runtimeConfig) {
+    public ToolResultAger(RuntimeConfig runtimeConfig, ExtensionRegistry extensions) {
         this.runtimeConfig = runtimeConfig;
+        this.extensions = extensions;
     }
 
     /**
@@ -91,18 +110,111 @@ public class ToolResultAger {
             return messages == null ? Collections.<LlmMessage>emptyList() : messages;
         }
         ReactSettings settings = runtimeConfig.getReactSettings();
-        int keepRecent = settings.getToolOutput().getKeepRecentMessages();
+        AgingStrategy strategy = strategyOf(sessionId, boundary, usage, messages.size(), settings);
+        int keepRecent = keepRecentOf(strategy, messages.size(), settings);
         if (keepRecent <= 0) {
             // 0 是总开关：既表示「不裁剪」，也表示「不做老化」。
             // 水位口径也要求保留窗口，否则「老化到哪为止」无从回答
             return messages;
         }
-        int agingPercent = settings.getCache().getAgingPercent();
+        int agingPercent = agingPercentOf(strategy, settings);
         if (agingPercent <= 0) {
-            return stub(messages, targetOf(messages.size(), keepRecent));
+            return stub(messages, targetOf(messages.size(), keepRecent), strategy);
         }
         return stub(messages, frontierOf(sessionId, boundary, messages.size(), keepRecent,
-                usage.exceeds(agingPercent)));
+                usage.exceeds(agingPercent)), strategy);
+    }
+
+    /**
+     * 询问各插件本次的老化策略，按 {@code order} 升序逐字段取第一个非空。
+     * <p>
+     * <b>处理器失败只记告警并跳过</b>：老化是上下文治理的一环，但一个坏插件不该让整轮对话发不出去。
+     *
+     * @param sessionId  会话标识，可为 {@code null}
+     * @param boundary   当前压缩边界下标
+     * @param usage      老化前的上下文用量
+     * @param messageCount 本次可见的消息条数
+     * @param settings   运行时配置（提供缺省值）
+     * @return 合并后的策略，保证非 {@code null}
+     */
+    private AgingStrategy strategyOf(String sessionId, int boundary, ContextUsage usage, int messageCount,
+                                     ReactSettings settings) {
+        List<HandlerBinding<AgingStrategyRequest, AgingStrategy>> bindings =
+                extensions.bindings(AgingStrategyRequest.class, null);
+        if (bindings.isEmpty()) {
+            return AgingStrategy.none();
+        }
+        AgingStrategyRequest request = new AgingStrategyRequest(sessionId, messageCount, usage.getUsedTokens(),
+                usage.getBudgetTokens(), boundary, settings.getToolOutput().getKeepRecentMessages(),
+                settings.getCache().getAgingPercent());
+        Integer keepRecent = null;
+        Integer agingPercent = null;
+        String stubText = null;
+        Map<String, String> stubTextsByTool = null;
+        for (HandlerBinding<AgingStrategyRequest, AgingStrategy> binding : bindings) {
+            AgingStrategy strategy = strategyOf(binding, request);
+            if (strategy == null) {
+                continue;
+            }
+            if (keepRecent == null && strategy.getKeepRecentMessages() != null) {
+                keepRecent = strategy.getKeepRecentMessages();
+            }
+            if (agingPercent == null && strategy.getAgingPercent() != null) {
+                agingPercent = strategy.getAgingPercent();
+            }
+            if (stubText == null && StringUtils.isNotBlank(strategy.getStubText())) {
+                stubText = strategy.getStubText().trim();
+            }
+            if ((stubTextsByTool == null || stubTextsByTool.isEmpty())
+                    && !strategy.getStubTextsByTool().isEmpty()) {
+                stubTextsByTool = strategy.getStubTextsByTool();
+            }
+        }
+        return new AgingStrategy(keepRecent, agingPercent, stubText, stubTextsByTool);
+    }
+
+    /**
+     * 调用一个老化策略处理器，把异常折成 {@code null}。
+     *
+     * @param binding 处理器绑定
+     * @param request 请求载荷
+     * @return 处理器结果；它失败时返回 {@code null}
+     */
+    private AgingStrategy strategyOf(HandlerBinding<AgingStrategyRequest, AgingStrategy> binding,
+                                     AgingStrategyRequest request) {
+        try {
+            return extensions.invoke(binding.getHandler(), request);
+        } catch (Exception e) {
+            LOG.warn("老化策略处理器执行失败，已跳过: owner={} reason={}", binding.getOwner(), e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * 取生效的保留条数：插件策略优先于配置，并钳制到合法区间。
+     *
+     * @param strategy    插件策略
+     * @param messageCount 消息条数
+     * @param settings    运行时配置
+     * @return 保留条数，落在 {@code [0, messageCount]}
+     */
+    private static int keepRecentOf(AgingStrategy strategy, int messageCount, ReactSettings settings) {
+        Integer declared = strategy.getKeepRecentMessages();
+        int keepRecent = declared == null ? settings.getToolOutput().getKeepRecentMessages() : declared;
+        return Math.max(0, Math.min(keepRecent, messageCount));
+    }
+
+    /**
+     * 取生效的老化水位：插件策略优先于配置，并钳制到合法区间。
+     *
+     * @param strategy 插件策略
+     * @param settings 运行时配置
+     * @return 百分比，落在 {@code [0, 100]}
+     */
+    private static int agingPercentOf(AgingStrategy strategy, ReactSettings settings) {
+        Integer declared = strategy.getAgingPercent();
+        int percent = declared == null ? settings.getCache().getAgingPercent() : declared;
+        return Math.max(0, Math.min(percent, 100));
     }
 
     /**
@@ -155,9 +267,10 @@ public class ToolResultAger {
      *
      * @param messages  待发往模型的消息列表
      * @param frontier  边界下标上界（不含）
+     * @param strategy  本次生效的老化策略（提供 stub 文案）
      * @return 老化后的列表；没有任何内容被替换时返回原列表
      */
-    private static List<LlmMessage> stub(List<LlmMessage> messages, int frontier) {
+    private static List<LlmMessage> stub(List<LlmMessage> messages, int frontier, AgingStrategy strategy) {
         List<LlmMessage> aged = null;
         for (int index = 0; index < frontier; index++) {
             LlmMessage message = messages.get(index);
@@ -171,10 +284,29 @@ public class ToolResultAger {
             if (aged == null) {
                 aged = new ArrayList<LlmMessage>(messages);
             }
-            aged.set(index, new LlmMessage(message.getRole(), envelope.stub(), message.getToolCallId(),
-                    message.getName(), null));
+            aged.set(index, new LlmMessage(message.getRole(), envelope.stub(stubTemplateOf(strategy, envelope)),
+                    message.getToolCallId(), message.getName(), null));
         }
         return aged == null ? messages : Collections.unmodifiableList(aged);
+    }
+
+    /**
+     * 取某个信封该用的 stub 模板：按工具名的覆盖优先于通用模板。
+     * <p>
+     * <b>为什么要有「按工具名」这一层</b>：同一条 stub 文案对「读文件」与「跑命令」的贴切程度不一样，
+     * 而写工具插件的作者同时知道自己那几个工具的名字与它们的输出形态。只给一个通用模板，
+     * 插件就只能挑一个折中的措辞——那正是本扩展点想避免的事。
+     *
+     * @param strategy 本次生效的策略
+     * @param envelope 被老化的信封
+     * @return 模板；{@code null} 表示用内核缺省
+     */
+    private static String stubTemplateOf(AgingStrategy strategy, ToolOutputEnvelope envelope) {
+        String byTool = strategy.getStubTextsByTool().get(envelope.getToolName());
+        if (StringUtils.isNotBlank(byTool)) {
+            return byTool;
+        }
+        return strategy.getStubText();
     }
 
     /**

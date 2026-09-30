@@ -393,6 +393,9 @@ public class PromptAssembler {
      * 屏幕投影、持久化与 {@code /resume} 看到的仍是完整历史，只有「发给模型的那条链路」按边界截。
      * 这也是为什么摘要在 system prompt 里而不是作为一条消息回灌：它一旦进了 {@code messages}，
      * 就会被后续每轮重复 append 回会话，越聊越像一份不断膨胀的假历史。
+     * <p>
+     * <b>出站前还要过一遍工具调用配对约束</b>：切出来的序列两端都可能非法（开头是孤儿工具结果、
+     * 结尾是悬空的工具调用），两类都会让厂商以 400 拒掉整次请求，详见 {@link ToolPairing}。
      *
      * @param session    会话运行态
      * @param firstIndex 第一条要发送的消息下标
@@ -400,10 +403,48 @@ public class PromptAssembler {
      */
     private static List<LlmMessage> toLlmMessages(Session session, int firstIndex) {
         List<SessionMessage> messages = session.getMessages();
+        int start = Math.max(0, firstIndex);
+        // 出站序列必须满足工具调用配对约束（见 ToolPairing）。压缩已经对齐过边界，
+        // 但恢复出来的会话可能带着旧版本写的、或手工改过的边界，因此这里再兜一层：
+        // 以孤儿 tool 消息开头的请求会被厂商直接拒（400）
+        while (start < messages.size() && ToolPairing.isToolResult(messages.get(start).getMessage())) {
+            start++;
+        }
         List<LlmMessage> llmMessages = new ArrayList<LlmMessage>(messages.size());
-        for (int index = Math.max(0, firstIndex); index < messages.size(); index++) {
+        for (int index = start; index < messages.size(); index++) {
             llmMessages.add(messages.get(index).getMessage());
         }
+        dropTrailingDanglingToolCalls(session.getSessionId(), llmMessages);
         return llmMessages;
+    }
+
+    /**
+     * 丢弃结尾那段「工具调用一条结果都没落盘」的 assistant 消息。
+     * <p>
+     * <b>为什么需要它</b>：会话结尾的 {@code assistant(toolCalls)} 若没有任何 {@code tool} 结果跟随，
+     * 发出去就是非法请求（见 {@link ToolPairing}）。正常路径下不会走到这里——回合被取消时
+     * {@code ReActLooper} 会给未执行的工具调用补上合成结果。剩下的是三类异常现场：进程崩溃在
+     * 「落完 assistant、还没落结果」之间、{@code /resume} 一份旧版本写的会话、以及手工改过会话文件。
+     * <p>
+     * <b>为什么是丢弃而不是补发</b>：补发要写回会话，而本方法在「组装本次请求」的路径上，
+     * 那条路径刻意不写会话（与 {@code ContextWindow} / {@code ToolResultAger} 同一口径）。
+     * 丢弃只是少发一条「本就没有下文」的消息，代价远小于让整个会话发不出去。
+     * <p>
+     * <b>只处理结尾</b>：中间的配对缺失（一组工具只落了部分结果）不会在这里修——它同样来自上述
+     * 异常现场，但修它要拆掉一个已经存在并且可能被引用到的工具调用，风险与收益不相称。
+     *
+     * @param sessionId 会话标识，仅供告警归因
+     * @param messages  已按边界切好的消息列表，会被就地修改
+     */
+    private static void dropTrailingDanglingToolCalls(String sessionId, List<LlmMessage> messages) {
+        int dropped = 0;
+        while (!messages.isEmpty() && ToolPairing.requiresToolResults(messages.get(messages.size() - 1))) {
+            messages.remove(messages.size() - 1);
+            dropped++;
+        }
+        if (dropped > 0) {
+            LOG.warn("会话结尾有 {} 条工具调用没有对应结果（取消或崩溃留下的），已从本次请求中丢弃: sessionId={}",
+                    dropped, sessionId);
+        }
     }
 }

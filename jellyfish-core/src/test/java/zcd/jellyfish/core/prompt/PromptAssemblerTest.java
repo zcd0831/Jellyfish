@@ -25,6 +25,7 @@ import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.llm.LlmMessage;
 import zcd.jellyfish.infra.llm.LlmRequest;
 import zcd.jellyfish.infra.llm.LlmTool;
+import zcd.jellyfish.infra.llm.LlmToolCall;
 import zcd.jellyfish.infra.model.ResolvedModel;
 import zcd.jellyfish.infra.registry.TypeRegistry;
 import zcd.jellyfish.infra.session.Session;
@@ -249,6 +250,17 @@ class PromptAssemblerTest {
     }
 
     /**
+     * 构造一条「带工具调用的 assistant」消息。
+     *
+     * @param callId 工具调用标识
+     * @return assistant 消息
+     */
+    private static LlmMessage assistantCalling(String callId) {
+        return LlmMessage.assistant("正在读取", Collections.singletonList(
+                new LlmToolCall(0, callId, "read_file", "{\"path\":\"a.txt\"}")));
+    }
+
+    /**
      * 创建一个空会话。
      *
      * @return 会话运行态
@@ -284,6 +296,45 @@ class PromptAssemblerTest {
         // Then：只剩边界之后的那一条；被压掉的原文不再进请求
         assertEquals(1, request.getMessages().size());
         assertEquals("三", request.getMessages().get(0).getContent());
+    }
+
+    @Test
+    void buildRequest_should_skipLeadingOrphanToolResult_when_boundarySplitsToolGroup() {
+        // Given：边界正好落在 assistant(toolCalls) 上，于是切出来的序列以孤儿的工具结果开头——
+        // 这种边界只可能来自旧版本写下的、或手工改过的会话文件
+        SessionManager sessions = newSessionManager();
+        Session session = sessions.createDefault();
+        String sessionId = session.getSessionId();
+        sessions.appendMessage(sessionId, assistantCalling("call-1"), null);
+        sessions.appendMessage(sessionId, LlmMessage.tool("call-1", "read_file", "A 的内容"), null);
+        sessions.appendMessage(sessionId, LlmMessage.user("接着来"), null);
+        sessions.applyCompaction(sessionId, "早前对话的摘要", session.getMessages().get(0).getMessageId(), 0);
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+
+        // When
+        LlmRequest request = assembler.buildRequest(session, resolvedModel(128_000, 4096));
+
+        // Then：孤儿工具结果被跳过，序列不以未配对的 tool 消息开头
+        assertEquals(1, request.getMessages().size());
+        assertEquals(LlmMessage.ROLE_USER, request.getMessages().get(0).getRole());
+    }
+
+    @Test
+    void buildRequest_should_dropTrailingDanglingToolCalls_when_resultsNeverLanded() {
+        // Given：会话以一条「一条结果都没落盘」的工具调用结尾（进程崩在落 assistant 与落结果之间）
+        SessionManager sessions = newSessionManager();
+        Session session = sessions.createDefault();
+        String sessionId = session.getSessionId();
+        sessions.appendMessage(sessionId, LlmMessage.user("读一下 A"), null);
+        sessions.appendMessage(sessionId, assistantCalling("call-1"), null);
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+
+        // When
+        LlmRequest request = assembler.buildRequest(session, resolvedModel(128_000, 4096));
+
+        // Then：悬空的工具调用被丢弃；留着它会让厂商以 400 拒掉之后每一次请求
+        assertEquals(1, request.getMessages().size());
+        assertEquals(LlmMessage.ROLE_USER, request.getMessages().get(0).getRole());
     }
 
     @Test

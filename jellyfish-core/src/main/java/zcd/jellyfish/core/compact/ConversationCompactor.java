@@ -11,6 +11,7 @@ import zcd.jellyfish.api.extension.CompactionStrategyRequest;
 import zcd.jellyfish.api.extension.CompactionTrigger;
 import zcd.jellyfish.core.prompt.ContextUsage;
 import zcd.jellyfish.core.prompt.TokenEstimator;
+import zcd.jellyfish.core.prompt.ToolPairing;
 import zcd.jellyfish.infra.config.Model;
 import zcd.jellyfish.infra.config.ReactSettings;
 import zcd.jellyfish.infra.config.RuntimeConfig;
@@ -369,7 +370,7 @@ public class ConversationCompactor implements AutoCloseable {
             throw new CompactionUnavailableException(availabilityMessage(session));
         }
         int keepRecent = keepRecentOf(strategy, messages.size());
-        int end = messages.size() - keepRecent;
+        int end = alignToToolGroup(messages, messages.size() - keepRecent, from);
         if (end <= from) {
             return null;
         }
@@ -392,6 +393,33 @@ public class ConversationCompactor implements AutoCloseable {
         }
         return new CompactionPlan(builder.build(), messages.get(end - 1).getMessageId(), end - start,
                 start - from, keepRecent, TokenEstimator.estimate(body));
+    }
+
+    /**
+     * 把「保留段起点」向前退到工具调用组的开头，使边界不掰开 {@code assistant(toolCalls)} 与其工具结果。
+     * <p>
+     * <b>为什么必须对齐</b>：边界是按<b>条数</b>算出来的，而 {@code tool} 消息在 ReAct 会话里占相当比例，
+     * 因此边界很容易正好落在 {@code assistant(toolCalls)} 与它的工具结果之间。这时发送序列会以一条
+     * 孤儿 {@code tool} 消息开头（它的 {@code assistant} 被边界切掉了），厂商会以 400 拒掉整次请求，
+     * 而该会话在边界下一次推进之前<b>每一次请求都会失败</b>。约束的完整说明见 {@link ToolPairing}。
+     * <p>
+     * <b>为什么向后退而不是向前跳</b>：向前跳要连工具结果一起丢掉，向后退只是多保留一组——
+     * {@code keepRecent} 的语义是「<b>至少</b>保留最近多少条原文」，多留一组并不违背它，
+     * 而且能保住「刚才做过什么」这段最可能被接着用到的上下文。
+     *
+     * @param messages 会话消息列表，不可为 {@code null}
+     * @param end      原始起点下标（第一条要保留的消息）
+     * @param from     可压范围的下界（含）；退到它以下就没有可压的历史了
+     * @return 对齐后的起点下标；可能等于 {@code from}（表示没有可压的历史）
+     */
+    private static int alignToToolGroup(List<SessionMessage> messages, int end, int from) {
+        int aligned = end;
+        // aligned < messages.size() 同时挡住 keepRecent 为 0 时 end == size 的越界
+        while (aligned > from && aligned < messages.size()
+                && ToolPairing.isToolResult(messages.get(aligned).getMessage())) {
+            aligned--;
+        }
+        return aligned;
     }
 
     /**

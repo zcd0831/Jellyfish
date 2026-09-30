@@ -7,6 +7,7 @@ import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.event.EventPublisher;
 import zcd.jellyfish.api.extension.CancellationToken;
 import zcd.jellyfish.api.extension.ToolCallResult;
+import zcd.jellyfish.api.extension.ToolMetadata;
 import zcd.jellyfish.core.compact.ConversationCompactor;
 import zcd.jellyfish.core.prompt.PromptAssembler;
 import zcd.jellyfish.core.prompt.PromptAssembly;
@@ -33,6 +34,7 @@ import javax.inject.Singleton;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
@@ -60,6 +62,8 @@ import java.util.concurrent.atomic.AtomicReference;
  * 把嵌套回合再排回同一个池里，几条并发父回合就能把池占满并互相等死。
  * <p>
  * <b>取消</b>：{@link ReActTurn#cancel()} 置标志并掐断当前 LLM 流；循环在每轮开始与每个工具执行前检查标志。
+ * 工具执行前被取消时，已落盘的 {@code assistant(toolCalls)} 缺的那些结果会一并补上——
+ * 悬空的工具调用会让厂商以 400 拒掉之后的每一次请求。
  *
  * @author zcd
  */
@@ -80,6 +84,12 @@ public class ReActLooper implements AutoCloseable {
 
     /** 达到最大轮次时回灌给调用方的提示。 */
     private static final String MAX_ROUNDS_MESSAGE = "已达到最大轮次仍未收敛，如需继续请调大 react.maxRounds 或换一个更明确的指令。";
+
+    /** 终止原因取值：回合被取消时为未执行的工具调用补的结果标这个值（约定见 {@code ToolMetadata}）。 */
+    private static final String TERMINAL_CANCELLED = "CANCELLED";
+
+    /** 回合被取消时，为未执行的工具调用补的合成结果正文。 */
+    private static final String NOT_RUN_MESSAGE = "已取消：该工具调用未执行";
 
     /** 会话域服务：读取会话状态、追加消息。 */
     private final SessionManager sessionManager;
@@ -328,10 +338,14 @@ public class ReActLooper implements AutoCloseable {
                 listener.onComplete(result);
                 return result;
             }
-            for (LlmToolCall toolCall : toolCalls) {
+            // 用下标循环而不是 for-each：回合被取消时要能说出「哪些工具调用还没执行」，
+            // 才能给它们补上结果（见 appendNotRunResults）
+            for (int index = 0; index < toolCalls.size(); index++) {
                 if (turn.isCancelled()) {
+                    appendNotRunResults(sessionId, toolCalls, index);
                     return cancel(sessionId, listener, round);
                 }
+                LlmToolCall toolCall = toolCalls.get(index);
                 ToolCallResult outcome = executeTool(turn, session, toolCall, listener);
                 // 元数据随工具结果消息落会话：会话是「界面看到什么」的真源，而界面后的重投影
                 // （以及 -resume 之后的历史）只有拿到字段才能渲染警告标记
@@ -444,6 +458,37 @@ public class ReActLooper implements AutoCloseable {
                                        ReActListener listener) {
         return toolExecutor.execute(session, turn, toolCall.getId(), toolCall.getName(),
                 toolCall.getArguments(), listener);
+    }
+
+    /**
+     * 给「本轮被中断、结果从未落盘」的工具调用补发合成结果。
+     * <p>
+     * <b>为什么必须补</b>：{@code assistant(toolCalls)} 是在执行工具<b>之前</b>落盘的，因此一旦在
+     * 工具执行前就被取消，会话里就留下一个悬空的工具调用。下一条请求会带着它发出去，而厂商会以 400
+     * 拒掉<b>整次请求</b>——该会话在边界下一次推进之前每一次请求都会失败，现场表现是「换模型、改配置
+     * 都救不回来」。约束的完整说明见 {@code ToolPairing}。
+     * <p>
+     * <b>为什么取消是唯一需要处理的情形</b>：{@code ToolExecutor} 把「参数解析失败」与「工具抛错」
+     * 一律转成失败结果而不上抛（见 {@code ToolExecutor.execute} 的两处 catch），因此循环不会因为
+     * 工具失败而提前退出。落盘本身失败这类兜底之外的情形，由 {@code PromptAssembler} 在出站前再兜一层。
+     * <p>
+     * <b>正文写一句给人看的话，元数据标 CANCELLED</b>：遵守 {@code ToolMetadata.KEY_TERMINAL}
+     * 「缺省 = 正常跑完」的约定——不标的话界面会把一条根本没跑过的工具渲染成正常完成。
+     * 取值用既有的 {@code CANCELLED}（与 {@code REJECTED} / {@code TIMEOUT} / {@code FAILED} 同一套词汇），
+     * 不自创词。
+     *
+     * @param sessionId 会话标识
+     * @param toolCalls 本轮模型的全部工具调用，不可为 {@code null}
+     * @param fromIndex 从这个下标起（含）的工具调用没有执行过
+     */
+    private void appendNotRunResults(String sessionId, List<LlmToolCall> toolCalls, int fromIndex) {
+        Map<String, Object> metadata = Collections.singletonMap(ToolMetadata.KEY_TERMINAL, TERMINAL_CANCELLED);
+        for (int index = fromIndex; index < toolCalls.size(); index++) {
+            LlmToolCall toolCall = toolCalls.get(index);
+            sessionManager.appendMessage(sessionId,
+                    LlmMessage.tool(toolCall.getId(), toolCall.getName(), NOT_RUN_MESSAGE),
+                    null, null, metadata);
+        }
     }
 
     /**

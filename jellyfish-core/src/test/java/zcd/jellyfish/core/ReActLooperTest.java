@@ -38,6 +38,7 @@ import zcd.jellyfish.infra.config.RuntimeConfig;
 import zcd.jellyfish.infra.config.SubAgentSettings;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.llm.LlmClient;
+import zcd.jellyfish.infra.llm.LlmMessage;
 import zcd.jellyfish.infra.llm.LlmRequest;
 import zcd.jellyfish.infra.llm.LlmResponse;
 import zcd.jellyfish.infra.llm.LlmStreamHandle;
@@ -555,6 +556,45 @@ class ReActLooperTest {
     }
 
     @Test
+    @Timeout(30)
+    void chat_should_appendSyntheticResults_when_cancelledBeforeRemainingToolsRun()
+            throws InterruptedException {
+        // Given：模型一次返回两个工具调用，第一个工具执行期间回合被取消（真实形态是渲染线程按 Esc）
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        when(permissionManager.decide(any(PermissionCheckRequest.class)))
+                .thenReturn(PermissionDecision.allow(null));
+        CountDownLatch running = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        registerTool("read", request -> {
+            running.countDown();
+            release.await(5, TimeUnit.SECONDS);
+            return new ToolCallResult("read", "第一个跑完了");
+        });
+        stubResponses(twoToolCallResponse(), LlmResponse.text("结束"));
+        Session session = sessionManager.createDefault();
+
+        // When
+        ReActTurn turn = newLooper().chat(session.getSessionId(), "读文件", new RecordingListener());
+        assertTrue(running.await(5, TimeUnit.SECONDS));
+        turn.cancel();
+        release.countDown();
+        ReActResult result = turn.await();
+
+        // Then：回合被取消，但两条工具调用都有结果落盘——悬空的 assistant(toolCalls)
+        // 会让厂商以 400 拒掉之后每一次请求，而该会话在边界下一次推进前都好不了
+        assertTrue(result.isCancelled());
+        assertEquals(4, session.size());
+        assertEquals("call_1", session.getMessages().get(2).getMessage().getToolCallId());
+        assertEquals("第一个跑完了", session.getMessages().get(2).getMessage().getContent());
+        LlmMessage synthetic = session.getMessages().get(3).getMessage();
+        assertEquals(LlmMessage.ROLE_TOOL, synthetic.getRole());
+        assertEquals("call_2", synthetic.getToolCallId());
+        assertEquals("已取消：该工具调用未执行", synthetic.getContent());
+        // 「缺省 = 正常跑完」：不标 CANCELLED 的话，界面会把一条根本没跑过的工具渲染成正常完成
+        assertTrue(ToolMetadata.failed(session.getMessages().get(3).getMetadata()));
+    }
+
+    @Test
     void chat_should_expose_run_scope_to_tools() {
         // Given：委派方只能在工具处理器里读到作用域（顶层回合边界只有循环器知道）
         when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
@@ -773,6 +813,20 @@ class ReActLooperTest {
     private static LlmResponse toolCallResponse(String callId, String toolName) {
         LlmToolCall toolCall = new LlmToolCall(0, callId, toolName, "{\"path\":\"a.txt\"}");
         return new LlmResponse(null, null, Collections.singletonList(toolCall), null, "tool_calls");
+    }
+
+    /**
+     * 构造一个「一次返回两个工具调用」的模型响应。
+     * <p>
+     * 两个而不是一个：要验证的正是「后面那个从未执行」时会不会被补上结果。
+     *
+     * @return 响应
+     */
+    private static LlmResponse twoToolCallResponse() {
+        List<LlmToolCall> toolCalls = new ArrayList<LlmToolCall>();
+        toolCalls.add(new LlmToolCall(0, "call_1", "read", "{\"path\":\"a.txt\"}"));
+        toolCalls.add(new LlmToolCall(1, "call_2", "read", "{\"path\":\"b.txt\"}"));
+        return new LlmResponse(null, null, toolCalls, null, "tool_calls");
     }
 
     /**

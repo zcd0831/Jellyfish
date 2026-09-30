@@ -51,6 +51,7 @@ import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -723,6 +724,43 @@ class ConversationCompactorTest {
         assertTrue(request.getBudgetTokens() > 0);
     }
 
+    @Test
+    @DisplayName("边界不得掰开 assistant(toolCalls) 与其工具结果：否则请求会以孤立 tool 消息开头")
+    void plan_should_notLeaveOrphanToolMessage_when_boundaryLandsInsideToolGroup() {
+        // Given：真实 ReAct 序列共 9 条，keepRecent=3 → 边界落在下标 5（assistant 工具调用），
+        // 而下标 6 正是它的工具结果；assistant 被边界切掉后，工具结果就成了孤儿
+        givenModel(128000, 4096);
+        Session session = reactSession();
+
+        // When
+        CompactionPlan plan = compactor.plan(session.getSessionId());
+
+        // Then：边界之后第一条要发送的消息不能是孤立 tool 消息
+        assertNotNull(plan, "这条会话应当产出压缩计划");
+        int firstSent = session.indexOfMessage(plan.getBoundaryMessageId()) + 1;
+        assertTrue(firstSent < session.getMessages().size(), "边界之后应当还有消息要发送");
+        LlmMessage first = session.getMessages().get(firstSent).getMessage();
+        assertNotEquals(LlmMessage.ROLE_TOOL, first.getRole(),
+                "边界掰开了 assistant(toolCalls) 与工具结果组，请求会以孤立 tool 消息开头（第 "
+                        + firstSent + " 条）");
+    }
+
+    @Test
+    @DisplayName("边界已经落在组外时不得移位：对齐只在必要时生效")
+    void plan_should_keepBoundary_when_itAlreadyLandsOutsideToolGroup() {
+        // Given：同一序列但 keepRecent=4 → 起点落在下标 5（assistant 工具调用）上，本就不需要对齐
+        givenModel(128000, 4096);
+        applyKeepRecent(4);
+        Session session = reactSession();
+
+        // When
+        CompactionPlan plan = compactor.plan(session.getSessionId());
+
+        // Then：起点一分不动，否则「至少保留最近 N 条」会静默地越留越多
+        assertNotNull(plan);
+        assertEquals(5, session.indexOfMessage(plan.getBoundaryMessageId()) + 1);
+    }
+
     /**
      * 构造压缩器（真实提示词资源 + 真实扩展点策略）。
      *
@@ -771,6 +809,42 @@ class ConversationCompactorTest {
             sessionManager.appendMessage(session.getSessionId(), LlmMessage.user("第 " + index + " 条"), null);
         }
         return session;
+    }
+
+    /**
+     * 构造一个真实的 ReAct 会话：每轮是「用户 → assistant(工具调用) → 工具结果 → assistant(结论)」。
+     * <p>
+     * 这类序列的特点正是 {@code tool} 消息占相当比例，因此「按条数切边界」很容易切在
+     * {@code assistant(toolCalls)} 与其工具结果之间。
+     *
+     * @return 会话运行态，共 9 条消息
+     */
+    private Session reactSession() {
+        Session session = sessionManager.createDefault();
+        sessionManager.switchTo(session.getSessionId());
+        createdSessionId = session.getSessionId();
+        String id = session.getSessionId();
+        sessionManager.appendMessage(id, LlmMessage.user("读一下 A"), null);
+        sessionManager.appendMessage(id, assistantCalling("call-1"), null);
+        sessionManager.appendMessage(id, LlmMessage.tool("call-1", "read_file", "A 的内容"), null);
+        sessionManager.appendMessage(id, LlmMessage.assistant("A 的内容是……"), null);
+        sessionManager.appendMessage(id, LlmMessage.user("再看 B"), null);
+        sessionManager.appendMessage(id, assistantCalling("call-2"), null);
+        sessionManager.appendMessage(id, LlmMessage.tool("call-2", "read_file", "B 的内容"), null);
+        sessionManager.appendMessage(id, LlmMessage.assistant("B 的内容是……"), null);
+        sessionManager.appendMessage(id, LlmMessage.user("总结"), null);
+        return session;
+    }
+
+    /**
+     * 构造一条「带工具调用的 assistant」消息。
+     *
+     * @param callId 工具调用标识
+     * @return assistant 消息
+     */
+    private static LlmMessage assistantCalling(String callId) {
+        return LlmMessage.assistant("正在读取", Collections.singletonList(
+                new LlmToolCall(0, callId, "read_file", "{\"path\":\"a.txt\"}")));
     }
 
     /**

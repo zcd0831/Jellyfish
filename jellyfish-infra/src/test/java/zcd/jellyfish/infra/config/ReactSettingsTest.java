@@ -181,14 +181,14 @@ class ReactSettingsTest {
 
     @Test
     void deserialization_should_bind_cache_section() {
-        // Given
-        String json = "{\"cache\":{\"agingPercent\":70}}";
+        // Given：用一个与缺省（70）不同的值，否则分不出「绑上了」与「用了缺省」
+        String json = "{\"cache\":{\"agingPercent\":40}}";
 
         // When
         ReactSettings settings = ObjectMapperWrapper.readValue(json, ReactSettings.class);
 
         // Then：只改了缓存段也必须被视为「配过了」，否则热更新会把它当空配置丢掉
-        assertEquals(70, settings.getCache().getAgingPercent());
+        assertEquals(40, settings.getCache().getAgingPercent());
         assertFalse(settings.isDefault());
     }
 }

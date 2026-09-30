@@ -8,6 +8,7 @@ import zcd.jellyfish.core.ReActTurn;
 import zcd.jellyfish.core.input.InputDirectiveRun;
 import zcd.jellyfish.infra.llm.LlmMessage;
 import zcd.jellyfish.infra.llm.LlmToolCall;
+import zcd.jellyfish.api.extension.ToolRenderHint;
 import zcd.jellyfish.infra.session.SessionMessage;
 import zcd.jellyfish.tui.text.VisualLine;
 
@@ -15,6 +16,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -32,6 +34,10 @@ import static org.mockito.Mockito.verify;
  * @author zcd
  */
 class ChatStateTest {
+
+    /** 空提示表：绝大多数用例不关心插件对工具行的表态。 */
+    private static final Map<String, ToolRenderHint> EMPTY_HINTS =
+            Collections.emptyMap();
 
     /** 测试用宽度。 */
     private static final int WIDTH = 40;
@@ -266,7 +272,7 @@ class ChatStateTest {
     @Test
     @DisplayName("首页投影：字标与提示按视口高度垂直居中")
     void view_should_centerHomeSplashVertically() {
-        ChatState.View view = state.view(null, messages(), 80, 21, MAX_MESSAGES);
+        ChatState.View view = state.view(null, messages(), 80, 21, MAX_MESSAGES, EMPTY_HINTS);
 
         List<String> body = texts(view);
         int contentRows = 5 + HomeHints.LEADING_BLANK_ROWS + HomeHints.HINTS.length;
@@ -286,10 +292,10 @@ class ChatStateTest {
     @DisplayName("终端变高后首页留白重算：视口行数也是投影的输入")
     void view_should_reprojectHomeWhenViewportGrows() {
         int contentRows = 5 + HomeHints.LEADING_BLANK_ROWS + HomeHints.HINTS.length;
-        state.view(null, messages(), 80, 11, MAX_MESSAGES);
+        state.view(null, messages(), 80, 11, MAX_MESSAGES, EMPTY_HINTS);
         assertEquals(1 + contentRows, state.getTotalRows(), "11 - 8 = 3，顶部留 1 行 + 8 行内容");
 
-        state.view(null, messages(), 80, 21, MAX_MESSAGES);
+        state.view(null, messages(), 80, 21, MAX_MESSAGES, EMPTY_HINTS);
 
         assertEquals(6 + contentRows, state.getTotalRows(), "只比列数缓存的话，这里会留在旧高度的行数上");
     }
@@ -457,7 +463,7 @@ class ChatStateTest {
      * @return 窗口
      */
     private ChatState.View view(List<SessionMessage> messages, int viewportRows) {
-        return state.view("s1", messages, WIDTH, viewportRows, MAX_MESSAGES);
+        return state.view("s1", messages, WIDTH, viewportRows, MAX_MESSAGES, EMPTY_HINTS);
     }
 
     /**
@@ -469,7 +475,7 @@ class ChatStateTest {
      * @return 窗口
      */
     private ChatState.View view(String sessionId, List<SessionMessage> messages, int viewportRows) {
-        return state.view(sessionId, messages, WIDTH, viewportRows, MAX_MESSAGES);
+        return state.view(sessionId, messages, WIDTH, viewportRows, MAX_MESSAGES, EMPTY_HINTS);
     }
 
     /**

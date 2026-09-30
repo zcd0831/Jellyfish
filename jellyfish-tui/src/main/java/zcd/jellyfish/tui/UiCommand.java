@@ -76,19 +76,21 @@ final class UiCommand {
      * @param input     命令原文
      * @param placement 落位状态，会被就地修改
      * @param panels    最近一次收集到的面板，可为 {@code null}
+     * @param shortcutCandidates 没生效的插件键位说明行，可为 {@code null}
      * @return 结果（成功文本或错误文本），保证非 {@code null}
      */
-    static Result execute(String input, UiPlacement placement, List<OwnedPanel> panels) {
+    static Result execute(String input, UiPlacement placement, List<OwnedPanel> panels,
+                          List<String> shortcutCandidates) {
         List<String> args = argsOf(input);
         if (args.isEmpty()) {
-            return Result.ok(renderList(placement, panels));
+            return Result.ok(renderList(placement, panels) + renderShortcuts(shortcutCandidates));
         }
         UiRegion region = REGIONS.get(args.get(0).toLowerCase());
         if (region == null) {
             return Result.error("未知区域：" + args.get(0) + "\n" + USAGE);
         }
         if (args.size() == 1) {
-            return cycle(region, placement, panels);
+            return cycle(region, placement, panels, shortcutCandidates);
         }
         String action = args.get(1);
         if (OFF.equalsIgnoreCase(action)) {
@@ -99,7 +101,7 @@ final class UiCommand {
             placement.show(region);
             return Result.ok(nameOf(region) + " 区域已恢复显示");
         }
-        return assign(region, action, placement, panels);
+        return assign(region, action, placement, panels, shortcutCandidates);
     }
 
     /**
@@ -110,7 +112,8 @@ final class UiCommand {
      * @param panels    面板候选
      * @return 结果
      */
-    private static Result cycle(UiRegion region, UiPlacement placement, List<OwnedPanel> panels) {
+    private static Result cycle(UiRegion region, UiPlacement placement, List<OwnedPanel> panels,
+                                List<String> shortcutCandidates) {
         if (region == UiRegion.STATUS) {
             // 状态栏是拼接型：片段共存，没有「一块区域放一个」可轮换，这个子命令的语义就是「显示」
             placement.show(region);
@@ -132,13 +135,15 @@ final class UiCommand {
      * @param panels    面板候选
      * @return 结果
      */
-    private static Result assign(UiRegion region, String owner, UiPlacement placement, List<OwnedPanel> panels) {
+    private static Result assign(UiRegion region, String owner, UiPlacement placement, List<OwnedPanel> panels,
+                                 List<String> shortcutCandidates) {
         if (!UiPlacement.isPanelRegion(region)) {
             return Result.error("状态栏是拼接型区域，不能指定插件；只能 " + OFF + " / " + ON + "\n" + USAGE);
         }
         if (!hasCandidate(placement, panels, region, owner)) {
             return Result.error("插件 " + owner + " 在 " + nameOf(region) + " 区域没有面板\n"
-                    + renderList(placement, panels));
+                    + renderList(placement, panels)
+                    + renderShortcuts(shortcutCandidates));
         }
         placement.assign(owner, region);
         return Result.ok(nameOf(region) + " 区域现在显示：" + owner);
@@ -188,6 +193,29 @@ final class UiCommand {
         sb.append('\n').append(USAGE);
         if (panels == null || panels.isEmpty()) {
             sb.append("\n（当前没有任何插件贡献界面内容）");
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 渲染没生效的插件键位说明。
+     * <p>
+     * <b>为什么它归 {@code /ui} 而不是 {@code /help}</b>：{@code /help} 是「有什么可以用」，
+     * 而这里回答的是「我绑的键为什么没反应」——那是个诊断问题，与面板被挤下去同一类。
+     * <p>
+     * 生效中的键位不在这里列（它们本来就会在按键时回显、也在 {@code /help} 里那条命令上），
+     * 只列没生效的：一份全量表会让人以为「列出来的都能用」。
+     *
+     * @param candidates 说明行，可为 {@code null}
+     * @return 文本片段；没有候选时为空串
+     */
+    private static String renderShortcuts(List<String> candidates) {
+        if (candidates == null || candidates.isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder("\n\n未生效的插件快捷键：");
+        for (String candidate : candidates) {
+            sb.append("\n  ").append(candidate);
         }
         return sb.toString();
     }

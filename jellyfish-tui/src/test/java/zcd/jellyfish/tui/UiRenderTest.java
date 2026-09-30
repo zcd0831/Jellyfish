@@ -8,6 +8,7 @@ import zcd.jellyfish.api.ui.UiEmphasis;
 import zcd.jellyfish.api.ui.UiLine;
 import zcd.jellyfish.api.ui.UiRegion;
 import zcd.jellyfish.api.ui.UiSegment;
+import zcd.jellyfish.api.ui.UiSegmentKind;
 import zcd.jellyfish.tui.text.VisualLine;
 
 import java.util.ArrayList;
@@ -15,6 +16,7 @@ import java.util.Collections;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -26,6 +28,45 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 @DisplayName("插件界面内容渲染")
 class UiRenderTest {
+
+    @Test
+    @DisplayName("同类目映射出的样式互不相同，且都不改颜色")
+    void kindStyle_should_differPerKind() {
+        List<Style> styles = new ArrayList<Style>();
+        for (UiSegmentKind kind : UiSegmentKind.values()) {
+            Style style = UiRender.segmentStyle(UiSegment.of("x", UiEmphasis.NORMAL, kind));
+            // 种类只管修饰、不管颜色：否则插件就无法在「这是一行小标题」的同时说「这行是错误」
+            assertFalse(style.fg().isPresent(), "种类 " + kind + " 改了颜色");
+            styles.add(style);
+        }
+        for (int i = 0; i < styles.size(); i++) {
+            for (int j = i + 1; j < styles.size(); j++) {
+                assertNotEquals(styles.get(i), styles.get(j),
+                        "种类 " + UiSegmentKind.values()[i] + " 与 " + UiSegmentKind.values()[j]
+                                + " 映射成了同一种样式");
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("种类与档位正交：颜色来自档位、修饰来自种类，两者都不丢")
+    void segmentStyle_should_mergeEmphasisAndKind() {
+        Style style = UiRender.segmentStyle(
+                UiSegment.of("x", UiEmphasis.ERROR, UiSegmentKind.HEADING));
+
+        assertEquals(UiRender.emphasisStyle(UiEmphasis.ERROR).fg(), style.fg());
+        assertEquals(UiRender.segmentStyle(UiSegment.of("x", UiEmphasis.NORMAL, UiSegmentKind.HEADING))
+                .effectiveModifiers(), style.effectiveModifiers());
+    }
+
+    @Test
+    @DisplayName("既有两个维度都不填时与正文逐字段一致")
+    void segmentStyle_should_fallBackToNormal() {
+        assertEquals(Style.EMPTY, UiRender.segmentStyle(null));
+        assertEquals(Style.EMPTY, UiRender.segmentStyle(new UiSegment("x", null)));
+        assertEquals(UiRender.emphasisStyle(UiEmphasis.NORMAL),
+                UiRender.segmentStyle(UiSegment.of("x", null, null)));
+    }
 
     @Test
     @DisplayName("常规档位就是无样式：正文不该被外壳擅自加装饰")

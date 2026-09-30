@@ -5,6 +5,7 @@ import zcd.jellyfish.api.extension.PanelContribution;
 import zcd.jellyfish.api.ui.UiEmphasis;
 import zcd.jellyfish.api.ui.UiLine;
 import zcd.jellyfish.api.ui.UiSegment;
+import zcd.jellyfish.api.ui.UiSegmentKind;
 import zcd.jellyfish.tui.text.DisplayWidth;
 import zcd.jellyfish.tui.text.LineWrapper;
 import zcd.jellyfish.tui.text.StyledSegment;
@@ -47,6 +48,18 @@ public final class UiRender {
     /** 截断提示的前缀行样式。 */
     private static final Style TRUNCATED_STYLE = Style.EMPTY.dim();
 
+    /** 小标题：粗体。 */
+    private static final Style KIND_HEADING_STYLE = Style.EMPTY.bold();
+
+    /** 代码 / 命令 / 标识符：反显（终端里最接近「代码块」的普遍支持写法）。 */
+    private static final Style KIND_CODE_STYLE = Style.EMPTY.reversed();
+
+    /** 键值对的值段：下划线，把它从相邻的键里划出来。 */
+    private static final Style KIND_KEY_VALUE_STYLE = Style.EMPTY.underlined();
+
+    /** 可去取的东西：斜体（终端不支持时退化成普通文本，而它本来就只是提示）。 */
+    private static final Style KIND_LINK_STYLE = Style.EMPTY.italic();
+
     /** 空样式段，用于「不带前缀」的折行调用。 */
     private static final StyledSegment NO_PREFIX = new StyledSegment("", Style.EMPTY);
 
@@ -57,6 +70,9 @@ public final class UiRender {
      * 把语义强调档位映射成样式。
      * <p>
      * 档位是语义、样式是外观：这里换颜色不影响任何插件，这也是 api 里不放 {@code Style} 的收益。
+     * <p>
+     * <b>它只管颜色，修饰归 {@link #kindStyle(UiSegmentKind)}</b>：两个维度正交之后，
+     * 插件用「强调」表达「多抢眼」、用「种类」表达「是什么」，彼此不会盖掉对方。
      *
      * @param emphasis 强调档位，可为 {@code null}
      * @return 样式，保证非 {@code null}
@@ -77,6 +93,50 @@ public final class UiRender {
             default:
                 return NORMAL_STYLE;
         }
+    }
+
+    /**
+     * 把语义种类映射成样式修饰。
+     * <p>
+     * <b>只用终端普遍支持的修饰</b>：粗体、反显、下划线、斜体。不写超链接转义序列——终端对
+     * OSC 8 的支持参差不齐，而 {@link UiSegmentKind#LINK} 的语义只是「这段可以去取」，不是「点它」。
+     * <p>
+     * <b>为什么每一条都是「修饰」而不是「颜色」</b>：种类与强调档位会被同时用上，
+     * 若种类也改颜色，插件就无法在「这是一行小标题」的同时说「这行是错误」——两者必有一个被吞掉。
+     *
+     * @param kind 语义种类，可为 {@code null}
+     * @return 只含修饰的样式，保证非 {@code null}
+     */
+    public static Style kindStyle(UiSegmentKind kind) {
+        if (kind == null) {
+            return NORMAL_STYLE;
+        }
+        switch (kind) {
+            case HEADING:
+                return KIND_HEADING_STYLE;
+            case CODE:
+                return KIND_CODE_STYLE;
+            case KEY_VALUE:
+                return KIND_KEY_VALUE_STYLE;
+            case LINK:
+                return KIND_LINK_STYLE;
+            default:
+                return NORMAL_STYLE;
+        }
+    }
+
+    /**
+     * 把一段文本的两个维度合起来。
+     *
+     * @param segment 文本段，可为 {@code null}
+     * @return 样式，保证非 {@code null}
+     */
+    public static Style segmentStyle(UiSegment segment) {
+        if (segment == null) {
+            return NORMAL_STYLE;
+        }
+        // patch 的语义正是「按字段合并」：颜色取自强调档位，修饰取自种类，两边都不丢
+        return emphasisStyle(segment.getEmphasis()).patch(kindStyle(segment.getKind()));
     }
 
     /**
@@ -152,7 +212,7 @@ public final class UiRender {
         }
         List<StyledSegment> body = new ArrayList<StyledSegment>(line.getSegments().size());
         for (UiSegment segment : line.getSegments()) {
-            body.add(new StyledSegment(segment.getText(), emphasisStyle(segment.getEmphasis())));
+            body.add(new StyledSegment(segment.getText(), segmentStyle(segment)));
         }
         // 空前缀：插件面板没有「角色标记」这种概念，续行也不需要悬挂缩进
         return LineWrapper.wrap(NO_PREFIX, body, width);

@@ -131,7 +131,8 @@ public final class Launcher {
             case TUI:
                 return new TuiRunMode(component.agentHarness(), component.commandManager(),
                         component.sessionManager(), component.modelManager(), component.agentManager(),
-                        component.extensionRegistry(), component.eventChannel(), component.approvalChannel(),
+                        component.extensionRegistry(), component.eventChannel(), component.runtimeInfoHolder(),
+                        component.approvalChannel(),
                         component.conversationCompactor(), component.inputDirectives(), component.inputTransforms(),
                         console, component.sessionDefaults());
             case SERVER:

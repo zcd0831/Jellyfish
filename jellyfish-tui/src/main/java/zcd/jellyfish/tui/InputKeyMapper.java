@@ -81,6 +81,25 @@ final class InputKeyMapper {
     }
 
     /**
+     * 把一个 {@code Ctrl+字母} 按键规范化成插件键位表的键。
+     * <p>
+     * <b>为什么只认定这个形状</b>：见 {@link #isCtrl}——终端不解码其它修饰键，
+     * 而 {@code ctrl+[a-z]} 是能按码点比较的唯一一类。插件声明的键位也是同一形状
+     * （{@code ShortcutBinding} 在构造时就卡死），两边因此只有一个真源。
+     *
+     * @param key 按键事件，不可为 {@code null}
+     * @return 规范化键位；不是 {@code Ctrl+字母} 时返回 {@code null}
+     */
+    static String shortcutKeyOf(KeyEvent key) {
+        if (!key.hasCtrl() || key.code() != KeyCode.CHAR) {
+            return null;
+        }
+        int codePoint = Character.toLowerCase(key.codePoint());
+        return codePoint >= 'a' && codePoint <= 'z'
+                ? "ctrl+" + (char) codePoint : null;
+    }
+
+    /**
      * 判断按键是否为指定的 {@code Ctrl+字母}。
      * <p>
      * 不能只看 {@code hasCtrl()}，那会把 {@code Ctrl+方向键} 之类也当命中；

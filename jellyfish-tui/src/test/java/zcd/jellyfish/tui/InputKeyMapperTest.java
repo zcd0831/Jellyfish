@@ -7,6 +7,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -175,5 +176,14 @@ class InputKeyMapperTest {
         assertFalse(InputKeyMapper.isCtrl(ctrl('s'), 'c'));
         assertFalse(InputKeyMapper.isCtrl(KeyEvent.ofChar('s'), 's'));
         assertFalse(InputKeyMapper.isCtrl(KeyEvent.ofKey(KeyCode.END, KeyModifiers.CTRL), 'e'));
+    }
+
+    @Test
+    @DisplayName("插件键位形状：只有 Ctrl+字母 能按码点规范化")
+    void shortcutKeyOf_should_normalize_ctrl_letters_only() {
+        assertEquals("ctrl+b", InputKeyMapper.shortcutKeyOf(ctrl('b')));
+        assertEquals("ctrl+z", InputKeyMapper.shortcutKeyOf(ctrl('Z')));
+        assertNull(InputKeyMapper.shortcutKeyOf(ctrl('1')));
+        assertNull(InputKeyMapper.shortcutKeyOf(KeyEvent.ofKey(KeyCode.ENTER)));
     }
 }

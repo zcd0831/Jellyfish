@@ -3,6 +3,7 @@ package zcd.jellyfish.tui;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import zcd.jellyfish.api.extension.ToolMetadata;
+import zcd.jellyfish.api.extension.ToolRenderHint;
 import zcd.jellyfish.infra.llm.LlmMessage;
 import zcd.jellyfish.infra.llm.LlmToolCall;
 import zcd.jellyfish.infra.session.SessionMessage;
@@ -110,6 +111,74 @@ class TranscriptProjectorTest {
                 completed());
 
         assertEquals(Arrays.asList("", "  \u276f ## 这不是标题"), texts(lines));
+    }
+
+    @Test
+    @DisplayName("插件让某工具不显示参数时，只是那一行少一段：文本仍然由工具自己写")
+    void project_should_hide_arguments_when_hint_says_so() {
+        List<SessionMessage> messages = Arrays.asList(
+                SessionMessage.of(LlmMessage.assistant("跑一下", Collections.singletonList(
+                        new LlmToolCall(0, "c1", "heartbeat", "{\"beat\":\"tick\"}")))),
+                SessionMessage.ofTool(LlmMessage.tool("c1", "heartbeat", "ok"), null));
+
+        List<VisualLine> withArguments = project(messages, completed());
+        List<VisualLine> withoutArguments = projectWithHints(messages, completed(), "heartbeat",
+                ToolRenderHint.of(null, null, Boolean.FALSE));
+
+        // Then：有提示时参数段整段消失，其余逐字段不变
+        assertTrue(texts(withArguments).get(3).contains("·"), texts(withArguments).toString());
+        assertFalse(texts(withoutArguments).get(3).contains("·"), texts(withoutArguments).toString());
+        assertEquals(texts(withArguments).subList(0, 3), texts(withoutArguments).subList(0, 3));
+    }
+
+    @Test
+    @DisplayName("Ctrl+E 的全局展开优先于插件的 showArguments=false")
+    void project_should_let_global_expand_win_over_hint() {
+        // 用户按了 Ctrl+E 就是「我要看参数」，插件说「这是噪音」在这时应当让位
+        List<SessionMessage> messages = Arrays.asList(
+                SessionMessage.of(LlmMessage.assistant("跑一下", Collections.singletonList(
+                        new LlmToolCall(0, "c1", "heartbeat", "{\"beat\":\"tick\"}")))),
+                SessionMessage.ofTool(LlmMessage.tool("c1", "heartbeat", "ok"), null));
+
+        List<VisualLine> lines = project(messages, completed(), WIDE,
+                TranscriptProjector.DEFAULT_MAX_MESSAGES, true,
+                Collections.singletonMap("heartbeat", ToolRenderHint.of(null, null, Boolean.FALSE)));
+
+        assertTrue(texts(lines).get(3).contains("·"), texts(lines).toString());
+    }
+
+    @Test
+    @DisplayName("插件让某工具默认展开时，参数放宽到展开档")
+    void project_should_expand_arguments_when_hint_says_so() {
+        StringBuilder longArguments = new StringBuilder("{");
+        for (int i = 0; i < TranscriptProjector.MAX_ARGUMENT_ROWS * 4; i++) {
+            longArguments.append("\"k").append(i).append("\": \"vvvvvvvvvvvvvvvvvvvv\",");
+        }
+        longArguments.append("\"z\": 1}");
+        List<SessionMessage> messages = Arrays.asList(
+                SessionMessage.of(LlmMessage.assistant("跑一下", Collections.singletonList(
+                        new LlmToolCall(0, "c1", "shell", longArguments.toString())))),
+                SessionMessage.ofTool(LlmMessage.tool("c1", "shell", "ok"), null));
+
+        List<VisualLine> folded = project(messages, completed());
+        List<VisualLine> expanded = projectWithHints(messages, completed(), "shell",
+                ToolRenderHint.of(null, Boolean.FALSE, null));
+
+        assertTrue(texts(folded).size() < texts(expanded).size(),
+                "折叠 " + texts(folded).size() + " 行应少于默认展开 " + texts(expanded).size() + " 行");
+    }
+
+    @Test
+    @DisplayName("没有提示表时与没有这个扩展点逐字段一致")
+    void project_should_be_unchanged_without_hints() {
+        List<SessionMessage> messages = Arrays.asList(
+                SessionMessage.of(LlmMessage.assistant("跑一下", Collections.singletonList(
+                        new LlmToolCall(0, "c1", "shell", "{\"cmd\":\"ls\"}")))),
+                SessionMessage.ofTool(LlmMessage.tool("c1", "shell", "ok"), null));
+
+        assertEquals(texts(project(messages, completed())), texts(project(messages, completed(), WIDE,
+                TranscriptProjector.DEFAULT_MAX_MESSAGES, false,
+                Collections.<String, ToolRenderHint>emptyMap())));
     }
 
     @Test
@@ -806,7 +875,41 @@ class TranscriptProjectorTest {
                                             InflightTurn.Snapshot inflight, int width, int maxMessages,
                                             boolean toolArgsExpanded) {
         return TranscriptProjector.project(messages, notices, inflight, width, maxMessages, false,
-                toolArgsExpanded);
+                toolArgsExpanded, Collections.<String, ToolRenderHint>emptyMap());
+    }
+
+    /**
+     * 带一条工具行渲染提示执行一次投影（默认宽度、默认消息上限、不全局展开）。
+     *
+     * @param messages 消息列表
+     * @param inflight 暂存区快照
+     * @param toolName 提示归属的工具名
+     * @param hint     提示
+     * @return 视觉行列表
+     */
+    private static List<VisualLine> projectWithHints(List<SessionMessage> messages,
+                                                     InflightTurn.Snapshot inflight,
+                                                     String toolName, ToolRenderHint hint) {
+        return project(messages, inflight, WIDE, TranscriptProjector.DEFAULT_MAX_MESSAGES, false,
+                Collections.singletonMap(toolName, hint));
+    }
+
+    /**
+     * 带提示表与全局展开开关执行一次投影。
+     *
+     * @param messages         消息列表
+     * @param inflight         暂存区快照
+     * @param width            可用列数
+     * @param maxMessages      消息上限
+     * @param toolArgsExpanded 是否全局展开工具参数
+     * @param hints            提示表
+     * @return 视觉行列表
+     */
+    private static List<VisualLine> project(List<SessionMessage> messages, InflightTurn.Snapshot inflight,
+                                            int width, int maxMessages, boolean toolArgsExpanded,
+                                            Map<String, ToolRenderHint> hints) {
+        return TranscriptProjector.project(messages, Collections.<ShellNotice>emptyList(), inflight, width,
+                maxMessages, false, toolArgsExpanded, hints);
     }
 
     /**
@@ -819,7 +922,8 @@ class TranscriptProjectorTest {
     private static List<VisualLine> projectExpanded(List<SessionMessage> messages,
                                                     InflightTurn.Snapshot inflight) {
         return TranscriptProjector.project(messages, Collections.<ShellNotice>emptyList(), inflight, WIDE,
-                TranscriptProjector.DEFAULT_MAX_MESSAGES, true, false);
+                TranscriptProjector.DEFAULT_MAX_MESSAGES, true, false,
+                Collections.<String, ToolRenderHint>emptyMap());
     }
 
     /**

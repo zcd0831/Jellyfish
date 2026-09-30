@@ -1,10 +1,15 @@
 package zcd.jellyfish.tui;
 
+import zcd.jellyfish.api.extension.ToolRenderHint;
+import zcd.jellyfish.infra.ui.OwnedShortcut;
 import zcd.jellyfish.infra.ui.UiContributions;
 import zcd.jellyfish.infra.ui.UiSnapshot;
 
+import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Supplier;
 
 /**
  * 插件 UI 贡献的帧间缓存。
@@ -47,6 +52,13 @@ final class UiCache {
     /** 上次收集<b>开始前</b>读到的版本号，只由渲染线程读写。 */
     private long collectedVersion;
 
+    /** 工具行渲染提示（按工具名），只由渲染线程读写。 */
+    private final Slot<Map<String, ToolRenderHint>> hints =
+            new Slot<Map<String, ToolRenderHint>>();
+
+    /** 插件声明的快捷键绑定，只由渲染线程读写。 */
+    private final Slot<List<OwnedShortcut>> shortcuts = new Slot<List<OwnedShortcut>>();
+
     /**
      * 构造缓存。
      *
@@ -67,6 +79,47 @@ final class UiCache {
     }
 
     /**
+     * 取工具行渲染提示，必要时重新问一遍插件。
+     * <p>
+     * <b>为什么与面板快照分开缓存</b>：提示按工具名索引、与会话无关，而快照按会话取。
+     * 合成一份会让每次切换会话都白问一遍全部工具——那是一张按工具数增长的查询，
+     * 而它本来只需要在「插件内容可能变了」时重问。
+     * <p>
+     * <b>返回的是同一个实例直到失效</b>：调用方（{@code ChatState}）按实例比对来判断
+     * 「提示有没有变」，因此这里不能每次新建一张内容相同的表。
+     *
+     * @return 工具名 → 提示；无贡献时为空映射而非 {@code null}
+     */
+    Map<String, ToolRenderHint> hints() {
+        return hints.get(version.get(), new Supplier<Map<String, ToolRenderHint>>() {
+
+            @Override
+            public Map<String, ToolRenderHint> get() {
+                return contributions.toolRenderHints();
+            }
+        });
+    }
+
+    /**
+     * 取插件声明的快捷键绑定，必要时重新问一遍插件。
+     * <p>
+     * 与 {@link #hints()} 同一种缓存口径：按工具数 / 插件数增长，且与会话无关，
+     * 因此只在「内容可能变了」时重问，并且<b>失效前返回同一个实例</b>——
+     * 调用方据此判断「要不要重新仲裁键位表」。
+     *
+     * @return 带来源的绑定列表（{@code order} 升序），无贡献时为空列表
+     */
+    List<OwnedShortcut> shortcutBindings() {
+        return shortcuts.get(version.get(), new Supplier<List<OwnedShortcut>>() {
+
+            @Override
+            public List<OwnedShortcut> get() {
+                return contributions.shortcuts();
+            }
+        });
+    }
+
+    /**
      * 取本帧要用的快照，必要时重新收集。
      * <p>
      * 只在渲染线程调用：命中缓存时零开销，失效时在调用点线程内联执行插件处理器。
@@ -84,5 +137,38 @@ final class UiCache {
             collectedVersion = current;
         }
         return cached;
+    }
+
+    /**
+     * 按版本号缓存的一格。
+     * <p>
+     * <b>回写的是「取用开始前」的版本</b>：若在插件处理器执行期间发生了失效，
+     * 两者就不再相等，下一帧自然再取一次——这正是 {@link #version} 用版本号而不是布尔脏标记的理由。
+     *
+     * @param <T> 内容类型
+     * @author zcd
+     */
+    private static final class Slot<T> {
+
+        /** 上次取用<b>开始前</b>读到的版本号。 */
+        private long version = -1L;
+
+        /** 缓存的内容，{@code null} 表示还没取过。 */
+        private T value;
+
+        /**
+         * 取内容，必要时重新加载。
+         *
+         * @param current 当前版本号
+         * @param loader  加载函数
+         * @return 内容，保证非 {@code null}
+         */
+        T get(long current, Supplier<T> loader) {
+            if (value == null || version != current) {
+                value = loader.get();
+                version = current;
+            }
+            return value;
+        }
     }
 }

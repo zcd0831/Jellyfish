@@ -62,7 +62,7 @@ class UiCommandTest {
         UiPlacement placement = new UiPlacement();
         List<OwnedPanel> panels = twoInDock();
 
-        UiCommand.Result result = UiCommand.execute("/ui", placement, panels);
+        UiCommand.Result result = UiCommand.execute("/ui", placement, panels, null);
 
         assertFalse(result.isError());
         assertTrue(result.getText().contains("alpha"));
@@ -78,7 +78,7 @@ class UiCommandTest {
         UiPlacement placement = new UiPlacement();
         List<OwnedPanel> panels = twoInDock();
 
-        UiCommand.Result result = UiCommand.execute("/ui dock", placement, panels);
+        UiCommand.Result result = UiCommand.execute("/ui dock", placement, panels, null);
 
         assertTrue(result.getText().contains("beta"));
         assertEquals("beta", placement.selected(panels).get(UiRegion.DOCK).getOwner());
@@ -90,7 +90,7 @@ class UiCommandTest {
         UiPlacement placement = new UiPlacement();
         List<OwnedPanel> panels = twoInDock();
 
-        UiCommand.Result result = UiCommand.execute("/ui dock beta", placement, panels);
+        UiCommand.Result result = UiCommand.execute("/ui dock beta", placement, panels, null);
 
         assertFalse(result.isError());
         assertEquals("beta", placement.selected(panels).get(UiRegion.DOCK).getOwner());
@@ -102,10 +102,10 @@ class UiCommandTest {
         UiPlacement placement = new UiPlacement();
         List<OwnedPanel> panels = twoInDock();
 
-        assertFalse(UiCommand.execute("/ui dock off", placement, panels).isError());
+        assertFalse(UiCommand.execute("/ui dock off", placement, panels, null).isError());
         assertTrue(placement.isHidden(UiRegion.DOCK));
 
-        assertFalse(UiCommand.execute("/ui dock on", placement, panels).isError());
+        assertFalse(UiCommand.execute("/ui dock on", placement, panels, null).isError());
         assertFalse(placement.isHidden(UiRegion.DOCK));
         assertNotNull(placement.selected(panels).get(UiRegion.DOCK));
     }
@@ -115,7 +115,7 @@ class UiCommandTest {
     void execute_should_rejectUnknownRegion() {
         UiPlacement placement = new UiPlacement();
 
-        UiCommand.Result result = UiCommand.execute("/ui nowhere", placement, twoInDock());
+        UiCommand.Result result = UiCommand.execute("/ui nowhere", placement, twoInDock(), null);
 
         assertTrue(result.isError());
         assertTrue(result.getText().contains("nowhere"));
@@ -127,7 +127,7 @@ class UiCommandTest {
     void execute_should_rejectPluginWithoutCandidate() {
         UiPlacement placement = new UiPlacement();
 
-        UiCommand.Result result = UiCommand.execute("/ui left alpha", placement, twoInDock());
+        UiCommand.Result result = UiCommand.execute("/ui left alpha", placement, twoInDock(), null);
 
         assertTrue(result.isError());
         assertTrue(result.getText().contains("alpha"));
@@ -139,10 +139,10 @@ class UiCommandTest {
     void execute_should_rejectAssignOnStatusRegion() {
         UiPlacement placement = new UiPlacement();
 
-        assertTrue(UiCommand.execute("/ui status alpha", placement, twoInDock()).isError());
-        assertFalse(UiCommand.execute("/ui status off", placement, twoInDock()).isError());
+        assertTrue(UiCommand.execute("/ui status alpha", placement, twoInDock(), null).isError());
+        assertFalse(UiCommand.execute("/ui status off", placement, twoInDock(), null).isError());
         assertTrue(placement.isHidden(UiRegion.STATUS));
-        assertFalse(UiCommand.execute("/ui status", placement, twoInDock()).isError());
+        assertFalse(UiCommand.execute("/ui status", placement, twoInDock(), null).isError());
         assertFalse(placement.isHidden(UiRegion.STATUS));
     }
 
@@ -151,7 +151,7 @@ class UiCommandTest {
     void execute_should_reportEmptyRegion() {
         UiPlacement placement = new UiPlacement();
 
-        UiCommand.Result result = UiCommand.execute("/ui left", placement, twoInDock());
+        UiCommand.Result result = UiCommand.execute("/ui left", placement, twoInDock(), null);
 
         assertFalse(result.isError());
         assertTrue(result.getText().contains("left"));
@@ -191,7 +191,7 @@ class UiCommandTest {
     void execute_should_ignoreExtraArguments() {
         UiPlacement placement = new UiPlacement();
 
-        UiCommand.Result result = UiCommand.execute("/ui dock beta extra", placement, twoInDock());
+        UiCommand.Result result = UiCommand.execute("/ui dock beta extra", placement, twoInDock(), null);
 
         assertFalse(result.isError());
         assertEquals("beta", placement.selected(twoInDock()).get(UiRegion.DOCK).getOwner());

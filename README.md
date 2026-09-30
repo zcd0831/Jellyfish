@@ -268,7 +268,7 @@ java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -tui
 面板占区域，而一块区域同一时刻只显示一个，因此两个插件抢同一位置时默认只显示 `order` 最小的那个，其余进入候选：
 
 ```
-/ui                        列出所有贡献：区域 | 插件 | 标题 | 是否可见 | 还有哪些候选
+/ui                        列出所有贡献：区域 | 插件 | 标题 | 是否可见 | 还有哪些候选 | 没生效的插件快捷键
 /ui right                  在该区域轮换到下一个候选
 /ui right jellyfish-todo   指定由某个插件占用该区域
 /ui right off              关掉该区域（/ui right on 恢复）

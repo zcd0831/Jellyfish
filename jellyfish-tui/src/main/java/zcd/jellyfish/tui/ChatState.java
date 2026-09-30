@@ -1,5 +1,6 @@
 package zcd.jellyfish.tui;
 
+import zcd.jellyfish.api.extension.ToolRenderHint;
 import zcd.jellyfish.core.ReActTurn;
 import zcd.jellyfish.core.input.InputDirectiveRun;
 import zcd.jellyfish.infra.session.SessionMessage;
@@ -8,6 +9,7 @@ import zcd.jellyfish.tui.text.VisualLine;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -85,6 +87,9 @@ public final class ChatState {
 
     /** 最近一次投影时的工具参数展开状态。 */
     private boolean lastToolArgumentsExpanded;
+
+    /** 上次投影用的工具行渲染提示表，按实例比对（见 {@code refreshProjection}）。 */
+    private Map<String, ToolRenderHint> lastToolHints = Collections.emptyMap();
 
     /** 最近一次投影时的提示版本号。 */
     private int lastNoticeVersion = -1;
@@ -319,10 +324,12 @@ public final class ChatState {
      * @param width       消息区可用列数
      * @param viewportRows 消息区可用行数
      * @param maxMessages 投影的消息条数上限
+     * @param toolHints   工具行渲染提示（按工具名），不可为 {@code null}
      * @return 本帧窗口，保证非 {@code null}
      */
-    public View view(String sessionId, List<SessionMessage> messages, int width, int viewportRows, int maxMessages) {
-        refreshProjection(sessionId, messages, width, viewportRows, maxMessages);
+    public View view(String sessionId, List<SessionMessage> messages, int width, int viewportRows,
+                     int maxMessages, Map<String, ToolRenderHint> toolHints) {
+        refreshProjection(sessionId, messages, width, viewportRows, maxMessages, toolHints);
         int rows = Math.max(1, viewportRows);
         int maxOffset = Math.max(0, totalRows - rows);
         this.viewportRows = rows;
@@ -432,7 +439,8 @@ public final class ChatState {
      * @param maxMessages  消息条数上限
      */
     private void refreshProjection(String sessionId, List<SessionMessage> messages, int width,
-                                   int viewportRows, int maxMessages) {
+                                   int viewportRows, int maxMessages,
+                                   Map<String, ToolRenderHint> toolHints) {
         List<SessionMessage> source = messages == null ? Collections.<SessionMessage>emptyList() : messages;
         String lastId = source.isEmpty() ? null : source.get(source.size() - 1).getMessageId();
         boolean unchanged = lastWidth == width
@@ -440,6 +448,9 @@ public final class ChatState {
                 && lastMaxMessages == maxMessages
                 && lastThinkingExpanded == thinkingExpanded
                 && lastToolArgumentsExpanded == toolArgumentsExpanded
+                // 按<b>实例</b>比对：提示表由 UiCache 在失效时才重建，同一个实例就代表内容没变。
+                // 逐项比对一张可能上百项的表，只为了得出同一结论，没有意义
+                && lastToolHints == toolHints
                 && lastMessageCount == source.size()
                 && lastNoticeVersion == noticeVersion
                 && Objects.equals(lastMessageId, lastId)
@@ -458,13 +469,14 @@ public final class ChatState {
             projected = TranscriptProjector.home(notices, width, viewportRows);
         } else {
             projected = TranscriptProjector.project(source, notices, snapshot, width, maxMessages,
-                    thinkingExpanded, toolArgumentsExpanded);
+                    thinkingExpanded, toolArgumentsExpanded, toolHints);
         }
         lastWidth = width;
         lastViewportRows = viewportRows;
         lastMaxMessages = maxMessages;
         lastThinkingExpanded = thinkingExpanded;
         lastToolArgumentsExpanded = toolArgumentsExpanded;
+        lastToolHints = toolHints;
         lastMessageCount = source.size();
         lastMessageId = lastId;
         lastSessionId = sessionId;

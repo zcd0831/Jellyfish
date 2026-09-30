@@ -913,15 +913,29 @@ pi 的表达力（自定义组件、overlay、替换 editor、消息/条目渲�
 给 `UiSegment` 增加一个**有缺省值**的 `kind` 字段与一个新静态工厂：
 
 ```java
-public enum UiSegmentKind { TEXT, HEADING, CODE, KEY_VALUE, PROGRESS, LINK }
+public enum UiSegmentKind { TEXT, HEADING, CODE, KEY_VALUE, LINK }
 
 // 既有构造器与 of(text) / of(text, emphasis) 完全不动，缺省 kind = TEXT
 public static UiSegment of(String text, UiEmphasis emphasis, UiSegmentKind kind);
 ```
 
 - **不新增构造器**（`UiSegment` 今天只有一个可见构造器），只加静态工厂 → 满足 §0.3 第 1 条。
-- 外壳各自映射：TUI 按 `kind` 选样式；`-cli` / `-server` 降级为纯文本（`PROGRESS` 渲染成 `[####----] 40%`）。
-  **映射表在内核之外**（`jellyfish-tui` 与 `jellyfish-cli`），插件永远只产出数据。
+- 外壳各自映射：TUI 按 `kind` 选样式；**映射表在内核之外**（`jellyfish-tui`），插件永远只产出数据。
+
+**落地时的两处修订（P6b 定稿）**：
+
+1. **去掉 `PROGRESS`，词汇表只收「纯样式」**。外壳拿到的只有「文本 + 档位 + 种类」，
+   要画进度条得有**百分比数值**、要做键值对齐得知道**分隔点**——两者都只能去解析插件给的文本，
+   而「文本由插件给、外壳反过来解析它」正是两个真源，与 §8.3 自己写的
+   「互不解析」直接矛盾。想画进度条就自己拼字符串（那本来就是内容）。
+   `KEY_VALUE` 随之定义成「键值对里的**值**段」：键由插件用 `TEXT` 段写，
+   「键值对」是插件的组合而不是外壳的解析。
+2. **「`-cli` / `-server` 降级为纯文本（`PROGRESS` 渲染成 `[####----] 40%`）」这条删掉**：
+   `UiSegment` 只有 `UiRender`（TUI）一个消费者，`-cli` 与 `-server` **根本不渲染面板**
+   （面板是 TUI 独占的界面）。给它写映射只会是死代码——那不是「降级」，是「没有这条路径」。
+
+**种类与档位正交**：种类决定**修饰**（粗体 / 反显 / 下划线 / 斜体），档位决定**颜色**。
+正交之后两者永远不会互相盖掉，插件也不必知道外壳把它们映射成了什么。
 - `PanelContribution`、`StatusLineContribution`、`UiLine`、`UiRegion` **一个都不改**。
   这是「宁可新增旁路类型也不改既有签名」的应用：这几个类型已经被插件直接构造。
 
@@ -936,7 +950,17 @@ public final class ToolRenderHint   // 静态工厂：none() / of(emphasis, coll
 **注册方式**：`handle`，路由键 = 工具名（同键唯一——一个工具行的样式只能有一套）。
 
 **调用时机**：外壳渲染一条工具轨迹行时，经 `UiContributions` 现查（**不是**每帧——沿用
-`UiContributions` 的「失效时收集」模型，工具行按 `toolCallId` 缓存）。
+`UiContributions` 的「失效时收集」模型）。
+
+**落地时的两点修订（P6b 定稿）**：
+
+- **不按 `toolCallId` 缓存，按工具名缓存即可**：路由键就是工具名，hint 只随工具名变，
+  同一个工具在一屏里出现多次只需要问一次。缓存归 `UiCache`（与面板快照同一套版本号失效），
+  解析出的表按**实例**传给 `TranscriptProjector`——它因此仍然是无依赖的静态投影器，
+  测试传空表即可。
+- **全局 `Ctrl+E` 优先于 `showArguments=false`**：用户按了 `Ctrl+E` 就是「我要看参数」，
+  插件说「这个工具的参数是噪音」在这时应当让位——那是用户当下明确表达的意愿，
+  而插件的表态是长期的默认值。
 
 **它能改什么、不能改什么**：
 
@@ -964,6 +988,20 @@ public final class ShortcutBinding        // 字段：key、commandName、descri
 **注册方式**：`contribute` + order 升序（多个插件可共存），**冲突时 order 最小者胜**，
 被挤掉的进 `/ui` 的候选清单（与面板落位同一口径）。
 
+**落地时的一处修订（P6b 定稿）：命令存在性校验放在收集时，不放在注册时。**
+初稿写「命令不存在时快捷键注册失败（`getCommands` 校验）」，但**注册是活的**：
+插件在自己的 `start()` 里先注册命令还是先注册快捷键、以及跨插件指向（A 的键执行 B 的命令），
+都会让「此刻命令在不在」变成一个随加载顺序变化的答案，而注册表没有「注册完成后」这个时点。
+改到收集时（`UiContributions` 交出键位表那一刻，插件已全部就绪）之后，判据与顺序无关，
+而顺序写反的后果只是「这条快捷键不生效」——不是插件启动失败。
+指向不存在命令的绑定**记 WARN 并剔除**，且**不占用键位**（否则一个坏声明会白占一个键）。
+
+**另一处修订：请求里给的是「内核保留键位」，不是「别人已经占了哪些」。**
+收集是**一趟**完成的，在问某个插件时其它插件的声明还没收齐，「已被占用」在那时不是一个能回答的问题；
+而插件之间的冲突本来就由内核按 `order` 确定性仲裁，不需要插件自己避让。
+保留键位不同：它是一份固定的内核事实，因此连常量都放在 `ShortcutBinding.RESERVED_KEYS`，
+插件自己也能查。
+
 **key 的取值必须收窄**，理由是终端事实（`../constraints/shells.md`）：
 框架不解析修饰键编码，`Shift+Enter` / CSI-u / CSI-27 一律落成 UNKNOWN，
 **只有 `Ctrl+<字母>` 可以按码点比较**。因此：
@@ -990,14 +1028,18 @@ public final class ShortcutBinding        // 字段：key、commandName、descri
 | 消息 / 条目的自定义渲染器 | 与「markdown 只在 assistant 正文渲染」的既有取舍冲突，且需要一套组件生命周期 |
 | 富文本表格 | 终端里中英混排按列对齐要赌字宽表，`architecture.md` 已明确「表格降级为代码块」 |
 
-### 8.6 测试点
+### 8.6 测试点（均已落地）
 
 - `UiSegment` 的既有构造器与 `of(text)` 行为不变（防回归）。
-- 三种外壳对每个 `UiSegmentKind` 都有映射，且 `-cli` 不抛错。
-- `ToolRenderHint` 0 handler 时工具行与今天逐字段一致。
+- **每个 `UiSegmentKind` 都有互不相同的映射**，且都不改颜色（种类只管修饰、档位管颜色）；
+  既有构造器与 `of(text)` 的行为逐字段不变。
+- `ToolRenderHint` 0 handler / 没有提示表时工具行与今天逐字段一致；`showArguments=false` 只让
+  那一行的参数段消失，其余逐字段不变；`collapsedByDefault=false` 放宽到展开档。
+- **全局 `Ctrl+E` 胜过 `showArguments=false`**。
 - 快捷键非法形状（`shift+a`、`ctrl+1`）注册报错；保留键位被拒。
-- 快捷键派发的是命令，且命令不存在时快捷键注册失败（`getCommands` 校验）。
+- 快捷键派发的是命令；**指向不存在命令的绑定在收集时被剔除、且不占用键位**。
 - 两个插件抢同一个键时 order 小者生效，另一个出现在 `/ui` 候选里。
+- `PluginShortcutsTest` 覆盖仲裁、命令校验、被剔除者不占键位、命令清单不可读时不抛错。
 
 ---
 
@@ -1207,7 +1249,7 @@ Server 的那一期还需要一个后台触发点，那是它的真实代价。
 | **P4** | §6 会话扩展条目与分支（含 `SessionKind` 迁移） | P3 | **高**（快照 schema + `parentSessionId` 语义迁移）**已完成** |
 | **P5** | §5 模型 / 厂商可插拔 | P0 | 中（凭据处理与 adapter 转换）**已完成** |
 | **P6a** | §7 工具激活与重建动作 | P3（§7.3） | 中（与缓存前缀保证的交互）**已完成** |
-| **P6b** | §8 UI 深度 | P0 | 低 **待做** |
+| **P6b** | §8 UI 深度 | P0 | 低 **已完成** |
 
 **跨期纪律**：每一期结束都必须保证「不注册任何新扩展点的老插件」行为**逐字节不变**，
 并用上一期的回归用例守住。这是本文最重要的验收标准——
@@ -1227,7 +1269,7 @@ Server 的那一期还需要一个后台触发点，那是它的真实代价。
 | `../constraints/permissions.md` | 「变换在权限之前」这条决定及其理由（TOCTOU）、`DENY` 不进权限审计 |
 | `../constraints/react-compact.md` | `CompactionPreRequest`、`TurnBeforeRequest` 的 `BLOCKED`、**`ToolActivation` 与清单冻结的关系、重建动作与前缀断裂**（P6a 已同步）|
 | `../constraints/session-config.md` | 扩展条目、`SessionKind` 迁移、fork 的配对对齐与「不复制 usage」 |
-| `../constraints/shells.md` | `UiSegmentKind` 的三外壳映射、`ToolRenderHint`、快捷键的合法形状与保留键位、`RuntimeInfo` 的取值表 |
+| `../constraints/shells.md` | **`UiSegmentKind` 的两个正交维度与「只有 TUI 渲染面板」、`ToolRenderHint`、快捷键的合法形状与保留键位**、`RuntimeInfo` 的取值表 |
 | `../architecture.md` | 扩展层表格补新点、LLM 层的「传输契约 + 插件 provider」说明；「已知边界与后续项」补本文的非目标（deferred 加载、完整会话树、自定义组件、OAuth、deferred provider） |
 | `../../README.md` / `../configuration.md` | 仅当新增配置项（动作队列容量、`ToolActivation` 开关）时同步；P5 **无新配置项**，但 `models.json` 的 `type` 一节要补「插件可提供新 type」与动态目录的口径 |
 
@@ -1387,6 +1429,16 @@ Server 的那一期还需要一个后台触发点，那是它的真实代价。
   归因靠 `Layer.TOOLS`（按会话冻结之下它只可能来自这个动作）。
 - 顺带一处签名修订：请求路径改成 `tools(Session, ToolFilter)`（§7.2）。
 
+### 12.17 P6b 落地时对 §8 的四处修正（已归入正文）
+
+- **`UiSegmentKind` 去掉 `PROGRESS`**，词汇表只收纯样式（§8.2）：进度条需要数值、键值对齐需要分隔点，
+  两者都只能解析插件给的文本，与 §8.3 的「互不解析」自相矛盾。
+- **「`-cli` / `-server` 降级」这条删掉**（§8.2）：面板只有 TUI 渲染，为它们写映射是死代码。
+- **`ToolRenderHint` 不按 `toolCallId` 缓存**（§8.3）：路由键是工具名，按名字缓存一次即可；
+  解析出的表按实例传给 `TranscriptProjector`，它因此保持无依赖的静态投影器。
+- **快捷键的命令存在性校验从注册时挪到收集时**（§8.4）：注册是活的，注册时校验会让加载顺序
+  变成正确性条件；请求里给的是「内核保留键位」而不是「别人已占用哪些」（收集是一趟完成的）。
+
 ---
 
 ## 附：改动一览（本轮决策改到正文的哪些地方）
@@ -1404,3 +1456,4 @@ Server 的那一期还需要一个后台触发点，那是它的真实代价。
 | 12.14 P5 对 §5 的修正 | §5.2、§5.3、§5.4、§5.5、§5.7 |
 | 12.15 目录询问时机 | §5.4、§5.7 |
 | 12.16 P6a 对 §7 的修正 | §7.2、§7.3、§7.6 |
+| 12.17 P6b 对 §8 的修正 | §8.2、§8.3、§8.4、§8.6 |

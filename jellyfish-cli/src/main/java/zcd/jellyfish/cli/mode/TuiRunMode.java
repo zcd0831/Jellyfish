@@ -15,6 +15,7 @@ import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.command.CommandManager;
 import zcd.jellyfish.infra.event.EventChannel;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
+import zcd.jellyfish.infra.plugin.RuntimeInfoHolder;
 import zcd.jellyfish.infra.model.ModelManager;
 import zcd.jellyfish.infra.permission.ApprovalChannel;
 import zcd.jellyfish.infra.session.SessionDefaults;
@@ -81,6 +82,9 @@ public final class TuiRunMode implements RunMode {
     /** 事件通道：UI 贡献失效订阅用。 */
     private final EventChannel events;
 
+    /** 运行时信息持有者：渲染提示与快捷键请求要带上外壳种类。 */
+    private final RuntimeInfoHolder runtimeInfo;
+
     /**
      * 人工审批通道：本模式是唯一会挂审批者的外壳。
      * <p>
@@ -114,6 +118,7 @@ public final class TuiRunMode implements RunMode {
      * @param agents     agent 门面，不可为 {@code null}
      * @param extensions 同步扩展点策略，不可为 {@code null}
      * @param events     事件通道，不可为 {@code null}
+     * @param runtimeInfo 运行时信息持有者，不可为 {@code null}
      * @param approvals  人工审批通道，不可为 {@code null}
      * @param compactor  会话压缩器，不可为 {@code null}
      * @param inputDirectives 输入指令服务，不可为 {@code null}
@@ -122,7 +127,8 @@ public final class TuiRunMode implements RunMode {
      */
     public TuiRunMode(AgentHarness harness, CommandManager commands, SessionManager sessions,
                       ModelManager models, AgentManager agents, ExtensionRegistry extensions,
-                      EventChannel events, ApprovalChannel approvals, ConversationCompactor compactor,
+                      EventChannel events, RuntimeInfoHolder runtimeInfo, ApprovalChannel approvals,
+                      ConversationCompactor compactor,
                       InputDirectives inputDirectives, InputTransforms inputTransforms, ConsoleIO console,
                       SessionDefaults sessionDefaults) {
         this.harness = Objects.requireNonNull(harness, "harness must not be null");
@@ -132,6 +138,7 @@ public final class TuiRunMode implements RunMode {
         this.agents = Objects.requireNonNull(agents, "agents must not be null");
         this.extensions = Objects.requireNonNull(extensions, "extensions must not be null");
         this.events = Objects.requireNonNull(events, "events must not be null");
+        this.runtimeInfo = Objects.requireNonNull(runtimeInfo, "runtimeInfo must not be null");
         this.approvals = Objects.requireNonNull(approvals, "approvals must not be null");
         this.compactor = Objects.requireNonNull(compactor, "compactor must not be null");
         this.inputDirectives = Objects.requireNonNull(inputDirectives, "inputDirectives must not be null");
@@ -165,7 +172,7 @@ public final class TuiRunMode implements RunMode {
     public int run(StartupOptions options) {
         // UI 贡献门面的生命周期归外壳：谁创建谁释放，因此放在这里而不是交给 Dagger 单例
         // （单例不会被组件自动关闭，订阅就会一直挂着）。
-        UiContributions uiContributions = new UiContributions(extensions, events, UI_OWNER);
+        UiContributions uiContributions = new UiContributions(extensions, events, runtimeInfo, UI_OWNER);
         // 挂上审批者：本模式有能力承载「需要人工审批」的模态交互。必须在界面跑起来之前挂，
         // 否则启动瞬间发生的工具调用会拿不到审批者而被按拒绝处理。
         approvals.attach();

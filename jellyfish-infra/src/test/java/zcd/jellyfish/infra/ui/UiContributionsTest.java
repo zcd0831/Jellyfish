@@ -18,12 +18,25 @@ import zcd.jellyfish.api.ui.UiRegion;
 import zcd.jellyfish.api.ui.UiSegment;
 import zcd.jellyfish.infra.event.EventChannel;
 import zcd.jellyfish.infra.event.EventChannelOptions;
+import zcd.jellyfish.api.RuntimeInfo;
+import zcd.jellyfish.api.extension.ShortcutBinding;
+import zcd.jellyfish.api.extension.ShortcutContribution;
+import zcd.jellyfish.api.extension.ShortcutContributionRequest;
+import zcd.jellyfish.api.extension.ToolCallRequest;
+import zcd.jellyfish.api.extension.ToolCallResult;
+import zcd.jellyfish.api.extension.ToolDescriptor;
+import zcd.jellyfish.api.extension.ToolRenderHint;
+import zcd.jellyfish.api.extension.ToolRenderHintRequest;
+import zcd.jellyfish.api.ui.UiEmphasis;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
+import zcd.jellyfish.infra.plugin.RuntimeInfoHolder;
 import zcd.jellyfish.infra.registry.TypeRegistry;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -55,6 +68,9 @@ class UiContributionsTest {
     /** 事件通道，失效订阅的落点。 */
     private EventChannel events;
 
+    /** 运行时信息持有者：请求里要带上外壳种类。 */
+    private final RuntimeInfoHolder runtimeInfo = new RuntimeInfoHolder();
+
     /** 被测门面。 */
     private UiContributions contributions;
 
@@ -64,13 +80,126 @@ class UiContributionsTest {
         extensions = new ExtensionRegistry(registry);
         events = new EventChannel(EventChannelOptions.defaults(), registry);
         events.start();
-        contributions = new UiContributions(extensions, events, "tui");
+        contributions = new UiContributions(extensions, events, runtimeInfo, "tui");
     }
 
     @AfterEach
     void tearDown() {
         contributions.close();
         events.close();
+    }
+
+    @Test
+    @DisplayName("没有插件表态时：提示表为空、键位表为空")
+    void ui_depth_should_be_empty_when_no_handlers() {
+        assertTrue(contributions.toolRenderHints().isEmpty());
+        assertTrue(contributions.shortcuts().isEmpty());
+    }
+
+    @Test
+    @DisplayName("工具行渲染提示按工具名索引，只保留表了态的")
+    void toolRenderHints_should_index_by_tool_name() {
+        registerTool("heartbeat");
+        registerTool("read_file");
+        extensions.handle("plugin-a", ToolRenderHintRequest.class, "heartbeat", null,
+                request -> ToolRenderHint.of(null, null, Boolean.FALSE), RegisterOptions.DEFAULT);
+        // 有条但三项都不表态：不进表——「表里没有」与「有条但不表态」对渲染是同一件事
+        extensions.handle("plugin-a", ToolRenderHintRequest.class, "read_file", null,
+                request -> ToolRenderHint.none(), RegisterOptions.DEFAULT);
+
+        Map<String, ToolRenderHint> hints = contributions.toolRenderHints();
+
+        assertEquals(Collections.singleton("heartbeat"), hints.keySet());
+        assertEquals(Boolean.FALSE, hints.get("heartbeat").getShowArguments());
+    }
+
+    @Test
+    @DisplayName("工具行渲染提示失败时按缺省渲染，不影响其它工具")
+    void toolRenderHints_should_skip_failing_handler() {
+        registerTool("heartbeat");
+        registerTool("read_file");
+        extensions.handle("plugin-a", ToolRenderHintRequest.class, "heartbeat", null,
+                request -> {
+                    throw new IllegalStateException("渲染提示炸了");
+                }, RegisterOptions.DEFAULT);
+        extensions.handle("plugin-b", ToolRenderHintRequest.class, "read_file", null,
+                request -> ToolRenderHint.of(UiEmphasis.ACCENT, null, null), RegisterOptions.DEFAULT);
+
+        Map<String, ToolRenderHint> hints = contributions.toolRenderHints();
+
+        assertEquals(Collections.singleton("read_file"), hints.keySet());
+    }
+
+    @Test
+    @DisplayName("键位按 order 升序交出，仲裁留给外壳")
+    void shortcuts_should_be_ordered_by_order() {
+        extensions.contribute("late", ShortcutContributionRequest.class, null,
+                request -> ShortcutContribution.of(Collections.singletonList(
+                        new ShortcutBinding("ctrl+b", "session", null))), RegisterOptions.order(10));
+        extensions.contribute("early", ShortcutContributionRequest.class, null,
+                request -> ShortcutContribution.of(Collections.singletonList(
+                        new ShortcutBinding("ctrl+b", "todo", null))), RegisterOptions.order(-10));
+
+        List<OwnedShortcut> shortcuts = contributions.shortcuts();
+
+        assertEquals(2, shortcuts.size());
+        assertEquals("early", shortcuts.get(0).getOwner());
+        assertEquals("todo", shortcuts.get(0).getBinding().getCommandName());
+    }
+
+    @Test
+    @DisplayName("内核保留键位被拒，插件其余键位照常生效")
+    void shortcuts_should_reject_reserved_keys() {
+        extensions.contribute("plugin-a", ShortcutContributionRequest.class, null,
+                request -> ShortcutContribution.of(Arrays.asList(
+                        new ShortcutBinding("ctrl+c", "quit", null),
+                        new ShortcutBinding("ctrl+b", "todo", null))), RegisterOptions.DEFAULT);
+
+        List<OwnedShortcut> shortcuts = contributions.shortcuts();
+
+        assertEquals(1, shortcuts.size());
+        assertEquals("ctrl+b", shortcuts.get(0).getBinding().getKey());
+    }
+
+    @Test
+    @DisplayName("快捷键贡献失败只跳过它自己")
+    void shortcuts_should_skip_failing_handler() {
+        extensions.contribute("broken", ShortcutContributionRequest.class, null,
+                request -> {
+                    throw new IllegalStateException("炸了");
+                }, RegisterOptions.DEFAULT);
+        extensions.contribute("plugin-b", ShortcutContributionRequest.class, null,
+                request -> ShortcutContribution.of(Collections.singletonList(
+                        new ShortcutBinding("ctrl+b", "todo", null))), RegisterOptions.DEFAULT);
+
+        assertEquals(1, contributions.shortcuts().size());
+    }
+
+    @Test
+    @DisplayName("请求里带上了外壳信息与保留键位")
+    void shortcuts_request_should_carry_shell_and_reserved_keys() {
+        runtimeInfo.set(RuntimeInfo.tui(true));
+        List<String> seen = new ArrayList<String>();
+        extensions.contribute("plugin-a", ShortcutContributionRequest.class, null, request -> {
+            seen.add(request.getShell().getShell() + "/" + request.getShell().isInteractive());
+            seen.addAll(request.getReservedKeys());
+            return ShortcutContribution.none();
+        }, RegisterOptions.DEFAULT);
+
+        contributions.shortcuts();
+
+        assertTrue(seen.contains("TUI/true"), seen.toString());
+        assertTrue(seen.contains("ctrl+c"), seen.toString());
+    }
+
+    /**
+     * 注册一个最简工具描述符（渲染提示按工具名路由，得先有这个工具）。
+     *
+     * @param name 工具名
+     */
+    private void registerTool(String name) {
+        extensions.handle("tools", ToolCallRequest.class, name, new ToolDescriptor(name, name),
+                request -> new ToolCallResult(name, "ok"), RegisterOptions.DEFAULT);
     }
 
     @Test
@@ -315,8 +444,8 @@ class UiContributionsTest {
     @Test
     @DisplayName("来源标识不能为空白：它是反注册与告警归因的依据")
     void constructor_should_rejectBlankOwner() {
-        assertThrows(JellyfishException.class, () -> new UiContributions(extensions, events, "  "));
-        assertThrows(JellyfishException.class, () -> new UiContributions(extensions, events, null));
+        assertThrows(JellyfishException.class, () -> new UiContributions(extensions, events, runtimeInfo, "  "));
+        assertThrows(JellyfishException.class, () -> new UiContributions(extensions, events, runtimeInfo, null));
     }
 
     /**

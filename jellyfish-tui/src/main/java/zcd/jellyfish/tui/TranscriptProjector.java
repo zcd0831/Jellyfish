@@ -2,6 +2,7 @@ package zcd.jellyfish.tui;
 
 import dev.tamboui.style.Style;
 import zcd.jellyfish.api.extension.ToolMetadata;
+import zcd.jellyfish.api.extension.ToolRenderHint;
 import zcd.jellyfish.infra.llm.LlmMessage;
 import zcd.jellyfish.infra.llm.LlmToolCall;
 import zcd.jellyfish.infra.session.SessionMessage;
@@ -253,11 +254,15 @@ public final class TranscriptProjector {
      * @param thinkingExpanded 是否展开思考过程：{@code false} 时每个思考块压成一行
      * @param toolArgumentsExpanded 是否展开工具调用参数：{@code false} 时参数折行到
      *        {@link #MAX_ARGUMENT_ROWS} 行为止，{@code true} 时放宽到 {@link #MAX_ARGUMENT_ROWS_EXPANDED} 行
+     * @param toolRenderHints 工具行渲染提示（按工具名），可为 {@code null}（当作没有插件表态）
      * @return 视觉行列表，保证非 {@code null}
      */
     public static List<VisualLine> project(List<SessionMessage> messages, List<ShellNotice> notices,
                                            InflightTurn.Snapshot inflight, int width, int maxMessages,
-                                           boolean thinkingExpanded, boolean toolArgumentsExpanded) {
+                                           boolean thinkingExpanded, boolean toolArgumentsExpanded,
+                                           Map<String, ToolRenderHint> toolRenderHints) {
+        Map<String, ToolRenderHint> hints = toolRenderHints == null
+                ? Collections.<String, ToolRenderHint>emptyMap() : toolRenderHints;
         List<SessionMessage> source = messages == null ? Collections.<SessionMessage>emptyList() : messages;
         List<ShellNotice> noticeSource = notices == null ? Collections.<ShellNotice>emptyList() : notices;
         int limit = maxMessages < 1 ? DEFAULT_MAX_MESSAGES : maxMessages;
@@ -291,7 +296,8 @@ public final class TranscriptProjector {
                         message.getThinking(), thinkingExpanded, width);
             } else if (LlmMessage.ROLE_TOOL.equals(role)) {
                 insideAssistantBlock = appendToolTrace(out, insideAssistantBlock, message,
-                        callArguments, toolArgumentsExpanded, width);
+                        callArguments, toolArgumentsExpanded, hintOf(hints, message.getMessage().getName()),
+                        width);
             }
             // 其余角色（如 system）不进消息列表；即便进了也不显示，避免泄漏系统提示词
         }
@@ -300,7 +306,8 @@ public final class TranscriptProjector {
             out.addAll(notice(noticeSource.get(noticeIndex), width));
             noticeIndex++;
         }
-        appendInflight(out, inflight, thinkingExpanded, toolArgumentsExpanded, insideAssistantBlock, width);
+        appendInflight(out, inflight, thinkingExpanded, toolArgumentsExpanded, insideAssistantBlock,
+                width, hints);
         return out;
     }
 
@@ -570,31 +577,92 @@ public final class TranscriptProjector {
      * @param message     工具消息
      * @param callArguments 工具调用 id 到参数显示文本的映射，不可为 {@code null}
      * @param expanded    是否展开工具参数
+     * @param hint        该工具的渲染提示，可为 {@code null}（按缺省渲染）
      * @param width       可用列数
      * @return 投影后是否处于助手块内（恒为 {@code true}）
      */
     private static boolean appendToolTrace(List<VisualLine> out, boolean inBlock, SessionMessage message,
-                                           Map<String, String> callArguments, boolean expanded, int width) {
+                                           Map<String, String> callArguments, boolean expanded,
+                                           ToolRenderHint hint, int width) {
         if (!inBlock) {
             out.add(VisualLine.EMPTY);
             out.add(VisualLine.of(new StyledSegment(ASSISTANT_HEADER, ASSISTANT_HEADER_STYLE)));
         }
         String name = message.getMessage().getName();
         String label = name == null || name.isEmpty() ? "工具" : name;
+        // 插件只改「这一行怎么显示」，改不了它说什么：文本仍然来自工具写进元数据的那一句
+        Style traceStyle = hintStyle(hint);
         List<StyledSegment> body = new ArrayList<StyledSegment>();
-        body.addAll(wrapBody(label, TRACE_STYLE));
+        body.addAll(wrapBody(label, traceStyle));
         // 摘要用与工具名相同的样式：它是「刚才那一行到底是什么事」的说明，不是一条警示。
         // 放在失败后缀之前，于是「哪个工具 · 它在干什么 · 成没成」从左到右顺着读下来。
         // 两段都可能来自不可信输入（插件 / 工具自定的 terminal 值），因此过一道控制字符过滤
-        body.addAll(wrapBody(ControlChars.strip(summarySuffix(message)), TRACE_STYLE));
+        body.addAll(wrapBody(ControlChars.strip(summarySuffix(message)), traceStyle));
         // 错误用红色后缀而不是把整行变红：工具名与结论要能一起读，整行染色会让
         // 「哪个工具失败了」这条信息淹没在颜色里。判据来自元数据字段，不去解析首行文案
         body.addAll(wrapBody(ControlChars.strip(failureSuffix(message)), ERROR_STYLE));
         // 参数取自 assistant 的工具调用（已解析、已压成单行），按 toolCallId 配对
-        body.addAll(wrapBody(argumentSuffix(callArguments.get(message.getMessage().getToolCallId())),
-                TRACE_STYLE));
-        appendTraceLine(out, body, expanded, width);
+        if (showsArguments(hint, expanded)) {
+            body.addAll(wrapBody(argumentSuffix(callArguments.get(message.getMessage().getToolCallId())),
+                    TRACE_STYLE));
+        }
+        appendTraceLine(out, body, expandedFor(hint, expanded), width);
         return true;
+    }
+
+    /**
+     * 取某个工具的渲染提示。
+     *
+     * @param hints    工具名 → 提示，不可为 {@code null}
+     * @param toolName 工具名，可为 {@code null}
+     * @return 提示；没有表态时返回 {@code null}
+     */
+    private static ToolRenderHint hintOf(Map<String, ToolRenderHint> hints, String toolName) {
+        return toolName == null ? null : hints.get(toolName);
+    }
+
+    /**
+     * 取该工具轨迹行的强调样式。
+     * <p>
+     * <b>只换颜色档位，不换结构</b>：失败后缀仍然是红、参数仍然是次要样式——插件表达的是
+     * 「这一行值不值得扫到」，不是「重写这一行的观感」。
+     *
+     * @param hint 提示，可为 {@code null}
+     * @return 样式；未表态时返回 {@link #TRACE_STYLE}
+     */
+    private static Style hintStyle(ToolRenderHint hint) {
+        return hint == null || hint.getEmphasis() == null
+                ? TRACE_STYLE : UiRender.emphasisStyle(hint.getEmphasis());
+    }
+
+    /**
+     * 判断该工具的轨迹行要不要显示参数。
+     *
+     * @param hint     提示，可为 {@code null}
+     * @param expanded 全局展开开关（{@code Ctrl+E}）
+     * @return 显示参数返回 {@code true}
+     */
+    private static boolean showsArguments(ToolRenderHint hint, boolean expanded) {
+        // 全局展开优先：用户按了 Ctrl+E 就是「我要看参数」，插件说「这个工具的参数是噪音」
+        // 在这时应当让位——那是用户当下明确表达的意愿，而插件的表态是长期的默认值
+        if (expanded) {
+            return true;
+        }
+        return hint == null || hint.getShowArguments() == null || hint.getShowArguments();
+    }
+
+    /**
+     * 取该工具轨迹行的参数行数档位。
+     *
+     * @param hint     提示，可为 {@code null}
+     * @param expanded 全局展开开关（{@code Ctrl+E}）
+     * @return 按展开档返回 {@code true}
+     */
+    private static boolean expandedFor(ToolRenderHint hint, boolean expanded) {
+        if (expanded) {
+            return true;
+        }
+        return hint != null && Boolean.FALSE.equals(hint.getCollapsedByDefault());
     }
 
     /**
@@ -731,10 +799,12 @@ public final class TranscriptProjector {
      * @param toolArgumentsExpanded 是否展开工具调用参数
      * @param width    可用列数
      * @param insideAssistantBlock 投影到这里时是否已在助手块内（决定要不要补表头）
+     * @param hints    工具行渲染提示（按工具名），不可为 {@code null}
      */
     private static void appendInflight(List<VisualLine> out, InflightTurn.Snapshot inflight,
                                        boolean thinkingExpanded, boolean toolArgumentsExpanded,
-                                       boolean insideAssistantBlock, int width) {
+                                       boolean insideAssistantBlock, int width,
+                                       Map<String, ToolRenderHint> hints) {
         String thinking = inflight.getThinking();
         String text = inflight.getText();
         InflightTurn.Outcome outcome = inflight.getOutcome();
@@ -745,7 +815,8 @@ public final class TranscriptProjector {
                 // 工具在跑：显示它的名字与实时输出末尾若干行。
                 // 这个分支必须排在「处理中…」之前——命令行可能跑几分钟，在那几分钟里
                 // 「处理中…」传达的信息量是零，而一条卡死的命令与一条在跑的看起来完全一样
-                if (appendRunningTool(out, inflight, insideAssistantBlock, toolArgumentsExpanded, width)) {
+                if (appendRunningTool(out, inflight, insideAssistantBlock, toolArgumentsExpanded,
+                        hintOf(hints, inflight.getRunningToolName()), width)) {
                     return;
                 }
                 // 没有可显示增量时给一个「还在干活」的信号，否则屏幕看起来像卡死了
@@ -785,11 +856,13 @@ public final class TranscriptProjector {
      * @param inflight 暂存区快照
      * @param insideAssistantBlock 是否已在助手块内
      * @param expanded 是否展开工具参数
+     * @param hint     该工具的渲染提示，可为 {@code null}
      * @param width    可用列数
      * @return 是否产出了内容
      */
     private static boolean appendRunningTool(List<VisualLine> out, InflightTurn.Snapshot inflight,
-                                             boolean insideAssistantBlock, boolean expanded, int width) {
+                                             boolean insideAssistantBlock, boolean expanded,
+                                             ToolRenderHint hint, int width) {
         String toolName = inflight.getRunningToolName();
         List<String> lines = inflight.getToolOutputLines();
         if (toolName == null && lines.isEmpty()) {
@@ -800,13 +873,17 @@ public final class TranscriptProjector {
             out.add(VisualLine.of(new StyledSegment(ASSISTANT_HEADER, ASSISTANT_HEADER_STYLE)));
         }
         String label = toolName == null || toolName.isEmpty() ? "工具" : toolName;
+        // 与完成后的轨迹行同一份提示：否则「跑的时候一个样、跑完变另一个样」无法解释
+        Style traceStyle = hintStyle(hint);
         List<StyledSegment> body = new ArrayList<StyledSegment>();
-        body.addAll(wrapBody(label, TRACE_STYLE));
+        body.addAll(wrapBody(label, traceStyle));
         // 参数与完成后的轨迹行同一形态、同一上限：运行期与落库后看到的文本一致，
         // 不会出现「跑的时候看得到、跑完就变了」这种无法解释的跳变。
         // 工具一返回这里就被会话投影出的正式轨迹与结果取代，所以它不标「已截断」。
-        body.addAll(wrapBody(argumentSuffix(runningArguments(inflight)), TRACE_STYLE));
-        appendTraceLine(out, body, expanded, width);
+        if (showsArguments(hint, expanded)) {
+            body.addAll(wrapBody(argumentSuffix(runningArguments(inflight)), TRACE_STYLE));
+        }
+        appendTraceLine(out, body, expandedFor(hint, expanded), width);
         for (String line : lines) {
             // 控制字符必须在显示边界上滤掉：命令输出里的一个 ESC 序列能改写屏幕。
             // 与 MarkdownRenderer / ApprovalPrompt 同一处理位置

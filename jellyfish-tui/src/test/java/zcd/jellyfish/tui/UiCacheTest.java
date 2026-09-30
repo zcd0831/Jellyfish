@@ -10,6 +10,7 @@ import zcd.jellyfish.api.extension.StatusLineContributionRequest;
 import zcd.jellyfish.infra.event.EventChannel;
 import zcd.jellyfish.infra.event.EventChannelOptions;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
+import zcd.jellyfish.infra.plugin.RuntimeInfoHolder;
 import zcd.jellyfish.infra.registry.TypeRegistry;
 import zcd.jellyfish.infra.ui.UiContributions;
 import zcd.jellyfish.infra.ui.UiSnapshot;
@@ -59,7 +60,7 @@ class UiCacheTest {
         registry = new TypeRegistry();
         extensions = new ExtensionRegistry(registry);
         events = new EventChannel(EventChannelOptions.defaults(), registry);
-        contributions = new UiContributions(extensions, events, "tui");
+        contributions = new UiContributions(extensions, events, new RuntimeInfoHolder(), "tui");
         cache = new UiCache(contributions);
         collects = new AtomicInteger();
         extensions.contribute("probe", StatusLineContributionRequest.class, null,

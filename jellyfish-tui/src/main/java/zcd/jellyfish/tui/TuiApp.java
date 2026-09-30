@@ -40,6 +40,7 @@ import zcd.jellyfish.infra.session.SessionDefaults;
 import zcd.jellyfish.infra.session.SessionManager;
 import zcd.jellyfish.infra.session.SessionMessage;
 import zcd.jellyfish.infra.ui.OwnedPanel;
+import zcd.jellyfish.infra.ui.OwnedShortcut;
 import zcd.jellyfish.infra.ui.UiContributions;
 import zcd.jellyfish.infra.ui.UiSnapshot;
 
@@ -47,10 +48,12 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * TUI 外壳：交互式终端界面的组装与事件循环。
@@ -163,6 +166,12 @@ public final class TuiApp extends ToolkitApp {
 
     /** 插件 UI 贡献的帧间缓存：只在失效时收集，空闲时零调用。 */
     private final UiCache uiCache;
+
+    /** 当前生效的插件键位表，由 {@link #pluginShortcuts()} 在绑定列表换实例时重建。 */
+    private PluginShortcuts pluginShortcuts = PluginShortcuts.NONE;
+
+    /** 上次仲裁用的绑定列表，按实例比对（见 {@link #pluginShortcuts()}）。 */
+    private List<OwnedShortcut> lastShortcutBindings = Collections.emptyList();
 
     /** 命令补全状态：只由渲染线程读写。 */
     private final CommandCompletion completion = new CommandCompletion();
@@ -409,7 +418,7 @@ public final class TuiApp extends ToolkitApp {
                 ChatShell.overlayRows(overlay), panels);
 
         ChatState.View view = chatState.view(sessionId, messages, layout.getMessageWidth(),
-                layout.getMessageRows(), TranscriptProjector.DEFAULT_MAX_MESSAGES);
+                layout.getMessageRows(), TranscriptProjector.DEFAULT_MAX_MESSAGES, uiCache.hints());
 
         String status = StatusBarView.render(statusInfoOf(session, contextTokensOf(messages)));
         // 压缩状态是「正在进行 / 已经压过一部分」的事实，模型与屏幕的差异必须有个出口
@@ -874,9 +883,77 @@ public final class TuiApp extends ToolkitApp {
      * @param text 命令原文
      */
     private void executeUi(String text) {
-        UiCommand.Result result = UiCommand.execute(text, uiPlacement, currentPanels());
+        UiCommand.Result result = UiCommand.execute(text, uiPlacement, currentPanels(),
+                pluginShortcuts().getCandidates());
         chatState.appendNotice(text, result.getText(),
                 result.isError() ? ShellNotice.Kind.ERROR : ShellNotice.Kind.INFO);
+    }
+
+    /**
+     * 取插件键位表，必要时重新仲裁。
+     * <p>
+     * <b>懒解析而不是每帧解析</b>：它只被按键与 {@code /ui} 用到，而这两件事都很稀疏；
+     * 每帧算一次会把一张随插件数增长的表白白重建 26 次/秒。触发重算的判据是
+     * 「{@code UiCache} 给的绑定列表换了实例」——那正代表插件内容可能变了。
+     *
+     * @return 键位表，保证非 {@code null}
+     */
+    private PluginShortcuts pluginShortcuts() {
+        List<OwnedShortcut> bindings = uiCache.shortcutBindings();
+        if (bindings != lastShortcutBindings) {
+            PluginShortcuts resolved = PluginShortcuts.resolve(bindings, commandNames());
+            if (!resolved.isEmpty() || !resolved.getCandidates().isEmpty()) {
+                LOG.info("插件键位表已重建：{}", describeShortcuts(resolved));
+            }
+            pluginShortcuts = resolved;
+            lastShortcutBindings = bindings;
+        }
+        return pluginShortcuts;
+    }
+
+    /**
+     * 执行一条插件快捷键：把它当作用户敲了那条 {@code /命令}。
+     * <p>
+     * <b>不直接回调插件</b>：这样插件不需要「被内核回调」这个新能力，而命令域已有的审计、
+     * {@code sessionRequired} 判定与错误处理全部复用，快捷键的可发现性也顺带解决
+     * （{@code /help} 里本来就有这条命令）。
+     *
+     * @param commandName 命令名（不含前缀斜杠）
+     */
+    private void runShortcut(String commandName) {
+        String text = CommandManager.COMMAND_PREFIX + commandName;
+        // 回显：屏幕上看得到「这个键干了什么」，否则一次改动了状态的快捷键会显得像自己发生的
+        chatState.appendNotice(text, "快捷键 " + text, ShellNotice.Kind.INFO);
+        executeCommand(text, currentSessionIdOrNull());
+    }
+
+    /**
+     * 取当前可用的命令名（含别名），供键位表校验「目标命令在不在」。
+     *
+     * @return 命令名集合，保证非 {@code null}
+     */
+    private Set<String> commandNames() {
+        Set<String> names = new LinkedHashSet<String>();
+        try {
+            for (CommandInfo info : commands.commands()) {
+                names.add(info.getName());
+                names.addAll(info.getAliases());
+            }
+        } catch (RuntimeException e) {
+            LOG.warn("读取命令清单失败，插件键位本次全部失效：{}", e.getMessage());
+        }
+        return names;
+    }
+
+    /**
+     * 拼出键位表的日志描述。
+     *
+     * @param shortcuts 键位表
+     * @return 描述文本
+     */
+    private static String describeShortcuts(PluginShortcuts shortcuts) {
+        return shortcuts.getCommands() + (shortcuts.getCandidates().isEmpty()
+                ? "" : "；未生效：" + shortcuts.getCandidates());
     }
 
     /**
@@ -1243,6 +1320,13 @@ public final class TuiApp extends ToolkitApp {
                     || action == InputAction.COMPLETE_NEXT
                     || action == InputAction.COMPLETE_ACCEPT) {
                 return handleCompletion(action);
+            }
+            // 插件键位排在模态之后、外壳键位之前：模态要吞掉一切（否则审批浮层里的按键会跑去执行命令），
+            // 而插件键位不可能与外壳保留键位重叠——内核在收集时就把那五个拒掉了
+            String pluginCommand = pluginShortcuts().commandOf(InputKeyMapper.shortcutKeyOf(key));
+            if (pluginCommand != null) {
+                runShortcut(pluginCommand);
+                return EventResult.HANDLED;
             }
             if (applyScroll(action)) {
                 return EventResult.HANDLED;

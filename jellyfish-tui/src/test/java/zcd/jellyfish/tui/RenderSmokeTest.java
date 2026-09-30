@@ -9,6 +9,7 @@ import dev.tamboui.toolkit.event.EventResult;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import zcd.jellyfish.api.extension.ToolRenderHint;
 import zcd.jellyfish.infra.llm.LlmMessage;
 import zcd.jellyfish.infra.session.SessionMessage;
 import zcd.jellyfish.tui.text.DisplayWidth;
@@ -17,6 +18,7 @@ import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -151,7 +153,8 @@ class RenderSmokeTest {
         List<SessionMessage> messages = sessionOf(answer.toString());
         ChatLayout layout = layout();
         ChatState.View view = state.view("s-1", messages, layout.getMessageWidth(),
-                layout.getMessageRows(), TranscriptProjector.DEFAULT_MAX_MESSAGES);
+                layout.getMessageRows(), TranscriptProjector.DEFAULT_MAX_MESSAGES,
+                Collections.<String, ToolRenderHint>emptyMap());
 
         // Then：投影行数比消息区高，因此窗口被切成尾部片段
         assertTrue(state.getTotalRows() > layout.getMessageRows(),
@@ -188,7 +191,8 @@ class RenderSmokeTest {
                 ChatShell.overlayRows(null), Collections.emptyMap());
         ChatState state = new ChatState();
         ChatState.View view = state.view("s-1", messages, layout.getMessageWidth(),
-                layout.getMessageRows(), TranscriptProjector.DEFAULT_MAX_MESSAGES);
+                layout.getMessageRows(), TranscriptProjector.DEFAULT_MAX_MESSAGES,
+                Collections.<String, ToolRenderHint>emptyMap());
         return paint(view, layout, "s-1", messages, width);
     }
 

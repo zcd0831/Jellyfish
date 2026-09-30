@@ -8,16 +8,27 @@ import zcd.jellyfish.api.event.notification.PluginStateChangedEvent;
 import zcd.jellyfish.api.event.notification.UiInvalidatedEvent;
 import zcd.jellyfish.api.extension.PanelContribution;
 import zcd.jellyfish.api.extension.PanelContributionRequest;
+import zcd.jellyfish.api.extension.ShortcutBinding;
+import zcd.jellyfish.api.extension.ShortcutContribution;
+import zcd.jellyfish.api.extension.ShortcutContributionRequest;
 import zcd.jellyfish.api.extension.StatusLineContribution;
 import zcd.jellyfish.api.extension.StatusLineContributionRequest;
+import zcd.jellyfish.api.extension.ToolCallRequest;
+import zcd.jellyfish.api.extension.ToolDescriptor;
+import zcd.jellyfish.api.extension.ToolRenderHint;
+import zcd.jellyfish.api.extension.ToolRenderHintRequest;
 import zcd.jellyfish.infra.event.EventChannel;
+import zcd.jellyfish.infra.extension.DescriptorBinding;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.extension.HandlerBinding;
+import zcd.jellyfish.infra.plugin.RuntimeInfoHolder;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
@@ -58,6 +69,9 @@ public final class UiContributions implements AutoCloseable {
     /** 订阅来源标识（外壳名，如 {@code tui}），用于反注册与告警归因。 */
     private final String owner;
 
+    /** 运行时信息持有者：渲染提示与快捷键请求都要带上外壳种类。 */
+    private final RuntimeInfoHolder runtimeInfo;
+
     /** 本类建立的订阅，{@link #close()} 时逐个解除。 */
     private final List<Subscription> subscriptions = new ArrayList<Subscription>();
 
@@ -67,14 +81,17 @@ public final class UiContributions implements AutoCloseable {
     /**
      * 构造 UI 贡献门面。
      *
-     * @param extensions 同步扩展点策略，不可为 {@code null}
-     * @param events     事件通道，不可为 {@code null}
-     * @param owner      订阅来源标识（外壳名），不可为空白
+     * @param extensions  同步扩展点策略，不可为 {@code null}
+     * @param events      事件通道，不可为 {@code null}
+     * @param runtimeInfo 运行时信息持有者，不可为 {@code null}
+     * @param owner       订阅来源标识（外壳名），不可为空白
      * @throws JellyfishException 来源标识为空白时抛出
      */
-    public UiContributions(ExtensionRegistry extensions, EventChannel events, String owner) {
+    public UiContributions(ExtensionRegistry extensions, EventChannel events, RuntimeInfoHolder runtimeInfo,
+                           String owner) {
         this.extensions = Objects.requireNonNull(extensions, "extensions must not be null");
         this.events = Objects.requireNonNull(events, "events must not be null");
+        this.runtimeInfo = Objects.requireNonNull(runtimeInfo, "runtimeInfo must not be null");
         if (owner == null || owner.trim().isEmpty()) {
             throw new JellyfishException("ui contributions owner must not be blank");
         }
@@ -97,6 +114,91 @@ public final class UiContributions implements AutoCloseable {
         } finally {
             collecting = false;
         }
+    }
+
+    /**
+     * 收集工具行渲染提示，按工具名索引。
+     * <p>
+     * <b>路由键是工具名</b>，因此同一屏里同一工具出现多少次只需要问到一次。只保留真正表了态的提示
+     * （三项都不表态的不进表），外壳因此可以把「表里没有」与「有条但不表态」当成同一件事。
+     * <p>
+     * <b>只问已注册的工具</b>：注册表里没有的工具连描述符都没有，插件也就无从判定。
+     *
+     * @return 工具名 → 提示；无贡献时为空映射而非 {@code null}
+     */
+    public Map<String, ToolRenderHint> toolRenderHints() {
+        Map<String, ToolRenderHint> hints = new LinkedHashMap<String, ToolRenderHint>();
+        for (DescriptorBinding<ToolDescriptor> binding
+                : extensions.descriptorBindings(ToolCallRequest.class, ToolDescriptor.class)) {
+            ToolDescriptor descriptor = binding.getDescriptor();
+            if (descriptor == null || descriptor.getName() == null
+                    || extensions.handlers(ToolRenderHintRequest.class, descriptor.getName()).isEmpty()) {
+                continue;
+            }
+            ToolRenderHint hint = hintOf(descriptor);
+            if (hint != null && !hint.isEmpty()) {
+                hints.put(descriptor.getName(), hint);
+            }
+        }
+        return Collections.unmodifiableMap(hints);
+    }
+
+    /**
+     * 取一个已注册工具的渲染提示。
+     *
+     * @param descriptor 工具描述符
+     * @return 提示；处理失败时返回 {@code null}（按缺省渲染）
+     */
+    private ToolRenderHint hintOf(ToolDescriptor descriptor) {
+        try {
+            return extensions.invoke(
+                    extensions.handler(ToolRenderHintRequest.class, descriptor.getName()),
+                    new ToolRenderHintRequest(descriptor.getName(), descriptor, runtimeInfo.snapshot()));
+        } catch (RuntimeException e) {
+            LOG.warn("工具 {} 的渲染提示失败，本行按缺省渲染：{}", descriptor.getName(), e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * 收集快捷键贡献，按 {@code order} 升序。
+     * <p>
+     * <b>仲裁不在这里</b>：这里只按 {@code order} 交出全部声明，谁生效由外壳按「先到者胜」决定
+     * ——与面板同一口径（面板的落位也归外壳，因为它还要考虑用户的 {@code /ui} 选择）。
+     * <p>
+     * <b>内核保留键位在这里就拒掉</b>（只记 WARN，不让插件启动失败）：那五个键的预期已经完全固定，
+     * 让插件占走会把最基本的操作变成需要学习的东西；而拒绝一条键位不该把整个插件判为不可用。
+     *
+     * @return 带来源的绑定列表（{@code order} 升序），无贡献时为空列表
+     */
+    public List<OwnedShortcut> shortcuts() {
+        List<HandlerBinding<ShortcutContributionRequest, ShortcutContribution>> bindings =
+                extensions.bindings(ShortcutContributionRequest.class, null);
+        if (bindings.isEmpty()) {
+            return Collections.emptyList();
+        }
+        ShortcutContributionRequest request = new ShortcutContributionRequest(runtimeInfo.snapshot());
+        List<OwnedShortcut> result = new ArrayList<OwnedShortcut>();
+        for (HandlerBinding<ShortcutContributionRequest, ShortcutContribution> binding : bindings) {
+            ShortcutContribution contribution;
+            try {
+                contribution = extensions.invoke(binding.getHandler(), request);
+            } catch (RuntimeException e) {
+                LOG.warn("插件 {} 的快捷键贡献失败，本次跳过：{}", binding.getOwner(), e.getMessage());
+                continue;
+            }
+            if (contribution == null || contribution.isEmpty()) {
+                continue;
+            }
+            for (ShortcutBinding shortcut : contribution.getBindings()) {
+                if (ShortcutBinding.isReserved(shortcut.getKey())) {
+                    LOG.warn("插件 {} 试图占用内核保留键位 {}，已拒绝", binding.getOwner(), shortcut.getKey());
+                    continue;
+                }
+                result.add(new OwnedShortcut(binding.getOwner(), shortcut));
+            }
+        }
+        return Collections.unmodifiableList(result);
     }
 
     /**

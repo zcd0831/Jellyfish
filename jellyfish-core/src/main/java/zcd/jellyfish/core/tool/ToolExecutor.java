@@ -13,10 +13,15 @@ import zcd.jellyfish.api.extension.ExtensionException;
 import zcd.jellyfish.api.extension.ExtensionHandler;
 import zcd.jellyfish.api.extension.PermissionCheckRequest;
 import zcd.jellyfish.api.extension.PermissionDecision;
+import zcd.jellyfish.api.extension.PermissionMode;
+import zcd.jellyfish.api.extension.ToolArgumentDecision;
+import zcd.jellyfish.api.extension.ToolArgumentPreRequest;
 import zcd.jellyfish.api.extension.ToolCallRequest;
 import zcd.jellyfish.api.extension.ToolCallResult;
 import zcd.jellyfish.api.extension.ToolMetadata;
 import zcd.jellyfish.api.extension.ToolOutputSink;
+import zcd.jellyfish.api.extension.ToolResultAdjustment;
+import zcd.jellyfish.api.extension.ToolResultPostRequest;
 import zcd.jellyfish.core.ReActListener;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.permission.PermissionManager;
@@ -28,6 +33,7 @@ import javax.inject.Inject;
 import javax.inject.Singleton;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
@@ -47,6 +53,12 @@ import java.util.Objects;
  * <b>异常不逃逸</b>：工具抛错、权限拒绝、未知工具一律转成 {@link ToolCallResult} 的文本，
  * 让调用方（模型或上下文）能看见失败原因并自适应；只有编程错误（例如参数解析用了非法 JSON）才抛，
  * 但那同样会被本类接住并转成结果文本。
+ * <p>
+ * <b>七步顺序是一条不可重排的链</b>（详见 {@code docs/constraints/tools-output.md}）：
+ * 参数解析 → <b>参数改写</b> → 权限判定 → 路由与调用 → <b>结果整形</b> → 截断与落盘 → 落会话与通知。
+ * 两个「改写点」的位置各有硬理由：参数改写<b>必须在权限判定之前</b>（否则审批看到的参数与执行的参数
+ * 不是同一份），结果整形<b>必须在截断之前</b>（否则信封与落盘文件永久分叉）。两者在无插件时
+ * 都退化成空操作，行为与引入之前逐字段一致。
  *
  * @author zcd
  */
@@ -90,6 +102,8 @@ public class ToolExecutor {
      * <p>
      * 供 ReAct 循环使用：模型返回的工具调用参数是 JSON 串，这里解析后再走同一条执行路径。
      * 解析失败也转成结果文本（模型能看懂并改正），与工具自身抛错的处置一致。
+     * <p>
+     * 本重载声明的发起方是 {@link ToolArgumentPreRequest.Source#MODEL}。
      *
      * @param session       会话运行态，不可为 {@code null}
      * @param cancellation  取消令牌，可为 {@code null}（按 {@link CancellationToken#NONE} 处理）
@@ -110,13 +124,16 @@ public class ToolExecutor {
             LOG.warn("工具参数解析失败: sessionId={} tool={}", session.getSessionId(), toolName, e);
             return new ToolCallResult(toolName, failureText(null, e));
         }
-        return execute(session, cancellation, toolCallId, toolName, arguments, listener);
+        return execute(session, cancellation, toolCallId, toolName, arguments, listener,
+                ToolArgumentPreRequest.Source.MODEL);
     }
 
     /**
      * 执行一次工具调用，参数已是映射。
      * <p>
      * 供输入指令使用：插件声明的是结构化参数，不需要再过一遍 JSON。
+     * <p>
+     * 本重载声明的发起方是 {@link ToolArgumentPreRequest.Source#DIRECTIVE}。
      *
      * @param session      会话运行态，不可为 {@code null}
      * @param cancellation 取消令牌，可为 {@code null}（按 {@link CancellationToken#NONE} 处理）
@@ -129,11 +146,45 @@ public class ToolExecutor {
     public ToolCallResult execute(Session session, CancellationToken cancellation,
                                   String toolCallId, String toolName, Map<String, Object> arguments,
                                   ReActListener listener) {
+        return execute(session, cancellation, toolCallId, toolName, arguments, listener,
+                ToolArgumentPreRequest.Source.DIRECTIVE);
+    }
+
+    /**
+     * 执行一次工具调用：参数已是映射，并显式声明发起方。
+     * <p>
+     * 两个公开重载只是填好 {@code source} 后走这一条路径，执行语义只有一份。
+     *
+     * @param session      会话运行态，不可为 {@code null}
+     * @param cancellation 取消令牌，可为 {@code null}（按 {@link CancellationToken#NONE} 处理）
+     * @param toolCallId   工具调用标识，不可为空白
+     * @param toolName     工具名，不可为空白
+     * @param arguments    工具参数，可为 {@code null}（等价空参数）
+     * @param listener     流式回调，可为 {@code null}（等价 {@link ReActListener#NOOP}）
+     * @param source       发起方，不可为 {@code null}
+     * @return 工具结果，保证非 {@code null}
+     */
+    private ToolCallResult execute(Session session, CancellationToken cancellation, String toolCallId,
+                                   String toolName, Map<String, Object> arguments, ReActListener listener,
+                                   ToolArgumentPreRequest.Source source) {
         Objects.requireNonNull(session, "session must not be null");
         ReActListener effective = listener == null ? ReActListener.NOOP : listener;
         String sessionId = session.getSessionId();
+        String agentId = session.getAgentId();
+        PermissionMode mode = session.getPermissionMode();
+        // 第 2 步：参数改写。本类里最不能挪的一处位置，两个理由：
+        //   · 必须在权限判定之前，否则审批浮层显示参数 A、真正执行参数 B（TOCTOU）；
+        //   · 必须在 onToolCallStarted 之前，否则轨迹行与 --show-tool-args 打出来的是旧参数，
+        //     与审批记录、与会话里落库的 toolCalls 不是同一份（四个显示面共用一份文本是既有纪律）
+        ToolArgumentDecision decision = transformArguments(agentId, toolName, arguments, mode, source, sessionId);
+        Map<String, Object> effectiveArguments = decision.isReplace() ? decision.getArguments() : arguments;
         events.publish(new ToolCallStartedEvent(toolCallId, toolName, sessionId));
-        effective.onToolCallStarted(toolCallId, toolName, arguments);
+        effective.onToolCallStarted(toolCallId, toolName, effectiveArguments);
+        if (decision.isDenied()) {
+            // 与「权限拒绝」同形：不建捕获通道、不调用工具，但照旧发齐「开始 + 结束」两个埋点，
+            // 让外壳与指标看到的是一次配对的失败调用，而不是一条只有结果的孤儿记录
+            return rejected(session, toolCallId, toolName, decision.getReason(), effective);
+        }
         long start = System.currentTimeMillis();
         // 捕获通道与取消令牌都随请求交给工具：无界输出的工具（命令行）靠前者不必物化整份输出，
         // 靠后者才能在用户按下 Esc 时被打断——同步派发不会中断正在执行的工具。
@@ -143,7 +194,7 @@ public class ToolExecutor {
         ToolCallResult invoked;
         boolean success = true;
         try {
-            invoked = invokeTool(session, cancellation, toolCallId, toolName, arguments, sink);
+            invoked = invokeTool(session, cancellation, toolCallId, toolName, effectiveArguments, sink);
         } catch (RuntimeException e) {
             // 同步侧没有护栏，异常处置是调用点（这里）的责任：记失败、回灌、继续循环。
             // 失败原因进元数据：success 不落会话，只有元数据才能在重投影 / -resume 之后仍显示标记
@@ -160,16 +211,161 @@ public class ToolExecutor {
             // 让下面那条「文本 + 元数据」的统一处理不必到处判空
             invoked = new ToolCallResult(toolName, null);
         }
-        // 截断与落盘只在这里做一次：回灌给模型、写入会话、通知外壳看到的必须是同一份文本，
-        // 否则会出现「界面显示全文、模型收到信封」这种无法排查的不一致
+        // 第 5 步：结果整形，必须在截断之前。截断之后回来改文本会产出「信封说截断了、正文却完整」的
+        // 自相矛盾结果；而落盘文件是截断那一步写的，后置变换够不到它，改晚了就是永久分叉。
+        // output 保持原始类型（String 或 Map/List）：截断要知道类型才能选对算法
         Object raw = invoked.getOutput();
-        String output = outputLimiter.limit(sessionId, toolCallId, toolName, raw);
+        ToolResultAdjustment adjustment = adjustResult(agentId, toolName, effectiveArguments, raw,
+                invoked.getMetadata(), ToolMetadata.failed(invoked.getMetadata()), sessionId);
+        Object adjusted = adjustment.hasOutput() ? adjustment.getOutput() : raw;
+        Map<String, Object> metadata = adjustment.hasMetadata() ? adjustment.getMetadata() : invoked.getMetadata();
+        // 第 6 步：截断与落盘只在这里做一次：回灌给模型、写入会话、通知外壳看到的必须是同一份文本，
+        // 否则会出现「界面显示全文、模型收到信封」这种无法排查的不一致
+        String output = outputLimiter.limit(sessionId, toolCallId, toolName, adjusted);
         long duration = System.currentTimeMillis() - start;
         events.publish(new ToolCallCompletedEvent(toolCallId, toolName, success, duration,
                 success ? null : output, sessionId));
         // 元数据不受截断影响：它描述的是「命令成没成」，与回灌文本被截成什么样无关
-        effective.onToolCallCompleted(toolCallId, toolName, success, output, invoked.getMetadata());
-        return new ToolCallResult(toolName, output, invoked.getMetadata());
+        effective.onToolCallCompleted(toolCallId, toolName, success, output, metadata);
+        return new ToolCallResult(toolName, output, metadata);
+    }
+
+    /**
+     * 跑一遍参数改写链，返回最终裁定。
+     * <p>
+     * <b>链式语义</b>（写在调用点的 {@code for} 循环里，注册表不参与）：每个处理器收到<b>上一个
+     * 处理器产出的</b>参数（首个收到原始参数）；{@code ABSTAIN} 保持当前值继续；{@code REPLACE}
+     * 替换当前值继续；{@code DENY} 立即短路。
+     * <p>
+     * <b>失败语义是 {@code ABSTAIN}</b>：异常隔离是调用点的责任（同步派发没有护栏），
+     * 而插件坏掉时既不该放行也不该崩溃——与 {@code PermissionManager} 对插件拦截的处置同口径。
+     * <p>
+     * <b>无插件时返回 {@code ABSTAIN} 且不构造任何请求对象</b>：这是「装了插件与没装插件行为一致」
+     * 的落点，调用方据此原样沿用传进来的参数。
+     *
+     * @param agentId   发起调用的 agentId，可为 {@code null}
+     * @param toolName  工具名
+     * @param arguments 当前参数，可为 {@code null}
+     * @param mode      权限模式
+     * @param source    发起方
+     * @param sessionId 会话标识
+     * @return 最终裁定；链上没有可用的处理器时为 {@link ToolArgumentDecision#abstain()}
+     */
+    private ToolArgumentDecision transformArguments(String agentId, String toolName, Map<String, Object> arguments,
+                                                    PermissionMode mode, ToolArgumentPreRequest.Source source,
+                                                    String sessionId) {
+        List<ExtensionHandler<ToolArgumentPreRequest, ToolArgumentDecision>> handlers =
+                extensions.handlers(ToolArgumentPreRequest.class, null);
+        if (handlers.isEmpty()) {
+            return ToolArgumentDecision.abstain();
+        }
+        Map<String, Object> current = arguments;
+        boolean replaced = false;
+        for (ExtensionHandler<ToolArgumentPreRequest, ToolArgumentDecision> handler : handlers) {
+            ToolArgumentDecision decision;
+            try {
+                decision = extensions.invoke(handler, new ToolArgumentPreRequest(agentId, toolName, current,
+                        mode, source, sessionId));
+            } catch (RuntimeException e) {
+                LOG.warn("参数改写处理器抛错，按不改处理: sessionId={} tool={}", sessionId, toolName, e);
+                continue;
+            }
+            if (decision == null) {
+                continue;
+            }
+            if (decision.isDenied()) {
+                return decision;
+            }
+            if (decision.isReplace()) {
+                current = decision.getArguments();
+                replaced = true;
+            }
+        }
+        return replaced ? ToolArgumentDecision.replace(current) : ToolArgumentDecision.abstain();
+    }
+
+    /**
+     * 跑一遍结果整形链，返回累计后的裁定。
+     * <p>
+     * <b>与参数改写链的一处差别</b>：后者的「当前值」是整份参数（替换即整体换掉），
+     * 而这里要分别累计 {@code output} 与 {@code metadata} 两个字段——一个处理器只改元数据时，
+     * 它的前一个处理器改过的输出必须仍然生效。
+     * <p>
+     * <b>失败语义是 {@code ABSTAIN}</b>，理由同 {@link #transformArguments}。
+     *
+     * @param agentId   发起调用的 agentId，可为 {@code null}
+     * @param toolName  工具名
+     * @param arguments 实际使用的参数，可为 {@code null}
+     * @param output    工具产出的原始结果，可为 {@code null}
+     * @param metadata  结构化元数据，可为 {@code null}
+     * @param failed    本次调用是否值得警示
+     * @param sessionId 会话标识
+     * @return 累计裁定；链上没有改动时为 {@link ToolResultAdjustment#abstain()}
+     */
+    private ToolResultAdjustment adjustResult(String agentId, String toolName, Map<String, Object> arguments,
+                                              Object output, Map<String, Object> metadata, boolean failed,
+                                              String sessionId) {
+        List<ExtensionHandler<ToolResultPostRequest, ToolResultAdjustment>> handlers =
+                extensions.handlers(ToolResultPostRequest.class, null);
+        if (handlers.isEmpty()) {
+            return ToolResultAdjustment.abstain();
+        }
+        Object adjustedOutput = null;
+        Map<String, Object> adjustedMetadata = null;
+        for (ExtensionHandler<ToolResultPostRequest, ToolResultAdjustment> handler : handlers) {
+            ToolResultAdjustment adjustment;
+            try {
+                adjustment = extensions.invoke(handler, new ToolResultPostRequest(agentId, toolName, arguments,
+                        adjustedOutput == null ? output : adjustedOutput,
+                        adjustedMetadata == null ? metadata : adjustedMetadata, failed, sessionId));
+            } catch (RuntimeException e) {
+                LOG.warn("结果整形处理器抛错，按不改处理: sessionId={} tool={}", sessionId, toolName, e);
+                continue;
+            }
+            if (adjustment == null || adjustment.isAbstain()) {
+                continue;
+            }
+            if (adjustment.hasOutput()) {
+                adjustedOutput = adjustment.getOutput();
+            }
+            if (adjustment.hasMetadata()) {
+                adjustedMetadata = adjustment.getMetadata();
+            }
+        }
+        if (adjustedOutput == null && adjustedMetadata == null) {
+            return ToolResultAdjustment.abstain();
+        }
+        return ToolResultAdjustment.of(adjustedOutput, adjustedMetadata);
+    }
+
+    /**
+     * 组装「参数被插件拒绝」的结果，并发齐本次调用的两个埋点。
+     * <p>
+     * <b>元数据里写 {@code REJECTED} 而不是 {@code FAILED}</b>：两者对界面都是警示（{@code failed}
+     * 返回真），但对排查是两件事——{@code FAILED} 是「工具自己没成」，{@code REJECTED} 是
+     * 「工具压根没跑」。区分开来之后，「工具失败率」这类指标不必去解析文案。
+     * <p>
+     * <b>不进权限审计</b>：权限事件回答的是「权限系统放没放行」，而这里是「插件拒了这条参数」，
+     * 合进同一个事件会让权限计数失真。
+     *
+     * @param session  会话运行态，不可为 {@code null}
+     * @param toolCallId 工具调用标识
+     * @param toolName   工具名
+     * @param reason     拒绝理由，可为 {@code null}
+     * @param listener   流式回调，保证非 {@code null}
+     * @return 失败结果，保证非 {@code null}
+     */
+    private ToolCallResult rejected(Session session, String toolCallId, String toolName, String reason,
+                                    ReActListener listener) {
+        String sessionId = session.getSessionId();
+        String text = "插件拒绝参数：" + messageOf(reason);
+        String output = outputLimiter.limit(sessionId, toolCallId, toolName, text);
+        Map<String, Object> metadata = new LinkedHashMap<String, Object>();
+        metadata.put(ToolMetadata.KEY_TERMINAL, ToolMetadata.TERMINAL_REJECTED);
+        Map<String, Object> immutable = Collections.unmodifiableMap(metadata);
+        events.publish(new ToolCallCompletedEvent(toolCallId, toolName, false, 0L, output, sessionId));
+        listener.onToolCallCompleted(toolCallId, toolName, false, output, immutable);
+        return new ToolCallResult(toolName, output, immutable);
     }
 
     /**
@@ -252,7 +448,7 @@ public class ToolExecutor {
     private static Map<String, Object> failureMetadata(RuntimeException error) {
         Map<String, Object> metadata = new LinkedHashMap<String, Object>();
         // 取值与 McpToolCaller 保持一致：这是对外约定的可见字符串，不自创词
-        metadata.put(ToolMetadata.KEY_TERMINAL, "FAILED");
+        metadata.put(ToolMetadata.KEY_TERMINAL, ToolMetadata.TERMINAL_FAILED);
         if (error instanceof JellyfishException) {
             String reason = firstLine(messageOf(error));
             if (!reason.isEmpty()) {

@@ -46,11 +46,34 @@ public final class ToolMetadata {
      * <p>
      * 内核在工具抛异常时也会补一个不等于 {@code COMPLETED} 的取值（{@code FAILED}），
      * 使 {@link #failed} 成为界面唯一的警示判据。
+     * <p>
+     * <b>取值集合不限于内核写入的那两个</b>：工具自定义的终止原因（如 {@code TIMEOUT}、
+     * {@code CANCELLED}）同样合法，只要不等于 {@code COMPLETED}。内核另会写入
+     * {@link #TERMINAL_REJECTED}（参数被插件拒绝），它与 {@code FAILED} 的差别不在警示与否
+     * （两者都警示），而在「工具压根没跑」与「工具自己没成」——区分开来之后，
+     * 失败率这类指标不必去解析文案。
      */
     public static final String KEY_TERMINAL = "terminal";
 
     /** 正常完成的取值。 */
     public static final String TERMINAL_COMPLETED = "COMPLETED";
+
+    /**
+     * 工具抛异常终止的取值，由内核写入。
+     *
+     * @see #KEY_TERMINAL
+     */
+    public static final String TERMINAL_FAILED = "FAILED";
+
+    /**
+     * 参数被插件拒绝的取值，由内核写入。
+     * <p>
+     * 它表示<b>工具压根没有执行</b>：参数改写链上的某个插件在权限判定之前拦下了这次调用。
+     * 与 {@link #TERMINAL_FAILED} 一样让 {@link #failed} 返回真，但语义不同。
+     *
+     * @see #KEY_TERMINAL
+     */
+    public static final String TERMINAL_REJECTED = "REJECTED";
 
     /**
      * 单行摘要键，值为字符串。
@@ -85,8 +108,11 @@ public final class ToolMetadata {
      * 放在这里而不是各界面各写一遍，否则「超时算不算失败」迟早会有两种答案。
      * <p>
      * <b>它也是「工具调用抛异常」的判据</b>：异常路径同样会补 {@link #KEY_TERMINAL}（取值
-     * {@code FAILED}），界面因此不必再读 {@code success}——文件读不到、{@code grep} 没找到、
+     * {@link #TERMINAL_FAILED}），界面因此不必再读 {@code success}——文件读不到、{@code grep} 没找到、
      * 测试没通过都表现为同一条警示，且重投影 / 重启后仍然存在。
+     * <p>
+     * <b>它不是「工具已经执行过」的判据</b>：参数被插件拒绝（{@link #TERMINAL_REJECTED}）同样返回真，
+     * 而那是「工具压根没跑」。需要区分时读 {@code terminal} 的具体取值，不要在这里加第二套判据。
      * <p>
      * 宽容处理坏数据：值不是数字、不是字符串等情形一律当作「无此信息」而不是抛异常。
      * 元数据是工具写的旁路信息，它写坏了不该炸掉一次渲染。

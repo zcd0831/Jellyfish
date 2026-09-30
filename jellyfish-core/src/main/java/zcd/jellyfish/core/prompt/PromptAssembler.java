@@ -5,6 +5,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import zcd.jellyfish.api.extension.PromptContribution;
 import zcd.jellyfish.api.extension.PromptContributionRequest;
+import zcd.jellyfish.api.extension.PromptPlacement;
+import zcd.jellyfish.api.extension.TurnContext;
+import zcd.jellyfish.api.extension.TurnContextRequest;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.config.ReactSettings;
 import zcd.jellyfish.infra.config.RuntimeConfig;
@@ -284,10 +287,14 @@ public class PromptAssembler {
     }
 
     /**
-     * 询问各插件本轮要贡献的上下文，按注册顺序拼接。
+     * 询问各插件本轮要贡献的上下文，按「分层 → 注册顺序」拼接。
      * <p>
      * <b>单个处理器失败只记告警并跳过</b>：贡献是「锦上添花」的上下文，一个坏插件不该让整个对话
      * 发不出去——这与「工具失败转成 tool 结果」是同一种取舍，只有模型调用本身失败才上抛。
+     * <p>
+     * <b>先按分层再按注册顺序</b>：注册表给的顺序是 {@code order} 升序 + 注册顺序，
+     * 在这里再按 {@link PromptPlacement} 分道——因为缓存是前缀匹配，块放在第几位直接决定了
+     * 「它一变要作废多少内容」。同一分层内保持注册表的顺序（{@code order} 是同一层内的显式序）。
      *
      * @param session 会话运行态
      * @return 拼接后的贡献文本；无人贡献时返回 {@code null}
@@ -301,33 +308,97 @@ public class PromptAssembler {
         // 同一个请求对象复用给全部处理器：载荷只有 sessionId，处理器只读
         PromptContributionRequest request = new PromptContributionRequest(session.getSessionId());
         StringBuilder text = new StringBuilder();
-        for (HandlerBinding<PromptContributionRequest, PromptContribution> binding : bindings) {
-            String fragment = fragmentOf(binding, request);
-            if (StringUtils.isBlank(fragment)) {
-                continue;
-            }
-            if (text.length() > 0) {
-                text.append(BLOCK_SEPARATOR);
-            }
-            text.append(fragment.trim());
+        // 按 values() 的声明顺序遍历：那份顺序就是「由稳定到易变」，也就是想要的拼接顺序
+        for (PromptPlacement placement : PromptPlacement.values()) {
+            appendPlacement(text, bindings, request, placement);
         }
         return text.length() == 0 ? null : text.toString();
     }
 
     /**
-     * 执行单个贡献处理器并取出文本。
+     * 追加某一分层的全部非空块，保持注册表给的顺序。
+     *
+     * @param text      目标缓冲
+     * @param bindings  全部贡献处理器（已按 {@code order} 升序）
+     * @param request   贡献请求
+     * @param placement 本道要取的分层
+     */
+    private void appendPlacement(StringBuilder text,
+                                 List<HandlerBinding<PromptContributionRequest, PromptContribution>> bindings,
+                                 PromptContributionRequest request, PromptPlacement placement) {
+        for (HandlerBinding<PromptContributionRequest, PromptContribution> binding : bindings) {
+            PromptContribution contribution = contributionOf(binding, request);
+            if (contribution == null || contribution.isEmpty() || contribution.getPlacement() != placement) {
+                continue;
+            }
+            appendBlock(text, contribution.getText());
+        }
+    }
+
+    /**
+     * 询问各插件「本轮有没有要随用户消息一起送达的即时状态」，按注册顺序拼接。
+     * <p>
+     * <b>与 {@link #contributionsOf} 的分工</b>：那个的产物进 system prompt，也就是缓存前缀的
+     * 第 0 个 token；本方法的产物由 {@code ReActLooper} 拼进<b>本轮用户消息</b>并随消息落盘，
+     * 因此是 append-only 的——它只影响本轮新产生的 token，对已经发送过的内容没有任何影响。
+     * 待办进度这类「会说变就变」的状态因此不该进 system prompt。
+     * <p>
+     * <b>失败口径与贡献块一致</b>：单个处理器抛错只记 WARN 跳过，不阻断对话。
+     *
+     * @param sessionId 会话标识，可为 {@code null}
+     * @param userInput 本轮用户输入原文，可为 {@code null}
+     * @param nested    是否嵌套回合
+     * @return 拼接后的回合上下文；无人应答时返回 {@code null}
+     */
+    public String turnContextOf(String sessionId, String userInput, boolean nested) {
+        List<HandlerBinding<TurnContextRequest, TurnContext>> bindings =
+                extensions.bindings(TurnContextRequest.class, null);
+        if (bindings.isEmpty()) {
+            return null;
+        }
+        // 同一个请求对象复用给全部处理器：载荷只有会话标识与输入原文，处理器只读
+        TurnContextRequest request = new TurnContextRequest(sessionId, userInput, nested);
+        StringBuilder text = new StringBuilder();
+        for (HandlerBinding<TurnContextRequest, TurnContext> binding : bindings) {
+            TurnContext context = turnContextOf(binding, request);
+            if (context == null || context.isEmpty()) {
+                continue;
+            }
+            appendBlock(text, context.getText());
+        }
+        return text.length() == 0 ? null : text.toString();
+    }
+
+    /**
+     * 执行单个贡献处理器并取出贡献。
      *
      * @param binding 处理器绑定（含 owner，供告警归因）
      * @param request 贡献请求
-     * @return 贡献文本；无贡献或处理失败时返回 {@code null}
+     * @return 贡献；无贡献或处理失败时返回 {@code null}
      */
-    private String fragmentOf(HandlerBinding<PromptContributionRequest, PromptContribution> binding,
-                              PromptContributionRequest request) {
+    private PromptContribution contributionOf(HandlerBinding<PromptContributionRequest, PromptContribution> binding,
+                                              PromptContributionRequest request) {
         try {
-            PromptContribution contribution = extensions.invoke(binding.getHandler(), request);
-            return contribution == null ? null : contribution.getText();
+            return extensions.invoke(binding.getHandler(), request);
         } catch (Exception e) {
             LOG.warn("提示词贡献处理器执行失败，已跳过: owner={} reason={}", binding.getOwner(), e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * 执行单个回合上下文处理器并取出结果。
+     *
+     * @param binding 处理器绑定（含 owner，供告警归因）
+     * @param request 回合上下文请求
+     * @return 结果；无内容或处理失败时返回 {@code null}
+     */
+    private TurnContext turnContextOf(HandlerBinding<TurnContextRequest, TurnContext> binding,
+                                      TurnContextRequest request) {
+        try {
+            return extensions.invoke(binding.getHandler(), request);
+        } catch (Exception e) {
+            LOG.warn("回合上下文处理器执行失败，已跳过: owner={} reason={}", binding.getOwner(), e.getMessage());
             return null;
         }
     }

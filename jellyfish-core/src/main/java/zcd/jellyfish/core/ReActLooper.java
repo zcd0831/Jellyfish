@@ -220,7 +220,7 @@ public class ReActLooper implements AutoCloseable {
                 throw e;
             }
             return runTurn(turn, session, userInput, listener,
-                    runtimeConfig.getReactSettings().getMaxRounds(), ToolFilter.none());
+                    runtimeConfig.getReactSettings().getMaxRounds(), ToolFilter.none(), false);
         } finally {
             // react 池线程会被复用：不关的话下一个回合会继承本回合的深度与计数
             runScopes.close();
@@ -260,7 +260,7 @@ public class ReActLooper implements AutoCloseable {
         ReActTurnImpl turn = ReActTurnImpl.inline(cancellationToken);
         scope.enter();
         try {
-            return runTurn(turn, session, prompt, effective, maxRounds, toolFilter);
+            return runTurn(turn, session, prompt, effective, maxRounds, toolFilter, true);
         } finally {
             scope.leave();
         }
@@ -282,14 +282,16 @@ public class ReActLooper implements AutoCloseable {
      * @param listener  监听器
      * @param maxRounds  最大循环轮数
      * @param toolFilter 工具清单过滤器
+     * @param nested     是否嵌套回合（子代理），传给回合上下文扩展点
      * @return 回合结果
      */
     private ReActResult runTurn(ReActTurnImpl turn, Session session, String userInput, ReActListener listener,
-                                int maxRounds, ToolFilter toolFilter) {
+                                int maxRounds, ToolFilter toolFilter, boolean nested) {
         String sessionId = session.getSessionId();
         sessionManager.beginTurn(sessionId);
         try {
-            sessionManager.appendMessage(sessionId, LlmMessage.user(userInput), null);
+            sessionManager.appendMessage(sessionId,
+                    LlmMessage.user(withTurnContext(session, userInput, nested)), null);
             return loop(turn, session, listener, maxRounds, toolFilter);
         } catch (JellyfishException e) {
             listener.onError(e);
@@ -540,6 +542,30 @@ public class ReActLooper implements AutoCloseable {
             return LlmMessage.assistant(response.getContent());
         }
         return LlmMessage.assistant(response.getContent(), toolCalls);
+    }
+
+    /**
+     * 把各插件本轮要送的即时状态拼到用户输入前面。
+     * <p>
+     * <b>为什么拼进本轮用户消息，而不是放进 system prompt 或插一条消息</b>：缓存是前缀匹配，
+     * system prompt 是第 0 个 token——待办进度这类「说变就变」的状态放进去，一次变化就要作废
+     * 整个请求；而插一条独立消息会让会话账本多出一条谁也没说过的话，屏幕投影与 {@code /resume}
+     * 跟着一起失真。拼进本轮用户消息是唯一两全的位置：它是 append-only 的，只影响本轮新产生的 token。
+     * <p>
+     * <b>没有上下文时原样返回</b>：绝大多数会话（没有这类插件）不该因为引入了这个扩展点而让
+     * 用户消息多出一个换行。
+     *
+     * @param session   会话运行态
+     * @param userInput 用户输入原文
+     * @param nested    是否嵌套回合
+     * @return 拼好上下文之后的输入；无人应答时原样返回
+     */
+    private String withTurnContext(Session session, String userInput, boolean nested) {
+        String context = promptAssembler.turnContextOf(session.getSessionId(), userInput, nested);
+        if (context == null) {
+            return userInput;
+        }
+        return context + "\n\n" + userInput;
     }
 
     /**

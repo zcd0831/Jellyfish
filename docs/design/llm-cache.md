@@ -334,10 +334,33 @@ LlmRequest.Builder builder = LlmRequest.builder(modelId)
 
 `react.toolOutput.keepRecentMessages: 0`（关闭老化）。详见 §5.4。
 
-#### P2 · system prompt 静态化（内核开点 + todo 插件迁移）
+#### P2a · system prompt 静态化（内核开点 + todo 插件迁移）——已落地
 
-收益最大的一步。内核新增「回合上下文」扩展点，让易变状态以 **append-only** 的方式进入会话；
-同时给 `PromptContribution` 增加 `placement`，把贡献分成三层并稳定排序。详见 §5.3。
+- **`PromptPlacement`**（`STATIC` / `SESSION` / `VOLATILE`）与 `PromptContribution.of(text, placement)`：
+  system prompt 改为按**稳定性**拼接而不是按注册顺序，同一层内保持 `order` 升序。
+  缺省分层是 `SESSION`，因此不改的老插件行为与引入之前完全一致。
+- **`TurnContextRequest` → `TurnContext`**：新增一条易变状态的 append-only 通道。
+  内核在 `ReActLooper.runTurn` 写用户消息**之前**询问，产物拼在本轮用户消息前面随消息落盘，
+  因此只影响本轮新产生的 token。
+- **todo 插件迁移**：`TodoPromptContribution` → `TodoTurnContext`（Jellyfish-Plugins）。
+  这是命中率收益的主体：待办从「每改一次就作废整段请求」变成「只多出本轮那几个 token」。
+- **file-reference 声明 `STATIC`**：它是常量，连会话之间都不变，是最该被反复复用的那一段。
+- **回合上下文不做核内去重**（有意如此）：去重会让「上一次注入已经落进被压缩掉的那一段」
+  变成一个无法察觉的永久失忆，代价远大于那几十个 token。
+
+> 验收：`CacheBreakWatcher` 的日志应当从「每轮都断」变成「只在压缩时断」，
+> `/usage` 的命中率应显著抬升。
+
+#### P2b · 摘要移出 system prompt（待做）
+
+**目标不是命中率，而是可检查的不变量 + 为显式断点铺路**（见 §4.3）：
+
+- 把压缩摘要从 system prompt 挪到消息流（由 `session.getCompaction()` 每轮现算的**合成消息**，
+  不落盘），system prompt 从此在**整个会话内逐字节恒定**。「system prompt 一变 = 一定有 bug」
+  于是成为一条可自动检查的断言。
+- 顺带为 Anthropic 的 `cache_control` 断点铺路：断点应当打在稳定前缀的末尾，而目前 system prompt
+  的末尾恰好是会变的摘要。
+- **不期待命中率收益**：压缩同时推进了消息边界，两种排法的分叉点是同一个位置（§4.3 已论证）。
 
 #### P3 · 老化改为单调、预算触发（内核）
 

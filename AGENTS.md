@@ -101,7 +101,7 @@ jellyfish-core/src/main/java/zcd/jellyfish/core/
 ├── ReActLooper.java            # 思考 → 行动 → 观察（顶层异步 + runNested 内联）
 ├── ReActTurn / ReActListener / ReActResult
 ├── RunScope / RunScopes        # 一次顶层回合的委派作用域：层数与派生预算（ThreadLocal）
-├── prompt/                     # PromptAssembler / ContextWindow / ToolCatalog / ToolFilter / TokenEstimator / ToolResultAger
+├── prompt/                     # PromptAssembler / ContextWindow / ToolCatalog / ToolFilter / TokenEstimator / ToolResultAger / CacheBreakWatcher / ToolPairing
 ├── compact/                    # ConversationCompactor / CompactionPlan / CompactionHealthIndicator
 ├── tool/                       # ToolExecutor（权限→路由→截断的唯一执行点）/ CancellationTokenSource
 ├── input/                      # InputDirectives / InputDirectiveRun / InputDirectiveCall / InputReferenceCompletion

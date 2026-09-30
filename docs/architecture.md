@@ -42,7 +42,7 @@ jellyfish-tui（TUI 外壳）  jellyfish-server（HTTP 外壳）  →  jellyfish
 
 | 通道 | 形态 | 用途 |
 | --- | --- | --- |
-| 同步扩展点（`ExtensionRegistry`） | 有返回值、同步派发、**不可丢弃** | 工具、命令、提示词贡献、权限拦截、会话持久化 / 恢复、压缩策略、UI 贡献、输入指令 |
+| 同步扩展点（`ExtensionRegistry`） | 有返回值、同步派发、**不可丢弃** | 工具、命令、提示词贡献、回合上下文、权限拦截、会话持久化 / 恢复、压缩策略、UI 贡献、输入指令 |
 | 异步事件通道（`EventChannel`） | `void`、异步派发、**可丢弃** | 轮次与会话等通知、可观测性 |
 
 **可丢与不可丢不能合成一条路**：一次工具调用没有返回值就是功能坏了，而一条统计通知丢了只是少一个数字。合成之后
@@ -306,7 +306,8 @@ flowchart TB
     %% ===================== 扩展层·同步派发：需要结果或必须完成（粗线） =====================
     ReAct ==>|"list：工具清单（LlmTool）"| ExtReg
     ReAct ==>|"ToolCallRequest（工具名 + 参数）"| ExtReg
-    ReAct ==>|"PromptContributionRequest（只进 system prompt）"| ExtReg
+    ReAct ==>|"PromptContributionRequest（进 system prompt）"| ExtReg
+    ReAct ==>|"TurnContextRequest（拼进本轮 user 消息）"| ExtReg
     SessionMgr ==>|"会话持久化 / 恢复（不可丢）"| ExtReg
     InputMgr ==>|"ToolCallRequest（经 ToolExecutor：权限 + 截断唯一入口）"| ExtReg
     InputMgr ==>|"结果落 user 消息（不可丢）"| SessionMgr

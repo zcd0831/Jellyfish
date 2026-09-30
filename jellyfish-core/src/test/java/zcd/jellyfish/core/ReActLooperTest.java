@@ -22,6 +22,8 @@ import zcd.jellyfish.api.extension.ToolCallResult;
 import zcd.jellyfish.api.extension.ToolMetadata;
 import zcd.jellyfish.api.extension.ToolOutputSink;
 import zcd.jellyfish.api.extension.ToolDescriptor;
+import zcd.jellyfish.api.extension.TurnContext;
+import zcd.jellyfish.api.extension.TurnContextRequest;
 import zcd.jellyfish.core.compact.ConversationCompactor;
 import zcd.jellyfish.core.prompt.CacheBreakWatcher;
 import zcd.jellyfish.core.prompt.ContextUsage;
@@ -78,6 +80,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -157,6 +160,107 @@ class ReActLooperTest {
     @AfterEach
     void tearDown() {
         executor.shutdownNow();
+    }
+
+    @Test
+    void chat_should_keepSystemPromptStable_acrossTurns_when_turnContextChanges() {
+        // Given：待办状态在两次用户回合之间变了，但它走的是回合上下文而不是贡献块
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        when(agentManager.systemPromptOf(null)).thenReturn("你是助手");
+        AtomicInteger revision = new AtomicInteger();
+        extensions.contribute("todo", TurnContextRequest.class, null,
+                request -> TurnContext.of("[待办] 第 " + revision.get() + " 版"), RegisterOptions.DEFAULT);
+        stubResponses(LlmResponse.text("好"));
+        Session session = sessionManager.createDefault();
+
+        // When
+        newLooper().chat(session.getSessionId(), "第一步", new RecordingListener()).await();
+        revision.incrementAndGet();
+        newLooper().chat(session.getSessionId(), "第二步", new RecordingListener()).await();
+
+        // Then：system prompt 逐字节相同——这就是 P2 要拿到的不变量。
+        // 待办若还在 system prompt 里，这里两段会不同，而代价是整个请求（连同全部历史）作废
+        ArgumentCaptor<LlmRequest> requests = ArgumentCaptor.forClass(LlmRequest.class);
+        verify(client, times(2)).chatStream(requests.capture(), any(LlmStreamListener.class));
+        assertEquals("你是助手", requests.getAllValues().get(0).getSystemPrompt());
+        assertEquals(requests.getAllValues().get(0).getSystemPrompt(),
+                requests.getAllValues().get(1).getSystemPrompt());
+        // 而待办确实变了，并且确实随消息走（append-only）
+        assertTrue(session.getMessages().get(0).getMessage().getContent().contains("第 0 版"));
+        assertTrue(session.getMessages().get(2).getMessage().getContent().contains("第 1 版"));
+    }
+
+    @Test
+    void chat_should_prependTurnContext_toUserMessage() {
+        // Given：插件把即时状态交给回合上下文，而不是塞进 system prompt
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        extensions.contribute("todo", TurnContextRequest.class, null,
+                request -> TurnContext.of("[待办]\n- [ ] 写文档"), RegisterOptions.DEFAULT);
+        stubResponses(LlmResponse.text("好"));
+        Session session = sessionManager.createDefault();
+
+        // When
+        newLooper().chat(session.getSessionId(), "继续", new RecordingListener()).await();
+
+        // Then：上下文随用户消息落盘——append-only，因此只影响本轮新产生的 token；
+        // 放进 system prompt 则会让「待办变了一次」作废整个请求
+        assertEquals("[待办]\n- [ ] 写文档\n\n继续",
+                session.getMessages().get(0).getMessage().getContent());
+    }
+
+    @Test
+    void chat_should_notAlterUserMessage_when_noTurnContextPlugin() {
+        // Given
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        stubResponses(LlmResponse.text("好"));
+        Session session = sessionManager.createDefault();
+
+        // When
+        newLooper().chat(session.getSessionId(), "你好", new RecordingListener()).await();
+
+        // Then：引入这个扩展点不该让没有这类插件的会话多出一个换行
+        assertEquals("你好", session.getMessages().get(0).getMessage().getContent());
+    }
+
+    @Test
+    void chat_should_passNestedFlag_toTurnContext() {
+        // Given
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        List<Boolean> nestedFlags = new ArrayList<>();
+        extensions.contribute("probe", TurnContextRequest.class, null, request -> {
+            nestedFlags.add(Boolean.valueOf(request.isNested()));
+            return TurnContext.empty();
+        }, RegisterOptions.DEFAULT);
+        stubResponses(LlmResponse.text("好"));
+        Session session = sessionManager.createDefault();
+
+        // When
+        newLooper().chat(session.getSessionId(), "你好", new RecordingListener()).await();
+
+        // Then：主会话必须是 false——子代理与主会话的措辞可能要区别对待
+        assertEquals(Collections.singletonList(Boolean.FALSE), nestedFlags);
+    }
+
+    @Test
+    void chat_should_keepToolPairing_when_turnContextInjected() {
+        // Given：注入上下文之后，工具调用与其结果的配对不能受影响
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        when(permissionManager.decide(any(PermissionCheckRequest.class)))
+                .thenReturn(PermissionDecision.allow(null));
+        extensions.contribute("todo", TurnContextRequest.class, null,
+                request -> TurnContext.of("[待办]\n- [ ] 写文档"), RegisterOptions.DEFAULT);
+        registerTool("read", request -> new ToolCallResult("read", "文件内容"));
+        stubResponses(toolCallResponse("call_1", "read"), LlmResponse.text("读完了"));
+        Session session = sessionManager.createDefault();
+
+        // When
+        ReActResult result = newLooper().chat(session.getSessionId(), "读文件", new RecordingListener()).await();
+
+        // Then
+        assertEquals("读完了", result.getContent());
+        assertEquals(4, session.size());
+        assertTrue(session.getMessages().get(1).getMessage().hasToolCalls());
+        assertEquals("call_1", session.getMessages().get(2).getMessage().getToolCallId());
     }
 
     @Test

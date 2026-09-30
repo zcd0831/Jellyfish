@@ -10,6 +10,9 @@ import zcd.jellyfish.api.event.RegisterOptions;
 import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.api.extension.PromptContribution;
 import zcd.jellyfish.api.extension.PromptContributionRequest;
+import zcd.jellyfish.api.extension.PromptPlacement;
+import zcd.jellyfish.api.extension.TurnContext;
+import zcd.jellyfish.api.extension.TurnContextRequest;
 import zcd.jellyfish.api.extension.SessionCompactionSnapshot;
 import zcd.jellyfish.api.extension.SessionMessageSnapshot;
 import zcd.jellyfish.api.extension.SessionRestoreRequest;
@@ -235,6 +238,125 @@ class PromptAssemblerTest {
 
         // Then：两参重载（主会话路径）必须传全放行，不能把 null 漏下去
         verify(toolCatalog).tools(ToolFilter.none());
+    }
+
+    @Test
+    void systemPromptOf_should_orderContributions_byPlacementBeforeOrder() {
+        // Given：易变块抢到了最小的 order（本应排最前），但缓存要求它排最后——
+        // 它是唯一会在会话内变的块，排在前面会让它的每次变化作废后面的全部内容
+        when(agentManager.systemPromptOf(null)).thenReturn("你是助手");
+        contributeWithPlacement("volatile", 0, "易变块", PromptPlacement.VOLATILE);
+        contributeWithPlacement("session", 5, "会话块", PromptPlacement.SESSION);
+        contributeWithPlacement("static", 10, "恒定块", PromptPlacement.STATIC);
+
+        // When
+        String prompt = assembler.systemPromptOf(newSession());
+
+        // Then：按 STATIC → SESSION → VOLATILE，order 只在同一层内生效
+        assertEquals("你是助手\n\n恒定块\n\n会话块\n\n易变块", prompt);
+    }
+
+    @Test
+    void systemPromptOf_should_keepOrderWithinSamePlacement() {
+        // Given：同一层内仍然按 order 升序
+        contributeWithPlacement("later", 9, "后", PromptPlacement.STATIC);
+        contributeWithPlacement("earlier", 1, "先", PromptPlacement.STATIC);
+
+        // When
+        String prompt = assembler.systemPromptOf(newSession());
+
+        // Then
+        assertEquals("先\n\n后", prompt);
+    }
+
+    @Test
+    void turnContextOf_should_joinContributions_inOrder() {
+        // Given
+        contributeTurnContext("second", 5, "第二段");
+        contributeTurnContext("first", 1, "第一段");
+
+        // When
+        String context = assembler.turnContextOf("s-1", "你好", false);
+
+        // Then
+        assertEquals("第一段\n\n第二段", context);
+    }
+
+    @Test
+    void turnContextOf_should_returnNull_when_nobodyAnswers() {
+        // When / Then：没有这类插件时，用户消息不该多出任何东西
+        assertNull(assembler.turnContextOf("s-1", "你好", false));
+    }
+
+    @Test
+    void turnContextOf_should_passSessionInputAndNestedFlag() {
+        // Given：插件靠这三项判断「这一轮到底要不要说、怎么说」
+        final String[] seenSession = new String[1];
+        final String[] seenInput = new String[1];
+        final boolean[] seenNested = new boolean[1];
+        extensions.contribute("probe", TurnContextRequest.class, null, request -> {
+            seenSession[0] = request.getSessionId();
+            seenInput[0] = request.getUserInput();
+            seenNested[0] = request.isNested();
+            return TurnContext.empty();
+        }, RegisterOptions.DEFAULT);
+
+        // When
+        assembler.turnContextOf("s-9", "实现 P2", true);
+
+        // Then
+        assertEquals("s-9", seenSession[0]);
+        assertEquals("实现 P2", seenInput[0]);
+        assertTrue(seenNested[0]);
+    }
+
+    @Test
+    void turnContextOf_should_skipFailingHandler_and_keepOthers() {
+        // Given：一个坏插件不该让整个回合发不出去
+        extensions.contribute("broken", TurnContextRequest.class, null, request -> {
+            throw new JellyfishException("记忆库不可用");
+        }, RegisterOptions.DEFAULT);
+        contributeTurnContext("ok", 0, "好插件的内容");
+
+        // When
+        String context = assembler.turnContextOf("s-1", "你好", false);
+
+        // Then
+        assertEquals("好插件的内容", context);
+    }
+
+    @Test
+    void turnContextOf_should_ignoreBlankContribution() {
+        // Given
+        contributeTurnContext("blank", 0, "   ");
+
+        // When / Then
+        assertNull(assembler.turnContextOf("s-1", "你好", false));
+    }
+
+    /**
+     * 注册一个带分层的提示词贡献处理器。
+     *
+     * @param owner     来源标识
+     * @param order     调用顺序
+     * @param text      贡献文本，可为 {@code null}
+     * @param placement 稳定性分层
+     */
+    private void contributeWithPlacement(String owner, int order, String text, PromptPlacement placement) {
+        extensions.contribute(owner, PromptContributionRequest.class, null,
+                request -> PromptContribution.of(text, placement), RegisterOptions.order(order));
+    }
+
+    /**
+     * 注册一个回合上下文处理器。
+     *
+     * @param owner 来源标识
+     * @param order 调用顺序
+     * @param text  上下文文本，可为 {@code null}
+     */
+    private void contributeTurnContext(String owner, int order, String text) {
+        extensions.contribute(owner, TurnContextRequest.class, null,
+                request -> TurnContext.of(text), RegisterOptions.order(order));
     }
 
     /**

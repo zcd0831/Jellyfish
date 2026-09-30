@@ -14,6 +14,23 @@
   **这条是本设计最不能碰的一条**——改回提交线程池会让测试**挂死**（不是断言失败），
   因此嵌套用例带 `@Timeout` 兜底。
 
+## 提示词布局与缓存
+
+- **system prompt 按「稳定性」分层拼接，不按注册顺序**：`PromptPlacement` 的声明顺序
+  （`STATIC` → `SESSION` → `VOLATILE`）就是拼接顺序，同一层内保持 `order` 升序。
+  理由就是下一条：厂商的 prompt 缓存是**前缀匹配**，一块放在第几位直接决定「它一变要作废多少内容」。
+- **易变状态不进 system prompt，随本轮用户消息走**：`TurnContextRequest` 的产物由 `ReActLooper`
+  拼进本轮用户消息并**随消息落盘**，因此是 append-only 的——它只影响本轮新产生的 token。
+  而 system prompt 是缓存前缀的**第 0 个 token**，把它放进去意味着「待办勾掉一项」要作废整个请求
+  （连同全部历史）。判据只看「会话内会不会变」：不会变 → 提示词贡献；会变 → 回合上下文。
+- **`PromptContribution.of(text)` 的缺省分层是 `SESSION`**：不改的老插件行为与引入分层之前完全一致。
+- **回合上下文不做核内去重**：内核每轮都问一遍，需不需要去重由插件自己判断。
+  核内去重会引入一个难查的失败模式——上一次注入的内容可能已经落进被压缩掉的那一段，
+  于是模型从此再也看不到那份状态，而日志里什么都看不出来。
+- **可缓存前缀的实际断裂会被观察并记日志**：`CacheBreakWatcher` 对比同一会话相邻两轮，
+  指出断在哪一层（system prompt / 工具清单 / 第几条消息起）。从稳定变为断裂的那一轮记 WARN，
+  持续期间降到 DEBUG，恢复后再断会重新告警。
+
 ## 上下文裁剪
 
 - **裁剪只裁本次请求**：`ContextWindow` 按 `contextLength - maxOutputTokens - contextReserveTokens` 从最旧

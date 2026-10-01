@@ -943,6 +943,23 @@ class ConversationCompactorTest {
     }
 
     @Test
+    @DisplayName("多个压缩前钩子同时表态时 order 最小者胜，与注册顺序无关")
+    void plan_should_letLowestOrderHookWin_when_multipleHooksDeclareKeepRecent() {
+        sessionWithMessages(8);
+        givenModel(128_000, 4_000);
+        applyKeepRecent(6);
+        // order 大的先注册：胜负必须由 order 决定，而不是由「谁后注册」决定
+        extensions.contribute("later", CompactionPreRequest.class, null,
+                request -> CompactionDirective.keepRecent(2), RegisterOptions.order(5));
+        extensions.contribute("first", CompactionPreRequest.class, null,
+                request -> CompactionDirective.keepRecent(4), RegisterOptions.order(1));
+
+        CompactionPlan plan = compactor.plan(createdSessionId);
+
+        assertEquals(4, plan.getCompressedCount());
+    }
+
+    @Test
     @DisplayName("压缩前钩子能拦下：理由进异常消息，且不发起任何模型调用")
     void plan_should_cancel_when_hookCancels() {
         sessionWithMessages(8);

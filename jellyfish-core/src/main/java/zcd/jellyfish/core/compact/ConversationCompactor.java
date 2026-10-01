@@ -645,8 +645,14 @@ public class ConversationCompactor implements AutoCloseable {
     /**
      * 跑一遍压缩前钩子链，返回最终指令。
      * <p>
-     * <b>链式语义</b>（写在调用点的 {@code for} 循环里，注册表不参与）：
-     * 第一个 {@code cancel} 立即短路（理由取自它）；{@code keepRecent} 取<b>最后一个非缺省</b>值。
+     * <b>合并语义</b>（写在调用点的 {@code for} 循环里，注册表不参与）：
+     * 第一个 {@code cancel} 立即短路（理由取自它）；{@code keepRecent} 取<b>第一个声明了它的</b>处理器
+     * ——注册表按 {@code order} 升序返回，因此这就是「{@code order} 最小者胜」，
+     * 与相邻的 {@code CompactionStrategyRequest} 合并规则一致（见 {@code strategyOf}）。
+     * <p>
+     * <b>为什么不是「最后一个非缺省」</b>：同一件事在两个相邻的扩展点上相反，会让「多插件同时表态时谁说了算」
+     * 变成必须逐个回忆的例外；而这类旋钮（保留条数、阈值）属于护栏参数，「更基础的插件先表态」比
+     * 「碰巧最后注册的那个说了算」更可预期。
      * <p>
      * <b>失败语义是「放行」</b>：同步派发没有护栏，异常处置是本方法的责任；插件坏掉不该让压缩
      * 彻底不能用，也不该静默改掉保留条数。
@@ -670,7 +676,7 @@ public class ConversationCompactor implements AutoCloseable {
             return CompactionDirective.proceed();
         }
         int tokensBefore = estimateTokens(messages, from);
-        Integer override = null;
+        Integer keepRecentOverride = null;
         for (ExtensionHandler<CompactionPreRequest, CompactionDirective> handler : handlers) {
             CompactionDirective directive;
             try {
@@ -686,11 +692,13 @@ public class ConversationCompactor implements AutoCloseable {
             if (directive.isCancelled()) {
                 return directive;
             }
-            if (directive.hasKeepRecent()) {
-                override = directive.getKeepRecent();
+            if (keepRecentOverride == null && directive.hasKeepRecent()) {
+                keepRecentOverride = directive.getKeepRecent();
             }
         }
-        return override == null ? CompactionDirective.proceed() : CompactionDirective.keepRecent(override.intValue());
+        return keepRecentOverride == null
+                ? CompactionDirective.proceed()
+                : CompactionDirective.keepRecent(keepRecentOverride.intValue());
     }
 
     /**

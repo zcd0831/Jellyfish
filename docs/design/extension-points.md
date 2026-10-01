@@ -289,7 +289,9 @@ public final class TurnDirective  // 静态工厂：proceed() / cancel(String) /
 ### 2.3 三个钩子的公共纪律
 
 - **全部走 `contribute`**（0..N，order 升序），合并规则统一为：
-  **第一个 `cancel` 短路**（理由取自它）；`replaceInput` / `keepRecent` 取**最后一个非缺省**值。
+  **第一个 `cancel` 短路**（理由取自它）；`keepRecent` 取**第一个声明了它的**处理器（即 `order` 最小者胜）。
+  `replaceInput` 则是**链式**语义（每个 handler 拿到的是上一个改过的输入），最后一环天然生效，
+  **不存在胜负规则**——它与「合并」不是同一种语义，不要互相套用。
   短路由调用点的 `for` 循环实现，注册表不参与。
 - **全部不可丢** → 同步侧，不进 `EventChannel`。
 - **全部禁止发布事件**（同 `UiContributions` 对处理器的三条硬约束的口径），

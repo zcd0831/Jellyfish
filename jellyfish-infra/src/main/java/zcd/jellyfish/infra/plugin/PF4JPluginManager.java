@@ -6,6 +6,7 @@ import org.pf4j.PluginWrapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import zcd.jellyfish.api.JellyfishException;
+import zcd.jellyfish.infra.event.EventChannel;
 
 import javax.inject.Inject;
 import java.util.ArrayList;
@@ -28,6 +29,10 @@ import java.util.Set;
  * </ol>
  * <b>刻意不用 PF4J 的批量 {@code startPlugins()}</b>：体检不通过的插件必须<b>不</b>启动，
  * 而批量方法会启动全部已解析插件，绕开校验。逐插件启动同样保留 PF4J 的依赖先行语义。
+ * <p>
+ * <b>它还负责把插件状态变更广播出去</b>：事件通道只在这里下传给内部管理器，由后者在
+ * {@code firePluginStateEvent} 里投影成 {@code PluginStateChangedEvent}——本类自己不做投影，
+ * 因为启动、热重载、关停与失败四条路径最终都汇到那一个出口。
  *
  * @author zcd
  */
@@ -38,6 +43,9 @@ public final class PF4JPluginManager implements AutoCloseable {
 
     /** 插件上下文工厂，用于创建插件上下文与按 owner 回收注册。 */
     private final PluginContextFactory contexts;
+
+    /** 事件通道：下传给内部管理器，供它广播插件状态变更。 */
+    private final EventChannel events;
 
     /** 插件运行时装配输入。 */
     private final PluginRuntimeConfig runtimeConfig;
@@ -53,11 +61,13 @@ public final class PF4JPluginManager implements AutoCloseable {
      *
      * @param contexts      插件上下文工厂，不可为 {@code null}
      * @param runtimeConfig 装配输入，不可为 {@code null}
+     * @param events        事件通道，不可为 {@code null}
      */
     @Inject
-    public PF4JPluginManager(PluginContextFactory contexts, PluginRuntimeConfig runtimeConfig) {
+    public PF4JPluginManager(PluginContextFactory contexts, PluginRuntimeConfig runtimeConfig, EventChannel events) {
         this.contexts = Objects.requireNonNull(contexts, "contexts must not be null");
         this.runtimeConfig = Objects.requireNonNull(runtimeConfig, "runtimeConfig must not be null");
+        this.events = Objects.requireNonNull(events, "events must not be null");
     }
 
     /**
@@ -71,7 +81,7 @@ public final class PF4JPluginManager implements AutoCloseable {
         if (manager != null) {
             throw new JellyfishException("plugin manager already bootstrapped");
         }
-        JellyfishPluginManager created = new JellyfishPluginManager(contexts, runtimeConfig);
+        JellyfishPluginManager created = new JellyfishPluginManager(contexts, runtimeConfig, events);
         manager = created;
         created.safeLoadPlugins();
         rejectBrokenDescriptors(created);

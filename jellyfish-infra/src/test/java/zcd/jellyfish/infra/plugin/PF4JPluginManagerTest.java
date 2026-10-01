@@ -11,6 +11,7 @@ import zcd.jellyfish.api.extension.ExtensionException;
 import zcd.jellyfish.api.extension.ToolCallResult;
 import zcd.jellyfish.api.extension.ToolCallRequest;
 import zcd.jellyfish.api.event.notification.ConfigWarningEvent;
+import zcd.jellyfish.api.event.notification.PluginStateChangedEvent;
 import zcd.jellyfish.api.plugin.JellyfishPlugin;
 import zcd.jellyfish.api.plugin.PluginContext;
 import zcd.jellyfish.infra.action.ActionQueue;
@@ -49,6 +50,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class PF4JPluginManagerTest {
 
+    /** 等待异步通知到达的超时（毫秒）。 */
+    private static final long AWAIT_TIMEOUT_MILLIS = 3000L;
+
+    /** 轮询间隔（毫秒）。 */
+    private static final long POLL_INTERVAL_MILLIS = 5L;
+
     /** 会话域服务：桩，只为满足插件上下文的构造。 */
     private final SessionManager sessions = Mockito.mock(SessionManager.class);
 
@@ -58,6 +65,9 @@ class PF4JPluginManagerTest {
 
     /** 记录插件生命周期回调，静态共享以便被插件类写入。 */
     private static final List<String> RECORDED = new CopyOnWriteArrayList<>();
+
+    /** 收到的插件状态变更通知，形如 {@code pluginId=STATE}；由事件通道异步写入。 */
+    private final List<String> stateChanges = new CopyOnWriteArrayList<>();
 
     /** 共用注册表：同步处理器与事件订阅都落在这里。 */
     private TypeRegistry registry;
@@ -74,10 +84,13 @@ class PF4JPluginManagerTest {
     @BeforeEach
     void setUp() {
         RECORDED.clear();
+        stateChanges.clear();
         registry = new TypeRegistry();
         extensions = new ExtensionRegistry(registry);
         eventChannel = new EventChannel(EventChannelOptions.defaults(), registry);
         eventChannel.start();
+        eventChannel.subscribe("test", PluginStateChangedEvent.class,
+                event -> stateChanges.add(event.getPluginId() + "=" + event.getState()));
         contexts = new PluginContextFactory(extensions, eventChannel, registry, new RuntimeInfoHolder(), new ActionQueue(), sessions);
     }
 
@@ -316,6 +329,76 @@ class PF4JPluginManagerTest {
         assertEquals("ok", callTool("echo").getOutput());
     }
 
+    @Test
+    void bootstrap_should_publish_started_state_when_plugin_starts() throws IOException {
+        // Given
+        writePlugin("sample", RecordingPlugin.class.getName(), "");
+        PF4JPluginManager manager = newManager(null, null);
+
+        // When
+        manager.bootstrap();
+
+        // Then：指标与外壳的 UI 失效都依赖这条通知
+        awaitStateChange("sample=STARTED");
+    }
+
+    @Test
+    void bootstrap_should_publish_failed_state_when_plugin_start_fails() throws IOException {
+        // Given：FailingPlugin 在 start 里抛异常
+        writePlugin("broken", FailingPlugin.class.getName(), "");
+        PF4JPluginManager manager = newManager(null, null);
+
+        // When
+        manager.bootstrap();
+
+        // Then：失败态是本项目自己补的（markFailed），必须同样广播出去——否则“插件启动失败”在指标里是空白
+        awaitStateChange("broken=FAILED");
+    }
+
+    @Test
+    void bootstrap_should_publish_failed_state_when_descriptor_is_rejected() throws IOException {
+        // Given：缺少 plugin.class，在描述符体检阶段就被拒
+        writePlugin("rejected", null, "");
+        PF4JPluginManager manager = newManager(null, null);
+
+        // When
+        manager.bootstrap();
+
+        // Then
+        awaitStateChange("rejected=FAILED");
+    }
+
+    @Test
+    void close_should_publish_stopped_state_when_plugins_stop() throws IOException {
+        // Given
+        writePlugin("sample", RecordingPlugin.class.getName(), "");
+        PF4JPluginManager manager = newManager(null, null);
+        manager.bootstrap();
+        awaitStateChange("sample=STARTED");
+
+        // When
+        manager.close();
+
+        // Then
+        awaitStateChange("sample=STOPPED");
+    }
+
+    @Test
+    void bootstrap_should_not_publish_started_state_for_disabled_plugin() throws IOException {
+        // Given：sample 启用、off 被禁用
+        writePlugin("sample", RecordingPlugin.class.getName(), "");
+        writePlugin("off", RecordingPlugin.class.getName(), "");
+        PF4JPluginManager manager = newManager(null, new LinkedHashSet<>(Collections.singletonList("off")));
+
+        // When
+        manager.bootstrap();
+
+        // Then：先等 enabled 那条到达（证明确实有一次派发发生），再断言被禁用的那个没有通知——
+        // 没有发生状态变化就没有通知，否则外壳会为一次不存在的变化重收集
+        awaitStateChange("sample=STARTED");
+        assertFalse(stateChanges.contains("off=STARTED"), "被禁用的插件不该广播启动: " + stateChanges);
+    }
+
     /**
      * 以调用点的方式调用工具：先查找处理器，再执行它。
      *
@@ -325,6 +408,31 @@ class PF4JPluginManagerTest {
     private ToolCallResult callTool(String toolName) {
         ToolCallRequest request = new ToolCallRequest(toolName, Collections.<String, Object>emptyMap());
         return extensions.invoke(extensions.handler(ToolCallRequest.class, toolName), request);
+    }
+
+    /**
+     * 等待一条插件状态变更通知到达，超时即失败。
+     *
+     * @param expected 期望的通知文本，形如 {@code pluginId=STATE}
+     */
+    private void awaitStateChange(String expected) {
+        long deadline = System.currentTimeMillis() + AWAIT_TIMEOUT_MILLIS;
+        while (!stateChanges.contains(expected) && System.currentTimeMillis() < deadline) {
+            sleep();
+        }
+        assertTrue(stateChanges.contains(expected),
+                "未在超时内收到状态变更通知: " + expected + "，实收 " + stateChanges);
+    }
+
+    /**
+     * 短暂休眠，等待异步派发。
+     */
+    private static void sleep() {
+        try {
+            Thread.sleep(POLL_INTERVAL_MILLIS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     /**
@@ -358,7 +466,7 @@ class PF4JPluginManagerTest {
      * @return 插件管理器门面
      */
     private PF4JPluginManager newManager(PluginRuntimeConfig config) {
-        return new PF4JPluginManager(contexts, config);
+        return new PF4JPluginManager(contexts, config, eventChannel);
     }
 
     /**

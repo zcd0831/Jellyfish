@@ -61,6 +61,10 @@
   - 推论一：**产生注册的后台线程必须在 `stop()` 返回前停下来**。
   - 推论二：子上下文也必须复用父上下文的标记，否则回收根上下文管不住子上下文。
   - 推导见 `PluginContextImpl` / `ContextLifecycle` 的注释。
+- **插件状态变更会广播为 `PluginStateChangedEvent`**（`pluginId` + PF4J 状态名：`STARTED` / `STOPPED` / `FAILED`）：
+  唯一出口是 `JellyfishPluginManager.firePluginStateEvent`——PF4J 的启动、停止、卸载与本项目自己补的失败态
+  （`markFailed`）都经过它，因此覆写一处即覆盖四条路径。**状态名必须取 PF4J 枚举名而不是自造拼法**，
+  消费方按名字比较；它走异步可丢通道，是指标 `plugin.*` 与外壳 UI 失效的触发源。
 - **插件碰不到会话、也拿不到工作目录**：`PluginContext` 只有身份、四个注册方法与
   `runtimeInfo()`（它给的四个字段全是进程级事实：外壳种类、有无交互界面、是否具备审批通道、有无终端；
   **不含 `sessionId` / `agentId` / `cwd` / 上下文用量 / 提示词**）。工具相对路径按进程工作目录解析

@@ -10,8 +10,10 @@ import org.pf4j.PluginWrapper;
 import org.pf4j.VersionManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import zcd.jellyfish.api.event.notification.PluginStateChangedEvent;
 import zcd.jellyfish.api.plugin.PluginContext;
 import zcd.jellyfish.api.plugin.PluginDeclaration;
+import zcd.jellyfish.infra.event.EventChannel;
 
 /**
  * PF4J 插件管理器的子类：挂载本项目的描述符解析器、插件工厂、状态提供者与版本管理器，
@@ -30,6 +32,9 @@ import zcd.jellyfish.api.plugin.PluginDeclaration;
  * {@code createPluginFactory()} / {@code createPluginStatusProvider()} / {@code createVersionManager()}，
  * 那时子类字段尚未赋值。因此这些覆写方法只能返回<b>延迟读取</b>成员字段的协作者，
  * 不能直接读字段。
+ * <p>
+ * <b>它还是插件状态变更的唯一出口</b>：覆写 {@code firePluginStateEvent} 把每次状态切换投影成
+ * {@code PluginStateChangedEvent} 发到事件通道，指标与外壳的 UI 失效都靠它。
  *
  * @author zcd
  */
@@ -40,6 +45,14 @@ final class JellyfishPluginManager extends DefaultPluginManager {
 
     /** 插件上下文工厂：创建能力上下文，并按 owner 回收注册。 */
     private final PluginContextFactory contexts;
+
+    /**
+     * 事件通道：插件状态变更的广播出口。
+     * <p>
+     * <b>与 {@link #contexts} 同理，只能在 {@code super(...)} 之后赋值</b>，因此
+     * {@link #publishStateChange} 里对它判空——父类构造器会在字段赋值之前调用 {@code create*()}。
+     */
+    private final EventChannel events;
 
     /** 插件运行时装配输入。 */
     private final PluginRuntimeConfig runtimeConfig;
@@ -58,12 +71,14 @@ final class JellyfishPluginManager extends DefaultPluginManager {
      *
      * @param contexts      插件上下文工厂，不可为 {@code null}
      * @param runtimeConfig 装配输入，不可为 {@code null}
+     * @param events        事件通道，不可为 {@code null}
      */
-    JellyfishPluginManager(PluginContextFactory contexts, PluginRuntimeConfig runtimeConfig) {
+    JellyfishPluginManager(PluginContextFactory contexts, PluginRuntimeConfig runtimeConfig, EventChannel events) {
         super(runtimeConfig.getPluginsRoots());
         // 赋值放在 super 之后：此前 create*() 已被调用，但它们只在后续 find/create/isPluginDisabled 时才读字段
         this.contexts = contexts;
         this.runtimeConfig = runtimeConfig;
+        this.events = events;
         this.statusProvider.attach(runtimeConfig);
     }
 
@@ -243,5 +258,49 @@ final class JellyfishPluginManager extends DefaultPluginManager {
         wrapper.setFailedException(cause);
         wrapper.setPluginState(PluginState.FAILED);
         firePluginStateEvent(new PluginStateEvent(this, wrapper, PluginState.FAILED));
+    }
+
+    /**
+     * 广播插件状态变更。
+     * <p>
+     * <b>覆写而不是注册 {@code PluginStateListener}</b>：本方法是 PF4J 全部状态事件的唯一出口
+     * ——启动、停止、卸载以及本项目自己补的失败态（{@link #markFailed} 显式调它）都经过这里，
+     * 因此覆写一处即可覆盖四条路径，不必分别注册监听器，也不引入一处新的父类 API。
+     * <p>
+     * <b>先调 {@code super}</b>：PF4J 自己的监听器语义保持原样，内核的通知是叠加在它之后的一层，
+     * 不改变 PF4J 的既有行为。
+     *
+     * @param event PF4J 状态事件，不可为 {@code null}
+     */
+    @Override
+    protected void firePluginStateEvent(PluginStateEvent event) {
+        super.firePluginStateEvent(event);
+        publishStateChange(event);
+    }
+
+    /**
+     * 把一个 PF4J 状态事件投影成内核通知。
+     * <p>
+     * <b>状态名取 PF4J 枚举名而不是自造字符串</b>：消费方按名字比较
+     * （{@code MetricsSubscriber} 只认 {@code STARTED} / {@code STOPPED} / {@code FAILED}），
+     * 换一套拼法会让它们认不出状态。
+     * <p>
+     * <b>发布失败不影响插件生命周期</b>：通知走可丢通道，状态此刻已经落定，广播不出去只记 WARN
+     * ——与 {@code SessionManager} 对会话通知的处置同口径。
+     *
+     * @param event PF4J 状态事件，不可为 {@code null}
+     */
+    private void publishStateChange(PluginStateEvent event) {
+        PluginWrapper wrapper = event.getPlugin();
+        PluginState state = event.getPluginState();
+        if (wrapper == null || state == null || events == null) {
+            // events 为 null 只可能发生在父类构造器期间；状态缺失则是 PF4J 的边界情形
+            return;
+        }
+        try {
+            events.publish(new PluginStateChangedEvent(wrapper.getPluginId(), state.name()));
+        } catch (RuntimeException e) {
+            LOG.warn("插件状态通知发布失败: pluginId={} state={}", wrapper.getPluginId(), state, e);
+        }
     }
 }

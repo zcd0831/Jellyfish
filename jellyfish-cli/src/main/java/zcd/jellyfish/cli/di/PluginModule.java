@@ -20,7 +20,12 @@ import javax.inject.Singleton;
  * <p>
  * 三者的装配顺序值得写下来：{@link PluginRuntimeConfig}（装配输入）→ {@link PluginContextFactory}
  * （能力上下文与回收）→ {@link PF4JPluginManager}（加载、体检、热部署）。插件管理器因此只依赖
- * 「会造上下文、会回收」这一个协作者，不感知注册表与事件通道。
+ * 「会造上下文、会回收」这一个协作者，<b>不感知注册表</b>。
+ * <p>
+ * <b>它仍然要拿事件通道</b>：插件启用 / 停止 / 卸载 / 启动失败都要广播
+ * {@code PluginStateChangedEvent}（指标与外壳的 UI 失效都订阅它），而状态事件只从 PF4J 的
+ * 内部管理器发出，因此通道必须经本模块下传进去——这与「用 {@link PluginContextFactory}
+ * 隐藏注册表」是两件事，通道在这里只被用来发布，不参与任何注册。
  * <p>
  * {@link PluginRuntimeConfig} 由配置驱动：扫描目录来自
  * {@link RuntimeConfig#getPluginRoots()}（{@code config.json} 的 {@code plugins.roots}），
@@ -78,12 +83,14 @@ public final class PluginModule {
      *
      * @param contexts      插件上下文工厂
      * @param runtimeConfig 装配输入
+     * @param events        事件通道，供门面下传给内部管理器广播插件状态变更
      * @return 插件运行时门面
      */
     @Provides
     @Singleton
     static PF4JPluginManager providePluginManager(PluginContextFactory contexts,
-                                                  PluginRuntimeConfig runtimeConfig) {
-        return new PF4JPluginManager(contexts, runtimeConfig);
+                                                  PluginRuntimeConfig runtimeConfig,
+                                                  EventChannel events) {
+        return new PF4JPluginManager(contexts, runtimeConfig, events);
     }
 }

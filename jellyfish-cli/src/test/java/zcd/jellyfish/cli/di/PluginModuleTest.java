@@ -126,16 +126,18 @@ class PluginModuleTest {
     void providePluginManager_should_expose_no_plugins_before_bootstrap() {
         // Given
         TypeRegistry registry = new TypeRegistry();
+        EventChannel events = new EventChannel(EventChannelOptions.defaults(), registry);
         PluginContextFactory factory = PluginModule.providePluginContextFactory(
                 new ExtensionRegistry(registry),
-                new EventChannel(EventChannelOptions.defaults(), registry),
+                events,
                 registry,
                 new RuntimeInfoHolder(), new ActionQueue(), org.mockito.Mockito.mock(zcd.jellyfish.infra.session.SessionManager.class));
 
         // When
         PF4JPluginManager manager = PluginModule.providePluginManager(factory,
                 PluginModule.providePluginRuntimeConfig(
-                        runtimeConfigOf(new ConfigPaths(), new PluginPaths(null))));
+                        runtimeConfigOf(new ConfigPaths(), new PluginPaths(null))),
+                events);
 
         // Then：未 bootstrap 时不触发任何插件扫描
         assertNotNull(manager);

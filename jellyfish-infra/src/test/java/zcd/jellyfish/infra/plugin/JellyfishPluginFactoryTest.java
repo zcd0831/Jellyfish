@@ -50,10 +50,13 @@ class JellyfishPluginFactoryTest {
     /** 会话域服务：桩，只为满足插件上下文的构造。 */
     private final SessionManager sessions = Mockito.mock(SessionManager.class);
 
+    /** 事件通道：插件状态变更的广播出口，与插件上下文复用同一个实例。 */
+    private final EventChannel eventChannel = new EventChannel(EventChannelOptions.defaults(), new TypeRegistry());
+
     /** 插件上下文工厂，用于创建插件上下文。 */
     private final PluginContextFactory contexts = new PluginContextFactory(
             new ExtensionRegistry(new TypeRegistry()),
-            new EventChannel(EventChannelOptions.defaults(), new TypeRegistry()),
+            eventChannel,
             new TypeRegistry(),
             new RuntimeInfoHolder(),
             new ActionQueue(),
@@ -69,7 +72,7 @@ class JellyfishPluginFactoryTest {
     void setUp() {
         RECORDED.clear();
         JellyfishPluginManager manager = new JellyfishPluginManager(contexts,
-                PluginRuntimeConfig.ofRoots(pluginsRoot));
+                PluginRuntimeConfig.ofRoots(pluginsRoot), eventChannel);
         factory = new JellyfishPluginFactory(manager);
     }
 

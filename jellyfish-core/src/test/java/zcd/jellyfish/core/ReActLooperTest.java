@@ -600,10 +600,11 @@ class ReActLooperTest {
         // When
         ReActResult result = newLooper().chat(session.getSessionId(), "读文件", new RecordingListener()).await();
 
-        // Then
+        // Then：提示要指向顶层回合自己那个配置键——调 react.maxRounds 才是有效动作
         assertTrue(result.isTruncated());
         assertEquals(1, result.getRounds());
         assertNotNull(result.getContent());
+        assertTrue(result.getContent().contains("react.maxRounds"));
     }
 
     @Test
@@ -850,6 +851,9 @@ class ReActLooperTest {
         assertEquals(1, nestedResults.size());
         assertTrue(nestedResults.get(0).isTruncated());
         assertEquals(1, nestedResults.get(0).getRounds());
+        // 提示也要按语境走：指向 react.maxRounds 的话，调用方照着调是白费力气
+        assertTrue(nestedResults.get(0).getContent().contains("subAgent.maxRounds"));
+        assertFalse(nestedResults.get(0).getContent().contains("react.maxRounds"));
     }
 
     @Test

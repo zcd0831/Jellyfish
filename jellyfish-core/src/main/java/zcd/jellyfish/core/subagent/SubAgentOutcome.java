@@ -62,7 +62,7 @@ public final class SubAgentOutcome {
     /**
      * 构造「达到轮数上限」结果。
      *
-     * @param text   内核给出的可读提示
+     * @param text   内核提示，外加子代理最后一段已产出的正文（它往往已经翻查过几轮）
      * @param rounds 实际轮数
      * @param usage  累计用量，可为 {@code null}
      * @return 结果
@@ -150,8 +150,9 @@ public final class SubAgentOutcome {
     /**
      * 判断子代理是否给出了可用文本。
      * <p>
-     * {@code TRUNCATED} 也算「有文本」：达到轮数上限时内核会给一段可读提示，
-     * 模型据此知道任务没做完，而不是以为子代理什么都没说。
+     * {@code TRUNCATED} 也算「有文本」：达到轮数上限时，内核提示后面还接着子代理最后一段
+     * 已产出的正文，模型据此知道任务没做完、也知道它做到哪一步了，
+     * 而不是以为子代理什么都没说。
      *
      * @return {@code COMPLETED} 或 {@code TRUNCATED} 返回 {@code true}
      */

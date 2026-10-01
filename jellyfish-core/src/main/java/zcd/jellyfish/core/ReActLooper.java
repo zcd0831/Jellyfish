@@ -40,6 +40,7 @@ import javax.inject.Singleton;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
@@ -88,8 +89,14 @@ public class ReActLooper implements AutoCloseable {
     /** react 线程空闲回收时间（秒）。 */
     private static final long REACT_KEEP_ALIVE_SECONDS = 60L;
 
-    /** 达到最大轮次时回灌给调用方的提示。 */
-    private static final String MAX_ROUNDS_MESSAGE = "已达到最大轮次仍未收敛，如需继续请调大 react.maxRounds 或换一个更明确的指令。";
+    /** 达到最大轮次时回灌给调用方的提示模板；占位符是「下一步该调哪个配置键」。 */
+    private static final String MAX_ROUNDS_MESSAGE = "已达到最大轮次仍未收敛，如需继续请调大 %s 或换一个更明确的指令。";
+
+    /** 顶层回合的轮数上限配置键名。 */
+    private static final String REACT_MAX_ROUNDS_KEY = "react.maxRounds";
+
+    /** 嵌套回合（子代理）的轮数上限配置键名。 */
+    private static final String SUBAGENT_MAX_ROUNDS_KEY = "subAgent.maxRounds";
 
     /** 终止原因取值：回合被取消时为未执行的工具调用补的结果标这个值（约定见 {@code ToolMetadata}）。 */
     private static final String TERMINAL_CANCELLED = "CANCELLED";
@@ -315,7 +322,7 @@ public class ReActLooper implements AutoCloseable {
      * @param listener  监听器
      * @param maxRounds  最大循环轮数
      * @param toolFilter 工具清单过滤器
-     * @param nested     是否嵌套回合（子代理），传给回合上下文扩展点
+     * @param nested     是否嵌套回合（子代理）：既传给回合上下文扩展点，也决定截断提示指向哪个配置键
      * @return 回合结果
      */
     private ReActResult runTurn(ReActTurnImpl turn, Session session, String userInput, ReActListener listener,
@@ -334,7 +341,7 @@ public class ReActLooper implements AutoCloseable {
             }
             sessionManager.appendMessage(sessionId, LlmMessage.user(
                     withTurnContext(session, effectiveInput(directive, userInput, nested), nested)), null);
-            return loop(turn, session, listener, maxRounds, toolFilter);
+            return loop(turn, session, listener, maxRounds, toolFilter, nested);
         } catch (JellyfishException e) {
             listener.onError(e);
             throw e;
@@ -355,10 +362,11 @@ public class ReActLooper implements AutoCloseable {
      * @param listener   监听器
      * @param maxRounds  最大循环轮数，由调用方给出
      * @param toolFilter 工具清单过滤器
+     * @param nested     是否嵌套回合（子代理），决定截断提示指向哪个配置键
      * @return 回合结果
      */
     private ReActResult loop(ReActTurnImpl turn, Session session, ReActListener listener, int maxRounds,
-                             ToolFilter toolFilter) {
+                             ToolFilter toolFilter, boolean nested) {
         String sessionId = session.getSessionId();
         for (int round = 1; round <= maxRounds; round++) {
             if (turn.isCancelled()) {
@@ -408,9 +416,24 @@ public class ReActLooper implements AutoCloseable {
             actionDispatcher.drainTurnBoundary(sessionId, round < maxRounds);
         }
         LOG.warn("ReAct 达到最大轮次: sessionId={} maxRounds={}", sessionId, maxRounds);
-        ReActResult result = ReActResult.truncated(sessionId, MAX_ROUNDS_MESSAGE, maxRounds);
+        ReActResult result = ReActResult.truncated(sessionId, maxRoundsMessage(nested), maxRounds);
         listener.onComplete(result);
         return result;
+    }
+
+    /**
+     * 组装「达到最大轮次」的提示文本。
+     * <p>
+     * <b>为什么按语境指向不同的配置键</b>：轮数上限由调用方给出——顶层回合读 {@code react.maxRounds}，
+     * 嵌套回合（子代理）读 {@code subAgent.maxRounds}。共用一句写死的提示会让子代理那条路上指向一个
+     * 调了也没用的键，而这条提示的全部价值就在于告诉调用方「下一步该改哪里」。
+     *
+     * @param nested 是否嵌套回合（子代理）
+     * @return 提示文本，保证非 {@code null}
+     */
+    private static String maxRoundsMessage(boolean nested) {
+        return String.format(Locale.ROOT, MAX_ROUNDS_MESSAGE,
+                nested ? SUBAGENT_MAX_ROUNDS_KEY : REACT_MAX_ROUNDS_KEY);
     }
 
     /**

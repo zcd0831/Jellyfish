@@ -351,6 +351,59 @@ class SubAgentLauncherTest {
     }
 
     @Test
+    void run_should_append_last_assistant_text_when_truncated() {
+        // Given：子代理跑到轮数上限，且最后一轮停在工具调用上（那条助手消息没有正文）
+        when(agentManager.find(SCOUT)).thenReturn(definition(true));
+        when(sessionModelResolver.resolveByAgentOrDefault(SCOUT)).thenReturn(resolvedModel());
+        runScopes.open(8, 8);
+        Session parent = parent(PermissionMode.NORMAL, null);
+        when(reActLooper.runNested(any(Session.class), any(), any(), any(), anyInt(), any()))
+                .thenAnswer(invocation -> {
+                    Session child = invocation.getArgument(0);
+                    String childId = child.getSessionId();
+                    sessionManager.appendMessage(childId, LlmMessage.user("只属于任务原文的标记"), null);
+                    sessionManager.appendMessage(childId, LlmMessage.assistant("我先读一下入口文件"), null);
+                    sessionManager.appendMessage(childId, LlmMessage.tool("call_1", "read_file", "只属于工具结果的标记"),
+                            null);
+                    sessionManager.appendMessage(childId, LlmMessage.assistant(null), null);
+                    return ReActResult.truncated(childId, "已达上限", 3);
+                });
+
+        // When
+        SubAgentOutcome outcome = launcher.run(call(parent, SCOUT, "查一下"), null);
+
+        // Then：主会话拿到的不能只有一句通知，还要有子代理最后说的那段话
+        assertEquals(SubAgentStatus.TRUNCATED, outcome.getStatus());
+        assertTrue(outcome.getText().startsWith("已达上限"), "内核提示要留在最前面");
+        assertTrue(outcome.getText().contains("我先读一下入口文件"), "最后一段正文要跟着回灌");
+        // 任务原文与工具回显是子代理看到的，不是它说的
+        assertFalse(outcome.getText().contains("只属于任务原文的标记"));
+        assertFalse(outcome.getText().contains("只属于工具结果的标记"));
+    }
+
+    @Test
+    void run_should_keep_hint_only_when_truncated_without_assistant_text() {
+        // Given：子代理光顾着调工具，一句正文都没写过
+        when(agentManager.find(SCOUT)).thenReturn(definition(true));
+        when(sessionModelResolver.resolveByAgentOrDefault(SCOUT)).thenReturn(resolvedModel());
+        runScopes.open(8, 8);
+        Session parent = parent(PermissionMode.NORMAL, null);
+        when(reActLooper.runNested(any(Session.class), any(), any(), any(), anyInt(), any()))
+                .thenAnswer(invocation -> {
+                    Session child = invocation.getArgument(0);
+                    String childId = child.getSessionId();
+                    sessionManager.appendMessage(childId, LlmMessage.user("任务"), null);
+                    return ReActResult.truncated(childId, "已达上限", 1);
+                });
+
+        // When
+        SubAgentOutcome outcome = launcher.run(call(parent, SCOUT, "查一下"), null);
+
+        // Then：没有正文可附时不要为「空内容」另编一句说明
+        assertEquals("已达上限", outcome.getText());
+    }
+
+    @Test
     void run_should_map_cancelled_result() {
         // Given
         when(agentManager.find(SCOUT)).thenReturn(definition(true));

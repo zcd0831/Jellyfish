@@ -13,14 +13,17 @@ import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.config.AgentDefinition;
 import zcd.jellyfish.infra.config.RuntimeConfig;
 import zcd.jellyfish.infra.config.SubAgentSettings;
+import zcd.jellyfish.infra.llm.LlmMessage;
 import zcd.jellyfish.infra.model.SessionModelResolver;
 import zcd.jellyfish.infra.permission.PermissionManager;
 import zcd.jellyfish.infra.session.Session;
 import zcd.jellyfish.infra.session.SessionManager;
+import zcd.jellyfish.infra.session.SessionMessage;
 import zcd.jellyfish.infra.session.SessionUsage;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
+import java.util.List;
 import java.util.Objects;
 
 /**
@@ -205,9 +208,61 @@ public class SubAgentLauncher {
             return SubAgentOutcome.cancelled(result.getRounds(), child.getUsage());
         }
         if (result.isTruncated()) {
-            return SubAgentOutcome.truncated(result.getContent(), result.getRounds(), child.getUsage());
+            return SubAgentOutcome.truncated(truncatedText(result, child), result.getRounds(), child.getUsage());
         }
         return SubAgentOutcome.completed(result.getContent(), result.getRounds(), child.getUsage());
+    }
+
+    /**
+     * 组装「达到轮数上限」时的回灌文本：内核提示 + 子代理最后一段已产出的正文。
+     * <p>
+     * <b>为什么要补上正文</b>：被截断意味着子代理还没写出结论，只回一句通知会让主会话对它做过什么
+     * 一无所知——而它已经把好几轮花在翻查上了，那些过程本身就是此刻唯一可用的线索。
+     * <p>
+     * <b>为什么只给最后一段而不是全部轮次</b>：截断时每一轮的正文都只是过程、没有结论，
+     * 全量回灌等于用主会话的上下文预算替子代理的寒暄买单；而回灌文本一旦超限，会被工具输出限流
+     * 按「头 30% / 尾 70%」截断，占住开头那 30% 的恰恰是信息量最低的早期内容。取最后一段既是
+     * 「它最后在想什么」的最近似答案，篇幅也天然可控（通常远低于 {@code react.maxToolOutputChars}）。
+     * <p>
+     * <b>为什么明说只附了一段</b>：不说的话，主会话会把这段过程文本当成子代理的全部交代。
+     *
+     * @param result 子代理回合结果
+     * @param child  子会话运行态
+     * @return 回灌文本，保证非 {@code null}
+     */
+    private static String truncatedText(ReActResult result, Session child) {
+        String hint = result.getContent() == null ? "" : result.getContent().trim();
+        String text = lastAssistantText(child);
+        if (StringUtils.isBlank(text)) {
+            // 一句正文都没写：只留内核提示，不为「空内容」另编一句说明
+            return hint;
+        }
+        return hint + "\n（以下是它最后一段已产出的正文，更早的轮次未一并回灌）\n" + text;
+    }
+
+    /**
+     * 取子会话里最后一条带正文的助手消息。
+     * <p>
+     * <b>为什么倒着找而不是直接取最后一条消息</b>：被截断时最后一轮必然停在工具调用上，
+     * 那条助手消息可能只带工具调用、没有正文，因此要往前找到第一条真有文本的。
+     * <p>
+     * <b>为什么不带用户消息与工具结果</b>：要的是子代理自己的话，不是它看到的任务原文或工具回显。
+     *
+     * @param child 子会话运行态
+     * @return 正文文本；一句都没写过时返回 {@code null}
+     */
+    private static String lastAssistantText(Session child) {
+        List<SessionMessage> messages = child.getMessages();
+        for (int index = messages.size() - 1; index >= 0; index--) {
+            LlmMessage message = messages.get(index).getMessage();
+            if (message == null || !LlmMessage.ROLE_ASSISTANT.equals(message.getRole())) {
+                continue;
+            }
+            if (StringUtils.isNotBlank(message.getContent())) {
+                return message.getContent().trim();
+            }
+        }
+        return null;
     }
 
     /**

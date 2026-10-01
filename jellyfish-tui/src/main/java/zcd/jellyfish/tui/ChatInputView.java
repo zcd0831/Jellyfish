@@ -16,7 +16,9 @@ import dev.tamboui.tui.event.MouseEvent;
 import dev.tamboui.tui.event.PasteEvent;
 import dev.tamboui.widgets.input.TextArea;
 import dev.tamboui.widgets.input.TextAreaState;
+import zcd.jellyfish.tui.text.DisplayWidth;
 
+import java.util.List;
 import java.util.Objects;
 
 /**
@@ -65,6 +67,13 @@ public final class ChatInputView implements Element {
     /** 边框占用的行数（上下各一）。 */
     static final int BORDER_ROWS = 2;
 
+    /**
+     * 输入区溢出行为：按词折行。
+     * <p>
+     * 它同时是「光标落在哪一显示行」的判据，因此构造 {@link TextArea} 与定位硬件光标必须用同一个值。
+     */
+    private static final Overflow OVERFLOW = Overflow.WRAP_WORD;
+
     /** 提示文案：同时充当键位说明，省掉一行专门的帮助。 */
     private static final String PLACEHOLDER =
             "\u8bf4\u70b9\u4ec0\u4e48\u2026\uff08Enter \u6362\u884c\u00b7Ctrl+S \u53d1\u9001\u00b7Esc \u4e2d\u65ad\uff09";
@@ -88,10 +97,84 @@ public final class ChatInputView implements Element {
     public void render(Frame frame, Rect area, RenderContext context) {
         TextArea widget = TextArea.builder()
                 .placeholder(PLACEHOLDER)
-                .overflow(Overflow.WRAP_WORD)
+                .overflow(OVERFLOW)
                 .build();
         // 用带光标的渲染：没有光标的输入框在用户看来就是「没反应」
         widget.renderWithCursor(area, frame.buffer(), state, frame);
+        // 框架的 renderWithCursor 只反显光标格，不定位终端硬件光标，这里必须自己补上（理由见方法注释）
+        placeHardwareCursor(frame, area);
+    }
+
+    /**
+     * 把终端硬件光标定位到输入光标所在的格子。
+     * <p>
+     * <b>为什么必须自己做</b>：框架的 {@code TextArea.renderWithCursor} 只把光标格反显（改缓冲区样式），
+     * <b>不调用 {@code Frame.setCursorPosition}</b>（框架里只有单行 {@code TextInput} 会），硬件光标因此停在
+     * 上一帧最后写入的那一格——首屏时那是状态栏末列。输入法的预编辑串由终端画在硬件光标处，从末列换行会把
+     * 整屏顶上去，而应用的缓冲区并不知道屏幕滚动过，之后所有差量重绘立刻错位（表现为输入框上移、旧画面残留）。
+     * <p>
+     * 尺寸为 0 或光标被滚出可视区时什么都不做：宁可让硬件光标停在上一次的位置，也不要把它送到可视区之外。
+     *
+     * @param frame 本帧，不可为 {@code null}
+     * @param area  输入区内容矩形（不含边框），不可为 {@code null}
+     */
+    private void placeHardwareCursor(Frame frame, Rect area) {
+        int width = area.width();
+        int height = area.height();
+        if (width <= 0 || height <= 0) {
+            return;
+        }
+        List<TextAreaState.DisplayRow> rows = state.computeDisplayRows(width, OVERFLOW);
+        int index = cursorDisplayRowIndex(rows, width);
+        if (index < 0 || index >= rows.size()) {
+            return;
+        }
+        // 本元素构造 TextArea 时不带 Block、也不开行号，因此内容矩形就是 area（将来若加上这两项要同步改）
+        TextAreaState.DisplayRow row = rows.get(index);
+        String line = state.getLine(row.logicalRow());
+        int start = Math.min(row.startCol(), line.length());
+        // 折行后同一逻辑行的后续显示行要从 startCol 重新起算，光标列因此是相对本显示行的列数
+        int end = Math.max(start, Math.min(state.cursorCol(), line.length()));
+        int column = DisplayWidth.of(line.substring(start, end));
+        int rowInView = index - state.scrollRow();
+        if (rowInView < 0 || rowInView >= height || column < 0 || column >= width) {
+            return;
+        }
+        frame.setCursorPosition(area.left() + column, area.top() + rowInView);
+    }
+
+    /**
+     * 取光标所在的显示行下标。
+     * <p>
+     * <b>为什么把这几个分支抄过来</b>：{@code TextAreaState.findCursorDisplayRowIndex} 是包内可见的，
+     * 而它比公开的 {@code findDisplayRowIndex} 多一条「光标正好压在折行边界上时算哪一行」的判定；
+     * 只调公开方法的话，硬件光标与 {@code TextArea} 自己反显的那一格会在折行处差一格。判定与 TamboUI
+     * 0.5.0 的 {@code TextAreaState#findCursorDisplayRowIndex} 逐分支一致。
+     *
+     * @param rows  显示行列表，不可为 {@code null} 且非空
+     * @param width 可用列数
+     * @return 显示行下标
+     */
+    private int cursorDisplayRowIndex(List<TextAreaState.DisplayRow> rows, int width) {
+        int index = TextAreaState.findDisplayRowIndex(rows, state.cursorRow(), state.cursorCol());
+        if (index < 0 || index >= rows.size()) {
+            return index;
+        }
+        TextAreaState.DisplayRow row = rows.get(index);
+        boolean wrappedAfter = index + 1 < rows.size()
+                && rows.get(index + 1).logicalRow() == state.cursorRow();
+        if (!wrappedAfter || state.cursorCol() < row.endCol()) {
+            return index;
+        }
+        if (state.cursorCol() != row.endCol()) {
+            return index + 1;
+        }
+        // 光标正好压在本显示行末尾：整行被宽度截满才落到下一显示行，否则（按词断开）留在本行
+        String line = state.getLine(state.cursorRow());
+        int start = Math.min(row.startCol(), line.length());
+        int end = Math.min(Math.max(start, row.endCol()), line.length());
+        int rowWidth = end <= start ? 0 : DisplayWidth.of(line.substring(start, end));
+        return rowWidth < width ? index : index + 1;
     }
 
     @Override

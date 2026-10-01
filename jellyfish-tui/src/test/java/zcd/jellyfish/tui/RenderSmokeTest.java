@@ -2,6 +2,7 @@ package zcd.jellyfish.tui;
 
 import dev.tamboui.buffer.Buffer;
 import dev.tamboui.buffer.Cell;
+import dev.tamboui.layout.Position;
 import dev.tamboui.layout.Rect;
 import dev.tamboui.terminal.Frame;
 import dev.tamboui.toolkit.element.RenderContext;
@@ -22,6 +23,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -167,6 +169,31 @@ class RenderSmokeTest {
         // Then：屏幕上出现的是最后一项（跟随底部），而不是第一项
         assertTrue(screen.stream().anyMatch(line -> line.contains("第 40 项")), screen.toString());
         assertFalse(screen.stream().anyMatch(line -> line.contains("第 1 项")), screen.toString());
+    }
+
+    @Test
+    @DisplayName("整屏渲染后硬件光标落在输入框内：留在最后一格会让 IME 预编辑串从末列换行、把整屏顶走")
+    void render_should_placeHardwareCursorInsideInputBox() {
+        // Given：一帧带会话内容的完整版式
+        ChatLayout layout = layout();
+        ChatState state = new ChatState();
+        List<SessionMessage> messages = sessionOf("你好");
+        ChatState.View view = state.view("s-1", messages, layout.getMessageWidth(),
+                layout.getMessageRows(), TranscriptProjector.DEFAULT_MAX_MESSAGES,
+                Collections.<String, ToolRenderHint>emptyMap());
+        Buffer buffer = Buffer.empty(Rect.of(TERMINAL_WIDTH, TERMINAL_HEIGHT));
+        Frame frame = Frame.forTesting(buffer);
+
+        // When：把整帧画进缓冲区
+        new ChatShell(new ChatInputView(keys -> EventResult.HANDLED))
+                .render(view, "会话", "状态栏", Overlay.none(), Collections.emptyMap(), layout)
+                .render(frame, frame.area(), RenderContext.empty());
+
+        // Then：硬件光标在输入区那一行，而不是终端右下角的状态栏末列
+        Position cursor = frame.cursorPosition().orElse(null);
+        assertNotNull(cursor, "整屏渲染后必须有硬件光标位置，否则 IME 预编辑串无处可画");
+        assertTrue(cursor.y() >= layout.getMessageRows(), "光标应在消息区下方的输入区：" + cursor);
+        assertTrue(cursor.y() < TERMINAL_HEIGHT - 1, "光标不得落在状态栏那一行：" + cursor);
     }
 
     /**

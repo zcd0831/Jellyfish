@@ -246,7 +246,8 @@ fork 不复制 token 用量，压缩摘要按「边界是否落在复制范围�
 ## 可观测性
 
 进程退出时会往日志里打一份**健康检查**（模型 / 插件 / 事件通道 / 压缩）与一份**运行期指标汇总**（命令、工具、权限、会话、
-压缩、事件通道队列等），用于事后排查。
+压缩、事件通道队列等），用于事后排查。插件启停相关的计数（`plugin.started` / `plugin.stopped` / `plugin.failed` /
+`plugin.stateChanges`）来自 `PluginStateChangedEvent`，它在插件启用 / 停止 / 卸载 / 启动失败时由插件运行时广播。
 
 **指标只做程序化输出，没有 `/metrics` 命令**：一份只在退出时落盘的排查材料，不需要额外的暴露面与鉴权面；
 `GET /health` 承担的是「服务活着吗」这一件事（见 [server-api.md](server-api.md)），不是指标出口。
@@ -394,6 +395,7 @@ flowchart TB
     Registry -->|"同步策略：调用点内联，取返回值"| ExtReg
     Registry -->|"异步策略：有界队列，可丢弃"| EventCh
     PluginMgr -->|"加载 / 交付 PluginContext"| PluginCtx
+    PluginMgr -.->|"PluginStateChangedEvent（启动 / 停止 / 失败）"| EventCh
     PluginCtx -->|"handle：工具 / 命令注册（描述符随 handler 存）"| ExtReg
     PluginCtx -->|"contribute：其它扩展点注册 / 按 pluginId 退订"| ExtReg
     PluginCtx -->|"observe / emit：按 pluginId 订阅与退订"| EventCh
@@ -410,7 +412,7 @@ flowchart TB
     %% ===================== 边界 <-> 插件 =====================
     PluginCtx -->|"插件唯一入口"| Plugins
     ExtReg -->|"按类型 + 路由键有序分发"| Plugins
-    EventCh -->|"白名单 + 限流广播"| Plugins
+    EventCh -->|"按类型广播：有界队列，满则丢弃并记账"| Plugins
     Plugins -->|"handle / contribute / observe / emit"| PluginCtx
 
     %% ===================== RuntimeConfig 注入 =====================

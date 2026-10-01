@@ -66,8 +66,6 @@ class TaskToolTest {
         assertEquals("subagent_type", descriptor.getRequired().get(0));
         assertEquals("prompt", descriptor.getRequired().get(1));
         assertTrue(descriptor.getParameters().containsKey("prompt"));
-        // 它会改外部状态（派生模型调用），不能声明成只读
-        assertFalse(descriptor.isReadOnly());
     }
 
     @Test

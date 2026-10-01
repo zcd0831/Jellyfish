@@ -10,7 +10,6 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -79,25 +78,5 @@ class ToolDescriptorTest {
     void toString_should_render_name() {
         // When / Then
         assertEquals("ToolDescriptor{name=calculator}", new ToolDescriptor("calculator", null).toString());
-    }
-
-    @Test
-    void isReadOnly_should_default_to_false_for_legacy_constructors() {
-        // When：不带 readOnly 的两个既有构造器
-        ToolDescriptor full = new ToolDescriptor("calculator", "desc", null, null);
-        ToolDescriptor brief = new ToolDescriptor("calculator", "desc");
-
-        // Then：缺省即可写工具，避免既有插件因此改变 PLAN 模式行为
-        assertFalse(full.isReadOnly());
-        assertFalse(brief.isReadOnly());
-    }
-
-    @Test
-    void isReadOnly_should_return_declared_value() {
-        // When
-        ToolDescriptor descriptor = new ToolDescriptor("read_file", "desc", null, null, true);
-
-        // Then
-        assertTrue(descriptor.isReadOnly());
     }
 }

@@ -7,7 +7,9 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import zcd.jellyfish.api.event.EventPublisher;
+import zcd.jellyfish.api.event.JellyfishEvent;
 import zcd.jellyfish.api.event.RegisterOptions;
+import zcd.jellyfish.api.event.notification.ConfigWarningEvent;
 import zcd.jellyfish.api.event.notification.PermissionDecidedEvent;
 import zcd.jellyfish.api.extension.ExtensionHandler;
 import zcd.jellyfish.api.extension.PermissionCheckRequest;
@@ -20,9 +22,11 @@ import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.plugin.PluginRuntimeConfig;
 import zcd.jellyfish.infra.registry.TypeRegistry;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -34,6 +38,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -212,9 +217,40 @@ class PermissionManagerTest {
         PermissionDecision decision = manager.decide(new PermissionCheckRequest("agent-a", "write_file", null,
                 PermissionMode.PLAN, null));
 
+        // Then：文案必须点明去哪儿声明，否则用户只能看到「仅允许只读工具」而不知道该改哪里
+        assertTrue(decision.isDenied());
+        assertTrue(decision.getReason().contains("readOnlyTools"), decision.getReason());
+    }
+
+    @Test
+    void decide_should_warnOnce_when_plan_denies_with_empty_whitelist() {
+        // Given：白名单为空（不是「取不到判据」，而是「一个都没声明」）
+        when(policies.policyOf("agent-a")).thenReturn(PermissionPolicy.unrestricted());
+
+        // When：连续两次被 PLAN 拒
+        manager.decide(new PermissionCheckRequest("agent-a", "write_file", null, PermissionMode.PLAN, null));
+        manager.decide(new PermissionCheckRequest("agent-a", "read_file", null, PermissionMode.PLAN, null));
+
+        // Then：同一份配置只喊一次——每次判定都喊会把这个提示变成刷屏噪音
+        List<ConfigWarningEvent> warnings = configWarnings();
+        assertEquals(1, warnings.size(), warnings.toString());
+        assertEquals(PermissionSettings.READ_ONLY_TOOLS, warnings.get(0).getSource());
+        assertTrue(warnings.get(0).getMessage().contains("readOnlyTools"), warnings.get(0).getMessage());
+    }
+
+    @Test
+    void decide_should_not_warn_when_denied_tool_is_simply_not_in_whitelist() {
+        // Given：白名单非空，只是这个名字不在里面——这不是配置问题，不该有配置告警
+        useReadOnlyTools("read_file");
+        when(policies.policyOf("agent-a")).thenReturn(PermissionPolicy.unrestricted());
+
+        // When
+        PermissionDecision decision = manager.decide(new PermissionCheckRequest("agent-a", "write_file", null,
+                PermissionMode.PLAN, null));
+
         // Then
         assertTrue(decision.isDenied());
-        assertEquals("PLAN 模式仅允许只读工具", decision.getReason());
+        verify(events, never()).publish(any(ConfigWarningEvent.class));
     }
 
     @Test
@@ -530,6 +566,26 @@ class PermissionManagerTest {
     }
 
     /**
+     * 收集本次判定过程中发出的全部配置告警。
+     * <p>
+     * 审计事件与配置告警走同一个发布入口，因此不能直接 {@code verify(events).publish(...)} 计数——
+     * 那是把两种事件混在一起数。
+     *
+     * @return 其中的配置告警，按发布顺序
+     */
+    private List<ConfigWarningEvent> configWarnings() {
+        ArgumentCaptor<JellyfishEvent> captor = ArgumentCaptor.forClass(JellyfishEvent.class);
+        verify(events, atLeastOnce()).publish(captor.capture());
+        List<ConfigWarningEvent> warnings = new ArrayList<>();
+        for (JellyfishEvent event : captor.getAllValues()) {
+            if (event instanceof ConfigWarningEvent) {
+                warnings.add((ConfigWarningEvent) event);
+            }
+        }
+        return warnings;
+    }
+
+    /**
      * 只声明审批超时，不挂审批者。
      */
     private void stubApprovalTimeout() {
@@ -572,9 +628,7 @@ class PermissionManagerTest {
     }
 
     /**
-     * 构造只读工具集合：模拟某个插件在配置里追加白名单。
-     * <p>
-     * 描述符那一份由真实的 {@link ExtensionRegistry} 提供，本测试不注册只读工具，因此结果等价于配置内容。
+     * 构造只读工具集合：模拟用户在白名单里写下的工具名。
      *
      * @param toolNames 声明为只读的工具名，可为空
      * @return 只读工具集合
@@ -586,7 +640,7 @@ class PermissionManagerTest {
         configurations.put("readonly-plugin", pluginConfig);
         // 告警在本测试里不是关注点，用空实现避免噪音
         return new ReadOnlyTools(new PluginRuntimeConfig(null, null, null, configurations), event -> {
-        }, extensions);
+        });
     }
 
     /**

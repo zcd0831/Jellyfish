@@ -50,7 +50,7 @@ class ToolActivationTest {
     @Test
     void request_should_carry_session_facts_and_descriptor() {
         ToolDescriptor descriptor = new ToolDescriptor("mcp_search", "搜索", Collections.emptyMap(),
-                Collections.<String>emptyList(), true);
+                Collections.<String>emptyList());
 
         ToolActivationRequest request = new ToolActivationRequest("s1", "coder", descriptor,
                 PermissionMode.PLAN);

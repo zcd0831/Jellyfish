@@ -59,8 +59,11 @@ jellyfish-tui（TUI 外壳）  jellyfish-server（HTTP 外壳）  →  jellyfish
 回合的边界由外壳决定。让内核自己起一个回合，会让外壳不知道发生了什么事——它在途状态、取消入口、
 输入互斥与并发写历史会一起变坏。因此没有在途回合时入队当场失败，而不是默默开一个新回合。
 
-权限只能收紧不能放宽：插件拦截是三态（`ABSTAIN` / `ASK` / `DENY`），**没有 `ALLOW`**。只读白名单 = 工具描述符声明
-∪ `plugins.configurations.<pluginId>.readOnlyTools`，也就是说**用户只能往里追加**，插件无法自称某个写操作是只读的。
+权限只能收紧不能放宽：插件拦截是三态（`ABSTAIN` / `ASK` / `DENY`），**没有 `ALLOW`**。只读白名单**只有一个来源**：
+`plugins.configurations.<pluginId>.readOnlyTools`，即「用户说哪些工具在 PLAN 下可用」。工具描述符里曾经有一个由提供方
+声明的 `readOnly`，它与用户配置取并集——那让白名单**只增不减**、判定权还落在提供方手里（MCP 那一侧的提供方甚至是
+不受信的外部进程），因此该字段已整个移除。代价是 **PLAN 开箱为空**：没配任何名字时 PLAN 拒掉全部工具，这是刻意的
+（「用户没表态」与「用户不准」在白名单语义下是同一件事）。
 
 **缓存相关的两个扩展点只开放「旋钮」，不开放「内容」**：`RequestTuningRequest` 的结果类型只有缓存路由键、
 保留策略、断点数三个字段，`AgingStrategyRequest` 只给两个阈值与 stub 文案——两者的返回类型里**都没有**

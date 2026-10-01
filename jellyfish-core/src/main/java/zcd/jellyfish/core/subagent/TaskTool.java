@@ -74,7 +74,7 @@ public final class TaskTool implements ExtensionHandler<ToolCallRequest, ToolCal
 
     /** 工具名片：随处理器一起落注册表，模型看到的工具清单里就有它。 */
     private static final ToolDescriptor DESCRIPTOR = new ToolDescriptor(NAME, description(),
-            parameters(), required(), false);
+            parameters(), required());
 
     /** 委派器：准入、派生、执行、收尾全在它那里。 */
     private final SubAgentLauncher launcher;

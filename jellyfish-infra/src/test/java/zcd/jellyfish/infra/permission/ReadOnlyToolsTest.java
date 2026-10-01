@@ -33,7 +33,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
 /**
- * {@link ReadOnlyTools} 的单元测试：验证「描述符声明 ∪ 配置追加」两个来源、热部署跟随与配置容错。
+ * {@link ReadOnlyTools} 的单元测试：验证「用户配置是唯一来源」、快照换新后的重算与配置容错。
  *
  * @author zcd
  */
@@ -44,7 +44,7 @@ class ReadOnlyToolsTest {
     @Mock
     private EventPublisher events;
 
-    /** 真实的同步扩展点策略，注册进其中的工具描述符是只读性的权威来源。 */
+    /** 真实的同步扩展点策略：用来锁定「注册表里的工具不影响白名单」这条语义。 */
     private final ExtensionRegistry extensions = new ExtensionRegistry(new TypeRegistry());
 
     @Test
@@ -142,9 +142,8 @@ class ReadOnlyToolsTest {
     @Test
     void constructor_should_reject_null_collaborators() {
         // When / Then
-        assertThrows(NullPointerException.class, () -> new ReadOnlyTools(null, events, extensions));
-        assertThrows(NullPointerException.class, () -> new ReadOnlyTools(pluginRuntimeConfig(null), null, extensions));
-        assertThrows(NullPointerException.class, () -> new ReadOnlyTools(pluginRuntimeConfig(null), events, null));
+        assertThrows(NullPointerException.class, () -> new ReadOnlyTools(null, events));
+        assertThrows(NullPointerException.class, () -> new ReadOnlyTools(pluginRuntimeConfig(null), null));
     }
 
     @Test
@@ -153,7 +152,7 @@ class ReadOnlyToolsTest {
         Map<String, Map<String, Object>> configurations = new LinkedHashMap<>();
         configurations.put("plugin-a", declaration(Collections.singletonList("read_file")));
         PluginRuntimeConfig config = pluginRuntimeConfig(configurations);
-        ReadOnlyTools tools = new ReadOnlyTools(config, events, extensions);
+        ReadOnlyTools tools = new ReadOnlyTools(config, events);
         assertEquals(Collections.singleton("read_file"), tools.names());
 
         // When：配置刷新后快照换新，白名单必须跟着换
@@ -171,7 +170,7 @@ class ReadOnlyToolsTest {
         Map<String, Map<String, Object>> configurations = new LinkedHashMap<>();
         configurations.put("plugin-a", declaration(Collections.singletonList("read_file")));
         PluginRuntimeConfig config = pluginRuntimeConfig(configurations);
-        ReadOnlyTools tools = new ReadOnlyTools(config, events, extensions);
+        ReadOnlyTools tools = new ReadOnlyTools(config, events);
         assertEquals(Collections.singleton("read_file"), tools.names());
 
         // When
@@ -197,74 +196,45 @@ class ReadOnlyToolsTest {
     }
 
     @Test
-    void names_should_include_descriptor_declared_read_only_tools() {
-        // Given：插件在描述符里声明，配置段完全没有它
-        register("read_file", true);
-        register("write_file", false);
+    void names_should_ignore_registered_tools_when_config_is_empty() {
+        // Given：注册表里有工具（内核自注册的、插件注册的，都算）
+        register("read_file");
+        register("todo_write");
 
-        // When
+        // When：用户没有配置任何白名单
         ReadOnlyTools tools = tools(null);
 
-        // Then
-        assertEquals(Collections.singleton("read_file"), tools.names());
-        assertTrue(tools.contains("read_file"));
-        assertFalse(tools.contains("write_file"));
+        // Then：白名单仍为空——注册表不再是判据，这正是本次改造要锁定的语义
+        assertTrue(tools.names().isEmpty());
+        assertFalse(tools.contains("read_file"));
+        assertFalse(tools.contains("todo_write"));
     }
 
     @Test
-    void names_should_union_descriptor_declaration_and_config_supplement() {
-        // Given：描述符声明一个，用户又追加一个提供方没标只读的
-        register("read_file", true);
-        register("legacy_read", false);
-        Map<String, Map<String, Object>> configurations = new LinkedHashMap<>();
-        configurations.put("plugin-a", declaration(Collections.singletonList("legacy_read")));
-
-        // When
-        ReadOnlyTools tools = tools(configurations);
-
-        // Then
-        assertEquals(new LinkedHashSet<>(Arrays.asList("legacy_read", "read_file")), tools.names());
-    }
-
-    @Test
-    void names_should_follow_plugin_hot_deploy() {
-        // Given：插件装上时声明只读工具
+    void names_should_not_follow_plugin_hot_deploy() {
+        // Given：用户配置了 legacy_read，同时插件注册了一个工具
         Map<String, Map<String, Object>> configurations = new LinkedHashMap<>();
         configurations.put("plugin-a", declaration(Collections.singletonList("legacy_read")));
         ReadOnlyTools tools = tools(configurations);
-        Subscription subscription = register("read_file", true);
-        assertEquals(new LinkedHashSet<>(Arrays.asList("legacy_read", "read_file")), tools.names());
+        Subscription subscription = register("read_file");
+        assertEquals(Collections.singleton("legacy_read"), tools.names());
 
-        // When：插件下架，注册项被回收
+        // When：插件下架
         subscription.close();
 
-        // Then：描述符那份白名单立刻消失（无需任何插件变更通知）
+        // Then：白名单只跟配置走，注册表的变化一点都反映不到这里
         assertEquals(Collections.singleton("legacy_read"), tools.names());
         assertFalse(tools.contains("read_file"));
     }
 
-    @Test
-    void names_should_include_core_registered_tool_without_plugin_config() {
-        // Given：内核自注册的工具（没有对应的 plugins.configurations 段）
-        register("todo_write", true);
-
-        // When
-        ReadOnlyTools tools = tools(Collections.<String, Map<String, Object>>emptyMap());
-
-        // Then：不再因为没有配置段而漏掉
-        assertTrue(tools.contains("todo_write"));
-    }
-
     /**
-     * 注册一个工具处理器，只关心它的描述符。
+     * 注册一个工具处理器，只关心「注册表里确实有它」。
      *
-     * @param name     工具名
-     * @param readOnly 是否只读
+     * @param name 工具名
      * @return 注册句柄，{@code close()} 即卸载该工具
      */
-    private Subscription register(String name, boolean readOnly) {
-        ToolDescriptor descriptor = new ToolDescriptor(name, name, null, null, readOnly);
-        return extensions.handle("test-owner", ToolCallRequest.class, name, descriptor,
+    private Subscription register(String name) {
+        return extensions.handle("test-owner", ToolCallRequest.class, name, new ToolDescriptor(name, name),
                 request -> new ToolCallResult(name, "ok"), RegisterOptions.DEFAULT);
     }
 
@@ -275,7 +245,7 @@ class ReadOnlyToolsTest {
      * @return 只读工具集合
      */
     private ReadOnlyTools tools(Map<String, Map<String, Object>> configurations) {
-        return new ReadOnlyTools(pluginRuntimeConfig(configurations), events, extensions);
+        return new ReadOnlyTools(pluginRuntimeConfig(configurations), events);
     }
 
     /**

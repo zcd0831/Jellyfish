@@ -17,8 +17,14 @@ import java.util.Map;
  * <p>
  * 与处理器一起存表的好处：工具清单不需要第二份目录，插件下架时描述符随注册一起消失。
  * <p>
- * {@code readOnly} 是「会不会产生副作用」的唯一权威声明：只有提供方知道答案，所以它随处理器一起落表，
- * 而不是让用户在配置里替工具声明。它不下发给模型（{@code LlmTool} 不含该字段），只供内核在 PLAN 模式下判定。
+ * <b>这里没有「是否只读」字段</b>：它曾经有（提供方在描述符里自称只读），现已移除。
+ * 原因是那个设计让 PLAN 模式的白名单变成「提供方声明 ∪ 用户配置」——一个<b>只增不减</b>的集合，
+ * 而且判定权落在被判定的一方：提供方可以把自己的工具塞进白名单，用户没有任何手段拿出来
+ * （MCP 那一侧更极端，「提供方」是不受信的外部进程）。
+ * 现在的口径是：<b>只读与否完全由用户配置决定</b>
+ * （{@code plugins.configurations.<pluginId>.readOnlyTools}），描述符只回答
+ * 「这个工具叫什么、怎么用、要什么参数」。
+ * <p>
  * 不可变，可安全跨线程传递。
  *
  * @author zcd
@@ -38,25 +44,15 @@ public final class ToolDescriptor {
     private final List<String> required;
 
     /**
-     * 是否为只读工具：调用它不会改变磁盘/外部状态。
-     * <p>
-     * 只有工具提供方知道自己的工具有没有副作用，因此这个声明随处理器一起落表，
-     * 由内核在 PLAN 模式下作为只读白名单使用。
-     */
-    private final boolean readOnly;
-
-    /**
      * 构造工具描述符。
      *
      * @param name        工具名，不可为空白
      * @param description 工具用途描述，可为 {@code null}
      * @param parameters  参数的 JSON Schema properties，可为 {@code null}
      * @param required    必填参数名列表，可为 {@code null}
-     * @param readOnly    是否为只读工具
      * @throws JellyfishException 工具名为空白时抛出
      */
-    public ToolDescriptor(String name, String description, Map<String, Object> parameters, List<String> required,
-                          boolean readOnly) {
+    public ToolDescriptor(String name, String description, Map<String, Object> parameters, List<String> required) {
         if (name == null || name.trim().isEmpty()) {
             throw new JellyfishException("tool descriptor name must not be blank");
         }
@@ -68,23 +64,6 @@ public final class ToolDescriptor {
         this.required = required == null
                 ? Collections.<String>emptyList()
                 : Collections.unmodifiableList(new ArrayList<>(required));
-        this.readOnly = readOnly;
-    }
-
-    /**
-     * 构造工具描述符，默认为可写工具。
-     * <p>
-     * 保留这个构造器是为了源码兼容：绝大多数工具是有副作用的，只读是少数，
-     * 让只读那个构造器成为显式选择可以减少误声明。
-     *
-     * @param name        工具名，不可为空白
-     * @param description 工具用途描述，可为 {@code null}
-     * @param parameters  参数的 JSON Schema properties，可为 {@code null}
-     * @param required    必填参数名列表，可为 {@code null}
-     * @throws JellyfishException 工具名为空白时抛出
-     */
-    public ToolDescriptor(String name, String description, Map<String, Object> parameters, List<String> required) {
-        this(name, description, parameters, required, false);
     }
 
     /**
@@ -132,15 +111,6 @@ public final class ToolDescriptor {
      */
     public List<String> getRequired() {
         return required;
-    }
-
-    /**
-     * 判断是否为只读工具。
-     *
-     * @return 只读返回 {@code true}
-     */
-    public boolean isReadOnly() {
-        return readOnly;
     }
 
     @Override

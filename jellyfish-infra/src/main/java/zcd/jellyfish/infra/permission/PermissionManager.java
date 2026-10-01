@@ -3,6 +3,7 @@ package zcd.jellyfish.infra.permission;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import zcd.jellyfish.api.event.EventPublisher;
+import zcd.jellyfish.api.event.notification.ConfigWarningEvent;
 import zcd.jellyfish.api.event.notification.PermissionDecidedEvent;
 import zcd.jellyfish.api.extension.PermissionCheckRequest;
 import zcd.jellyfish.api.extension.PermissionDecision;
@@ -17,6 +18,7 @@ import javax.inject.Inject;
 import javax.inject.Singleton;
 import java.time.Duration;
 import java.util.Objects;
+import java.util.Set;
 import java.util.function.Predicate;
 
 /**
@@ -55,6 +57,10 @@ public class PermissionManager {
     /** 审批结论的来源标识，写进审计事件：一眼能分出「策略直接拒绝」与「人在审批框上拒绝」。 */
     public static final String APPROVAL_SOURCE = "approval";
 
+    /** PLAN 被拒时给出的「去哪儿声明」提示：拒绝文案与空白名单告警共用一份，避免两处说法漂移。 */
+    private static final String READ_ONLY_DECLARATION_HINT =
+            "请在 plugins.configurations.<pluginId>.readOnlyTools 里声明 PLAN 下允许使用的工具名";
+
     /** 策略来源，将来由 AgentManager 实现。 */
     private final PermissionPolicyProvider policies;
 
@@ -72,6 +78,9 @@ public class PermissionManager {
 
     /** 运行时配置，用于现读审批超时。 */
     private final RuntimeConfig runtimeConfig;
+
+    /** 上次就「PLAN 白名单为空」发过告警所依据的白名单快照，用于「每种配置只喊一次」。 */
+    private volatile Set<String> emptyWhitelistWarnedFor;
 
     /**
      * 构造权限管理器。
@@ -182,9 +191,40 @@ public class PermissionManager {
         }
         if (request.getMode() == PermissionMode.PLAN && !readOnlyTools.contains(toolName)) {
             // PLAN 是白名单语义：集合为空时同样拒绝（属「策略已生效但集合为空」，不是「取不到策略」）
-            return PermissionDecision.deny("PLAN 模式仅允许只读工具");
+            warnIfPlanWhitelistIsEmpty(toolName);
+            return PermissionDecision.deny("PLAN 模式仅允许只读工具（" + READ_ONLY_DECLARATION_HINT + "）");
         }
         return PermissionDecision.allow(null);
+    }
+
+    /**
+     * 在「PLAN 因白名单为空而拒绝」时补一条配置告警，每种配置只发一次。
+     * <p>
+     * <b>为什么挂在拒绝上，而不是启动时发</b>：只读白名单为空是 PLAN 的合法配置（就是「一个都不许」），
+     * 缺省模式又不是 PLAN——启动时无条件喊一次，会对绝大多数根本不用 PLAN 的用户造成纯噪音，
+     * 喊多了还会把真正需要看见的告警淹掉。而「刚被 PLAN 拒了一次」正是用户第一次需要这条信息的时刻：
+     * 此时他看到的拒绝文案是「仅允许只读工具」，不说清去哪儿声明，他只能去翻配置文档。
+     * <p>
+     * <b>为什么去重键是白名单快照本身</b>：{@code ReadOnlyTools} 每次重算会给出一个新的集合实例，
+     * 因此引用比较恰好等于「这份配置是否已经喊过」。用户改完配置后若仍然是空集合，会再喊一次——
+     * 那是新的一份配置，不能算重复。判定本身不依赖告警，发出失败也不影响拒绝结论。
+     *
+     * @param toolName 被拒的工具名，进告警文案便于定位
+     */
+    private void warnIfPlanWhitelistIsEmpty(String toolName) {
+        Set<String> names = readOnlyTools.names();
+        if (!names.isEmpty() || names == emptyWhitelistWarnedFor) {
+            return;
+        }
+        emptyWhitelistWarnedFor = names;
+        try {
+            events.publish(new ConfigWarningEvent(PermissionSettings.READ_ONLY_TOOLS,
+                    "PLAN 模式下工具「" + toolName + "」被拒，且只读白名单为空（PLAN 下所有工具都会被拒）："
+                            + READ_ONLY_DECLARATION_HINT));
+        } catch (RuntimeException e) {
+            // 告警只是提示，发不出去不改变判定（审批链路上任何一环都不该因为可观测性而失败）
+            LOG.warn("只读白名单为空的告警发布失败", e);
+        }
     }
 
     /**

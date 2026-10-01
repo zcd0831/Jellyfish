@@ -147,6 +147,29 @@ class SubAgentToolsTest {
     }
 
     @Test
+    void register_should_restore_core_tool_when_overriding_plugin_is_reclaimed() {
+        // Given：插件顶替了内核的 task 工具
+        tools.register();
+        ToolDescriptor replacement = new ToolDescriptor(TaskTool.NAME, "自定义委派", null, null);
+        Subscription plugin = extensions.handle("my-plugin", ToolCallRequest.class, TaskTool.NAME, replacement,
+                (ExtensionHandler<ToolCallRequest, ToolCallResult>) request -> null,
+                RegisterOptions.override(true));
+        assertEquals("my-plugin",
+                extensions.descriptorBindings(ToolCallRequest.class, ToolDescriptor.class).get(0).getOwner());
+
+        // When：插件停止（框架按 pluginId 回收它的全部登记）
+        plugin.close();
+
+        // Then：内核的 task 工具回到注册表，而不是永久消失
+        // （覆盖一旦不可逆，「装过插件之后内置工具就没了」这种问题只能靠重启进程恢复）
+        List<DescriptorBinding<ToolDescriptor>> bindings =
+                extensions.descriptorBindings(ToolCallRequest.class, ToolDescriptor.class);
+        assertEquals(1, bindings.size());
+        assertEquals(SubAgentTools.OWNER, bindings.get(0).getOwner());
+        assertEquals(TaskTool.NAME, bindings.get(0).getDescriptor().getName());
+    }
+
+    @Test
     void register_should_reject_plugin_without_explicit_override() {
         // Given
         tools.register();

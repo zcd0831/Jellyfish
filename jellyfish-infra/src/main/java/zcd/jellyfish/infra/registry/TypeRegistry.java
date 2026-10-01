@@ -6,9 +6,11 @@ import zcd.jellyfish.api.extension.ExtensionException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicLong;
@@ -29,6 +31,17 @@ import java.util.function.Predicate;
  * </ul>
  * <b>唯一性由登记入口决定，不是键的属性</b>：同一个 (类型, 路由键) 在唯一入口下唯一，在共享入口下可多个。
  * <p>
+ * <b>覆盖是一条链，不是一次覆盖写</b>：唯一键上的一次显式覆盖把新登记<b>压在旧登记之上</b>，
+ * 旧登记仍然留在表里，只是不再生效；查询始终只看链顶，因此对外仍是「同键唯一」。
+ * 这样做是为了让覆盖<b>可逆</b>：覆盖者被注销（插件停止、主动 {@code Subscription.close()}）时，
+ * 被它压住的那一层自动回到生效位置。
+ * <p>
+ * <b>为什么必须可逆</b>：覆盖是「用我的实现顶替你的」，而覆盖者的存活期通常短于被覆盖者
+ * （插件会被停掉、会被 {@code /reload} 重启，内核的注册活到进程结束）。若覆盖是就地替换、
+ * 旧登记被丢弃，那么插件一走，被它顶掉的内核工具就<b>永久消失</b>，而且登记表上看不出少了谁——
+ * 表现为「装过插件之后，某个内置命令就再也没了」，重启进程才恢复。这条链把「谁被谁压住」
+ * 记在 {@code HandlerRegistration.getOverriddenOwner()} 上，回收时逐层还原。
+ * <p>
  * 匹配规则：注册的类型只要 {@code isAssignableFrom} 查询类型即命中，因此订阅父类型能收到子类型；
  * 路由键为 {@code null} 的类型级注册对所有路由键生效。
  * <p>
@@ -44,8 +57,8 @@ public final class TypeRegistry {
             Comparator.comparingInt(HandlerRegistration::getOrder)
                     .thenComparingLong(HandlerRegistration::getSequence);
 
-    /** 注册项：键 → 处理器列表，保持注册顺序。 */
-    private final Map<RegistryKey, CopyOnWriteArrayList<HandlerRegistration>> registrations = new ConcurrentHashMap<>();
+    /** 注册项：键 → 槽位，保持注册顺序。 */
+    private final Map<RegistryKey, Slot> registrations = new ConcurrentHashMap<>();
 
     /** 解析缓存：查询类型 → 命中注册项（已按 order + sequence 排序）。 */
     private final Map<Class<?>, List<HandlerRegistration>> candidates = new ConcurrentHashMap<>();
@@ -70,24 +83,19 @@ public final class TypeRegistry {
     public HandlerRegistration registerUnique(String owner, Class<?> type, String routeKey, Object handler,
                                              Object descriptor, int order, boolean override) {
         RegistryKey key = keyOf(owner, type, routeKey, handler);
-        CopyOnWriteArrayList<HandlerRegistration> slot = slotOf(key);
+        Slot slot = slotOf(key);
         HandlerRegistration registration;
-        String overriddenOwner = null;
         synchronized (slot) {
-            if (!slot.isEmpty() && !override) {
+            slot.unique = true;
+            HandlerRegistration current = slot.peek();
+            if (current != null && !override) {
                 throw new ExtensionException(ExtensionException.Code.DUPLICATE_HANDLER,
-                        key + " already registered by " + slot.get(0).getOwner());
+                        key + " already registered by " + current.getOwner());
             }
-            if (!slot.isEmpty()) {
-                overriddenOwner = slot.get(0).getOwner();
-            }
+            // 覆盖是「压在链顶之上」而不是就地替换：被压住的那一层留着，覆盖者注销时自动回退
+            String overriddenOwner = current == null ? null : current.getOwner();
             registration = create(owner, type, routeKey, handler, descriptor, order, overriddenOwner);
-            if (overriddenOwner == null) {
-                slot.add(registration);
-            } else {
-                // 覆盖是整条替换：同键唯一语义下旧处理器不再保留
-                slot.set(0, registration);
-            }
+            slot.entries.add(registration);
         }
         candidates.clear();
         return registration;
@@ -95,8 +103,11 @@ public final class TypeRegistry {
 
     /**
      * 同键 0..N 登记。
+     * <p>
+     * 落在唯一键上时槽位退化为共享语义（该键的全部登记都可见）：这是编程错误下的兜底，
+     * 与改造前的表现一致——那时它们同样全部可见，查询会以 {@code AMBIGUOUS_HANDLER} 暴露出来。
      *
-     * @param owner      来源（内核组件名或 pluginId），不可为空白
+     * @param owner      来源
      * @param type       类型，不可为 {@code null}
      * @param routeKey   路由键，可为 {@code null}（类型级）
      * @param handler    处理器对象，不可为 {@code null}
@@ -110,7 +121,9 @@ public final class TypeRegistry {
                                               Object descriptor, int order) {
         RegistryKey key = keyOf(owner, type, routeKey, handler);
         HandlerRegistration registration = create(owner, type, routeKey, handler, descriptor, order, null);
-        slotOf(key).add(registration);
+        Slot slot = slotOf(key);
+        slot.unique = false;
+        slot.entries.add(registration);
         candidates.clear();
         return registration;
     }
@@ -133,9 +146,10 @@ public final class TypeRegistry {
     }
 
     /**
-     * 列出某类型下的全部注册项，忽略路由键。
+     * 列出某类型下的全部<b>生效</b>注册项，忽略路由键。
      * <p>
      * 供描述符查询使用：工具是按工具名（路由键）注册的，但清单需要一次拿到该类型下的所有处理器。
+     * 被覆盖压住的层不在这里——清单要的是「现在真正能用的是谁」。
      *
      * @param type 查询类型，不可为 {@code null}
      * @return 按 order 升序、同序按注册顺序排列的注册项，不可修改；无命中时为空列表
@@ -174,6 +188,9 @@ public final class TypeRegistry {
 
     /**
      * 解除一次登记。
+     * <p>
+     * <b>解除唯一键的链顶就是一次回退</b>：被它压住的那一层重新生效，不必由谁重新注册。
+     * 这对插件收尾尤其重要——插件停止时只回收自己的登记，被它顶替过的内核注册原地复活。
      *
      * @param registration 注册项，可为 {@code null}
      * @return 确实移除返回 {@code true}
@@ -183,11 +200,11 @@ public final class TypeRegistry {
             return false;
         }
         RegistryKey key = RegistryKey.of(registration.getType(), registration.getRouteKey());
-        CopyOnWriteArrayList<HandlerRegistration> slot = registrations.get(key);
-        if (slot == null || !slot.remove(registration)) {
+        Slot slot = registrations.get(key);
+        if (slot == null || !slot.entries.remove(registration)) {
             return false;
         }
-        if (slot.isEmpty()) {
+        if (slot.entries.isEmpty()) {
             registrations.remove(key, slot);
         }
         candidates.clear();
@@ -200,6 +217,9 @@ public final class TypeRegistry {
      * <b>精确匹配</b>：只回收 owner 完全相等的登记。需要「连同子来源一起回收」时用
      * {@link #removeAllUnder(String, String)}，不要放宽本方法的匹配规则——
      * 它同时也服务于内核内部来源（如 {@code metrics}）的收尾，改宽会让回收范围悄悄越界。
+     * <p>
+     * <b>被本来源压住的层会跟着回退</b>：回收后会重算每个槽位的生效项，因此「插件注册了工具 →
+     * 插件被停掉」之后，原先被它覆盖的内核工具自动恢复，不需要任何补偿动作。
      *
      * @param owner 来源标识
      * @return 回收的注册项数量
@@ -218,7 +238,7 @@ public final class TypeRegistry {
      * <p>
      * <b>匹配规则是「命名空间 + 分隔符」前缀，而不是裸前缀</b>：回收 {@code x} 不得碰
      * {@code xy} 这个毫不相干的插件，因此 {@code x} 只命中 {@code x} 与 {@code x<sep>*}，
-     * 层级更深（{@code x<sep>a<sep>b}）的也一并命中。
+     * 层级更深（ {@code x<sep>a<sep>b}）的也一并命中。
      * <p>
      * <b>分隔符由调用方传入</b>：命名空间是插件运行时的约定，不是注册表的约定；
      * 写死一个分隔符会让表底座替上层做主。
@@ -247,16 +267,20 @@ public final class TypeRegistry {
      * <p>
      * 逐槽位收集再整批移除：{@code CopyOnWriteArrayList} 的逐个移除每次都复制整个数组，
      * 一次注册量大的插件会退化成平方开销。
+     * <p>
+     * 这里回收的是槽位里的<b>全部</b>登记（含被压住的层），不是只有生效的那些：
+     * 判定依据是「这条登记属于谁」，与它此刻是否生效无关——一个被压住却没被回收的层，
+     * 会在覆盖者离开之后悄悄复活，那正是要避免的残留。
      *
      * @param doomed 判定命中逆汰的谓词，不可为 {@code null}
      * @return 回收的注册项数量
      */
     private int removeMatching(Predicate<HandlerRegistration> doomed) {
         int removed = 0;
-        for (Map.Entry<RegistryKey, CopyOnWriteArrayList<HandlerRegistration>> entry : registrations.entrySet()) {
-            CopyOnWriteArrayList<HandlerRegistration> slot = entry.getValue();
+        for (Map.Entry<RegistryKey, Slot> entry : registrations.entrySet()) {
+            Slot slot = entry.getValue();
             List<HandlerRegistration> matched = new ArrayList<>();
-            for (HandlerRegistration registration : slot) {
+            for (HandlerRegistration registration : slot.entries) {
                 if (doomed.test(registration)) {
                     matched.add(registration);
                 }
@@ -264,9 +288,9 @@ public final class TypeRegistry {
             if (matched.isEmpty()) {
                 continue;
             }
-            slot.removeAll(matched);
+            slot.entries.removeAll(matched);
             removed += matched.size();
-            if (slot.isEmpty()) {
+            if (slot.entries.isEmpty()) {
                 registrations.remove(entry.getKey(), slot);
             }
         }
@@ -277,17 +301,37 @@ public final class TypeRegistry {
     }
 
     /**
-     * 列出全部注册项，供诊断使用。
+     * 列出全部登记项，供诊断使用。
+     * <p>
+     * <b>含被覆盖压住的层</b>：诊断要回答的是「现在谁注册了什么」，而「被谁压住了」正是其中的一部分。
+     * 哪些此刻生效由 {@link #activeRegistrations()} 回答。
      *
-     * @return 按注册顺序排列的注册项，不可修改；无登记时为空列表
+     * @return 按注册顺序排列的登记项，不可修改；无登记时为空列表
      */
     public List<HandlerRegistration> registrations() {
         List<HandlerRegistration> all = new ArrayList<>();
-        for (CopyOnWriteArrayList<HandlerRegistration> slot : registrations.values()) {
-            all.addAll(slot);
+        for (Slot slot : registrations.values()) {
+            all.addAll(slot.entries);
         }
         all.sort(Comparator.comparingLong(HandlerRegistration::getSequence));
         return Collections.unmodifiableList(all);
+    }
+
+    /**
+     * 列出此刻生效的登记项：唯一键只有链顶生效，共享键全部生效。
+     *
+     * @return 不可修改集合；无登记时为空集合
+     */
+    public Set<HandlerRegistration> activeRegistrations() {
+        Set<HandlerRegistration> active = new HashSet<>();
+        for (Slot slot : registrations.values()) {
+            if (slot.unique && !slot.entries.isEmpty()) {
+                active.add(slot.peek());
+            } else {
+                active.addAll(slot.entries);
+            }
+        }
+        return Collections.unmodifiableSet(active);
     }
 
     /**
@@ -348,12 +392,15 @@ public final class TypeRegistry {
      * @param key 注册键
      * @return 槽位
      */
-    private CopyOnWriteArrayList<HandlerRegistration> slotOf(RegistryKey key) {
-        return registrations.computeIfAbsent(key, ignored -> new CopyOnWriteArrayList<HandlerRegistration>());
+    private Slot slotOf(RegistryKey key) {
+        return registrations.computeIfAbsent(key, ignored -> new Slot());
     }
 
     /**
      * 收集查询类型对应的候选注册项，带缓存。
+     * <p>
+     * 只收<b>生效</b>的登记项：唯一键链上被压住的层不参与匹配，否则一次覆盖会变成
+     * {@code AMBIGUOUS_HANDLER}。
      *
      * @param type 查询类型
      * @return 已按 order + sequence 排序的注册项，不可修改
@@ -365,8 +412,8 @@ public final class TypeRegistry {
             return cached;
         }
         List<HandlerRegistration> collected = new ArrayList<>();
-        for (CopyOnWriteArrayList<HandlerRegistration> slot : registrations.values()) {
-            for (HandlerRegistration registration : slot) {
+        for (Slot slot : registrations.values()) {
+            for (HandlerRegistration registration : slot.visible()) {
                 if (registration.getType().isAssignableFrom(type)) {
                     collected.add(registration);
                 }
@@ -385,5 +432,44 @@ public final class TypeRegistry {
      */
     public RegistrySnapshot snapshot() {
         return RegistrySnapshot.of(this);
+    }
+
+    /**
+     * 一个键下的全部登记。
+     * <p>
+     * 两种形态由登记入口决定：唯一键是<b>覆盖链</b>（只有链顶可见，其余是被压住的层），
+     * 共享键是<b>处理器集合</b>（全部可见）。合成一个类型是因为二者共用一份顺序与一段存活期，
+     * 拆成两张表反而要在回收时对齐两边的键。
+     */
+    private static final class Slot {
+
+        /** 登记项，按登记顺序排列；唯一键的链顶是最后一个元素。 */
+        private final CopyOnWriteArrayList<HandlerRegistration> entries = new CopyOnWriteArrayList<>();
+
+        /** 是否为唯一键（链式）；被共享登记落到同一键上时退化为 {@code false}。 */
+        private volatile boolean unique = true;
+
+        /**
+         * 取链顶，即唯一键当前生效的那一条。
+         *
+         * @return 链顶登记项；空槽位返回 {@code null}
+         */
+        private HandlerRegistration peek() {
+            return entries.isEmpty() ? null : entries.get(entries.size() - 1);
+        }
+
+        /**
+         * 列出本槽位参与查询匹配的登记项。
+         *
+         * @return 唯一键只给链顶，共享键给全部
+         */
+        private List<HandlerRegistration> visible() {
+            if (!unique) {
+                return entries;
+            }
+            HandlerRegistration top = peek();
+            return top == null ? Collections.<HandlerRegistration>emptyList()
+                    : Collections.singletonList(top);
+        }
     }
 }

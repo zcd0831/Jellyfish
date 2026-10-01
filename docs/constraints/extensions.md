@@ -42,9 +42,31 @@
   `try/catch` 里落地。同步侧没有异常隔离（见上一节），不写就等于把「插件抛错时内核怎么办」留空。
 - **请求 / 结果类型放 `api`，恰好一个可见构造器 + 静态工厂**：新增字段只能用新静态工厂补，
   不加兼容构造器（跨边界载荷规则见 [session-config.md](session-config.md)）。
-- **`order` 升序、同序按注册顺序**：这是 `TypeRegistry` 的既有语义，新点不得另立一套；
-  结果合并规则（第一个非 `ABSTAIN` 胜出 / 第一个 `cancel` 短路 / 取最后一个非缺省值）
-  由调用点的 `for` 循环实现，注册表不参与。
+- **`order` 升序、同序按注册顺序**：这是 `TypeRegistry` 的既有语义，新点不得另立一套。
+  结果合并规则由调用点的 `for` 循环实现，注册表不参与，且只有两类：
+  - **链式**（handler 看得到上游结果，如 `InputTransformRequest`、`TurnDirective.replaceInput`）：
+    逐环传递，最后一环天然生效，**不存在「谁胜」的规则**；
+  - **合并**（同一个请求对象复用给全部 handler，各自从原始值出发）：**`order` 最小且声明了该字段的那一个胜出**，
+    与「第一个非 `ABSTAIN` 胜出」「第一个 `cancel` 短路」同向——都是「更基础的插件先表态」。
+    「取最后一个非缺省」会让胜负取决于注册顺序，是刻意排除的。
+
+## 覆盖可恢复：同键唯一键上的覆盖是一条链
+
+- **覆盖不是就地替换，是压在链顶之上**：`registerUnique` 遇到已被占用的键且声明了
+  `RegisterOptions.override(true)` 时，新登记压在旧登记之上，旧登记**仍留在表里**，只是不再生效。
+  `ExtensionRegistry.handler(type, routeKey)` 的「同键唯一」语义因此**对外逐字段不变**（查询只看链顶，
+  被压住的层不参与匹配，不会退化成 `AMBIGUOUS_HANDLER`）。
+- **解除链顶就是一次回退**：`Subscription.close()`、插件停止时的 `removeAllUnder(pluginId)` 都会让
+  被压住的那一层**自动重新生效**，不需要任何补偿注册。
+- **为什么必须这样**：覆盖是「插件顶替内核」，而两者存活期不同——**内核的注册活到进程结束，
+  插件的注册随时可能被回收**（停止、`/reload` 重启插件）。若覆盖是就地替换并丢弃旧登记，
+  插件一走，被它顶掉的内核工具 / 命令就**永久消失**，登记表上也看不出少了谁（表现为
+  「装过插件之后，某个内置命令再也没了」，只能重启进程恢复）。这条链把「谁被谁压住」记在
+  `HandlerRegistration.getOverriddenOwner()` 上。
+- **回收按 owner 判定，与是否生效无关**：一个被压住却没被回收的层，会在覆盖者离开之后悄悄复活——
+  那正是要避免的残留，因此 `removeAll` / `removeAllUnder` 收的是槽位里的**全部**登记。
+- **诊断要能看见被压住的层**：`RegistrySnapshot` 把两层都列出来，并给被压住的那条标 `(shadowed)`。
+  只显示生效项会让「谁被顶掉了」无从查起。
 
 ## 插件生命周期
 
@@ -88,7 +110,8 @@
   `jellyfish.json` 里插件配置段的变化由 `/reload` 按差异重启对应插件。
 - **插件启用 / 禁用名单与逐插件配置段**在 `jellyfish.json` 的 `plugins` 段；字段语义与合并规则见
   [configuration.md](../configuration.md) 的 `plugins` 一节。
-- **只读白名单**：插件只能声明工具描述符，用户只能追加；语义见 [permissions.md](permissions.md)。
+- **只读白名单**：只有用户配置一个来源（`plugins.configurations.<pluginId>.readOnlyTools`），工具描述符里
+  没有「只读」这个字段；语义见 [permissions.md](permissions.md)。
 
 ## 改动检查清单
 

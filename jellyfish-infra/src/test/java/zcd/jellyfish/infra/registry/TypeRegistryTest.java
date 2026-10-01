@@ -81,6 +81,87 @@ class TypeRegistryTest {
     }
 
     @Test
+    void remove_should_reveal_overridden_layer_when_override_is_undone() {
+        // Given：内核注册 → 插件显式覆盖
+        HandlerRegistration builtin = registry.registerUnique("builtin", CommandRequest.class, "calc",
+                "one", null, 0, false);
+        HandlerRegistration plugin = registry.registerUnique("plugin-a", CommandRequest.class, "calc",
+                "two", null, 0, true);
+        assertEquals("two", registry.resolve(CommandRequest.class, "calc").get(0).getHandler());
+
+        // When：覆盖者被注销（插件停止走的就是这条路）
+        assertTrue(registry.remove(plugin));
+
+        // Then：被压住的内核注册重新生效，而不是键变成「无处理器」
+        List<HandlerRegistration> resolved = registry.resolve(CommandRequest.class, "calc");
+        assertEquals(1, resolved.size());
+        assertEquals(builtin, resolved.get(0));
+        assertEquals("one", resolved.get(0).getHandler());
+    }
+
+    @Test
+    void removeAll_should_reveal_overridden_layer_when_plugin_owner_is_reclaimed() {
+        // Given：内核注册 → 插件覆盖
+        registry.registerUnique("core", ToolCallRequest.class, "task", "core-task", null, 0, false);
+        registry.registerUnique("my-plugin", ToolCallRequest.class, "task", "plugin-task", null, 0, true);
+        assertEquals("plugin-task", registry.resolve(ToolCallRequest.class, "task").get(0).getHandler());
+
+        // When：框架按 pluginId 整批回收
+        assertEquals(1, registry.removeAll("my-plugin"));
+
+        // Then：内核工具复现，且描述符也回到原始来源
+        List<HandlerRegistration> resolved = registry.resolve(ToolCallRequest.class, "task");
+        assertEquals(1, resolved.size());
+        assertEquals("core", resolved.get(0).getOwner());
+        assertEquals("core-task", resolved.get(0).getHandler());
+    }
+
+    @Test
+    void registerUnique_should_stack_overrides_and_unwind_in_reverse_order() {
+        // Given：三层覆盖链
+        registry.registerUnique("core", CommandRequest.class, "calc", "core", null, 0, false);
+        HandlerRegistration second = registry.registerUnique("plugin-a", CommandRequest.class, "calc",
+                "a", null, 0, true);
+        registry.registerUnique("plugin-b", CommandRequest.class, "calc", "b", null, 0, true);
+        assertEquals("b", registry.resolve(CommandRequest.class, "calc").get(0).getHandler());
+
+        // When / Then：先撤中间那层，链顶不受影响
+        assertTrue(registry.remove(second));
+        assertEquals("b", registry.resolve(CommandRequest.class, "calc").get(0).getHandler());
+        // 再撤链顶：回退到最底下的内核注册
+        assertEquals(1, registry.removeAll("plugin-b"));
+        assertEquals("core", registry.resolve(CommandRequest.class, "calc").get(0).getHandler());
+    }
+
+    @Test
+    void resolve_should_never_expose_shadowed_layers_as_ambiguous() {
+        // Given：内核与插件都注册了同键，插件覆盖
+        registry.registerUnique("core", CommandRequest.class, "calc", "core", null, 0, false);
+        registry.registerUnique("plugin-a", CommandRequest.class, "calc", "a", null, 0, true);
+
+        // Then：查询只看到链顶一条——被压住的层不得让同键唯一查询变成「多命中」
+        assertEquals(1, registry.resolve(CommandRequest.class, "calc").size());
+        assertEquals(1, registry.registrationsOf(CommandRequest.class).size());
+        assertEquals(2, registry.registrations().size());
+        assertEquals(1, registry.activeRegistrations().size());
+    }
+
+    @Test
+    void registrationsOf_should_hide_shadowed_descriptor_but_snapshot_should_list_it() {
+        // Given：内核注册带描述符，插件覆盖后自带描述符
+        registry.registerUnique("core", ToolCallRequest.class, "calc", "core", "core-descriptor", 0, false);
+        registry.registerUnique("plugin-a", ToolCallRequest.class, "calc", "plugin", "plugin-descriptor", 0, true);
+
+        // Then：生效清单里只有链顶那一条描述符
+        assertEquals(Collections.singletonList((Object) "plugin-descriptor"),
+                registry.descriptorsOf(ToolCallRequest.class, String.class));
+        // 而诊断快照把两层都列出来，并标出被压住的那层
+        String rendered = registry.snapshot().render();
+        assertTrue(rendered.contains("(overrides core)"), rendered);
+        assertTrue(rendered.contains("(shadowed)"), rendered);
+    }
+
+    @Test
     void registerShared_should_allow_multiple_handlers_for_same_key() {
         // When
         registry.registerShared("owner-a", ContributionRequest.class, null, "a", null, 0);

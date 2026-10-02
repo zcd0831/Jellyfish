@@ -2,6 +2,7 @@ package zcd.jellyfish.core.action;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import zcd.jellyfish.api.action.ActionFailureReason;
 import zcd.jellyfish.api.action.PluginAction;
 import zcd.jellyfish.api.extension.CompactionTrigger;
 import zcd.jellyfish.core.compact.ConversationCompactor;
@@ -25,8 +26,9 @@ import java.util.List;
  * <b>排空点只有两处</b>，都由 {@code ReActLooper} 在回合内部调用：
  * <ul>
  *     <li>{@link #drainTurnBoundary}：一轮工具批次之后 / 模型本要收敛之前。
- *     压缩、切换模型、以及插入点为「工具批次之后」的用户消息在这里执行——它们都改缓存前缀，
- *     回合中途换掉会让本回合前后几轮的上下文不同源；</li>
+ *     改会话集合或缓存前缀的动作（压缩、切换模型、分支会话、重建工具清单）与插入点为「工具批次之后」
+ *     的用户消息在这里执行——它们都改缓存前缀，回合中途换掉会让本回合前后几轮的上下文不同源；
+ *     新增动作默认也落在这一档（见 {@code ActionQueue.Window#atTurnBoundary}）；</li>
  *     <li>{@link #drainConvergence}：模型不再要求工具、本来要收敛那一刻。
  *     插入点为「让回合继续跑」的用户消息在这里执行，返回值告诉循环「不要收敛」。</li>
  * </ul>
@@ -81,11 +83,10 @@ public class ActionDispatcher {
      * 必须在回合作业提交之前调用：与外壳的回合闸门同理，先起回合再登记会让
      * 「起回合」与「第一次投递」之间的动作白跑一趟。
      *
-     * @param sessionId    会话标识，不可为空白
-     * @param cancelHandle 取消该回合的回调，不可为 {@code null}
+     * @param sessionId 会话标识，不可为空白
      */
-    public void beginTurn(String sessionId, Runnable cancelHandle) {
-        queue.beginTurn(sessionId, cancelHandle);
+    public void beginTurn(String sessionId) {
+        queue.beginTurn(sessionId);
     }
 
     /**
@@ -137,7 +138,8 @@ public class ActionDispatcher {
                 injected += run(sessionId, entry, canInjectText);
             } catch (RuntimeException e) {
                 LOG.warn("插件动作执行失败: sessionId={} kind={}", sessionId, entry.getAction().getKind(), e);
-                entry.fail("执行失败：" + e.getClass().getSimpleName() + ": " + e.getMessage());
+                entry.fail(ActionFailureReason.EXECUTION_ERROR,
+                        "执行失败：" + e.getClass().getSimpleName() + ": " + e.getMessage());
             }
         }
         return injected;
@@ -166,7 +168,7 @@ public class ActionDispatcher {
                 return rebuildToolCatalog(sessionId, entry);
             default:
                 // 动作清单是封闭的，走到这里说明新增了动作却没接上执行分支
-                entry.fail("本内核尚未提供该能力：" + action.getKind());
+                entry.fail(ActionFailureReason.UNSUPPORTED_KIND, "本内核尚未提供该能力：" + action.getKind());
                 return 0;
         }
     }
@@ -238,7 +240,7 @@ public class ActionDispatcher {
     private int inject(String sessionId, ActionQueue.Pending entry, PluginAction.SendUserMessage action,
                        boolean canInjectText) {
         if (!canInjectText) {
-            entry.fail("本回合轮次已用尽，消息未投递");
+            entry.fail(ActionFailureReason.NO_REMAINING_ROUNDS, "本回合轮次已用尽，消息未投递");
             return 0;
         }
         sessionManager.appendMessage(sessionId, LlmMessage.user(action.getText()), null);
@@ -258,7 +260,7 @@ public class ActionDispatcher {
      */
     private int compact(String sessionId, ActionQueue.Pending entry) {
         if (!compactor.isAvailable()) {
-            entry.fail("压缩不可用：没有任何插件提供压缩策略");
+            entry.fail(ActionFailureReason.COMPACTION_UNAVAILABLE, "压缩不可用：没有任何插件提供压缩策略");
             return 0;
         }
         compactor.start(sessionId, CompactionTrigger.MANUAL);

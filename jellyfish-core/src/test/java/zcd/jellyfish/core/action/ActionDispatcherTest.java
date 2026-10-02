@@ -4,6 +4,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import zcd.jellyfish.api.action.ActionFailureReason;
 import zcd.jellyfish.api.action.ActionHandle;
 import zcd.jellyfish.api.action.ActionStatus;
 import zcd.jellyfish.api.action.DeliverAs;
@@ -56,8 +57,7 @@ class ActionDispatcherTest {
         compactor = mock(ConversationCompactor.class);
         toolCatalog = mock(ToolCatalog.class);
         dispatcher = new ActionDispatcher(queue, sessionManager, compactor, toolCatalog);
-        dispatcher.beginTurn("s1", () -> {
-        });
+        dispatcher.beginTurn("s1");
     }
 
     @Test
@@ -83,6 +83,7 @@ class ActionDispatcherTest {
         // 投了也永远不会发给模型，只会在历史里留下一条没人回答的提问
         verify(sessionManager, never()).appendMessage(any(), any(), any());
         assertEquals(ActionStatus.FAILED, handle.getStatus());
+        assertEquals(ActionFailureReason.NO_REMAINING_ROUNDS, handle.getFailureReason());
         assertTrue(handle.getResult().contains("轮次已用尽"), handle.getResult());
     }
 
@@ -124,6 +125,7 @@ class ActionDispatcherTest {
 
         verify(compactor, never()).start(any(), any());
         assertEquals(ActionStatus.FAILED, handle.getStatus());
+        assertEquals(ActionFailureReason.COMPACTION_UNAVAILABLE, handle.getFailureReason());
         assertTrue(handle.getResult().contains("压缩不可用"), handle.getResult());
     }
 
@@ -147,7 +149,9 @@ class ActionDispatcherTest {
 
         dispatcher.drainTurnBoundary("s1", true);
 
+        // 一条坏建议不该把整个排空点弄失败，后面的动作照跑
         assertEquals(ActionStatus.FAILED, broken.getStatus());
+        assertEquals(ActionFailureReason.EXECUTION_ERROR, broken.getFailureReason());
         assertTrue(broken.getResult().contains("模型不认识"), broken.getResult());
         assertEquals(ActionStatus.DONE, healthy.getStatus());
     }
@@ -187,6 +191,7 @@ class ActionDispatcherTest {
         dispatcher.drainTurnBoundary("s1", true);
 
         assertEquals(ActionStatus.FAILED, handle.getStatus());
+        assertEquals(ActionFailureReason.EXECUTION_ERROR, handle.getFailureReason());
     }
 
     @Test

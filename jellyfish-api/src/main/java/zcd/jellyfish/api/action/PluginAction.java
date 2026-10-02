@@ -44,9 +44,6 @@ public abstract class PluginAction {
         /** 立刻压缩会话，见 {@link PluginAction#compact(String)}。 */
         COMPACT,
 
-        /** 中止当前回合，见 {@link PluginAction#abortTurn(String)}。 */
-        ABORT_TURN,
-
         /** 切换会话的 provider / model，见 {@link PluginAction#switchModel(String, String, String)}。 */
         SWITCH_MODEL,
 
@@ -93,6 +90,9 @@ public abstract class PluginAction {
      * <p>
      * <b>{@code null} 或空白的文本没有意义</b>，当场拒绝——一条空消息在会话里会变成需要模型解释的东西，
      * 而不是一次静默的无操作。
+     * <p>
+     * <b>DONE 承诺什么</b>：消息<b>已经写进会话历史</b>，本回合的下一次模型调用一定看得到它。
+     * 它不承诺「模型照做了」——那是回合内容，不是动作的结果。
      *
      * @param sessionId 目标会话标识，不可为空白
      * @param text      消息文本，不可为空白
@@ -112,6 +112,9 @@ public abstract class PluginAction {
      * <p>
      * <b>只表达「现在就压」，不表达「怎么压」</b>：压缩策略请注册 {@code CompactionStrategy}；
      * 一个带自由文本指示的入口会让「策略」有两个真源。
+     * <p>
+     * <b>DONE 只承诺「已受理」，不承诺「已经压完」</b>：压缩本身是异步的（同一个线程池），
+     * 结果请查会话的压缩状态。与既有的 {@code /compact} 完全同口径，外壳因此不需要为它新增任何展示。
      *
      * @param sessionId 目标会话标识，不可为空白
      * @return 动作
@@ -122,27 +125,15 @@ public abstract class PluginAction {
     }
 
     /**
-     * 中止目标会话的在途回合。
-     * <p>
-     * <b>它不入队</b>：语义就是「置一个取消标志」，是个快动作，因此投递那一刻就执行
-     * （与既有的取消语义一致）。因此它在没有在途回合时也**不算失败**——「已经没有回合可中止了」
-     * 与「中止成功」的结果相同，为一个已经达成的目标报错只会让插件多写一个无用的分支。
-     *
-     * @param sessionId 目标会话标识，不可为空白
-     * @return 动作
-     * @throws JellyfishException 会话标识为空白时抛出
-     */
-    public static PluginAction abortTurn(String sessionId) {
-        return new AbortTurn(sessionId);
-    }
-
-    /**
      * 切换目标会话的 provider / model。
      * <p>
      * 与用户敲 {@code /model} 改会话模型是同一条路径。它不动权限判定链，也不动历史消息。
      * <p>
      * <b>为什么只在回合边界排空</b>：会话模型是缓存前缀的一部分，回合中途换掉会让本回合后面几轮的
      * 上下文前缀与前面几轮不同源。
+     * <p>
+     * <b>DONE 承诺什么</b>：会话的模型已经被改掉，本回合剩下的轮次与后续回合都用新的。
+     * 变化点本身在回合边界，因此不存在「前几轮一个模型、后几轮另一个模型」的混用。
      *
      * @param sessionId 目标会话标识，不可为空白
      * @param provider  provider 名，可为 {@code null}（表示跟随配置默认）
@@ -165,8 +156,13 @@ public abstract class PluginAction {
      * 没操作的情况下换掉。新会话标识写在 {@link ActionHandle#getResult()} 里，
      * 插件也可以订阅 {@code SessionCreatedEvent} 自行跟踪。
      * <p>
+     * <b>DONE 承诺什么</b>：新会话<b>已经落盘</b>，它的标识写在 {@link ActionHandle#getResult()} 里
+     * （文本形式，供人读；需要编程使用请订阅 {@code SessionCreatedEvent}）。
+     * <p>
      * <b>失败会明确回报</b>：源会话不存在、分支点消息找不到、没有可复制的历史、或生命周期钩子
-     * 拦下了本次分支时，句柄以 {@link ActionStatus#FAILED} 回报原因，而不是静默无效。
+     * 拦下了本次分支时，句柄以 {@link ActionStatus#FAILED} 回报，原因同时落在
+     * {@link ActionHandle#getFailureReason()}（机器可读）与 {@link ActionHandle#getResult()}（人可读），
+     * 而不是静默无效。
      *
      * @param sessionId 目标会话标识，不可为空白
      * @param messageId 分支点消息标识，可为 {@code null}（表示从末尾分支）
@@ -191,6 +187,11 @@ public abstract class PluginAction {
      * <p>
      * <b>它必定换来一次缓存前缀断裂</b>：工具清单在多数厂商的模板里排在 messages 之前，变一个字
      * 则整段请求连同历史一起作废，因此内核会为此记一条 WARN。
+     * <p>
+     * <b>DONE 承诺什么</b>：分两种情形，都写进 {@link ActionHandle#getResult()}——
+     * ① 该会话已有冻结清单时，表示清单已被丢弃、<b>下一个回合</b>会重新冻结（本次会作废一段缓存前缀）；
+     * ② 尚未冻结过时，表示本来就没有代价，下一个回合本就会带上最新工具集。
+     * 两者都是「已经办好」，差别只在有没有付出缓存代价。
      *
      * @param sessionId 目标会话标识，不可为空白
      * @param reason    重建原因，供日志与诊断使用，可为 {@code null}
@@ -296,28 +297,6 @@ public abstract class PluginAction {
         @Override
         public Kind getKind() {
             return Kind.COMPACT;
-        }
-    }
-
-    /**
-     * 「中止在途回合」动作。
-     *
-     * @author zcd
-     */
-    public static final class AbortTurn extends PluginAction {
-
-        /**
-         * 构造。
-         *
-         * @param sessionId 会话标识
-         */
-        private AbortTurn(String sessionId) {
-            super(sessionId);
-        }
-
-        @Override
-        public Kind getKind() {
-            return Kind.ABORT_TURN;
         }
     }
 

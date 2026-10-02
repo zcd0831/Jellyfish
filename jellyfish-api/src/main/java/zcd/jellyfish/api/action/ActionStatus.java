@@ -25,15 +25,19 @@ public enum ActionStatus {
      * <p>
      * <b>它是常态而不是异常</b>：插件从事件订阅回调（异步投递、可能落在回合刚结束之后）或自己的线程上
      * 投递动作时，失败是正常结果。插件必须把它当「这次没成」处理，而不是当 bug。
-     * 具体原因见 {@link ActionHandle#getResult()}。
+     * <p>
+     * 人可读的原因见 {@link ActionHandle#getResult()}；<b>要分流必须看</b>
+     * {@link ActionHandle#getFailureReason()}——本状态覆盖好几种来路不同的处境，
+     * 只按状态分流会把「轮次已用尽」当成可重试。
      */
     FAILED,
 
     /**
      * 被丢弃，没有执行。
      * <p>
-     * 两种来源：① 待排空队列已满（每会话有上界），新动作被丢；
-     * ② 插件停止时它在途排队的动作被整批清掉。
+     * 两种来源：① 待排空队列已满（每会话有上界），新动作被丢；② 插件停止时它在途排队的动作被整批清掉。
+     * 两者分别由 {@link ActionFailureReason#QUEUE_FULL} 与 {@link ActionFailureReason#PLUGIN_STOPPED}
+     * 区分，因此「等队列空出来再投」与「别投了」是可以编程分辨的。
      * <p>
      * 丢弃是安全的：动作是「建议内核做事」，不是「必须完成的事实」。
      */

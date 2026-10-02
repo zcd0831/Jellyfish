@@ -216,7 +216,7 @@ public class ReActLooper implements AutoCloseable {
         ReActTurnImpl turn = new ReActTurnImpl();
         // 先登记再起回合：与外壳的回合闸门同理。反过来的话，「起回合」与「插件第一次投递」之间的
         // 动作会白跑一趟，而那个窗口在真实使用里正好是「插件收到回合开始事件」那一刻
-        actionDispatcher.beginTurn(sessionId, turn::cancel);
+        actionDispatcher.beginTurn(sessionId);
         try {
             turn.submit(executor, () -> execute(turn, sessionId, userInput, effective));
         } catch (RuntimeException e) {

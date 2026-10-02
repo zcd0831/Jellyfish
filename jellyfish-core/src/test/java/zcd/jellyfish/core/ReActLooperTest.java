@@ -18,6 +18,7 @@ import zcd.jellyfish.api.extension.PermissionCheckRequest;
 import zcd.jellyfish.api.extension.PermissionDecision;
 import zcd.jellyfish.api.extension.CancellationToken;
 import zcd.jellyfish.api.extension.ToolCallRequest;
+import zcd.jellyfish.api.action.ActionFailureReason;
 import zcd.jellyfish.api.action.ActionHandle;
 import zcd.jellyfish.api.action.ActionStatus;
 import zcd.jellyfish.api.action.DeliverAs;
@@ -970,6 +971,7 @@ class ReActLooperTest {
         // Then：回合本身照常收敛，失败只在动作句柄上——投了也发不出去的消息不进历史，
         // 否则它会变成一条永远没人回答的提问，并与用户的下一次输入连成两条 user 消息
         assertEquals(ActionStatus.FAILED, handles.get(0).getStatus());
+        assertEquals(ActionFailureReason.NO_REMAINING_ROUNDS, handles.get(0).getFailureReason());
         assertTrue(handles.get(0).getResult().contains("轮次已用尽"), handles.get(0).getResult());
         assertEquals("读完了", result.getContent());
         // user + assistant(tool_use) + tool + assistant：插件的消息没进历史
@@ -996,27 +998,8 @@ class ReActLooperTest {
 
         // Then：回合结束时残留的动作被标失败，而不是镀成一个永不兑现的 QUEUED
         assertEquals(ActionStatus.FAILED, handles.get(0).getStatus());
+        assertEquals(ActionFailureReason.TURN_ENDED_UNREACHED, handles.get(0).getFailureReason());
         assertTrue(handles.get(0).getResult().contains("回合已结束"), handles.get(0).getResult());
-    }
-
-    @Test
-    void chat_should_abort_running_turn_when_plugin_asks() {
-        // Given：插件要求中止当前回合——它不入队，投递那一刻就置取消标志
-        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
-        when(permissionManager.decide(any(PermissionCheckRequest.class)))
-                .thenReturn(PermissionDecision.allow(null));
-        Session session = sessionManager.createDefault();
-        registerTool("read", request -> {
-            actionQueue.submit("plugin-a", PluginAction.abortTurn(session.getSessionId()));
-            return new ToolCallResult("read", "文件内容");
-        });
-        stubResponses(toolCallResponse("call_1", "read"), LlmResponse.text("不应该跑到这里"));
-
-        // When
-        ReActResult result = newLooper().chat(session.getSessionId(), "读文件", new RecordingListener()).await();
-
-        // Then
-        assertTrue(result.isCancelled());
     }
 
     @Test
@@ -1033,6 +1016,7 @@ class ReActLooperTest {
 
         // Then：明确失败，而不是静默丢掉
         assertEquals(ActionStatus.FAILED, handle.getStatus());
+        assertEquals(ActionFailureReason.NO_TURN_IN_FLIGHT, handle.getFailureReason());
         assertTrue(handle.getResult().contains("没有在途回合"), handle.getResult());
     }
 

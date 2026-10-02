@@ -3,6 +3,7 @@ package zcd.jellyfish.infra.plugin;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import zcd.jellyfish.api.JellyfishException;
+import zcd.jellyfish.api.action.ActionFailureReason;
 import zcd.jellyfish.api.action.ActionHandle;
 import zcd.jellyfish.api.action.ActionStatus;
 import zcd.jellyfish.api.action.DeliverAs;
@@ -196,8 +197,7 @@ class PluginContextFactoryTest {
     void release_should_drop_pending_plugin_actions() {
         // Given：插件投了一条动作，它还在队列里等排空
         PluginContext context = factory.create(PluginDeclaration.of("plugin-a"));
-        actions.beginTurn("s1", () -> {
-        });
+        actions.beginTurn("s1");
         ActionHandle handle = context.submit(
                 PluginAction.sendUserMessage("s1", "接着干", DeliverAs.FOLLOW_UP));
         assertEquals(ActionStatus.QUEUED, handle.getStatus());
@@ -207,6 +207,7 @@ class PluginContextFactoryTest {
 
         // Then：停止之后没人再来排空它，插件必须能从旬柄上看到「没投出去」
         assertEquals(ActionStatus.DROPPED, handle.getStatus());
+        assertEquals(ActionFailureReason.PLUGIN_STOPPED, handle.getFailureReason());
         assertTrue(handle.getResult().contains("插件已停止"), handle.getResult());
     }
 

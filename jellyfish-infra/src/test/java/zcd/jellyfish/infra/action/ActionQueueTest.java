@@ -3,16 +3,17 @@ package zcd.jellyfish.infra.action;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import zcd.jellyfish.api.action.ActionFailureReason;
 import zcd.jellyfish.api.action.ActionHandle;
 import zcd.jellyfish.api.action.ActionStatus;
 import zcd.jellyfish.api.action.DeliverAs;
 import zcd.jellyfish.api.action.PluginAction;
 
 import java.util.List;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -41,48 +42,27 @@ class ActionQueueTest {
                 PluginAction.sendUserMessage("s1", "接着把 X 改完", DeliverAs.FOLLOW_UP));
 
         assertEquals(ActionStatus.FAILED, handle.getStatus());
+        assertEquals(ActionFailureReason.NO_TURN_IN_FLIGHT, handle.getFailureReason());
         assertTrue(handle.getResult().contains("没有在途回合"), handle.getResult());
         assertTrue(handle.isFinished());
     }
 
     @Test
-    void submit_should_report_done_when_aborting_without_turn() {
-        // 「已经没有回合可中止」与「中止成功」的结果相同，为此报错只会让插件多写一个走不到的分支
-        ActionHandle handle = queue.submit("plugin-a", PluginAction.abortTurn("s1"));
-
-        assertEquals(ActionStatus.DONE, handle.getStatus());
-        assertTrue(handle.getResult().contains("无需中止"), handle.getResult());
-    }
-
-    @Test
-    void submit_should_cancel_turn_immediately_when_aborting() {
-        AtomicBoolean cancelled = new AtomicBoolean(false);
-        queue.beginTurn("s1", () -> cancelled.set(true));
-
-        ActionHandle handle = queue.submit("plugin-a", PluginAction.abortTurn("s1"));
-
-        // 中止不入队：入队再等排空会让它错过自己想中止的那个回合
-        assertTrue(cancelled.get());
-        assertEquals(ActionStatus.DONE, handle.getStatus());
-    }
-
-    @Test
     void submit_should_queue_without_executing_when_turn_in_flight() {
         // 「入队即返回、绝不在提交者栈上执行」是硬规则：提交之后到被取走之前，它一直停在 QUEUED
-        queue.beginTurn("s1", () -> {
-        });
+        queue.beginTurn("s1");
 
         ActionHandle handle = queue.submit("plugin-a",
                 PluginAction.sendUserMessage("s1", "把 X 也改了", DeliverAs.STEER));
 
         assertEquals(ActionStatus.QUEUED, handle.getStatus());
+        assertNull(handle.getFailureReason());
         assertFalse(handle.isFinished());
     }
 
     @Test
     void takeTurnBoundary_should_take_steer_but_keep_follow_up() {
-        queue.beginTurn("s1", () -> {
-        });
+        queue.beginTurn("s1");
         ActionHandle steer = queue.submit("plugin-a",
                 PluginAction.sendUserMessage("s1", "改方向", DeliverAs.STEER));
         ActionHandle followUp = queue.submit("plugin-a",
@@ -98,8 +78,7 @@ class ActionQueueTest {
     @Test
     void takeTurnBoundary_should_take_compact_and_switch_model() {
         // 两者都改缓存前缀，因此只在回合边界做——取用规则必须与 STEER 同一档
-        queue.beginTurn("s1", () -> {
-        });
+        queue.beginTurn("s1");
         queue.submit("plugin-a", PluginAction.compact("s1"));
         queue.submit("plugin-a", PluginAction.switchModel("s1", "openai", "gpt-4o"));
 
@@ -108,8 +87,7 @@ class ActionQueueTest {
 
     @Test
     void takeConvergence_should_take_follow_up() {
-        queue.beginTurn("s1", () -> {
-        });
+        queue.beginTurn("s1");
         queue.submit("plugin-a", PluginAction.sendUserMessage("s1", "接着干", DeliverAs.FOLLOW_UP));
 
         List<ActionQueue.Pending> taken = queue.takeConvergence("s1");
@@ -126,8 +104,7 @@ class ActionQueueTest {
 
     @Test
     void takeTurnBoundary_should_preserve_delivery_order() {
-        queue.beginTurn("s1", () -> {
-        });
+        queue.beginTurn("s1");
         queue.submit("plugin-a", PluginAction.sendUserMessage("s1", "第一条", DeliverAs.STEER));
         queue.submit("plugin-b", PluginAction.sendUserMessage("s1", "第二条", DeliverAs.STEER));
 
@@ -142,8 +119,7 @@ class ActionQueueTest {
     @Test
     void submit_should_drop_when_queue_full() {
         ActionQueue small = new ActionQueue(2);
-        small.beginTurn("s1", () -> {
-        });
+        small.beginTurn("s1");
         small.submit("plugin-a", PluginAction.sendUserMessage("s1", "一", DeliverAs.STEER));
         small.submit("plugin-a", PluginAction.sendUserMessage("s1", "二", DeliverAs.STEER));
 
@@ -152,14 +128,14 @@ class ActionQueueTest {
 
         // 丢而不抛：动作是「建议内核做事」，不是「必须完成的事实」；插件靠句柄知道没投出去
         assertEquals(ActionStatus.DROPPED, overflow.getStatus());
+        assertEquals(ActionFailureReason.QUEUE_FULL, overflow.getFailureReason());
         assertTrue(overflow.getResult().contains("队列已满"), overflow.getResult());
         assertEquals(2, small.takeTurnBoundary("s1").size());
     }
 
     @Test
     void endTurn_should_close_window_and_fail_leftovers() {
-        queue.beginTurn("s1", () -> {
-        });
+        queue.beginTurn("s1");
         ActionHandle leftover = queue.submit("plugin-a",
                 PluginAction.sendUserMessage("s1", "太晚了", DeliverAs.FOLLOW_UP));
 
@@ -167,6 +143,7 @@ class ActionQueueTest {
 
         // 失败而不是丢弃：它没被容量或插件停止淘汰，而是「回合结束了，再也不会有人来取」
         assertEquals(ActionStatus.FAILED, leftover.getStatus());
+        assertEquals(ActionFailureReason.TURN_ENDED_UNREACHED, leftover.getFailureReason());
         assertTrue(leftover.getResult().contains("回合已结束"), leftover.getResult());
         assertEquals(ActionStatus.FAILED,
                 queue.submit("plugin-a", PluginAction.compact("s1")).getStatus());
@@ -179,8 +156,7 @@ class ActionQueueTest {
 
     @Test
     void dropByOwner_should_drop_own_and_child_namespace_actions() {
-        queue.beginTurn("s1", () -> {
-        });
+        queue.beginTurn("s1");
         ActionHandle own = queue.submit("plugin-a", PluginAction.compact("s1"));
         ActionHandle child = queue.submit("plugin-a::jira", PluginAction.compact("s1"));
         ActionHandle other = queue.submit("plugin-ab", PluginAction.compact("s1"));
@@ -191,6 +167,7 @@ class ActionQueueTest {
         // 前缀匹配必须带分隔符：否则 plugin-a 会把 plugin-ab 的动作一起清掉
         assertEquals(2, dropped);
         assertEquals(ActionStatus.DROPPED, own.getStatus());
+        assertEquals(ActionFailureReason.PLUGIN_STOPPED, own.getFailureReason());
         assertEquals(ActionStatus.DROPPED, child.getStatus());
         assertEquals(ActionStatus.QUEUED, other.getStatus());
         assertEquals(ActionStatus.QUEUED, unrelated.getStatus());
@@ -198,8 +175,7 @@ class ActionQueueTest {
 
     @Test
     void dropByOwner_should_ignore_null_owner() {
-        queue.beginTurn("s1", () -> {
-        });
+        queue.beginTurn("s1");
         queue.submit("plugin-a", PluginAction.compact("s1"));
 
         assertEquals(0, queue.dropByOwner(null));
@@ -208,8 +184,7 @@ class ActionQueueTest {
     @Test
     void submit_should_queue_fork_when_capability_available() {
         // fork 已随会话分支能力落地：与其他改会话集合的动作一样在回合边界排空
-        queue.beginTurn("s1", () -> {
-        });
+        queue.beginTurn("s1");
 
         ActionHandle fork = queue.submit("plugin-a", PluginAction.forkSession("s1", "m1", "分支"));
 
@@ -220,8 +195,7 @@ class ActionQueueTest {
     @Test
     void submit_should_queue_rebuild_tool_catalog_at_turn_boundary() {
         // 它是「回合边界」那一档：正在跑的回合已经拿过清单，中途换掉会让同一个回合里模型看到两套工具
-        queue.beginTurn("s1", () -> {
-        });
+        queue.beginTurn("s1");
 
         ActionHandle rebuild = queue.submit("plugin-a", PluginAction.rebuildToolCatalog("s1", "插件变了"));
 
@@ -231,16 +205,18 @@ class ActionQueueTest {
     }
 
     @Test
-    void beginTurn_should_replace_previous_window() {
-        AtomicBoolean first = new AtomicBoolean(false);
-        AtomicBoolean second = new AtomicBoolean(false);
-        queue.beginTurn("s1", () -> first.set(true));
-        queue.beginTurn("s1", () -> second.set(true));
+    void beginTurn_should_fail_leftovers_when_same_session_window_is_replaced() {
+        // 同一会话两个顶层回合是外壳该拦的事；动作通道只能认一个，且只能认最新的那个
+        queue.beginTurn("s1");
+        ActionHandle stranded = queue.submit("plugin-a",
+                PluginAction.sendUserMessage("s1", "投给了旧窗口", DeliverAs.STEER));
 
-        queue.submit("plugin-a", PluginAction.abortTurn("s1"));
+        queue.beginTurn("s1");
 
-        // 同一会话两个顶层回合是外壳该拦的事；动作通道只能认一个，并认最新的那个
-        assertFalse(first.get());
-        assertTrue(second.get());
+        // 旧窗口再也不会被任何人取走：不收尾它就会永久停在 QUEUED，插件据此等终态就等不到
+        assertEquals(ActionStatus.FAILED, stranded.getStatus());
+        assertEquals(ActionFailureReason.TURN_SUPERSEDED, stranded.getFailureReason());
+        assertTrue(stranded.getResult().contains("被同一会话的新回合取代"), stranded.getResult());
+        assertTrue(stranded.isFinished());
     }
 }

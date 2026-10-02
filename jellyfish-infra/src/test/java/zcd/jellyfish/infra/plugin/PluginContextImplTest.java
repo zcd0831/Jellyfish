@@ -3,6 +3,7 @@ package zcd.jellyfish.infra.plugin;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import zcd.jellyfish.api.JellyfishException;
+import zcd.jellyfish.api.action.ActionFailureReason;
 import zcd.jellyfish.api.action.ActionHandle;
 import zcd.jellyfish.api.action.ActionStatus;
 import zcd.jellyfish.api.action.DeliverAs;
@@ -304,7 +305,7 @@ class PluginContextImplTest {
 
         // When / Then
         assertThrows(JellyfishException.class,
-                () -> closable.submit(PluginAction.abortTurn("s1")));
+                () -> closable.submit(PluginAction.compact("s1")));
     }
 
     @Test
@@ -320,6 +321,7 @@ class PluginContextImplTest {
 
         // Then：「这次没赶上」是正常结果，不该变成必须 try/catch 的错误路径
         assertEquals(ActionStatus.FAILED, handle.getStatus());
+        assertEquals(ActionFailureReason.NO_TURN_IN_FLIGHT, handle.getFailureReason());
         assertTrue(handle.getResult().contains("没有在途回合"), handle.getResult());
     }
 

@@ -67,13 +67,6 @@ class PluginActionTest {
     }
 
     @Test
-    void abortTurn_should_carry_only_session() {
-        PluginAction action = PluginAction.abortTurn("s1");
-
-        assertEquals(PluginAction.Kind.ABORT_TURN, action.getKind());
-    }
-
-    @Test
     void switchModel_should_allow_null_provider_and_model() {
         // null 表示「跟随配置默认」，与 /model 的语义一致
         PluginAction.SwitchModel action =
@@ -124,6 +117,6 @@ class PluginActionTest {
     @Test
     void kind_should_cover_every_factory() {
         // 静态工厂与种类一一对应：清单「有界且逐条列明」这句话因此可以被程序检查
-        assertEquals(6, PluginAction.Kind.values().length);
+        assertEquals(5, PluginAction.Kind.values().length);
     }
 }

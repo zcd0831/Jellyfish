@@ -3,6 +3,7 @@ package zcd.jellyfish.infra.action;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import zcd.jellyfish.api.JellyfishException;
+import zcd.jellyfish.api.action.ActionFailureReason;
 import zcd.jellyfish.api.action.ActionHandle;
 import zcd.jellyfish.api.action.ActionStatus;
 import zcd.jellyfish.api.action.DeliverAs;
@@ -32,7 +33,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * <b>队列的存活期恰好是一个回合</b>：窗口由 {@link #beginTurn} 打开、{@link #endTurn} 关闭。
  * 这个内核里「一次 {@code chat} 调用 = 一个回合」，回合的边界由外壳决定，因此没有在途回合就没有窗口，
  * 入队一律失败。窗口随回合一起消失，残留的待排空动作在回合结束时被标为失败——
- * 它们已经不可能再被排空了。
+ * 它们已经不可能再被排空了。窗口被同一会话的另一个回合顶掉时同理：旧窗口的残留动作在
+ * {@link #beginTurn} 里就被收尾（见那里的注释），**任何一条路径都不会把动作留在
+ * {@link ActionStatus#QUEUED} 上无人认领**。
  * <p>
  * <b>为什么必须有个队列</b>：{@code submit} 与排空点不在同一时刻，甚至不在同一线程
  * （插件可以从它自己的线程投递）。因此「投了但还没轮到」是一个真实存在的状态，必须有地方承接它。
@@ -91,13 +94,13 @@ public final class ActionQueue {
     /**
      * 投递一条动作。
      * <p>
-     * <b>它只做「校验 + 入队」</b>，绝不在调用者的栈上执行动作本身——只有
-     * {@link PluginAction.Kind#ABORT_TURN} 例外：它的语义就是「置一个取消标志」这样一个快动作，
-     * 入队再等排空反而会让「中止」错过它想中止的那个回合。
+     * <b>它只做「校验 + 入队」</b>，绝不在调用者的栈上执行动作本身，也没有任何例外——
+     * 这一点是插件侧「不会重入」的全部依据（见 {@code PluginContext#submit}）。
      * <p>
      * <b>失败一律回报而不抛异常</b>：拿不到在途回合是插件可以预期的正常结果
      * （见 {@link ActionStatus#FAILED}），而不是必须 try/catch 的错误路径。
-     *
+     * 回报时一律带上 {@link ActionFailureReason}，让插件能按原因分流而不必解析文本。
+     * <p>
      * <b>「本内核尚未提供」这类拒绝已全部消失</b>：动作清单上的每一个都有落点了，
      * 因此这里不再有一档「先收下再当场标失败」的分支。
      *
@@ -107,14 +110,7 @@ public final class ActionQueue {
      */
     public ActionHandle submit(String owner, PluginAction action) {
         Objects.requireNonNull(action, "action must not be null");
-        Handle handle = new Handle(action);
-        String sessionId = action.getSessionId();
-        switch (action.getKind()) {
-            case ABORT_TURN:
-                return abort(handle, sessionId);
-            default:
-                return enqueue(owner, handle);
-        }
+        return enqueue(owner, new Handle(action));
     }
 
     /**
@@ -123,18 +119,27 @@ public final class ActionQueue {
      * <b>必须在起回合之前调用</b>：与 {@code SessionTurns} 的占位同理。「先起回合、再登记」会让
      * 起回合与第一次 {@code submit} 之间的动作白跑一趟，而那个窗口在真实使用里正好是
      * 「插件收到回合开始事件」那一刻。
+     * <p>
+     * <b>窗口被替换时旧窗口必须收尾</b>：同一会话再开一个新窗口，旧窗口连同里面的待排空动作
+     * 就再也不会被任何人取走。因此这里把它们逐条标为失败（{@link ActionFailureReason#TURN_SUPERSEDED}），
+     * 而不是让插件一直停在 {@link ActionStatus#QUEUED} 上等一个永远不会到来的终态。
+     * 内核不禁止同一会话两个顶层回合（那由外壳的闸门负责，Server 是 {@code SessionTurns}），
+     * 但动作通道只能认一个，且只认最新的那个。
      *
-     * @param sessionId    会话标识，不可为空白
-     * @param cancelHandle 取消该回合的回调，不可为 {@code null}
+     * @param sessionId 会话标识，不可为空白
      */
-    public void beginTurn(String sessionId, Runnable cancelHandle) {
-        Objects.requireNonNull(cancelHandle, "cancelHandle must not be null");
-        if (windows.containsKey(sessionId)) {
-            // 同一会话两个顶层回合：内核不禁止（那由外壳的闸门负责，Server 是 SessionTurns），
-            // 但动作通道只能认一个。记 WARN 而不是抛错——重开窗口比让新回合完全失去动作能力要好
-            LOG.warn("会话已有在途回合窗口，动作通道改认新回合: sessionId={}", sessionId);
+    public void beginTurn(String sessionId) {
+        Window previous = windows.put(sessionId, new Window());
+        if (previous == null) {
+            return;
         }
-        windows.put(sessionId, new Window(cancelHandle));
+        List<Pending> superseded = previous.takeAllWithoutStateChange();
+        LOG.warn("会话已有在途回合窗口，动作通道改认新回合: sessionId={} 未排空动作={}",
+                sessionId, superseded.size());
+        for (Pending leftover : superseded) {
+            leftover.fail(ActionFailureReason.TURN_SUPERSEDED,
+                    "回合窗口被同一会话的新回合取代，动作未能在本回合内排空");
+        }
     }
 
     /**
@@ -152,7 +157,7 @@ public final class ActionQueue {
             return;
         }
         for (Pending leftover : window.takeAllWithoutStateChange()) {
-            leftover.fail("回合已结束，动作未能在本回合内排空");
+            leftover.fail(ActionFailureReason.TURN_ENDED_UNREACHED, "回合已结束，动作未能在本回合内排空");
         }
     }
 
@@ -198,36 +203,13 @@ public final class ActionQueue {
         for (Window window : windows.values()) {
             for (Handle handle : window.dropOwnedBy(owner)) {
                 dropped++;
-                handle.onDropped("插件已停止，在途动作被丢弃");
+                handle.onDropped(ActionFailureReason.PLUGIN_STOPPED, "插件已停止，在途动作被丢弃");
             }
         }
         if (dropped > 0) {
             LOG.info("已丢弃插件在途动作: owner={} actions={}", owner, dropped);
         }
         return dropped;
-    }
-
-    /**
-     * 立刻中止目标会话的在途回合。
-     * <p>
-     * <b>没有在途回合也算成功</b>：「已经没有回合可中止了」与「中止成功」的结果相同，
-     * 为一个已经达成的目标报错，只会让插件多写一个永远走不到的分支。
-     *
-     * @param handle    动作句柄
-     * @param sessionId 会话标识
-     * @return 已落终态的句柄
-     */
-    private Handle abort(Handle handle, String sessionId) {
-        Window window = windows.get(sessionId);
-        if (window == null) {
-            return handle.onSucceeded("没有在途回合，无需中止");
-        }
-        try {
-            window.cancelHandle.run();
-            return handle.onSucceeded("已请求中止在途回合");
-        } catch (RuntimeException e) {
-            return handle.onFailed("中止在途回合失败：" + e.getClass().getSimpleName() + ": " + e.getMessage());
-        }
     }
 
     /**
@@ -243,14 +225,16 @@ public final class ActionQueue {
             // 最典型的失败，也是最容易被误当 bug 的一条：插件从事件订阅回调或自己的线程投递，
             // 而那一刻没有回合在跑。会话不存在、以及该会话只有子代理（嵌套）回合时，也会走到这里——
             // 后两者都没有顶层回合，因此归在同一处失败，把三种情形在原因里说清
-            return handle.onFailed("当前没有在途回合：插件动作只能投进正在跑的顶层回合"
-                    + "（会话不存在、或该会话只有子代理回合时同样如此）");
+            return handle.onFailed(ActionFailureReason.NO_TURN_IN_FLIGHT,
+                    "当前没有在途回合：插件动作只能投进正在跑的顶层回合"
+                            + "（会话不存在、或该会话只有子代理回合时同样如此）");
         }
         handle.owner = owner;
         if (!window.offer(handle)) {
             LOG.warn("动作队列已满，丢弃: owner={} sessionId={} capacity={}",
                     owner, handle.getAction().getSessionId(), capacity);
-            return handle.onDropped("动作队列已满（每会话上限 " + capacity + "），本条被丢弃");
+            return handle.onDropped(ActionFailureReason.QUEUE_FULL,
+                    "动作队列已满（每会话上限 " + capacity + "），本条被丢弃");
         }
         return handle;
     }
@@ -262,20 +246,8 @@ public final class ActionQueue {
      */
     private final class Window {
 
-        /** 取消该回合的回调。 */
-        private final Runnable cancelHandle;
-
         /** 待排空动作，按投递顺序。 */
         private final Deque<Handle> pending = new ArrayDeque<Handle>();
-
-        /**
-         * 构造。
-         *
-         * @param cancelHandle 取消回调
-         */
-        private Window(Runnable cancelHandle) {
-            this.cancelHandle = cancelHandle;
-        }
 
         /**
          * 入队。
@@ -347,9 +319,13 @@ public final class ActionQueue {
         /**
          * 判断一条动作是否属于「回合边界」那一档。
          * <p>
-         * 压缩与切换模型都在回合边界做（两者都改缓存前缀，中途换掉会让本回合前后几轮的上下文不同源），
-         * 用户消息则按 {@link DeliverAs} 分两档：{@code STEER} 在回合边界，
-         * {@code FOLLOW_UP} 要留到收敛点。
+         * <b>规则是「除收敛点之外全在回合边界」</b>：改会话集合或缓存前缀的动作（压缩、切换模型、
+         * 分支会话、重建工具清单）都在回合边界做——回合中途换掉会让本回合前后几轮的上下文不同源，
+         * 或者让模型在同一个回合里看到两套工具；用户消息则按 {@link DeliverAs} 分两档，
+         * {@code STEER} 在回合边界，{@code FOLLOW_UP} 要留到收敛点。
+         * <p>
+         * <b>因此新增动作时默认落在回合边界</b>：要另立一档，必须在这里显式写出来，
+         * 并在 {@code ActionDispatcher} 里接上对应的排空点。
          *
          * @param action 动作
          * @return 属于回合边界返回 {@code true}
@@ -394,17 +370,21 @@ public final class ActionQueue {
 
         /**
          * 回填失败。
+         * <p>
+         * 调用方<b>必须</b>给出原因码：它是插件按原因分流的唯一凭据，
+         * 缺了它插件只能去解析 {@code detail} 那句人话。
          *
-         * @param reason 失败原因
+         * @param reason 失败原因码，不可为 {@code null}
+         * @param detail 失败细节，人可读，可为 {@code null}
          */
-        void fail(String reason);
+        void fail(ActionFailureReason reason, String detail);
     }
 
     /**
      * 动作句柄实现：状态与结果都对插件可见，因此写入顺序有要求。
      * <p>
-     * 先写 {@code result} 再写 {@code status}：两者都是 volatile，读方看到新状态时也必然看到
-     * 与之配套的结果，不会出现「状态是 FAILED、原因还是 null」这样的半成品。
+     * 先写 {@code failureReason} 与 {@code result} 再写 {@code status}：三者都是 volatile，
+     * 读方看到新状态时也必然看到与之配套的原因，不会出现「状态是 FAILED、原因还是 null」这样的半成品。
      */
     private static final class Handle implements Pending, ActionHandle {
 
@@ -416,6 +396,9 @@ public final class ActionQueue {
 
         /** 当前状态。 */
         private volatile ActionStatus status = ActionStatus.QUEUED;
+
+        /** 失败 / 丢弃的原因码，非失败态为 {@code null}。 */
+        private volatile ActionFailureReason failureReason;
 
         /** 结果说明，未结束时为 {@code null}。 */
         private volatile String result;
@@ -445,39 +428,34 @@ public final class ActionQueue {
         }
 
         @Override
+        public ActionFailureReason getFailureReason() {
+            return failureReason;
+        }
+
+        @Override
         public String getResult() {
             return result;
         }
 
         @Override
         public void succeed(String text) {
-            finish(ActionStatus.DONE, text);
+            finish(ActionStatus.DONE, null, text);
         }
 
         @Override
-        public void fail(String reason) {
-            finish(ActionStatus.FAILED, reason);
-        }
-
-        /**
-         * 落终态为成功并返回自身，供内部链式返回。
-         *
-         * @param text 执行摘要，可为 {@code null}
-         * @return 本句柄
-         */
-        private Handle onSucceeded(String text) {
-            finish(ActionStatus.DONE, text);
-            return this;
+        public void fail(ActionFailureReason reason, String detail) {
+            finish(ActionStatus.FAILED, Objects.requireNonNull(reason, "reason must not be null"), detail);
         }
 
         /**
          * 落终态为失败并返回自身，供内部链式返回。
          *
-         * @param reason 失败原因
+         * @param reason 失败原因码
+         * @param detail 失败细节
          * @return 本句柄
          */
-        private Handle onFailed(String reason) {
-            finish(ActionStatus.FAILED, reason);
+        private Handle onFailed(ActionFailureReason reason, String detail) {
+            fail(reason, detail);
             return this;
         }
 
@@ -485,17 +463,18 @@ public final class ActionQueue {
          * 标记为执行中：出队即执行中，两者之间没有可观察的间隔。
          */
         private void execute() {
-            finish(ActionStatus.EXECUTING, null);
+            finish(ActionStatus.EXECUTING, null, null);
         }
 
         /**
          * 标记为被丢弃。
          *
-         * @param reason 丢弃原因
+         * @param reason 丢弃原因码
+         * @param detail 丢弃细节
          * @return 本句柄，便于链式返回
          */
-        private Handle onDropped(String reason) {
-            finish(ActionStatus.DROPPED, reason);
+        private Handle onDropped(ActionFailureReason reason, String detail) {
+            finish(ActionStatus.DROPPED, reason, detail);
             return this;
         }
 
@@ -503,11 +482,13 @@ public final class ActionQueue {
          * 落终态。
          *
          * @param next   目标状态
-         * @param reason 结果说明
+         * @param reason 原因码，非失败态为 {@code null}
+         * @param detail 结果说明
          * @return 本句柄
          */
-        private Handle finish(ActionStatus next, String reason) {
-            this.result = reason;
+        private Handle finish(ActionStatus next, ActionFailureReason reason, String detail) {
+            this.failureReason = reason;
+            this.result = detail;
             this.status = next;
             return this;
         }

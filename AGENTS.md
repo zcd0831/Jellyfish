@@ -57,9 +57,9 @@ Maven 多模块；根 `jellyfish`（`zcd:jellyfish:0.0.1-SNAPSHOT`）是 `packag
 | 模块 | 职责 | 依赖 |
 | --- | --- | --- |
 | `jellyfish-api` | 插件作者唯一的稳定契约：SPI、扩展点/事件模型、统一异常 | 无 |
-| `jellyfish-infra` | 基础设施层全部实现（会话 / agent / 模型 / 权限 / 插件运行时 / 命令域 / UI / 指标 / 配置） | api |
-| `jellyfish-core` | 应用层：ReAct 循环与 `AgentHarness` 门面、提示词组装、压缩机制、系统命令、子代理委派 | api、infra |
-| `jellyfish-tui` | TUI 外壳：TamboUI 界面、视图投影与滚动、TUI 版 `ReActListener` | api、infra、core |
+| `jellyfish-infra` | 基础设施层全部实现（会话 / agent / 模型 / 权限 / 插件运行时 / 命令域 / UI / 外壳贡献信箱 / 指标 / 配置） | api |
+| `jellyfish-core` | 应用层：会话提交管线（`ConversationService`，命令/输入改写/输入指令/起回合的顺序）、在途回合表（`TurnRegistry`，每会话一个槽位 + 取消 + 终态自动归还）、外壳通道门面（`ShellStreams`，可靠 lane + 尽力 lane 的唯一订阅入口）、ReAct 循环与 `AgentHarness` 门面、提示词组装、压缩机制、系统命令、子代理委派 | api、infra |
+| `jellyfish-tui` | TUI 外壳：TamboUI 界面、视图投影与滚动、TUI 版可靠 lane 订阅者（`TuiTurnListener`） | api、infra、core |
 | `jellyfish-server` | HTTP 外壳：Undertow 上的 REST + SSE、会话按 id 寻址、HTTP 化人工审批 | api、infra、core、undertow-core |
 | `jellyfish-cli` | `main`、参数解析、模式分发、Dagger 装配、shade 可执行 jar | api、infra、core、tui、server |
 
@@ -91,6 +91,7 @@ jellyfish-infra/src/main/java/zcd/jellyfish/infra/
 ├── plugin/                     # 插件运行时 PF4JPluginManager / PluginRuntimeConfig / JellyfishPluginAdapter
 ├── permission/                 # 权限判定 PermissionManager / ApprovalChannel / PermissionPolicy / ReadOnlyTools
 ├── ui/                         # UI 贡献门面 UiContributions
+├── shell/                      # 外壳贡献信箱 ShellIngress（每 owner 有界 · 同 key 合并 · 满即丢）
 ├── metrics/                    # 指标与健康检查 MetricsRegistry / MetricsSubscriber / HealthCheck
 ├── config/                     # 配置加载与热更新 RuntimeConfig / ConfigReloader
 ├── tooloutput/                 # 工具结果治理：ToolOutputEnvelope / ToolOutputStore / ToolOutputLimiter
@@ -104,6 +105,8 @@ jellyfish-core/src/main/java/zcd/jellyfish/core/
 ├── prompt/                     # PromptAssembler / ContextWindow / ToolCatalog / ToolFilter / TokenEstimator / ToolResultAger / CacheBreakWatcher / ToolPairing
 ├── compact/                    # ConversationCompactor / CompactionPlan / CompactionHealthIndicator
 ├── tool/                       # ToolExecutor（权限→路由→截断的唯一执行点）/ CancellationTokenSource
+├── conversation/               # ConversationService / Submission / SubmissionPolicy / TurnRegistry
+│                               #   + ShellStreams / ShellTurnEvent / ShellContributionListener
 ├── input/                      # InputDirectives / InputDirectiveRun / InputDirectiveCall / InputReferenceCompletion
 ├── subagent/                   # 子代理：SubAgentLauncher / TaskTool / SubAgentTools（owner=core）
 │                               #   + SubAgentCall / SubAgentOutcome / SubAgentStatus

@@ -9,21 +9,32 @@
 - **两个能力面**：`ExtensionRegistry`（同步：调用点内联、按 order 升序、取返回值、**不可丢**）与
   `EventChannel`（异步：有界队列、无返回值、**可丢**），共用 `infra/registry` 的同一份 `TypeRegistry`。
   **禁止引入第三方事件总线**（如 Guava EventBus）。
-- **另外还有一条入站队列：`ActionQueue`**（插件主动动作）。它是**内核自有的、有界的、单向的**队列，
-  不是事件总线——没有订阅、没有广播、没有 handler 注册：
-  - 方向与上面两个相反：`handle` / `contribute` / `observe` 是「内核回头找插件」，
-    `emit` 与 `submit` 是「插件往外发」（通知队列 / 动作队列），四条边都不是同步回调；
-  - 它只接受 `PluginAction` 上列出的那几种动作，「能投什么」是一份有界清单，
+- **另外还有两条插件发出的边：`ActionQueue`（入站动作）与 `ShellIngress`（出站贡献）**。
+  两者都是**内核自有的、有界的、单向的**队列，都不是事件总线（没有订阅、没有广播、没有 handler 注册）：
+  - 方向：`handle` / `contribute` / `observe` 是「内核回头找插件」，`emit` / `submit` / `present`
+    是「插件往外发」（通知队列 / 动作队列 / 外壳贡献信箱），五条边都不是同步回调；
+  - **`ActionQueue` 只接受 `PluginAction` 上列出的那几种动作**，「能投什么」是一份有界清单，
     插件不能把它扩成开放式接口（`PluginAction` 的构造器是包级私有的，只能经静态工厂构造）；
-  - 队列的存活期恰好是一个顶层回合：`ReActLooper.chat` 在提交任务之前开窗，任务的 `finally` 关窗。
+    队列的存活期恰好是一个顶层回合：`ReActLooper.chat` 在提交任务之前开窗，任务的 `finally` 关窗。
     **动作只投进正在跑的顶层回合**，没有回合就没有窗口，入队当场回报 `FAILED`，
     边界与理由见下一节；
-  - 结果由插件轮询 `ActionHandle` 取得（`QUEUED` / `EXECUTING` / `DONE` / `FAILED` / `DROPPED`），
+    结果由插件轮询 `ActionHandle` 取得（`QUEUED` / `EXECUTING` / `DONE` / `FAILED` / `DROPPED`），
     内核不在动作完成时回头调插件。**失败必须按原因码分流**：`ActionHandle.getFailureReason()` 是
     机器可读的那一份（`getResult()` 只给人看），因为同一个 `FAILED` 既可能是「换个时刻再投就行」，
     也可能是「重投一百次也一样」；
-  - `submit` 与注册共用 `ContextLifecycle` 这条存活边界：`stop()` 之后当场抛 `JellyfishException`，
-    停止时在途动作按 owner 命名空间整批丢弃（`DROPPED` + `PLUGIN_STOPPED`）。
+  - **`ShellIngress` 只接受 `ShellContribution`**（`NOTICE` / `INVALIDATED` 两种 kind，封闭枚举），
+    与回合无关（插件可以在没有回合在跑时推一条状态提示），因此没有回合窗口，
+    只有「每 owner 有界 + 同 key 合并 + 满即丢最新」。它**不注入 `SessionManager` 与 `AgentHarness`**
+    ——插件不能新建会话、不能起回合这条硬约束因此是结构性的，不是文档约定；
+    投递结果用 `ShellContributionStatus` 回报（`ACCEPTED` / `COALESCED` / 三种 `DROPPED_*`），
+    **只有「已停止」抛异常**；
+  - **`submit` 与 `present` 与注册共用 `ContextLifecycle` 这条存活边界**：`stop()` 之后当场抛
+    `JellyfishException`，停止时在途内容按 owner 命名空间整批丢弃（`ActionQueue.dropByOwner` /
+    `ShellIngress.reset`，同一时刻；贡献先清，因为随后可能有一条插件状态变更触发的失效重拉）。
+- **为什么贡献不复用 `emit`**：`emit` 发布给未知数量的订阅者，没有「送没送到」这回事；
+  贡献的消费者是具体的那个外壳进程，插件需要知道「我这条进度是不是把队列冲爆了」。
+  而且外壳**刻意不订阅** `EventChannel`（它的队列是进程内的、可丢的，而外壳要的是可寻址的一条流），
+  把贡献塞进 `emit` 会让「订阅者」与「外壳」两个概念混在一起。
 - **选择能力面的判据是「能否丢弃」，不是「有没有返回值」**：工具、工具参数改写与结果整形、生命周期钩子（含会话分支前）、厂商注册与模型目录发现、工具激活、
   提示词注入、权限拦截、会话持久化、输入改写走同步侧（即使无返回值也不能丢）；轮次通知、指标、审计走异步侧。
 - **类型即地址**：请求类型本身就是身份，注册表按「类型 + 路由键」找 handler；插件拿不到的类型就注册不了。
@@ -45,6 +56,10 @@
   四件事一起弄坏。因此「插件在回合之外想说话」（定时检查点、长任务完成后汇报、自动提交对某一轮的
   反思结论）**明确不做**——插件只能在回合内参与，不能当回合的发起者。需要这条能力时应由外壳提供
   显式入口，而不是让内核隐式起回合。
+  - **"在回合之外说话"里唯一被允许的形态是"显示"**：`present(ShellContribution.notice(...))`
+    可以在没有回合在跑的时候给外壳推一条通知（「长任务做完了」）。它与上面的禁令不冲突，因为
+    贡献**不进消息序列、不进模型上下文、不落盘**——模型看不到它，下一个回合也不会被它改变。
+    要让模型看见东西，仍然是 `submit(PluginAction.sendUserMessage(...))`，而那一条照旧要求有在途回合。
 - **子代理（嵌套）回合不开窗**：`runNested` 不调 `beginTurn`，因此插件影响不了任何子代理回合。
   这类投递与「会话不存在」在回报上同档（都是 `NO_TURN_IN_FLIGHT`），差异只在 `getResult()` 的文本里。
 - **插件没有任何召回入口**：动作投出后只会走向终态，`ActionHandle` 不提供取消、超时与 `get()`。
@@ -55,6 +70,35 @@
 - **能力被截断时的回报语义**：回合结束前没被排空的残留动作标 `FAILED` +
   `TURN_ENDED_UNREACHED`；窗口被同一会话的新回合顶掉时，旧窗口里的残留动作标 `FAILED` +
   `TURN_SUPERSEDED`（两者都不能留在 `QUEUED` 上——插件据此等终态就再也等不到）。
+
+## 插件往外壳推内容：`present` / `ShellContribution`
+
+- **推送事件，拉取状态**：通知 / 失效提示走推送（`present` + `INVALIDATED`）；
+  面板、状态栏、会话条目的**内容**仍走拉取（`PanelContributionRequest` /
+  `StatusLineContributionRequest` / `SessionExtensionEntry`）。把状态也改成推送会立刻产生第二份真源。
+- **贡献是展示数据，不是请求**：`Kind` 是封闭枚举，两种取值都不携带「发给谁」「什么内容给模型」
+  这类载荷，因此插件**在类型上**不可能凭贡献新开会话或起回合；
+  贡献不产生 `LlmMessage`、不参与 prompt 组装、不进 `SessionMessage`、不落盘。
+  插件要让模型看见东西，唯一通路仍是 `submit(PluginAction.sendUserMessage(...))`，
+  而它照旧要求存在在途顶层回合（`NO_TURN_IN_FLIGHT` 语义完全不变）。
+- **不自动建会话**：`Scope.SESSION` 的贡献必须指向一个**已存在**的会话；
+  `sessionId` 为空、空白或查不到时回报 `DROPPED_NO_SESSION`，**绝不调 `SessionManager.create`**。
+  `Scope.SHELL` 与任何会话无关，不查会话。
+- **没有渲染面就不收**：`-cli` 单次调用没有界面也没人来取队列，因此 `present` 回报
+  `DROPPED_NO_RENDERER`（判据是外壳种类，而不是 `RuntimeInfo.hasUI()`——后者对 HTTP 外壳是
+  `false`，但它的客户端有渲染面）。未写入运行时信息时落到保守的「不收」一侧。
+- **`DROPPED_QUEUE_FULL` 不重试**：它是「这次显示没赶上」，不是「操作失败」。
+  据此重发会把一次洪水放大成持续洪水。只有 `INVALIDATED` 值得稍后重发（它是状态触发的，重发幂等）。
+- **内容行用 `lines` 而不是纯字符串**：与 `PanelContribution` 同一口径。纯字符串会逼插件用 ANSI
+  转义序列表达强调，而转义序列不占显示列、会破坏外壳的折行与宽度计算。
+  **空 `lines` 是「不显示」，不是「清空」**——清空只有时间与条数上限两条路径。
+- **`what` 只是线索，不是协议**：外壳可以忽略它并全量重拉。一旦它变成跨边界的标识符，
+  插件与外壳就必须维护同一套取值，而它的全部价值只是省一次全量重拉。
+- **文本是不可信输入**：`lines` 里的控制字符必须在**渲染面**滤掉（TUI 是 `ControlChars.strip` + 
+  `ChatState.appendPluginNotice`，Server 是 `SseContributionListener`）；内核不做内容改写。
+  一个 `ESC` 序列足以改写整屏。
+- **指标只记计数**（`plugin.shellContribution.accepted` / `.coalesced` / `.dropped`），
+  **不记审计事件**。诊断要分档时看日志。
 
 ## 新增扩展点的公共约定
 
@@ -153,3 +197,8 @@
    句柄永久停在 `QUEUED`。
 7. 新增动作时：`ActionFailureReason` 是否给了新动作的每一个失败分支合适的原因码？
    `PluginAction` 上是否写明了它 `DONE` 到底承诺什么（是「已受理」还是「已完成」）？
+8. 若改了 `ShellIngress`（容量、合并规则、取出时机、`reset`）：是否同时核对了
+   **每一条「贡献没送到」的出路**（队列满丢最新、会话不存在、无渲染面、插件停止清桶）？
+   少一条，插件侧的 `ShellContributionStatus` 就会缺一档，而它是插件唯一可依据的机器可读反馈。
+9. 新增贡献 kind 时：它能否被插件用来影响会话或模型上下文？若是，地它挂回
+   `PluginContext.emit` / `submit`，不要放宽 `ShellContribution` 的封闭枚举。

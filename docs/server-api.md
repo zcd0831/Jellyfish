@@ -54,6 +54,8 @@
 | `tool_done` | 工具调用结束（权威结果） |
 | `approval_required` | 需要人工审批 |
 | `approval_resolved` | 审批已裁决 |
+| `shell_notice` | 插件推的一条通知，载荷 `{owner,sessionId,key,severity,lines}` |
+| `shell_invalidated` | 插件说「我贡献的内容脏了」，载荷 `{owner,sessionId,what}` |
 | `input_handled` | 终态：输入被插件接过去了，没有回合，载荷 `{sessionId,notice}` |
 | `done` | 终态：回合正常结束 |
 | `cancelled` | 终态：回合被取消 |
@@ -79,6 +81,21 @@
 **工具抛异常时也带 `metadata.terminal=FAILED`**（并按条件带 `summary` 说明原因），因此前端不必再读 `success`
 就能画出失败标记。没有元数据时它是空对象 `{}`。
 
+**`shell_notice` / `shell_invalidated` 走的是尽力 lane，不是回合事件**：
+
+- 它们与回合**没有关系**：插件可以在没有回合在跑的时候推（典型是「长任务做完了」或「插件刚加载」），
+  因此客户端不能把它们当成回合的一部分，也不能用它们判断回合是否结束。
+- **它们可丢**：服务端每 owner 有界、同 key 可合并、满了丢最新一条；
+  因此客户端**不得把它们当状态真源**，面板 / 状态栏的内容仍然靠拉取（`GET /sessions/{id}` 等）。
+- **它们不落盘、不进模型上下文**：`NOTICE` 是临时显示，进程重启即消失。
+- **时延最多一秒**：写循环每秒会把积压的贡献冲一次（回合事件仍然一到就走）。
+- `severity` 取值是 `INFO` / `WARN` / `ERROR`（语义，不是颜色）；`lines` 是**已经滤掉控制字符**的纯文本行，
+  行内的强调信息不过线（见 `ShellNoticeEvent` 的注释）。
+- **`SHELL` scope 的贡献发给每一条流**（它是进程级事实，与任何会话无关）；
+  `SESSION` scope 只发给它自己的那条流。
+- `key` 非空时表示「同 owner + 同 key 的后到者覆盖先到者」——客户端可以直接把同一个 `key` 的后到者当成
+  前一条的**原地更新**，而不是追加一条新的。
+
 ## 会话语义
 
 - **会话一律按路径里的 id 寻址**；`-server` 不支持 `--session`（写了判用法错误退 `2`），
@@ -86,8 +103,8 @@
 - **同会话同时只允许一个回合**：第二个请求返回 `409`（避免两个回合把消息历史交错写坏）；要打断就用
   `POST /sessions/{id}/cancel`，或直接断开 SSE 连接（服务端据此取消回合）。
 - **人工审批走 HTTP**：`askTools` 里的工具会在流里推 `approval_required`，客户端拿 `requestId` 调
-  `POST /approvals/{requestId}`。`ApprovalChannel` 是**全局单槽位**，因此任一时刻最多只有一条待审批项，
-  多会话并发时后面的会排队。
+  `POST /approvals/{requestId}`。`ApprovalChannel` 的头槽位是**每会话一个**：同一会话内仍是单槽位 + FIFO 队列，
+  会话之间互不排队。`GET /approvals` 没有会话上下文，取的是跨会话最早的那一条，只适用于单客户端场景。
 - **错误体统一为** `{"error":"CODE","message":"…"}`；命令执行的三态在 `kind` 字段里（`UNKNOWN` 同时回 404）；
   鉴权失败是 `401` + `{"error":"UNAUTHORIZED"}`，并带 `WWW-Authenticate: Bearer realm="jellyfish"`。
 

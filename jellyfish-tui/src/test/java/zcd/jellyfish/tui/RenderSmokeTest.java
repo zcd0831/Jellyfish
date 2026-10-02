@@ -124,6 +124,28 @@ class RenderSmokeTest {
     }
 
     @Test
+    @DisplayName("表格在屏幕上画成网格：边框、表头分隔线与格子内容都在，且不越宽")
+    void render_should_paintTableAsGrid() {
+        // Given：一条含表格的助手消息
+        String answer = "| 甲 | 乙 |\n| --- | --- |\n| 1 | 2 |\n";
+
+        // When
+        List<String> screen = paint(sessionOf(answer));
+
+        // Then：网格字符真的到了屏幕上，代码块围栏与源码里的分隔行都没有出现
+        assertTrue(screen.stream().anyMatch(line -> line.contains("\u250c") && line.contains("\u252c")),
+                screen.toString());
+        assertTrue(screen.stream().anyMatch(line -> line.contains("│ 甲 │ 乙 │")),
+                screen.toString());
+        assertTrue(screen.stream().anyMatch(line -> line.contains("\u251c") && line.contains("\u253c")),
+                screen.toString());
+        assertFalse(screen.stream().anyMatch(line -> line.contains("| --- |")), screen.toString());
+        for (String line : screen) {
+            assertTrue(DisplayWidth.of(line) <= TERMINAL_WIDTH, line);
+        }
+    }
+
+    @Test
     @DisplayName("工具轨迹与用户消息照旧：它们不参与 markdown 渲染")
     void render_should_keepTraceAndUserMessageAsPlainText() {
         // Given

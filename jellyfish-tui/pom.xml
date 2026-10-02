@@ -46,7 +46,7 @@
 
         <!-- Markdown：只用它的 AST 解析器，渲染由我们自己的 text/MarkdownRenderer 承担。
              版本锁在 0.21.0（Java 8 兼容的最后一版），理由见父 POM 的同名属性注释。
-             两个扩展都是「识别出来之后按自己的方式渲染」：表格降级为代码块、删除线加 crossedOut。 -->
+             两个扩展都是「识别出来之后按自己的方式渲染」：表格按行列结构画成网格、删除线加 crossedOut。 -->
         <dependency>
             <groupId>org.commonmark</groupId>
             <artifactId>commonmark</artifactId>

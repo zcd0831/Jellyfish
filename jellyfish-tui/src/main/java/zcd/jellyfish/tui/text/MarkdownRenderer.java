@@ -68,8 +68,8 @@ public final class MarkdownRenderer {
      * 全局复用一份：{@code Parser} 的解析上下文是每次 {@code parse()} 新建的，因此它是线程安全的；
      * 而构造成本（一堆块级解析器工厂）没必要每帧付一次。
      * <p>
-     * 挂两个 GFM 扩展：<b>表格</b>是为了把它识别出来、然后按「降级为代码块」处理（不识别的话
-     * 一堆管道符会当普通段落铺开，比代码块更难读）；<b>删除线</b>是因为它的目标样式
+     * 挂两个 GFM 扩展：<b>表格</b>是为了拿到它的行列结构（不识别的话一堆管道符会当普通段落铺开，
+     * 连「哪里是一格」都看不出来）；<b>删除线</b>是因为它的目标样式
      * （{@code Style.crossedOut()}）终端直接支持。
      */
     private static final Parser PARSER = Parser.builder()
@@ -90,6 +90,30 @@ public final class MarkdownRenderer {
 
     /** 分隔线字符。 */
     private static final String RULE_CHAR = "\u2500";
+
+    /** 表格竖线（与引用块前缀同一个字符，但这里是网格的一部分）。 */
+    private static final String TABLE_BAR = "\u2502";
+
+    /** 表格单元格左右内边距（列）。 */
+    private static final int CELL_PADDING = 1;
+
+    /**
+     * 表格每列除内容之外的固定开销：左右内边距 2 列 + 每列右侧的竖线 1 列。
+     * <p>
+     * 最后再加一列（{@link #GRID_OVERHEAD_EDGE}）给整张表最左侧的那条竖线。
+     */
+    private static final int GRID_OVERHEAD_PER_COLUMN = CELL_PADDING * 2 + 1;
+
+    /** 表格最左侧竖线占用的列数。 */
+    private static final int GRID_OVERHEAD_EDGE = 1;
+
+    /**
+     * 表格列宽下限。
+     * <p>
+     * 分不到这个宽度时单元格里连一个可见的字都摆不下（还要占掉内边距），网格只会把内容切成碎片，
+     * 此时整张表退回代码块降级（见 {@link #tableAsCodeBlock}）。
+     */
+    private static final int MIN_COLUMN_WIDTH = 3;
 
     /** 截断标记。 */
     static final String ELLIPSIS = "\u2026";
@@ -386,59 +410,462 @@ public final class MarkdownRenderer {
     }
 
     /**
-     * 渲染表格：<b>降级为代码块</b>。
+     * 渲染表格：量出每列的宽度后画成网格，格子放不下时在列内折行。
      * <p>
-     * 终端里做列对齐需要先量出每列的最大宽度，而中英混排的列宽取决于终端自己的字宽表，
-     * 算出来的对齐在真机上大概率错位；降级成等宽代码块至少能保证「看得清每个格子」，
-     * 也不会因为错位而误导。
+     * <b>为什么现在敢做列对齐</b>：对齐的唯一依据是「这个码点占几列」，而它取决于终端自己的字宽表。
+     * 本项目的主力输入是中英混排（中文占 2 列），{@link DisplayWidth} 已按 East Asian Width
+     * 把常见字符都算准；宽度有歧义的少数码点（带变体选择符的 emoji、{@code ±} 这类）
+     * 仍可能被多算或少算一列，那种表偶尔错位一格——但整体仍读得出是张表，比一律不排要好。
+     * <p>
+     * <b>放不下时折行、不截断</b>：表格里最长的往往是「说明」这类关键列，截断等于把最该看的内容丢掉；
+     * 折行只是让表格变高，信息一条不丢（行数不设上限，与代码块同一口径）。
+     * <p>
+     * <b>实在放不下时退回代码块</b>：列数过多，多到每列连 {@link #MIN_COLUMN_WIDTH} 列都分不到时，
+     * 网格会把每个格子切成碎片，不如退回等宽代码块——至少每个格子的原文看得清。
      *
      * @param node 表格节点
      * @param ctx  渲染上下文
      */
     private static void table(TableBlock node, Ctx ctx) {
-        Style style = ctx.base.dim();
-        raw(ctx, style, FENCE);
+        String prefix = ctx.takePrefix();
+        Style grid = ctx.base.dim();
+        List<List<Cell>> head = new ArrayList<List<Cell>>();
+        List<List<Cell>> body = new ArrayList<List<Cell>>();
         for (Node section = node.getFirstChild(); section != null; section = section.getNext()) {
-            boolean head = section instanceof TableHead;
+            boolean header = section instanceof TableHead;
             for (Node row = section.getFirstChild(); row != null; row = row.getNext()) {
-                if (!(row instanceof TableRow)) {
-                    continue;
-                }
-                raw(ctx, style, row((TableRow) row));
-                if (head) {
-                    raw(ctx, style, "|" + repeat(" --- |", count(row)));
+                if (row instanceof TableRow) {
+                    (header ? head : body).add(cells((TableRow) row, ctx.base, header));
                 }
             }
         }
-        raw(ctx, style, FENCE);
+        int columns = Math.max(columnCount(head), columnCount(body));
+        int[] natural = new int[columns];
+        measure(head, natural);
+        measure(body, natural);
+        int budget = ctx.width - DisplayWidth.of(prefix)
+                - GRID_OVERHEAD_PER_COLUMN * columns - GRID_OVERHEAD_EDGE;
+        if (columns == 0 || budget < columns * MIN_COLUMN_WIDTH) {
+            tableAsCodeBlock(ctx, prefix, grid, head, body);
+            return;
+        }
+        int[] widths = allocate(natural, budget);
+        gridLine(ctx, prefix, grid, widths, '\u250c', '\u252c', '\u2510');
+        for (List<Cell> row : head) {
+            gridRow(ctx, prefix, grid, widths, row);
+        }
+        if (!head.isEmpty() && !body.isEmpty()) {
+            // 表头与表体之间那道横线：没有它，「哪一行是列名」就只能靠猜
+            gridLine(ctx, prefix, grid, widths, '\u251c', '\u253c', '\u2524');
+        }
+        for (List<Cell> row : body) {
+            gridRow(ctx, prefix, grid, widths, row);
+        }
+        gridLine(ctx, prefix, grid, widths, '\u2514', '\u2534', '\u2518');
     }
 
     /**
-     * 把一行表格拼成等宽文本。
+     * 表格的降级渲染：<b>等宽代码块</b>。
+     * <p>
+     * 保留原有的行结构（含表头下的 {@code | --- |} 分隔行），但不承诺任何列对齐——
+     * 它的价值只在「每个格子看得清」，不假装是一张排好的表。
      *
-     * @param row 行节点
+     * @param ctx    渲染上下文
+     * @param prefix 行首前缀
+     * @param style  样式
+     * @param head   表头行
+     * @param body   表体行
+     */
+    private static void tableAsCodeBlock(Ctx ctx, String prefix, Style style,
+                                        List<List<Cell>> head, List<List<Cell>> body) {
+        fixed(ctx, prefix, style, FENCE);
+        for (List<Cell> row : head) {
+            fixed(ctx, prefix, style, pipeRow(row));
+            fixed(ctx, prefix, style, "|" + repeat(" --- |", row.size()));
+        }
+        for (List<Cell> row : body) {
+            fixed(ctx, prefix, style, pipeRow(row));
+        }
+        fixed(ctx, prefix, style, FENCE);
+    }
+
+    /**
+     * 把一行单元格拼成等宽文本（降级渲染用）。
+     *
+     * @param row 单元格列表
      * @return 形如 {@code | 甲 | 乙 |} 的文本
      */
-    private static String row(TableRow row) {
+    private static String pipeRow(List<Cell> row) {
         StringBuilder sb = new StringBuilder("|");
-        for (Node node = row.getFirstChild(); node != null; node = node.getNext()) {
-            if (!(node instanceof TableCell)) {
-                continue;
-            }
-            sb.append(' ').append(text(node)).append(" |");
+        for (Cell cell : row) {
+            sb.append(' ').append(textOf(cell.content, 0)).append(" |");
         }
         return sb.toString();
     }
 
     /**
-     * 渲染一行不折行的文本（代码、围栏、分隔线）。
+     * 取一行的单元格：内容走行内渲染规则，表头单元格整体加粗。
+     *
+     * @param row    行节点
+     * @param base   基础样式
+     * @param header 是否为表头行
+     * @return 单元格列表，保证非 {@code null}
+     */
+    private static List<Cell> cells(TableRow row, Style base, boolean header) {
+        List<Cell> cells = new ArrayList<Cell>();
+        for (Node node = row.getFirstChild(); node != null; node = node.getNext()) {
+            if (node instanceof TableCell) {
+                cells.add(new Cell((TableCell) node, header ? base.bold() : base));
+            }
+        }
+        return cells;
+    }
+
+    /**
+     * 统计若干行里最多有几个单元格（即列数）。
+     *
+     * @param rows 行列表
+     * @return 列数
+     */
+    private static int columnCount(List<List<Cell>> rows) {
+        int columns = 0;
+        for (List<Cell> row : rows) {
+            columns = Math.max(columns, row.size());
+        }
+        return columns;
+    }
+
+    /**
+     * 量出各列的自然宽度（折行之前的内容宽度）。
+     *
+     * @param rows    行列表
+     * @param natural 输出数组，下标即列号
+     */
+    private static void measure(List<List<Cell>> rows, int[] natural) {
+        for (List<Cell> row : rows) {
+            for (int i = 0; i < row.size() && i < natural.length; i++) {
+                natural[i] = Math.max(natural[i], row.get(i).width());
+            }
+        }
+    }
+
+    /**
+     * 把可用列数分给各列。
+     * <p>
+     * <b>水位法</b>：自然宽度高于水位的列一律压到水位，其余保持原宽。水位取「压完之后总和仍不超预算」
+     * 的最大值（二分求得），于是窄列不会被无谓拉宽，宽列按超出水位的多少让出空间。
+     * <p>
+     * 水位是离散的，压完之后通常还剩一点零头，把它补回被压得最狠的那几列：可用宽度就这么多，
+     * 多给某一列一列宽度就少折一行，不用满等于白扔。
+     *
+     * @param natural 各列自然宽度
+     * @param budget  各列内容宽度之和的上限
+     * @return 各列实际宽度，每列不小于 {@link #MIN_COLUMN_WIDTH}
+     */
+    private static int[] allocate(int[] natural, int budget) {
+        int[] widths = natural.clone();
+        int used = 0;
+        for (int width : widths) {
+            used += width;
+        }
+        if (used <= budget) {
+            // 自然宽度就放得下：不拉宽也不压缩，表格因此贴着内容走
+            return widths;
+        }
+        int low = MIN_COLUMN_WIDTH;
+        int high = 0;
+        for (int width : widths) {
+            high = Math.max(high, width);
+        }
+        while (low < high) {
+            int mid = (low + high + 1) >>> 1;
+            if (usedAt(widths, mid) <= budget) {
+                low = mid;
+            } else {
+                high = mid - 1;
+            }
+        }
+        used = 0;
+        for (int i = 0; i < widths.length; i++) {
+            widths[i] = Math.max(MIN_COLUMN_WIDTH, Math.min(widths[i], low));
+            used += widths[i];
+        }
+        for (int i = 0; i < widths.length && used < budget; i++) {
+            if (natural[i] > widths[i]) {
+                widths[i]++;
+                used++;
+            }
+        }
+        return widths;
+    }
+
+    /**
+     * 计算「所有列都压到不超过指定水位」之后的内容宽度之和。
+     *
+     * @param natural 各列自然宽度
+     * @param level   水位
+     * @return 宽度之和
+     */
+    private static int usedAt(int[] natural, int level) {
+        int used = 0;
+        for (int width : natural) {
+            used += Math.max(MIN_COLUMN_WIDTH, Math.min(width, level));
+        }
+        return used;
+    }
+
+    /**
+     * 画一条表格横线。
+     *
+     * @param ctx    渲染上下文
+     * @param prefix 行首前缀
+     * @param style  样式
+     * @param widths 各列宽度
+     * @param left   左端字符（{@code ┌} / {@code ├} / {@code └}）
+     * @param joint  列间交叉字符（{@code ┬} / {@code ┼} / {@code ┴}）
+     * @param right  右端字符（{@code ┐} / {@code ┤} / {@code ┘}）
+     */
+    private static void gridLine(Ctx ctx, String prefix, Style style, int[] widths,
+                                 char left, char joint, char right) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(left);
+        for (int i = 0; i < widths.length; i++) {
+            if (i > 0) {
+                sb.append(joint);
+            }
+            sb.append(repeat(RULE_CHAR, widths[i] + CELL_PADDING * 2));
+        }
+        sb.append(right);
+        fixed(ctx, prefix, style, sb.toString());
+    }
+
+    /**
+     * 渲染一行表格：每格先按列宽折行，再按本行最高的那个格子把矮格子补齐。
+     *
+     * @param ctx    渲染上下文
+     * @param prefix 行首前缀
+     * @param grid   网格字符样式
+     * @param widths 各列宽度
+     * @param row    本行单元格
+     */
+    private static void gridRow(Ctx ctx, String prefix, Style grid, int[] widths, List<Cell> row) {
+        List<List<List<StyledSegment>>> wrapped = new ArrayList<List<List<StyledSegment>>>(widths.length);
+        int height = 1;
+        for (int i = 0; i < widths.length; i++) {
+            List<StyledSegment> content = i < row.size()
+                    ? row.get(i).content : Collections.<StyledSegment>emptyList();
+            List<List<StyledSegment>> lines = wrapCell(content, widths[i]);
+            wrapped.add(lines);
+            height = Math.max(height, lines.size());
+        }
+        for (int k = 0; k < height; k++) {
+            List<StyledSegment> segments = new ArrayList<StyledSegment>(widths.length * 4 + 2);
+            segments.add(new StyledSegment(prefix, grid));
+            for (int i = 0; i < widths.length; i++) {
+                Cell cell = i < row.size() ? row.get(i) : null;
+                Style style = cell == null ? ctx.base : cell.style;
+                List<StyledSegment> line = k < wrapped.get(i).size()
+                        ? wrapped.get(i).get(k) : Collections.<StyledSegment>emptyList();
+                int pad = widths[i] - DisplayWidth.of(textOf(line, 0));
+                int left = cell == null ? 0 : alignPad(pad, cell.alignment);
+                segments.add(new StyledSegment(TABLE_BAR, grid));
+                segments.add(new StyledSegment(spaces(CELL_PADDING + left), style));
+                segments.addAll(line);
+                segments.add(new StyledSegment(spaces(CELL_PADDING + pad - left), style));
+            }
+            segments.add(new StyledSegment(TABLE_BAR, grid));
+            ctx.out.add(new VisualLine(segments));
+        }
+    }
+
+    /**
+     * 把一个单元格的内容按列宽折行。
+     *
+     * @param content 单元格内容
+     * @param width   列宽
+     * @return 每行的样式段列表，至少一个元素（空内容也占一行）
+     */
+    private static List<List<StyledSegment>> wrapCell(List<StyledSegment> content, int width) {
+        List<List<StyledSegment>> lines = new ArrayList<List<StyledSegment>>();
+        for (VisualLine line : LineWrapper.wrap(new StyledSegment("", Style.EMPTY), content, width)) {
+            List<StyledSegment> segments = new ArrayList<StyledSegment>(line.getSegments().size());
+            for (StyledSegment segment : line.getSegments()) {
+                // 换行器会在行首放一个空前缀段，网格自己负责边界，把它丢掉
+                if (!segment.isEmpty()) {
+                    segments.add(segment);
+                }
+            }
+            lines.add(segments);
+        }
+        return lines;
+    }
+
+    /**
+     * 计算一行单元格内容左侧要补多少空格。
+     *
+     * @param pad       该行剩余列数
+     * @param alignment 对齐方式，可为 {@code null}（按左对齐处理）
+     * @return 左侧补白列数
+     */
+    private static int alignPad(int pad, TableCell.Alignment alignment) {
+        if (alignment == TableCell.Alignment.RIGHT) {
+            return pad;
+        }
+        if (alignment == TableCell.Alignment.CENTER) {
+            return pad / 2;
+        }
+        return 0;
+    }
+
+    /**
+     * 取一个单元格的可见内容。
+     * <p>
+     * 走的是行内渲染规则（行内代码着色、加粗、删除线都保留），但内部换行压成空格：
+     * 单元格在网格里是「一格」，换行由列宽决定，不由源码决定。
+     *
+     * @param cell  单元格节点
+     * @param style 基础样式
+     * @return 样式段列表，保证非 {@code null}
+     */
+    private static List<StyledSegment> cellContent(Node cell, Style style) {
+        List<StyledSegment> rendered = inline(cell, style);
+        List<StyledSegment> flattened = new ArrayList<StyledSegment>(rendered.size());
+        for (StyledSegment segment : rendered) {
+            flattened.add(new StyledSegment(oneLine(segment.getText()), segment.getStyle()));
+        }
+        return trim(flattened);
+    }
+
+    /**
+     * 去掉内容两端的空白：内边距由网格统一提供，单元格再自带空白只会让列宽虚胖。
+     *
+     * @param segments 样式段列表
+     * @return 去空白后的样式段列表
+     */
+    private static List<StyledSegment> trim(List<StyledSegment> segments) {
+        List<StyledSegment> out = new ArrayList<StyledSegment>(segments.size());
+        boolean started = false;
+        for (StyledSegment segment : segments) {
+            String text = segment.getText();
+            if (!started) {
+                text = stripLeading(text);
+                if (text.isEmpty()) {
+                    continue;
+                }
+                started = true;
+            }
+            out.add(new StyledSegment(text, segment.getStyle()));
+        }
+        while (!out.isEmpty()) {
+            StyledSegment last = out.get(out.size() - 1);
+            String text = stripTrailing(last.getText());
+            if (text.isEmpty()) {
+                out.remove(out.size() - 1);
+                continue;
+            }
+            out.set(out.size() - 1, new StyledSegment(text, last.getStyle()));
+            break;
+        }
+        return out;
+    }
+
+    /**
+     * 去掉开头的空白。
+     *
+     * @param text 文本
+     * @return 结果文本
+     */
+    private static String stripLeading(String text) {
+        int i = 0;
+        while (i < text.length() && isBlank(text.charAt(i))) {
+            i++;
+        }
+        return text.substring(i);
+    }
+
+    /**
+     * 去掉结尾的空白。
+     *
+     * @param text 文本
+     * @return 结果文本
+     */
+    private static String stripTrailing(String text) {
+        int i = text.length();
+        while (i > 0 && isBlank(text.charAt(i - 1))) {
+            i--;
+        }
+        return text.substring(0, i);
+    }
+
+    /**
+     * 判断字符是否算空白（单元格修剪用）。
+     *
+     * @param c 字符
+     * @return 空格或制表符返回 {@code true}
+     */
+    private static boolean isBlank(char c) {
+        return c == ' ' || c == '\t';
+    }
+
+    /**
+     * 摊平后的一个表格单元格：内容 + 内容样式 + 对齐方式。
+     * <p>
+     * 内容在构造时就渲染好并被多行复用（一行网格要为每一行单元格反复取内容），
+     * 因此这里存的是结果而不是节点。
+     */
+    private static final class Cell {
+
+        /** 单元格内容（行内规则已渲染，内部换行已压成空格）。 */
+        private final List<StyledSegment> content;
+
+        /** 单元格基准样式（表头为加粗），内边距与填充用它铺。 */
+        private final Style style;
+
+        /** 对齐方式，可为 {@code null}（按左对齐处理）。 */
+        private final TableCell.Alignment alignment;
+
+        /**
+         * 构造单元格。
+         *
+         * @param cell  单元格节点
+         * @param style 基准样式
+         */
+        Cell(TableCell cell, Style style) {
+            this.content = cellContent(cell, style);
+            this.style = style;
+            this.alignment = cell.getAlignment();
+        }
+
+        /**
+         * 取内容的自然宽度（折行之前）。
+         *
+         * @return 列数
+         */
+        int width() {
+            return DisplayWidth.of(textOf(content, 0));
+        }
+    }
+
+    /**
+     * 渲染一行不折行的文本，行首前缀取当前上下文（代码块、围栏、分隔线用）。
      *
      * @param ctx   渲染上下文
      * @param style 样式
      * @param text  文本，可为 {@code null}
      */
     private static void raw(Ctx ctx, Style style, String text) {
-        String prefix = ctx.takePrefix();
+        fixed(ctx, ctx.takePrefix(), style, text);
+    }
+
+    /**
+     * 渲染一行不折行的文本，行首前缀由调用方给定（表格网格要按同一个前缀铺多行）。
+     *
+     * @param ctx    渲染上下文
+     * @param prefix 行首前缀，不可为 {@code null}
+     * @param style  样式
+     * @param text   文本，可为 {@code null}
+     */
+    private static void fixed(Ctx ctx, String prefix, Style style, String text) {
         String content = text == null ? "" : text;
         String fitted = truncate(content, Math.max(1, ctx.width - DisplayWidth.of(prefix)));
         List<StyledSegment> segments = new ArrayList<StyledSegment>(2);

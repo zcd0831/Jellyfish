@@ -146,11 +146,97 @@ class MarkdownRendererTest {
     }
 
     @Test
-    @DisplayName("表格降级为代码块：保留行结构但明确不是按列对齐的表格")
-    void render_should_degradeTableToCodeBlock() {
+    @DisplayName("表格画成网格：上下边框、表头、表头分隔线各就位，列宽贴着内容走")
+    void render_should_drawTableAsGrid() {
         List<String> lines = texts(render("| 甲 | 乙 |\n| --- | --- |\n| 1 | 2 |"));
 
-        assertEquals(java.util.Arrays.asList("```", "| 甲 | 乙 |", "| --- | --- |", "| 1 | 2 |", "```"), lines);
+        // Then：自然宽度就放得下（各列 2 列内容 + 左右各 1 列内边距），因此不做无谓拉宽
+        assertEquals(java.util.Arrays.asList(
+                "\u250c\u2500\u2500\u2500\u2500\u252c\u2500\u2500\u2500\u2500\u2510",
+                "\u2502 \u7532 \u2502 \u4e59 \u2502",
+                "\u251c\u2500\u2500\u2500\u2500\u253c\u2500\u2500\u2500\u2500\u2524",
+                "\u2502 1  \u2502 2  \u2502",
+                "\u2514\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2518"), lines);
+    }
+
+    @Test
+    @DisplayName("单元格放不下时在列内折行：表格变高，内容一条不丢，也不截断")
+    void render_should_wrapCellContentInsteadOfTruncating() {
+        // Given：第二列内容（20 个汉字 = 40 列）远超可用宽度
+        List<String> lines = texts(render("| 名 | 值 |\n| --- | --- |\n| a | " + repeat("字", 20) + " |", 20));
+
+        // Then：内容整段都在（用行高换宽度），没有省略号
+        String joined = String.join("", lines);
+        assertEquals(20, joined.length() - joined.replace("字", "").length(), joined);
+        assertFalse(joined.contains(MarkdownRenderer.ELLIPSIS), joined);
+        // 网格宽 20、高 8；每行都不越界（首行是上边框）
+        assertEquals(8, lines.size());
+        assertEquals(20, DisplayWidth.of(lines.get(0)));
+        for (String line : lines) {
+            assertEquals(20, DisplayWidth.of(line), line);
+        }
+    }
+
+    @Test
+    @DisplayName("列对齐按源码里的冒号生效：右对齐的左补白、居中的两侧均分")
+    void render_should_applyCellAlignment() {
+        List<String> lines = texts(render(
+                "| 左 | 中间 | 数值 |\n| :--- | :---: | ---: |\n| a | b | 12 |"));
+
+        // Then：第二列居中（左补 1）第三列右对齐（左补 2），第一列保持左对齐
+        assertEquals(java.util.Arrays.asList(
+                "\u250c\u2500\u2500\u2500\u2500\u252c\u2500\u2500\u2500\u2500\u2500\u2500\u252c\u2500\u2500\u2500\u2500\u2500\u2500\u2510",
+                "\u2502 \u5de6 \u2502 \u4e2d\u95f4 \u2502 \u6570\u503c \u2502",
+                "\u251c\u2500\u2500\u2500\u2500\u253c\u2500\u2500\u2500\u2500\u2500\u2500\u253c\u2500\u2500\u2500\u2500\u2500\u2500\u2524",
+                "\u2502 a  \u2502  b   \u2502   12 \u2502",
+                "\u2514\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2518"), lines);
+    }
+
+    @Test
+    @DisplayName("表头加粗、单元格里的行内样式保留：网格不改行内渲染规则")
+    void render_should_keepInlineStylesInsideCells() {
+        List<VisualLine> lines = render("| 名 | 说明 |\n| --- | --- |\n| `code` | **粗** |");
+
+        // Then：表头（第 1 行，第 0 行是上边框）整行加粗
+        assertTrue(styles(lines, 1).stream()
+                        .anyMatch(style -> style.effectiveModifiers().contains(dev.tamboui.style.Modifier.BOLD)),
+                String.valueOf(styles(lines, 1)));
+        // Then：表体里行内代码仍然着黄色、加粗仍然加粗（第 3 行是表体）
+        List<Style> body = styles(lines, 3);
+        assertTrue(body.stream()
+                        .anyMatch(style -> java.util.Optional.of(dev.tamboui.style.Color.YELLOW).equals(style.fg())),
+                String.valueOf(body));
+        assertTrue(body.stream()
+                        .anyMatch(style -> style.effectiveModifiers().contains(dev.tamboui.style.Modifier.BOLD)),
+                String.valueOf(body));
+    }
+
+    @Test
+    @DisplayName("列数多到分不下时退回代码块：每个格子的原文至少看得清")
+    void render_should_fallBackToCodeBlockWhenColumnsDoNotFit() {
+        // Given：8 列塞进 20 列宽（每列连 3 列内容都分不到）
+        List<String> lines = texts(render("| a | b | c | d | e | f | g | h |\n"
+                + "| --- | --- | --- | --- | --- | --- | --- | --- |\n"
+                + "| 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |", 20));
+
+        // Then：退回等宽代码块，没有网格字符
+        assertEquals("```", lines.get(0));
+        assertEquals("```", lines.get(lines.size() - 1));
+        assertTrue(lines.get(1).startsWith("| a | b |"), lines.get(1));
+        assertFalse(String.join("", lines).contains("\u250c"), String.join("", lines));
+    }
+
+    @Test
+    @DisplayName("表格整体跟着所在块的缩进走：每一行网格都带同一个前缀")
+    void render_should_prefixEveryGridLine() {
+        List<String> lines = texts(render("> | 甲 | 乙 |\n> | --- | --- |\n> | 1 | 2 |"));
+
+        // Then：5 行网格每行都以引用竖线开头（前缀不是只挂在第一行上）
+        assertEquals(5, lines.size());
+        assertEquals("\u2502 \u250c\u2500\u2500\u2500\u2500\u252c\u2500\u2500\u2500\u2500\u2510", lines.get(0));
+        for (String line : lines) {
+            assertTrue(line.startsWith("\u2502 "), line);
+        }
     }
 
     @Test
@@ -222,9 +308,11 @@ class MarkdownRendererTest {
     @Test
     @DisplayName("中文与 emoji 都不越界：每行显示宽度不超过可用列数")
     void render_should_neverExceedWidth() {
-        // Given：一段混排内容，含 CJK、emoji 代理对、长 URL、代码块
+        // Given：一段混排内容，含 CJK、emoji 代理对、长 URL、表格、代码块
         String source = "# 中文标题\n\n一段很长的中文说明文字，用来验证换行是否按列数而不是按字符数计算 🐟🐟🐟。\n\n"
                 + "- 列表项里也有一大段中文，包含一个很长的地址 http://example.com/very/long/path/segments\n\n"
+                + "| 甲 | 乙 | 丙 |\n| --- | --- | --- |\n"
+                + "| 中文 🐟 | mixed ASCII | 一段很长的说明文字，用来验证表格折行也按列数算 |\n\n"
                 + "```\n" + repeat("中文abc", 20) + "\n```";
 
         for (int width : new int[]{8, 16, 40}) {

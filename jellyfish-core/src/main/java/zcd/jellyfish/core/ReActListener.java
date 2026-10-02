@@ -5,6 +5,13 @@ import java.util.Map;
 /**
  * ReAct 回合的流式回调。
  * <p>
+ * <b>它是内核内部接缝，不是外壳接口</b>：外壳只经 {@code ConversationService.submit} +
+ * {@code ShellStreams.subscribe} 两条边工作，拿到的是
+ * {@code zcd.jellyfish.core.conversation.ShellTurnEvent} 而不是本接口的回调。
+ * 本接口现在的直接使用方是：{@code ReActLooper}（驱动回合）、{@code ShellStreams} 的发布器
+ * （把回调翻成外壳事件）、{@code InputDirectives}（输入指令的实时输出）、{@code runNested}
+ * （子代理回合，它不上外壳事件流），以及 {@code TurnRegistry.releasing}（终态即归还槽位）。
+ * <p>
  * <b>线程语义</b>：除 {@link #onToolCallOutput(String, String, String)} 以外，全部回调都在同一个
  * {@code react} 线程上触发，因此实现方不需要自己加锁，也不会出现「文本增量与工具事件乱序」。代价是回调中
  * 做耗时操作会拖住整条循环，需要异步处理的调用方应在实现里自行转投队列。

@@ -52,10 +52,10 @@ class ApprovalBridgeTest {
         Thread requester = new Thread(() -> channel.request(pending, Duration.ofSeconds(5)), "approval-requester");
         requester.setDaemon(true);
         requester.start();
-        for (int i = 0; i < 100 && !channel.pending().isPresent(); i++) {
+        for (int i = 0; i < 100 && !channel.pending(sessionId).isPresent(); i++) {
             Thread.sleep(10);
         }
-        assertTrue(channel.pending().isPresent(), "头槽位未就位");
+        assertTrue(channel.pending(sessionId).isPresent(), "头槽位未就位");
         return pending.getId();
     }
 
@@ -75,6 +75,16 @@ class ApprovalBridgeTest {
         occupyHead("s1", "write_file");
 
         assertFalse(bridge.headFor("s2").isPresent());
+    }
+
+    @Test
+    void headFor_should_return_each_session_head_independently() throws InterruptedException {
+        String first = occupyHead("s1", "write_file");
+        String second = occupyHead("s2", "bash");
+
+        // 两个会话各有一个头槽位，互不阻塞（全局单槽位时代第二个只能排队）
+        assertEquals(first, bridge.headFor("s1").get().getRequestId());
+        assertEquals(second, bridge.headFor("s2").get().getRequestId());
     }
 
     @Test

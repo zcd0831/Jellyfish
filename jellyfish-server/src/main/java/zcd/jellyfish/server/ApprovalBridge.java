@@ -52,7 +52,10 @@ public final class ApprovalBridge {
     }
 
     /**
-     * 取当前头槽位待审批项。
+     * 取当前头槽位待审批项（跨会话最早的那一条）。
+     * <p>
+     * 只服务「不知道自己是哪个会话」的晚到客户端（{@code GET /approvals}）；
+     * SSE 流应当用 {@link #headFor(String)} 取本会话的那一条。
      *
      * @return 待审批项；没有时为空
      */
@@ -63,19 +66,13 @@ public final class ApprovalBridge {
     /**
      * 取属于指定会话的头槽位待审批项。
      * <p>
-     * 只有属于本会话的头槽位才该发给本会话的 SSE 流：审批是全局单槽位，不按会话过滤会把
-     * 别的会话的审批广播到每一条流上。
+     * 只有属于本会话的头槽位才该发给本会话的 SSE 流。
      *
      * @param sessionId 会话标识
-     * @return 待审批项；头槽位为空或不属于该会话时为空
+     * @return 待审批项；该会话没有待审批项时为空
      */
     public Optional<ApprovalDto> headFor(String sessionId) {
-        Optional<ApprovalDto> head = head();
-        if (!head.isPresent()) {
-            return Optional.empty();
-        }
-        ApprovalDto dto = head.get();
-        return sessionId != null && sessionId.equals(dto.getSessionId()) ? head : Optional.<ApprovalDto>empty();
+        return approvals.pending(sessionId).map(ApprovalDto::of);
     }
 
     /**
@@ -83,15 +80,13 @@ public final class ApprovalBridge {
      *
      * @param requestId 请求标识
      * @param approved  是否批准
-     * @throws ApiException 请求标识不是当前头槽位（或已被裁决）时抛出 404
+     * @throws ApiException 请求标识不是任何会话的头槽位（或已被裁决 / 已超时）时抛出 404
      */
     public void resolve(String requestId, boolean approved) {
-        ApprovalDto head = head().orElse(null);
-        if (head == null || !head.getRequestId().equals(requestId)) {
+        if (!approvals.resolve(requestId, approved)) {
             throw new ApiException(Responses.NOT_FOUND, "APPROVAL_NOT_FOUND",
                     "没有这条待审批项（可能已被裁决或已超时）：" + requestId);
         }
-        approvals.resolve(requestId, approved);
     }
 
     /**
@@ -106,9 +101,6 @@ public final class ApprovalBridge {
         if (requestId == null) {
             return;
         }
-        ApprovalDto head = head().orElse(null);
-        if (head != null && head.getRequestId().equals(requestId)) {
-            approvals.resolve(requestId, false);
-        }
+        approvals.resolve(requestId, false);
     }
 }

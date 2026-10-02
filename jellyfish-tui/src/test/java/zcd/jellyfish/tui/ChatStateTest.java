@@ -194,23 +194,12 @@ class ChatStateTest {
     }
 
     @Test
-    @DisplayName("中断转交给当前回合句柄")
-    void cancelTurn_should_delegate_to_bound_turn() {
-        ReActTurn turn = mock(ReActTurn.class);
-        state.bindTurn(turn);
-
-        state.cancelTurn();
-
-        verify(turn).cancel();
-    }
-
-    @Test
-    @DisplayName("没有绑定回合时中断是安全的空操作")
-    void cancelTurn_should_be_noop_when_no_turn() {
+    @DisplayName("没有绑定指令时中断是安全的空操作")
+    void cancelDirective_should_be_noop_when_none() {
         assertDoesNotThrow(new Executable() {
             @Override
             public void execute() {
-                state.cancelTurn();
+                state.cancelDirective();
             }
         });
     }
@@ -218,7 +207,7 @@ class ChatStateTest {
     @Test
     @DisplayName("回合正常结束后不再判定为进行中")
     void isTurnRunning_should_be_false_after_finish() {
-        state.beginTurn(null);
+        state.beginWork();
         assertTrue(state.isTurnRunning());
 
         state.getInflight().finish(InflightTurn.Outcome.COMPLETED, null);
@@ -227,9 +216,9 @@ class ChatStateTest {
     }
 
     @Test
-    @DisplayName("输入指令与回合并用同一个暂存区：beginDirective 后即处于进行中")
-    void beginDirective_should_markRunning() {
-        state.beginDirective();
+    @DisplayName("输入指令与回合并用同一个暂存区：beginWork 后即处于进行中")
+    void beginWork_should_markRunning() {
+        state.beginWork();
 
         assertTrue(state.isTurnRunning());
         assertNull(state.getDirective());
@@ -248,23 +237,23 @@ class ChatStateTest {
     }
 
     @Test
-    @DisplayName("没有回合时 Esc 应取消输入指令")
-    void cancelTurn_should_cancel_directive_when_no_turn() {
+    @DisplayName("Esc 中断输入指令")
+    void cancelDirective_should_cancel_bound_directive() {
         InputDirectiveRun run = new InputDirectiveRun("r1", "!", "!ls");
-        state.beginDirective();
+        state.beginWork();
         state.bindDirective(run);
 
-        state.cancelTurn();
+        state.cancelDirective();
 
         assertTrue(run.isCancelled());
     }
 
     @Test
-    @DisplayName("beginTurn 应清掉上一条指令句柄，避免过期句柄被取消")
-    void beginTurn_should_clear_directive() {
+    @DisplayName("beginWork 应清掉上一条指令句柄，避免过期句柄被取消")
+    void beginWork_should_clear_directive() {
         state.bindDirective(new InputDirectiveRun("r1", "!", "!ls"));
 
-        state.beginTurn(null);
+        state.beginWork();
 
         assertNull(state.getDirective());
     }
@@ -324,15 +313,15 @@ class ChatStateTest {
     }
 
     @Test
-    @DisplayName("beginTurn 重置暂存区，使新回合的正文立即可见")
-    void beginTurn_should_make_new_turn_content_visible() {
-        state.beginTurn(null);
+    @DisplayName("beginWork 重置暂存区，使新回合的正文立即可见")
+    void beginWork_should_make_new_turn_content_visible() {
+        state.beginWork();
         state.getInflight().appendText("第一回合");
         view(messages(), 5);
         state.getInflight().finish(InflightTurn.Outcome.COMPLETED, null);
         view(messages(), 5);
 
-        state.beginTurn(null);
+        state.beginWork();
         state.getInflight().appendText("第二回合");
         ChatState.View view = view(messages(), 5);
 
@@ -377,6 +366,51 @@ class ChatStateTest {
         assertEquals(ChatState.MAX_NOTICES, blocks.size(), "提示块数应被上限封顶");
         assertFalse(blocks.contains("    \u23bf n0"), "最旧的提示应已被丢弃");
         assertTrue(blocks.contains("    \u23bf n" + (ChatState.MAX_NOTICES + 9)), "最新的提示必须保留");
+    }
+
+    @Test
+    @DisplayName("插件通知按来源封顶：一个插件刷屏不该把别的插件的通知挤掉")
+    void view_should_boundPluginNoticesPerOwner() {
+        // Given：两个来源，各自都往届一刷
+        for (int i = 0; i < ChatState.MAX_NOTICES_PER_PLUGIN + 5; i++) {
+            state.appendPluginNotice("plugin-a", "a" + i, ShellNotice.Kind.INFO);
+        }
+        state.appendPluginNotice("plugin-b", "b0", ShellNotice.Kind.WARN);
+
+        // When
+        String body = String.join("\n", texts(view(messages(), 400)));
+
+        // Then：A 只留最新三条，且 B 的一条仍在——全局上限封顶的是总量，不是「谁先来谁占满」
+        assertEquals(ChatState.MAX_NOTICES_PER_PLUGIN + 1, countNonBlank(texts(view(messages(), 400))));
+        assertFalse(body.contains("a0"), body);
+        assertTrue(body.contains("a" + (ChatState.MAX_NOTICES_PER_PLUGIN + 4)), body);
+        assertTrue(body.contains("b0"), body);
+    }
+
+    @Test
+    @DisplayName("插件通知的空白文本被忽略：空内容不是「清空此前的通知」")
+    void appendPluginNotice_should_ignoreBlankText() {
+        state.appendPluginNotice("plugin-a", "hello", ShellNotice.Kind.INFO);
+        state.appendPluginNotice("plugin-a", "   ", ShellNotice.Kind.INFO);
+        state.appendPluginNotice("plugin-a", null, ShellNotice.Kind.INFO);
+
+        assertEquals(1, countNonBlank(texts(view(messages(), 40))));
+    }
+
+    /**
+     * 数一数非空行。
+     *
+     * @param lines 行列表
+     * @return 非空行数
+     */
+    private static int countNonBlank(List<String> lines) {
+        int count = 0;
+        for (String line : lines) {
+            if (!line.trim().isEmpty()) {
+                count++;
+            }
+        }
+        return count;
     }
 
     @Test

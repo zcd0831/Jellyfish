@@ -9,6 +9,8 @@ import zcd.jellyfish.api.event.RegisterOptions;
 import zcd.jellyfish.api.event.Subscription;
 import zcd.jellyfish.api.extension.ExtensionHandler;
 import zcd.jellyfish.api.extension.ExtensionRequest;
+import zcd.jellyfish.api.extension.ShellContribution;
+import zcd.jellyfish.api.extension.ShellContributionStatus;
 
 import java.util.List;
 import java.util.Map;
@@ -362,4 +364,29 @@ public interface PluginContext {
      * @throws zcd.jellyfish.api.JellyfishException 插件上下文已失效（已停止）时抛出
      */
     void emit(JellyfishEvent event);
+
+    /**
+     * 向当前外壳贡献一条可渲染内容或失效提示。
+     * <p>
+     * <b>为什么不是复用 {@link #emit}</b>：{@code emit} 的语义是「发布一条 {@link JellyfishEvent}
+     * 给订阅者」，它走事件通道（无界订阅者集合、可丢广播、无交付确认）。贡献是「给<b>当前这一个</b>
+     * 外壳的一份载荷」——两者在订阅者模型与交付语义上都不同。把贡献塞进 {@code emit}
+     * 会让「订阅者」与「外壳」两个概念混在一起，而外壳恰恰是刻意<b>不订阅</b>事件通道的。
+     * <p>
+     * <b>只入队，不阻塞调用方</b>：本方法可能在插件自己的线程上、也可能在插件的工具回调里调用，
+     * 任何阻塞都会顺着那条线传下去。队列按 owner 分桶且有界，满了丢最新一条并回报
+     * {@link ShellContributionStatus#DROPPED_QUEUE_FULL}。
+     * <p>
+     * <b>它不能起回合、不能建会话</b>：贡献是展示数据，不进模型上下文、不落盘；
+     * {@link ShellContribution} 的 kind 是一份封闭清单，插件在类型上就拿不到「发一条消息」这种能力。
+     * 要让模型看见东西，仍然只能 {@link #submit}。
+     * <p>
+     * <b>失败一律用返回值回报，只有「已停止」抛异常</b>（与 {@link #emit} 同一条存活边界）。
+     * 丢弃不代表失败，不要据此重发——见 {@link ShellContributionStatus}。
+     *
+     * @param contribution 贡献，不可为 {@code null}
+     * @return 投递结果，保证非 {@code null}
+     * @throws JellyfishException 贡献为 {@code null}，或插件上下文已失效（已停止）时抛出
+     */
+    ShellContributionStatus present(ShellContribution contribution);
 }

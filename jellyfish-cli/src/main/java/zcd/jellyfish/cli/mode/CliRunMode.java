@@ -4,17 +4,18 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.RuntimeInfo;
+import zcd.jellyfish.api.event.Subscription;
 import zcd.jellyfish.api.extension.CommandResult;
 import zcd.jellyfish.api.extension.InputTransformRequest;
-import zcd.jellyfish.api.extension.InputTransformResult;
 import zcd.jellyfish.cli.ExitCodes;
 import zcd.jellyfish.cli.StartupOptions;
-import zcd.jellyfish.cli.console.CliReActListener;
+import zcd.jellyfish.cli.console.CliTurnListener;
 import zcd.jellyfish.cli.console.ConsoleIO;
-import zcd.jellyfish.core.AgentHarness;
-import zcd.jellyfish.core.ReActResult;
-import zcd.jellyfish.core.input.InputTransforms;
-import zcd.jellyfish.infra.command.CommandManager;
+import zcd.jellyfish.core.conversation.ConversationService;
+import zcd.jellyfish.core.conversation.ShellStreams;
+import zcd.jellyfish.core.conversation.ShellTurnEvent;
+import zcd.jellyfish.core.conversation.Submission;
+import zcd.jellyfish.core.conversation.SubmissionPolicy;
 import zcd.jellyfish.infra.session.Session;
 import zcd.jellyfish.infra.session.SessionManager;
 
@@ -30,9 +31,14 @@ import java.util.Objects;
  * echo "/help" | jellyfish -cli
  * </pre>
  * <p>
- * <b>命令与 LLM 的分流判据只有一个</b>：{@link CommandManager#isCommand(String)}。它只做语法判定、
- * 不查注册表——「有没有这条命令」由执行结果回答（{@code UNKNOWN}），因此插件在启动后才注册的命令
- * 也能被同一路径命中，不存在第二份清单。
+ * <b>「命令还是对话」的判定不在本类</b>：分流顺序（命令判定 → 输入改写 → 输入指令 → 起回合）
+ * 是内核不变量，统一在 {@link ConversationService#submit} 一处实现；本类只声明自己的策略
+ * （{@link SubmissionPolicy#cli()}：执行命令、<b>不解析输入指令</b>、必须有会话）并把
+ * {@link Submission} 的判别式结果翻译成退出码。
+ * <p>
+ * <b>回合事件走可靠 lane</b>：本类不再自己实现 {@code ReActListener}，而是<b>先订阅再提交</b>
+ * （{@code submit} 内部会起回合并立即产出事件），然后用终态事件的闩锁替代了过去的
+ * {@code ReActTurn.await()}——退出码由终态事件的种类决定，不再需要回合句柄。
  * <p>
  * <b>退出码按失败类别区分</b>：命令报错与回合失败都是 4，回合未收敛是 6，未知命令仍是 0
  * （那是用户输入错了命令名，不是程序执行失败）。这样脚本能区分「没这条命令」与「跑挂了」。
@@ -44,11 +50,11 @@ public final class CliRunMode implements RunMode {
     /** 日志。 */
     private static final Logger LOG = LoggerFactory.getLogger(CliRunMode.class);
 
-    /** 智能入口：ReAct 回合的唯一门面。 */
-    private final AgentHarness harness;
+    /** 会话提交服务：分流与起回合的唯一入口。 */
+    private final ConversationService conversations;
 
-    /** 命令域服务：解析与分发命令。 */
-    private final CommandManager commands;
+    /** 可靠 lane：回合事件的订阅入口。 */
+    private final ShellStreams streams;
 
     /** 会话域服务：每轮现读当前会话。 */
     private final SessionManager sessions;
@@ -56,24 +62,19 @@ public final class CliRunMode implements RunMode {
     /** 输出面板。 */
     private final ConsoleIO console;
 
-    /** 输入改写服务：命令判定之后、回合之前的那一道扩展点。 */
-    private final InputTransforms inputTransforms;
-
     /**
      * 构造 CLI 单次模式。
      *
-     * @param harness  智能入口，不可为 {@code null}
-     * @param commands 命令域服务，不可为 {@code null}
-     * @param sessions 会话域服务，不可为 {@code null}
-     * @param inputTransforms 输入改写服务，不可为 {@code null}
-     * @param console  输出面板，不可为 {@code null}
+     * @param conversations 会话提交服务，不可为 {@code null}
+     * @param streams       可靠 lane，不可为 {@code null}
+     * @param sessions      会话域服务，不可为 {@code null}
+     * @param console       输出面板，不可为 {@code null}
      */
-    public CliRunMode(AgentHarness harness, CommandManager commands, SessionManager sessions,
-                      InputTransforms inputTransforms, ConsoleIO console) {
-        this.harness = Objects.requireNonNull(harness, "harness must not be null");
-        this.commands = Objects.requireNonNull(commands, "commands must not be null");
+    public CliRunMode(ConversationService conversations, ShellStreams streams, SessionManager sessions,
+                      ConsoleIO console) {
+        this.conversations = Objects.requireNonNull(conversations, "conversations must not be null");
+        this.streams = Objects.requireNonNull(streams, "streams must not be null");
         this.sessions = Objects.requireNonNull(sessions, "sessions must not be null");
-        this.inputTransforms = Objects.requireNonNull(inputTransforms, "inputTransforms must not be null");
         this.console = Objects.requireNonNull(console, "console must not be null");
     }
 
@@ -91,22 +92,39 @@ public final class CliRunMode implements RunMode {
             return ExitCodes.USAGE_ERROR;
         }
         String sessionId = currentSessionId();
-        if (commands.isCommand(input)) {
-            return executeCommand(input, sessionId);
+        CliTurnListener listener = new CliTurnListener(console, options.isShowThinking(),
+                options.isShowToolArgs());
+        // 必须先订阅再提交：回合一启动就会产出事件，晚订阅会丢掉开头那一段
+        Subscription subscription = streams.subscribe(sessionId, listener);
+        try {
+            Submission submission = conversations.submit(sessionId, input,
+                    InputTransformRequest.Source.CLI, SubmissionPolicy.cli());
+            switch (submission.getKind()) {
+                case EXECUTED_COMMAND:
+                    return commandExitCode(submission.getCommandResult());
+                case HANDLED_INPUT:
+                    // 输入被插件接过去了：没有回答，写一条说明到 stdout（与命令结果同一条通道）
+                    writeCommandOutput(noticeOf(submission.getNotice()));
+                    return ExitCodes.OK;
+                case STARTED_TURN:
+                    return awaitTurn(listener);
+                case STARTED_DIRECTIVE:
+                case REJECTED:
+                default:
+                    // 两个都不可能到达：cli() 不解析输入指令；空输入已在上面拦下、会话由启动期保证
+                    console.writeErrLine("没有可执行的输入（外壳接线错误）。");
+                    return ExitCodes.RUNTIME_ERROR;
+            }
+        } catch (JellyfishException e) {
+            // 失败原因通常已由 listener 打过；只有「流被中断」这类没有回调的失败才需要补一句
+            if (!listener.isFailed()) {
+                console.writeErrLine("回合失败：" + e.getMessage());
+            }
+            LOG.debug("CLI 提交失败", e);
+            return ExitCodes.RUNTIME_ERROR;
+        } finally {
+            subscription.close();
         }
-        // 输入改写：排在命令判定之后（插件改不动用户显式的命令）、回合之前。
-        // 它排在会话保证之后是刻意的：CLI 的单次调用必须有一个会话承载回合，
-        // 先把会话准备好再问插件，被拦下时也不会留下「为了这一次输入而建的会话」
-        InputTransformResult transformed = inputTransforms.transform(sessionId, input,
-                InputTransformRequest.Source.CLI);
-        if (transformed.isHandled()) {
-            writeCommandOutput(noticeOf(transformed.getNotice()));
-            return ExitCodes.OK;
-        }
-        if (transformed.hasText()) {
-            input = transformed.getText();
-        }
-        return executeTurn(input, sessionId, options);
     }
 
     /**
@@ -127,14 +145,14 @@ public final class CliRunMode implements RunMode {
     }
 
     /**
-     * 执行一条命令。
+     * 把命令结果翻译成退出码。
+     * <p>
+     * 未知命令仍是 0：那是用户输入错了命令名，不是程序执行失败；只有命令报错才是 4。
      *
-     * @param input     命令原文
-     * @param sessionId 当前会话标识
+     * @param result 命令结果，保证非 {@code null}
      * @return 退出码
      */
-    private int executeCommand(String input, String sessionId) {
-        CommandResult result = commands.execute(input, sessionId);
+    private int commandExitCode(CommandResult result) {
         String output = result.getOutput();
         if (result.getKind() == CommandResult.Kind.ERROR) {
             console.writeErrLine(output == null || output.isEmpty() ? "命令执行失败。" : output);
@@ -150,7 +168,7 @@ public final class CliRunMode implements RunMode {
      * 命令返回的是「给人看的文本块」（可能是多行帮助），补一个换行让终端的下一行从行首开始；
      * 已经以换行结尾的输出不重复补。
      *
-     * @param output 命令输出，可为 {@code null}
+     * @param output 输出，可为 {@code null}
      */
     private void writeCommandOutput(String output) {
         if (output == null || output.isEmpty()) {
@@ -160,37 +178,30 @@ public final class CliRunMode implements RunMode {
     }
 
     /**
-     * 跑一次 ReAct 回合并等待结束。
+     * 等待一次 ReAct 回合结束并映射退出码。
+     * <p>
+     * 退出码只看终态事件：拦下与被取消互斥，但两者都比「未收敛」先判——
+     * 一个根本没跑起来的回合不该被说成「达到最大轮次」。
      *
-     * @param input     用户输入
-     * @param sessionId 当前会话标识
-     * @param options   启动参数（取思考过程开关）
+     * @param listener 已经交出去的订阅者（它同时是终态闩锁），不可为 {@code null}
      * @return 退出码
      */
-    private int executeTurn(String input, String sessionId, StartupOptions options) {
-        CliReActListener listener = new CliReActListener(console, options.isShowThinking(),
-                options.isShowToolArgs());
-        try {
-            ReActResult result = harness.chat(sessionId, input, listener).await();
-            // 顺序有讲究：拦下与取消互斥，但两者都比「未收敛」先判——
-            // 一个根本没跑起来的回合不该被说成「达到最大轮次」
-            if (result.isBlocked()) {
-                return ExitCodes.TURN_BLOCKED;
-            }
-            if (result.isCancelled()) {
-                return ExitCodes.RUNTIME_ERROR;
-            }
-            if (result.isTruncated()) {
-                return ExitCodes.TRUNCATED;
-            }
-            return ExitCodes.OK;
-        } catch (JellyfishException e) {
-            // 失败原因通常已由 listener.onError 打过；只有「流被中断」这类没有回调的失败才需要补一句
-            if (!listener.isFailed()) {
-                console.writeErrLine("回合失败：" + e.getMessage());
-            }
-            LOG.debug("CLI 回合失败", e);
+    private int awaitTurn(CliTurnListener listener) {
+        ShellTurnEvent terminal = listener.awaitTerminal();
+        if (terminal == null) {
+            // 等待被中断且终态尚未到达：按运行失败处理（中断位已在 listener 里恢复）
             return ExitCodes.RUNTIME_ERROR;
+        }
+        switch (terminal.getKind()) {
+            case BLOCKED:
+                return ExitCodes.TURN_BLOCKED;
+            case CANCELLED:
+                return ExitCodes.RUNTIME_ERROR;
+            case COMPLETED:
+                return terminal.isTruncated() ? ExitCodes.TRUNCATED : ExitCodes.OK;
+            case ERROR:
+            default:
+                return ExitCodes.RUNTIME_ERROR;
         }
     }
 

@@ -10,13 +10,17 @@ import zcd.jellyfish.api.event.Subscription;
 import zcd.jellyfish.api.extension.ExtensionHandler;
 import zcd.jellyfish.api.extension.ExtensionRequest;
 import zcd.jellyfish.api.extension.SessionExtensionEntry;
+import zcd.jellyfish.api.extension.ShellContribution;
+import zcd.jellyfish.api.extension.ShellContributionStatus;
 import zcd.jellyfish.api.plugin.PluginContext;
 import zcd.jellyfish.api.plugin.PluginDeclaration;
 import zcd.jellyfish.api.plugin.PluginOwnerNamespace;
 import zcd.jellyfish.infra.action.ActionQueue;
+import zcd.jellyfish.infra.metrics.MetricsRegistry;
 import zcd.jellyfish.infra.event.EventChannel;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.session.SessionManager;
+import zcd.jellyfish.infra.shell.ShellIngress;
 
 import java.util.List;
 import java.util.Map;
@@ -71,8 +75,11 @@ public final class PluginContextImpl implements PluginContext {
     /** 动作队列：插件主动动作的入站队列，同一个根插件下的子上下文共用。 */
     private final ActionQueue actions;
 
-    /** 会话域服务：仅用于会话扩展条目的读写。 */
+    /** 会话域服务：会话扩展条目的读写，以及「这个会话存不存在」的只读判断。 */
     private final SessionManager sessions;
+
+    /** 外壳贡献信箱：插件往外推可渲染内容的唯一出口。 */
+    private final ShellIngress shellIngress;
 
     /**
      * 构造一个<b>自持有存活标记</b>的插件上下文。
@@ -92,7 +99,7 @@ public final class PluginContextImpl implements PluginContext {
     public PluginContextImpl(PluginDeclaration declaration, ExtensionRegistry extensions, EventChannel events,
                              SessionManager sessions) {
         this(declaration, extensions, events, new ContextLifecycle(), new RuntimeInfoHolder(), new ActionQueue(),
-                sessions);
+                sessions, new ShellIngress(new MetricsRegistry()));
     }
 
     /**
@@ -105,10 +112,11 @@ public final class PluginContextImpl implements PluginContext {
      * @param runtimeInfo 运行时信息持有者，不可为 {@code null}；子上下文同样复用它
      * @param actions     动作队列，不可为 {@code null}；子上下文同样复用它
      * @param sessions    会话域服务，不可为 {@code null}；子上下文同样复用它
+     * @param shellIngress 外壳贡献信箱，不可为 {@code null}；子上下文同样复用它
      */
     PluginContextImpl(PluginDeclaration declaration, ExtensionRegistry extensions, EventChannel events,
                       ContextLifecycle lifecycle, RuntimeInfoHolder runtimeInfo, ActionQueue actions,
-                      SessionManager sessions) {
+                      SessionManager sessions, ShellIngress shellIngress) {
         this.declaration = declaration;
         this.extensions = extensions;
         this.events = events;
@@ -116,6 +124,7 @@ public final class PluginContextImpl implements PluginContext {
         this.runtimeInfo = runtimeInfo;
         this.actions = actions;
         this.sessions = sessions;
+        this.shellIngress = shellIngress;
     }
 
     @Override
@@ -143,7 +152,7 @@ public final class PluginContextImpl implements PluginContext {
         // 本方法刻意不做存活检查——它不产生任何注册，真正需要被拦住的是注册那一刻。
         // 运行时信息持有者也一并复用：外壳是进程级事实，子单元与父单元看到的必须一致
         return new PluginContextImpl(PluginDeclaration.of(childPluginId, declaration.getConfiguration()),
-                extensions, events, lifecycle, runtimeInfo, actions, sessions);
+                extensions, events, lifecycle, runtimeInfo, actions, sessions, shellIngress);
     }
 
     @Override
@@ -173,6 +182,40 @@ public final class PluginContextImpl implements PluginContext {
     public void emit(JellyfishEvent event) {
         requireAlive("publish event");
         events.publish(event);
+    }
+
+    @Override
+    public ShellContributionStatus present(ShellContribution contribution) {
+        requireAlive("present shell contribution");
+        if (contribution == null) {
+            throw new JellyfishException("shell contribution must not be null: pluginId=" + pluginId());
+        }
+        // 没有界面就没有人去取那个信箱，收下只会让队列白白积压一批永远不显示的东西
+        if (!hasRenderer()) {
+            return shellIngress.recordRejection(pluginId(), ShellContributionStatus.DROPPED_NO_RENDERER);
+        }
+        // SESSION scope 必须指向一个已存在的会话；不存在就当场回报，绝不顺手新建一个
+        if (contribution.getScope() == ShellContribution.Scope.SESSION
+                && !sessions.exists(contribution.getSessionId())) {
+            return shellIngress.recordRejection(pluginId(), ShellContributionStatus.DROPPED_NO_SESSION);
+        }
+        return shellIngress.present(pluginId(), contribution);
+    }
+
+    /**
+     * 判断当前外壳是否可能渲染贡献。
+     * <p>
+     * <b>判据是「外壳种类」而不是「有没有客户端连着」</b>：{@code RuntimeInfo.hasUI()} 对 HTTP 外壳是
+     * {@code false}（进程自己确实没有界面），但它的客户端有——因此直接问
+     * {@code getShell() != CLI} 才对应「这个外壳有没有渲染面」这个真正的问题。
+     * <p>
+     * 未写入运行时信息时（嵌入式 / 单元测试）落到保守的「无渲染面」一侧：宁可回报
+     * {@code DROPPED_NO_RENDERER}，也不要收下一批没人取的东西。
+     *
+     * @return 可能渲染时返回 {@code true}
+     */
+    private boolean hasRenderer() {
+        return runtimeInfo.snapshot().getShell() != RuntimeInfo.Shell.CLI;
     }
 
     @Override

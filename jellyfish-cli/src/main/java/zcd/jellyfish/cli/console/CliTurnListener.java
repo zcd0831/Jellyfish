@@ -1,16 +1,17 @@
 package zcd.jellyfish.cli.console;
 
 import java.util.Map;
+import java.util.Objects;
+import java.util.concurrent.CountDownLatch;
 
 import zcd.jellyfish.api.extension.ToolMetadata;
-import zcd.jellyfish.core.ReActListener;
-import zcd.jellyfish.core.ReActResult;
+import zcd.jellyfish.core.conversation.ShellTurnEvent;
+import zcd.jellyfish.core.conversation.ShellTurnListener;
 import zcd.jellyfish.infra.support.ToolArgumentsText;
 
-import java.util.Objects;
-
 /**
- * {@link ReActListener} 的 CLI 渲染：把一次回合的回调翻译成「stdout 上的回答 + stderr 上的诊断」。
+ * {@link ShellTurnListener} 的 CLI 渲染：把可靠 lane 上的回合事件翻译成「stdout 上的回答 +
+ * stderr 上的诊断」。
  * <p>
  * <b>分流契约（本类存在的理由）</b>：
  * <ul>
@@ -20,21 +21,18 @@ import java.util.Objects;
  *     诊断信息，它们对「回答本身」没有价值，但排查问题时必须可见。</li>
  * </ul>
  * <p>
- * <b>回答为什么先缓冲、收敛时再一次性落盘</b>：{@code ReActLooper} 把文本按增量回调，而工具进度、
- * 思考等诊断走 stderr。若在 {@link #onText(String)} 里就把半个句子写进 stdout，诊断行会紧贴在这半个句子后面，
+ * <b>回答为什么先缓冲、收敛时再一次性落盘</b>：内核把文本按增量发布，而工具进度、思考等诊断走 stderr。
+ * 若在 {@link ShellTurnEvent.Kind#TEXT} 里就把半个句子写进 stdout，诊断行会紧贴在这半个句子后面，
  * 把回答从中间切断（终端里同一行会看到「回答半句→ read_file」）。因此这里把文本攒起来，
- * 只在 {@link #onComplete(ReActResult)} 时整体写 stdout：终端不再交错，文件内容仍是逐字节精确的回答。
+ * 只在终态事件时整体写 stdout：终端不再交错，文件内容仍是逐字节精确的回答。
  * <p>
  * <b>中间轮次的文本为什么归 stderr</b>：模型常在发起工具调用前先吐一句「我先看一下文件」，随后才给出最终回答。
  * 这段文本属于过程轨迹而非回答，实时写 stdout 会让同一句话在回答前后各出现一次。因此在
- * {@link #onToolCallStarted(String, String)} 处把它当作轨迹转写到 stderr（带 {@code … } 前缀），并清空缓冲，
+ * {@link ShellTurnEvent.Kind#TOOL_STARTED} 处把它当作轨迹转写到 stderr（带 {@code … } 前缀），并清空缓冲，
  * 使 stdout 严格等于「本轮最终回答」。
  * <p>
  * <b>为什么只在与工具 / 思考交界处收尾思考行</b>：思考是逐块增量、不带换行地写到 stderr 的；
  * 若它还没结束就来了轨迹或工具行，两段内容会在终端里粘在同一行上。因此在「另一类输出开始」时补一个换行。
- * <p>
- * <b>工具执行期的输出为什么也写 stderr</b>：它是诊断而不是回答，走 stdout 会直接违反上面那条字节级契约。
- * 它让「一条跑几分钟的命令」在 {@code -cli} 下也能看到进展（默认只按工具名给一行开始与结束，不打印内容）。
  * <p>
  * <b>工具调用的参数为什么默认不打</b>：参数长度不受控（一次 {@code write_file} 就能把整篇正文倒进来），
  * 而 stderr 会被重定向到文件、收进 CI 日志，因此只能显式开（{@code --show-tool-args}）。
@@ -43,13 +41,16 @@ import java.util.Objects;
  * 同口径）：外壳按参数名猜不出哪个是密钥，遮不住命令原文与写入正文这些真正会出事的地方；
  * 所以把「参数里可能有敏感信息」当作使用者自己知道的前提（与官方文档的警告同理）。
  * <p>
- * <b>线程语义</b>：{@link #onToolCallOutput(String, String, String)} 不在 {@code react} 线程上，
- * 它由工具的 stdout / stderr 两条泵线程<b>并发</b>调用，因此本类里只有它需要加锁
- * （其余回调都发生在同一条 {@code react} 线程上，且工具执行期间那条线程正阻塞在工具里）。
+ * <b>线程语义</b>：{@link ShellTurnEvent.Kind#TOOL_OUTPUT} 不在 {@code react} 线程上，
+ * 它由工具的 stdout / stderr 两条泵线程<b>并发</b>触发，因此本类里只有它需要加锁
+ * （其余事件都发生在同一条 {@code react} 线程上，且工具执行期间那条线程正阻塞在工具里）。
+ * <p>
+ * <b>终态闩锁</b>：CLI 是单次模式，需要阻塞到回合结束才能决定退出码。终态事件恰好一条，
+ * 因此一个 {@link CountDownLatch} 就够，不需要超时（没有终态就是内核的 bug，而不是需要容忍的情形）。
  *
  * @author zcd
  */
-public final class CliReActListener implements ReActListener {
+public final class CliTurnListener implements ShellTurnListener {
 
     /** 思考过程的行首标记。 */
     private static final String THINKING_PREFIX = "· ";
@@ -98,6 +99,12 @@ public final class CliReActListener implements ReActListener {
     /** 工具实时输出当前是否停在一行的行首（下一段需要先补缩进）。 */
     private boolean toolOutputAtLineStart;
 
+    /** 终态闩锁：终态事件到达时放行等待者。 */
+    private final CountDownLatch terminalLatch = new CountDownLatch(1);
+
+    /** 终态事件，由 {@link #onTurnEvent(ShellTurnEvent)} 写入。 */
+    private volatile ShellTurnEvent terminal;
+
     /**
      * 构造监听器。
      *
@@ -105,14 +112,90 @@ public final class CliReActListener implements ReActListener {
      * @param showThinking 是否把思考过程打到 stderr
      * @param showToolArgs 是否在工具轨迹行上打出调用参数（单行、封顶）
      */
-    public CliReActListener(ConsoleIO console, boolean showThinking, boolean showToolArgs) {
+    public CliTurnListener(ConsoleIO console, boolean showThinking, boolean showToolArgs) {
         this.console = Objects.requireNonNull(console, "console must not be null");
         this.showThinking = showThinking;
         this.showToolArgs = showToolArgs;
     }
 
     @Override
-    public void onText(String delta) {
+    public void onTurnEvent(ShellTurnEvent event) {
+        switch (event.getKind()) {
+            case STARTED:
+                // 没有可渲染的内容：stdout 的空缓冲与 stderr 的一行都不用为它写
+                break;
+            case TEXT:
+                onText(event.getText());
+                break;
+            case THINKING:
+                onThinking(event.getText());
+                break;
+            case TOOL_STARTED:
+                onToolStarted(event.getToolName(), event.getToolArguments());
+                break;
+            case TOOL_OUTPUT:
+                onToolOutput(event.getToolCallId(), event.getToolName(), event.getText());
+                break;
+            case TOOL_COMPLETED:
+                onToolCompleted(event.getToolName(), event.isSuccess(), event.getOutput(),
+                        event.getMetadata());
+                break;
+            case COMPLETED:
+                onComplete(event);
+                finish(event);
+                break;
+            case CANCELLED:
+                onCancelled();
+                finish(event);
+                break;
+            case BLOCKED:
+                onBlocked(event.getReason());
+                finish(event);
+                break;
+            case ERROR:
+                onError(event.getError());
+                finish(event);
+                break;
+            default:
+                break;
+        }
+    }
+
+    /**
+     * 阻塞等待本回合的终态事件。
+     * <p>
+     * <b>没有超时是刻意的</b>：终态事件恰好一条是内核的契约（见 {@link ShellTurnEvent#isTerminal()}），
+     * 等不到就是内核违约——给它加一个超时只会把 bug 变成「偶尔报错的正常路径」，更难查。
+     *
+     * @return 终态事件；等待被中断且尚无终态时返回 {@code null}
+     */
+    public ShellTurnEvent awaitTerminal() {
+        try {
+            terminalLatch.await();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        return terminal;
+    }
+
+    /**
+     * 判断本回合是否已经报过错。
+     * <p>
+     * 供调用点决定「要不要再打一次失败原因」：回合失败的原因已经在上面的处理里打过，
+     * 重复打印只会让终端里同一句话出现两遍。
+     *
+     * @return 已经报过错返回 {@code true}
+     */
+    public boolean isFailed() {
+        return failed;
+    }
+
+    /**
+     * 收到一段模型文本增量（可能是最终回答，也可能是中间轮次的过程轨迹）。
+     *
+     * @param delta 增量
+     */
+    private void onText(String delta) {
         if (delta == null || delta.isEmpty()) {
             return;
         }
@@ -120,8 +203,12 @@ public final class CliReActListener implements ReActListener {
         answer.append(delta);
     }
 
-    @Override
-    public void onThinking(String delta) {
+    /**
+     * 收到一段思考过程增量。
+     *
+     * @param delta 增量
+     */
+    private void onThinking(String delta) {
         if (!showThinking || delta == null || delta.isEmpty()) {
             return;
         }
@@ -136,14 +223,13 @@ public final class CliReActListener implements ReActListener {
         }
     }
 
-    @Override
-    public void onToolCallStarted(String toolCallId, String toolName) {
-        // 兼容重载：没有参数也要走同一条路径，否则既有调用点会落到空的默认实现上
-        onToolCallStarted(toolCallId, toolName, null);
-    }
-
-    @Override
-    public void onToolCallStarted(String toolCallId, String toolName, Map<String, Object> arguments) {
+    /**
+     * 一次工具调用开始。
+     *
+     * @param toolName  工具名
+     * @param arguments 工具参数，可为 {@code null}
+     */
+    private void onToolStarted(String toolName, Map<String, Object> arguments) {
         closeThinkingLine();
         closeToolOutputLine();
         // 走到这里说明本轮以工具调用收尾，缓冲的文本是过程轨迹而非最终回答，转写 stderr 后清空
@@ -157,7 +243,7 @@ public final class CliReActListener implements ReActListener {
      * <b>为什么不像 TUI 那样折行</b>：TUI 的轨迹块是给人滚着看的一片区域，CLI 的 stderr 是流——
      * 折出来的行会被后面的内容冲散，反而更难读；一行截断至少能让人 grep 到「这次调用了什么」。
      * <p>
-     * 口径与 TUI 共用 {@link ToolArgumentsText}：同一条参数在三个显示面上必须是同一份文本，
+     * 口径与 TUI 共用 {@link ToolArgumentsText}：同一条参数在三个显示面上必须是同一份文本。
      *
      * @param arguments 工具参数，可为 {@code null}
      * @return 后缀文本（含分隔空格）；未开启或没有参数时返回空串
@@ -202,8 +288,7 @@ public final class CliReActListener implements ReActListener {
      * @param toolName   工具名
      * @param chunk      输出片段
      */
-    @Override
-    public synchronized void onToolCallOutput(String toolCallId, String toolName, String chunk) {
+    private synchronized void onToolOutput(String toolCallId, String toolName, String chunk) {
         if (chunk == null || chunk.isEmpty()) {
             return;
         }
@@ -222,9 +307,16 @@ public final class CliReActListener implements ReActListener {
         toolOutputAtLineStart = chunk.endsWith("\n");
     }
 
-    @Override
-    public void onToolCallCompleted(String toolCallId, String toolName, boolean success, String output,
-                                    Map<String, Object> metadata) {
+    /**
+     * 一次工具调用结束。
+     *
+     * @param toolName 工具名
+     * @param success  是否成功
+     * @param output   结果文本，可为 {@code null}
+     * @param metadata 结果元数据，可为 {@code null}
+     */
+    private void onToolCompleted(String toolName, boolean success, String output,
+                                 Map<String, Object> metadata) {
         closeThinkingLine();
         closeToolOutputLine();
         // 只读工具（read_file 之类）没有元数据，这一行因此保持原样；命令类工具带上退出码时补在末尾
@@ -240,7 +332,7 @@ public final class CliReActListener implements ReActListener {
      * <p>
      * <b>为什么命令行这边也要它</b>：子代理的轨迹行在 TUI 上是 {@code ⎿ task · 子代理 scout · 3 轮}，
      * 命令行不能只给一个 {@code ← task 完成}——那是同一件事在两个外壳下长得不一样，
-     * 而“刚才那一步到底是什么”是两边都需要回答的问题。
+     * 而「刚才那一步到底是什么」是两边都需要回答的问题。
      * <p>
      * <b>为什么读元数据而不读结果正文的首行</b>：与 TUI 同一个理由——首行是给模型读的措辞，
      * 展示若依赖它，改一个句子标记就会消失。
@@ -280,18 +372,24 @@ public final class CliReActListener implements ReActListener {
         return "";
     }
 
-    @Override
-    public void onComplete(ReActResult result) {
+    /**
+     * 回合正常收敛。
+     *
+     * @param event 终态事件
+     */
+    private void onComplete(ShellTurnEvent event) {
         closeThinkingLine();
         closeToolOutputLine();
-        writeAnswer(result);
-        if (result != null && result.isTruncated()) {
+        writeAnswer(event.getText());
+        if (event.isTruncated()) {
             console.writeErrLine("回合未收敛：已达最大轮次，上面的回答可能不完整。");
         }
     }
 
-    @Override
-    public void onCancelled() {
+    /**
+     * 回合被取消。
+     */
+    private void onCancelled() {
         closeThinkingLine();
         closeToolOutputLine();
         // 已取消的回合没有最终回答，残片留在缓冲里会丢，转写 stderr 让用户至少看得到已生成的部分
@@ -302,8 +400,8 @@ public final class CliReActListener implements ReActListener {
     /**
      * 回合在开始前被插件拦下。
      * <p>
-     * <b>故意不继承 {@link #onCancelled()} 的处理</b>：被拦下的回合一句都没发给模型，
-     * 因此缓冲里<b>不可能</b>有「已生成的部分」可转写——那是取消路径的需求，不是这里的。
+     * <b>故意不继承「已取消」的处理</b>：被拦下的回合一句都没发给模型，因此缓冲里<b>不可能</b>
+     * 有「已生成的部分」可转写——那是取消路径的需求，不是这里的。
      * 它也与「已取消」是两回事：用户没按过 Esc。
      * <p>
      * <b>理由走 stderr、stdout 保持空</b>：stdout 是「回答」，而被拦下的回合没有回答；
@@ -311,13 +409,16 @@ public final class CliReActListener implements ReActListener {
      *
      * @param reason 拦下的理由，可为 {@code null}
      */
-    @Override
-    public void onBlocked(String reason) {
+    private void onBlocked(String reason) {
         console.writeErrLine("回合被拦下：" + (reason == null || reason.trim().isEmpty() ? "未提供理由" : reason));
     }
 
-    @Override
-    public void onError(Throwable error) {
+    /**
+     * 回合失败。
+     *
+     * @param error 失败原因，可为 {@code null}
+     */
+    private void onError(Throwable error) {
         closeThinkingLine();
         closeToolOutputLine();
         flushTrace();
@@ -326,32 +427,31 @@ public final class CliReActListener implements ReActListener {
     }
 
     /**
-     * 判断本回合是否已经报过错。
+     * 写入终态并放行等待者。
      * <p>
-     * 供调用点决定「要不要再打一次失败原因」：{@code ReActTurn.await()} 抛出时错误已经在上面的回调里打过，
-     * 重复打印只会让终端里同一句话出现两遍。
+     * 终态事件恰好一条，因此这里不需要「是不是第一条」的判断；重复调用只会覆盖同一个值。
      *
-     * @return 已经报过错返回 {@code true}
+     * @param event 终态事件
      */
-    public boolean isFailed() {
-        return failed;
+    private void finish(ShellTurnEvent event) {
+        this.terminal = event;
+        terminalLatch.countDown();
     }
 
     /**
      * 把缓冲的回答写进 stdout 并保证以换行收尾。
      * <p>
-     * 缓冲为空时回退到 {@link ReActResult#getContent()}：截断回合的最后一轮文本已在工具行处作为轨迹输出，
-     * 此时 stdout 需要承载结果里的可读提示，避免用户看到一片空白。
+     * 缓冲为空时回退到结果里的可读提示：截断回合的最后一轮文本已在工具行处作为轨迹输出，
+     * 此时 stdout 需要承载结果里的那份提示，避免用户看到一片空白。
      *
-     * @param result 回合结果，可为 {@code null}
+     * @param content 收敛时的最终正文，可为 {@code null}
      */
-    private void writeAnswer(ReActResult result) {
+    private void writeAnswer(String content) {
         if (answer.length() > 0) {
             writeOutLine(answer.toString());
             answer.setLength(0);
             return;
         }
-        String content = result == null ? null : result.getContent();
         if (content != null && !content.trim().isEmpty()) {
             writeOutLine(content);
         }
@@ -369,7 +469,7 @@ public final class CliReActListener implements ReActListener {
     /**
      * 把缓冲中的中间轮次文本转写到 stderr，并清空缓冲。
      * <p>
-     * 换行由内容自己带，未带时补一个，避免与后续诊断行粘在同一行。
+     * 换行由内容自己带，未带时补一个，避免与后续诊断行粘在同一行上。
      */
     private void flushTrace() {
         if (answer.length() == 0) {
@@ -396,7 +496,7 @@ public final class CliReActListener implements ReActListener {
     /**
      * 结束进行中的工具输出行：补一个换行，避免与后续的结束行粘在同一行。
      * <p>
-     * 加锁的原因与 {@link #onToolCallOutput(String, String, String)} 相同：它读写的行状态
+     * 加锁的原因与 {@link #onToolOutput(String, String, String)} 相同：它读写的行状态
      * 可能正被泵线程改动。只在「已经半行未收尾」时才写一个换行，因此不会把终端输出切开。
      */
     private synchronized void closeToolOutputLine() {

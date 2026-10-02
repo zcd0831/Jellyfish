@@ -17,7 +17,10 @@ import zcd.jellyfish.cli.mode.RunMode;
 import zcd.jellyfish.cli.mode.ServerRunMode;
 import zcd.jellyfish.cli.mode.TuiRunMode;
 import zcd.jellyfish.core.AgentHarness;
-import zcd.jellyfish.core.input.InputTransforms;
+import zcd.jellyfish.core.conversation.ConversationService;
+import zcd.jellyfish.core.conversation.ShellStreams;
+import zcd.jellyfish.core.conversation.TurnRegistry;
+import zcd.jellyfish.core.conversation.Submission;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.command.CommandManager;
 import zcd.jellyfish.infra.event.EventChannel;
@@ -25,6 +28,8 @@ import zcd.jellyfish.infra.event.EventChannelOptions;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.model.ModelManager;
 import zcd.jellyfish.infra.model.SessionModelResolver;
+import zcd.jellyfish.infra.metrics.MetricsRegistry;
+import zcd.jellyfish.infra.shell.ShellIngress;
 import zcd.jellyfish.core.compact.ConversationCompactor;
 import zcd.jellyfish.core.prompt.PromptAssembler;
 import zcd.jellyfish.core.input.InputDirectives;
@@ -44,6 +49,8 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doThrow;
@@ -98,8 +105,14 @@ class LauncherTest {
     private final RuntimeInfoHolder runtimeInfoHolder = new RuntimeInfoHolder();
 
     /** 真实输入改写服务：只为满足三个运行模式的构造（非空校验）。 */
-    private final InputTransforms inputTransforms =
-            new InputTransforms(new ExtensionRegistry(typeRegistry));
+    @Mock
+    private ConversationService conversations;
+
+    /** 在途回合表：TUI / Server 装配需要。 */
+    private final TurnRegistry turnRegistry = new TurnRegistry();
+
+    /** 可靠 lane：三个模式装配都需要。 */
+    private final ShellStreams shellStreams = new ShellStreams(new ShellIngress(new MetricsRegistry()));
 
     /** 真实健康检查汇总，仅为满足 Server 装配。 */
     private final zcd.jellyfish.infra.metrics.HealthCheck healthCheck =
@@ -208,8 +221,8 @@ conversationCompactor = new ConversationCompactor(sessions, models, runtimeConfi
         // Given：插件在 start() 里就会读运行时信息（据此前置决定要不要注册需要审批的能力），
         // 因此写入必须早于 bootstrap，否则插件读到的是缺省的「未知外壳」
         givenComponentCollaborators();
-        when(commands.isCommand("/help")).thenReturn(true);
-        when(commands.execute("/help", session.getSessionId())).thenReturn(CommandResult.ok("帮助"));
+        when(conversations.submit(eq(session.getSessionId()), eq("/help"), any(), any()))
+                .thenReturn(Submission.command(session.getSessionId(), CommandResult.ok("帮助")));
         AtomicReference<RuntimeInfo> atBootstrap = new AtomicReference<RuntimeInfo>();
         doAnswer(invocation -> {
             atBootstrap.set(runtimeInfoHolder.snapshot());
@@ -241,8 +254,8 @@ conversationCompactor = new ConversationCompactor(sessions, models, runtimeConfi
     @Test
     void launch_should_bootstrap_run_and_shutdown_when_cli_given() {
         givenComponentCollaborators();
-        when(commands.isCommand("/help")).thenReturn(true);
-        when(commands.execute("/help", session.getSessionId())).thenReturn(CommandResult.ok("帮助"));
+        when(conversations.submit(eq(session.getSessionId()), eq("/help"), any(), any()))
+                .thenReturn(Submission.command(session.getSessionId(), CommandResult.ok("帮助")));
 
         int code = launcher.launch(StartupOptions.builder(StartupOptions.Mode.CLI).prompt("/help").build());
 
@@ -255,18 +268,23 @@ conversationCompactor = new ConversationCompactor(sessions, models, runtimeConfi
     @Test
     void launch_should_keep_current_session_when_one_exists() {
         givenComponentCollaborators();
-        when(commands.isCommand("/status")).thenReturn(true);
-        when(commands.execute("/status", session.getSessionId())).thenReturn(CommandResult.ok("概要"));
+        when(conversations.submit(eq(session.getSessionId()), eq("/status"), any(), any()))
+                .thenReturn(Submission.command(session.getSessionId(), CommandResult.ok("概要")));
 
         launcher.launch(StartupOptions.builder(StartupOptions.Mode.CLI).prompt("/status").build());
 
         assertNotNull(sessions.current());
-        verify(commands).execute("/status", session.getSessionId());
+        verify(conversations).submit(eq(session.getSessionId()), eq("/status"), any(), any());
     }
 
     @Test
     void launch_should_return_startup_error_and_still_shutdown_when_bootstrap_fails() {
-        givenRunModeCollaborators();
+        // 本用例在 bootstrap 就失败，走不到模式实现：因此只桩 Launcher 与 SessionBootstrap 要用的那几个
+        when(component.agentHarness()).thenReturn(harness);
+        when(component.conversationService()).thenReturn(conversations);
+        when(component.shellStreams()).thenReturn(shellStreams);
+        when(component.sessionManager()).thenReturn(sessions);
+        when(component.runtimeInfoHolder()).thenReturn(runtimeInfoHolder);
         doThrow(new JellyfishException("插件目录不可读")).when(harness).bootstrap();
 
         int code = launcher.launch(StartupOptions.builder(StartupOptions.Mode.CLI).prompt("你好").build());
@@ -290,8 +308,8 @@ conversationCompactor = new ConversationCompactor(sessions, models, runtimeConfi
     @Test
     void launch_should_still_shutdown_when_mode_throws_unexpected_exception() {
         givenComponentCollaborators();
-        when(commands.isCommand("boom")).thenReturn(true);
-        when(commands.execute("boom", session.getSessionId())).thenThrow(new JellyfishException("命令域故障"));
+        when(conversations.submit(eq(session.getSessionId()), eq("boom"), any(), any()))
+                .thenThrow(new JellyfishException("命令域故障"));
 
         int code = launcher.launch(StartupOptions.builder(StartupOptions.Mode.CLI).prompt("boom").build());
 
@@ -324,10 +342,9 @@ conversationCompactor = new ConversationCompactor(sessions, models, runtimeConfi
      * 那是用例刻意不走路径，不是多余的桩。
      */
     private void givenRunModeCollaborators() {
-        when(component.agentHarness()).thenReturn(harness);
-        when(component.commandManager()).thenReturn(commands);
+        when(component.conversationService()).thenReturn(conversations);
+        when(component.shellStreams()).thenReturn(shellStreams);
         when(component.sessionManager()).thenReturn(sessions);
-        when(component.inputTransforms()).thenReturn(inputTransforms);
         lenient().when(component.runtimeInfoHolder()).thenReturn(runtimeInfoHolder);
     }
 
@@ -345,6 +362,7 @@ conversationCompactor = new ConversationCompactor(sessions, models, runtimeConfi
      */
     private void givenTuiCollaborators() {
         givenRunModeCollaborators();
+        when(component.commandManager()).thenReturn(commands);
         when(component.modelManager()).thenReturn(models);
         when(component.agentManager()).thenReturn(agents);
         when(component.extensionRegistry()).thenReturn(extensionRegistry);
@@ -352,6 +370,7 @@ conversationCompactor = new ConversationCompactor(sessions, models, runtimeConfi
         when(component.approvalChannel()).thenReturn(approvalChannel);
         when(component.conversationCompactor()).thenReturn(conversationCompactor);
         when(component.inputDirectives()).thenReturn(inputDirectives);
+        when(component.turnRegistry()).thenReturn(turnRegistry);
         when(component.sessionDefaults()).thenReturn(sessionDefaults);
     }
 
@@ -360,10 +379,12 @@ conversationCompactor = new ConversationCompactor(sessions, models, runtimeConfi
      */
     private void givenServerCollaborators() {
         givenRunModeCollaborators();
+        when(component.commandManager()).thenReturn(commands);
         when(component.modelManager()).thenReturn(models);
         when(component.agentManager()).thenReturn(agents);
         when(component.approvalChannel()).thenReturn(approvalChannel);
         when(component.healthCheck()).thenReturn(healthCheck);
+        when(component.turnRegistry()).thenReturn(turnRegistry);
     }
 
     /**
@@ -371,6 +392,7 @@ conversationCompactor = new ConversationCompactor(sessions, models, runtimeConfi
      */
     private void givenComponentCollaborators() {
         givenRunModeCollaborators();
+        when(component.agentHarness()).thenReturn(harness);
         when(component.modelManager()).thenReturn(models);
         when(component.agentManager()).thenReturn(agents);
     }

@@ -288,6 +288,132 @@ class ApprovalChannelTest {
         assertThrows(NullPointerException.class, () -> channel.request(pending(), null));
     }
 
+    @Test
+    void pending_should_be_isolated_per_session() throws Exception {
+        channel.attach();
+        AtomicReference<PermissionDecision> decisionA = new AtomicReference<PermissionDecision>();
+        AtomicReference<PermissionDecision> decisionB = new AtomicReference<PermissionDecision>();
+        ApprovalChannel.Pending a = pendingFor("session-a");
+        ApprovalChannel.Pending b = pendingFor("session-b");
+
+        Thread threadA = requestInBackground(a, decisionA);
+        assertEquals(a.getId(), awaitPending("session-a").getId());
+        Thread threadB = requestInBackground(b, decisionB);
+        assertEquals(b.getId(), awaitPending("session-b").getId());
+
+        // 两个会话各占自己的头槽位，互不排队（这正是多槽位要修的那个缺陷）
+        assertEquals(0, channel.waitingCount("session-a"));
+        assertEquals(0, channel.waitingCount("session-b"));
+
+        assertTrue(channel.resolve(a.getId(), true));
+        assertTrue(channel.resolve(b.getId(), true));
+        threadA.join(2000L);
+        threadB.join(2000L);
+        assertTrue(decisionA.get().isAllowed());
+        assertTrue(decisionB.get().isAllowed());
+    }
+
+    @Test
+    void resolve_should_advance_only_its_own_session() throws Exception {
+        channel.attach();
+        AtomicReference<PermissionDecision> first = new AtomicReference<PermissionDecision>();
+        AtomicReference<PermissionDecision> second = new AtomicReference<PermissionDecision>();
+        AtomicReference<PermissionDecision> other = new AtomicReference<PermissionDecision>();
+        ApprovalChannel.Pending a1 = pendingFor("session-a");
+        ApprovalChannel.Pending a2 = pendingFor("session-a");
+        ApprovalChannel.Pending b1 = pendingFor("session-b");
+
+        Thread threadA1 = requestInBackground(a1, first);
+        assertEquals(a1.getId(), awaitPending("session-a").getId());
+        Thread threadA2 = requestInBackground(a2, second);
+        awaitWaiting("session-a", 1);
+        Thread threadB = requestInBackground(b1, other);
+        assertEquals(b1.getId(), awaitPending("session-b").getId());
+
+        assertTrue(channel.resolve(a1.getId(), true));
+
+        // 只有 A 的头槽位推进，B 的头不受影响
+        assertEquals(a2.getId(), channel.pending("session-a").orElse(null).getId());
+        assertEquals(b1.getId(), channel.pending("session-b").orElse(null).getId());
+
+        assertTrue(channel.resolve(a2.getId(), true));
+        assertTrue(channel.resolve(b1.getId(), true));
+        threadA1.join(2000L);
+        threadA2.join(2000L);
+        threadB.join(2000L);
+    }
+
+    @Test
+    void resolve_should_return_false_for_a_queued_request() throws Exception {
+        channel.attach();
+        AtomicReference<PermissionDecision> first = new AtomicReference<PermissionDecision>();
+        AtomicReference<PermissionDecision> second = new AtomicReference<PermissionDecision>();
+        ApprovalChannel.Pending a1 = pendingFor("session-a");
+        ApprovalChannel.Pending a2 = pendingFor("session-a");
+
+        Thread threadA1 = requestInBackground(a1, first);
+        assertEquals(a1.getId(), awaitPending("session-a").getId());
+        Thread threadA2 = requestInBackground(a2, second);
+        awaitWaiting("session-a", 1);
+
+        // 排队中的那一条审批者根本看不到，裁决它等于无事发生
+        assertFalse(channel.resolve(a2.getId(), true));
+        assertEquals(a1.getId(), channel.pending("session-a").orElse(null).getId());
+
+        assertTrue(channel.resolve(a1.getId(), true));
+        assertTrue(channel.resolve(a2.getId(), true));
+        threadA1.join(2000L);
+        threadA2.join(2000L);
+    }
+
+    /**
+     * 构造一条指定会话的待审批请求。
+     *
+     * @param sessionId 会话标识
+     * @return 请求
+     */
+    private static ApprovalChannel.Pending pendingFor(String sessionId) {
+        Map<String, Object> arguments = new LinkedHashMap<String, Object>();
+        arguments.put("path", "a.txt");
+        return new ApprovalChannel.Pending(sessionId, "agent-a", "write_file", arguments,
+                PermissionMode.NORMAL, "agent 策略要求人工审批该工具");
+    }
+
+    /**
+     * 等到指定会话真的挂上当前槽位。
+     *
+     * @param sessionId 会话标识
+     * @return 当前待审批请求
+     * @throws Exception 超时或中断
+     */
+    private ApprovalChannel.Pending awaitPending(String sessionId) throws Exception {
+        for (int i = 0; i < 200; i++) {
+            ApprovalChannel.Pending current = channel.pending(sessionId).orElse(null);
+            if (current != null) {
+                return current;
+            }
+            Thread.sleep(5L);
+        }
+        throw new IllegalStateException("会话 " + sessionId + " 的审批请求未在预期时间内挂上");
+    }
+
+    /**
+     * 等到指定会话的排队数达到预期值。
+     *
+     * @param sessionId 会话标识
+     * @param expected  预期排队数
+     * @throws Exception 超时或中断
+     */
+    private void awaitWaiting(String sessionId, int expected) throws Exception {
+        for (int i = 0; i < 200; i++) {
+            if (channel.waitingCount(sessionId) >= expected) {
+                return;
+            }
+            Thread.sleep(5L);
+        }
+        throw new IllegalStateException("会话 " + sessionId + " 的排队数未在预期时间内达到 " + expected);
+    }
+
     /**
      * 构造一条待审批请求。
      *

@@ -12,16 +12,15 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Deque;
-import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * 人工审批通道：同步判定的 {@code ASK} 分支与外壳界面之间唯一的交接点。
@@ -40,10 +39,14 @@ import java.util.concurrent.atomic.AtomicReference;
  * 工具执行失败、可被用户察觉。这条同时也是 {@code -cli} / {@code -server} 的现状保持路径：
  * 它们不 {@code attach()}，因此行为与审批通道落地前完全一致。
  * <p>
- * <b>为什么一次只交接一个</b>：审批在界面上是一个模态选择框，同屏只能显示一个。因此「当前待审批项」
- * 只有一个槽位（读侧每帧读它），其余请求按到达顺序排队；排队数封顶 {@link #MAX_WAITING}，
- * 超出即拒绝——{@code react} 池并发上限有限，真排到上限说明审批者已经不在了，
- * 让请求无限堆积只会把内存与线程一起拖住。
+ * <b>为什么一次只交接一个（每个会话）</b>：审批在界面上是一个模态选择框，同屏只能显示一个。
+ * 因此<b>每个会话</b>同时只有一个「当前待审批项」（读侧每帧读它），该会话其余请求按到达顺序排队；
+ * 排队数封顶 {@link #MAX_WAITING}，超出即拒绝——{@code react} 池并发上限有限，真排到上限说明
+ * 审批者已经不在了，让请求无限堆积只会把内存与线程一起拖住。
+ * <p>
+ * <b>槽位按会话隔离</b>：头槽位是<b>每会话一个</b>，会话之间不互相排队。
+ * 全局单槽位时代，会话 A 的审批没答完，会话 B 的审批就得排在后面——而审批者只能看到一条，
+ * 于是 B 的回合会一直阻塞到超时。这正是本类从单槽位改成多槽位的原因。
  * <p>
  * <b>「只接受第一次结论」怎么保证</b>：裁决、超时、通道关闭三方都可能给出结论，它们全部经
  * {@link #finish} 在<b>同一把锁</b>内完成「查等待者 → 摘掉 → 推进当前槽位」，
@@ -84,13 +87,21 @@ public class ApprovalChannel {
     /** 是否已挂上审批者（外壳启动时置位）。 */
     private volatile boolean attached;
 
-    /** 当前展示给审批者的那一条，{@code null} 表示没有待审批项。读侧无锁读。 */
-    private final AtomicReference<Pending> current = new AtomicReference<Pending>();
+    /**
+     * 每会话的当前头槽位：无待审批项的会话不出现在表里。
+     * <p>
+     * 用 {@link ConcurrentHashMap} 而不是在 {@link #lock} 里读：读侧（外壳每帧取件）不应该等写侧，
+     * 而写侧推进头槽位本来就是原子的替换。
+     */
+    private final ConcurrentHashMap<String, Pending> heads = new ConcurrentHashMap<String, Pending>();
 
-    /** 等待中的请求（先进先出），与 {@link #waiters} 同增同减。 */
-    private final Deque<Pending> waiting = new ArrayDeque<Pending>();
+    /** 每会话的排队区（不含头槽位），与 {@link #waiters} 同增同减。 */
+    private final Map<String, Deque<Pending>> waiting = new LinkedHashMap<String, Deque<Pending>>();
 
-    /** 全部在途请求的等待者，键为请求 id：当前那条与排队中的都记在这里，供裁决与关闭时定位。 */
+    /** 全部在途请求（含头槽位与排队中的），键为请求 id：用于按 id 定位它属于哪个会话。 */
+    private final Map<String, Pending> pendingById = new LinkedHashMap<String, Pending>();
+
+    /** 全部在途请求的等待者，键为请求 id：供裁决与关闭时定位。 */
     private final Map<String, Waiter> waiters = new LinkedHashMap<String, Waiter>();
 
     /** 状态变更锁：入队、裁决、摘除三处共用。 */
@@ -131,16 +142,36 @@ public class ApprovalChannel {
     }
 
     /**
-     * 取当前待审批请求，供外壳每帧绘制审批浮层。
+     * 取一个待审批请求（跨会话最早的那一条）。
+     * <p>
+     * <b>它只服务「不知道自己是哪个会话」的晚到客户端</b>（{@code GET /approvals}）。
+     * 外壳绘制审批浮层应当用 {@link #pending(String)}：那一个才是「本会话的头槽位」，
+     * 而本方法在多会话并发时给出的可能是不属于当前会话的另一条。
      *
-     * @return 当前请求；没有待审批项时为 {@link Optional#empty()}
+     * @return 最早的待审批请求；没有任何待审批项时为 {@link Optional#empty()}
      */
     public Optional<Pending> pending() {
-        return Optional.ofNullable(current.get());
+        Pending oldest = null;
+        for (Pending candidate : heads.values()) {
+            if (oldest == null || candidate.getTimestamp() < oldest.getTimestamp()) {
+                oldest = candidate;
+            }
+        }
+        return Optional.ofNullable(oldest);
     }
 
     /**
-     * 取当前排队等待数（不含当前展示的那一条）。
+     * 取指定会话当前待审批请求，供外壳每帧绘制审批浮层。
+     *
+     * @param sessionId 会话标识，可为 {@code null}（归入无会话槽位）
+     * @return 该会话的当前请求；没有时为 {@link Optional#empty()}
+     */
+    public Optional<Pending> pending(String sessionId) {
+        return Optional.ofNullable(heads.get(sessionKey(sessionId)));
+    }
+
+    /**
+     * 取全部会话排队中的请求总数（不含各会话的头槽位）。
      * <p>
      * 只供诊断与测试断言使用，不参与任何判定：排队上限是在 {@link #enqueue} 里现算的，
      * 拿到这个数字之后它就可能已经变了。
@@ -149,31 +180,50 @@ public class ApprovalChannel {
      */
     int waitingCount() {
         synchronized (lock) {
-            return waiting.size();
+            int total = 0;
+            for (Deque<Pending> queue : waiting.values()) {
+                total += queue.size();
+            }
+            return total;
+        }
+    }
+
+    /**
+     * 取指定会话排队中的请求数（不含头槽位）。
+     *
+     * @param sessionId 会话标识，可为 {@code null}
+     * @return 排队中的请求数
+     */
+    int waitingCount(String sessionId) {
+        synchronized (lock) {
+            Deque<Pending> queue = waiting.get(sessionKey(sessionId));
+            return queue == null ? 0 : queue.size();
         }
     }
 
     /**
      * 给出审批结论（渲染线程调用）。
      * <p>
-     * 只对<b>当前展示的那一条</b>生效：排队中的请求审批者根本看不到，也就无从裁决；
+     * 只对<b>某个会话当前展示的那一条</b>生效：排队中的请求审批者根本看不到，也就无从裁决，
      * 对它调用等于无事发生。同一条请求的第一次结论胜出，
      * 之后的调用（超时后用户才点下、重复按键）静默丢弃。
      *
      * @param id       请求 id，可为 {@code null}
      * @param approved 是否批准
+     * @return 本次调用真的落定了一条头槽位返回 {@code true}；无事发生时返回 {@code false}
      */
-    public void resolve(String id, boolean approved) {
+    public boolean resolve(String id, boolean approved) {
         if (id == null) {
-            return;
+            return false;
         }
+        Pending target;
         synchronized (lock) {
-            Pending head = current.get();
-            if (head == null || !head.getId().equals(id)) {
-                return;
-            }
+            target = pendingById.get(id);
         }
-        finish(id, approved ? PermissionDecision.allow(APPROVED)
+        if (target == null || !Objects.equals(target, heads.get(sessionKey(target.getSessionId())))) {
+            return false;
+        }
+        return finish(id, approved ? PermissionDecision.allow(APPROVED)
                 : PermissionDecision.deny(REJECTED));
     }
 
@@ -229,11 +279,9 @@ public class ApprovalChannel {
             if (waiter == null) {
                 return false;
             }
-            Pending head = current.get();
-            if (head != null && id.equals(head.getId())) {
-                current.set(waiting.isEmpty() ? null : waiting.pollFirst());
-            } else {
-                removeWaiting(id);
+            Pending pending = pendingById.remove(id);
+            if (pending != null) {
+                advance(pending);
             }
         }
         waiter.decision = decision;
@@ -242,7 +290,37 @@ public class ApprovalChannel {
     }
 
     /**
-     * 入队一条审批请求：当前槽位空闲则直接占用，否则排队（超出上限返回失败）。
+     * 从某会话的槽位表中摘掉一条已落定的请求，并推进该会话的头槽位。
+     * <p>
+     * 必须是头槽位才能推进：排队中的请求被摘掉只影响队列自己，
+     * 把队列里的下一个提为头就是这个请求的副作用。
+     *
+     * @param pending 已落定的请求
+     */
+    private void advance(Pending pending) {
+        String key = sessionKey(pending.getSessionId());
+        Pending head = heads.get(key);
+        if (head == null) {
+            return;
+        }
+        if (head.getId().equals(pending.getId())) {
+            Deque<Pending> queue = waiting.get(key);
+            if (queue == null || queue.isEmpty()) {
+                heads.remove(key);
+                waiting.remove(key);
+            } else {
+                heads.put(key, queue.pollFirst());
+            }
+        } else {
+            Deque<Pending> queue = waiting.get(key);
+            if (queue != null) {
+                queue.remove(pending);
+            }
+        }
+    }
+
+    /**
+     * 入队一条审批请求：该会话的头槽位空闲则直接占用，否则排队（超出上限返回失败）。
      *
      * @param request 审批请求
      * @param waiter  等待者
@@ -255,33 +333,40 @@ public class ApprovalChannel {
                 // 不重查的话这条请求会进了队列却没人看（审批者已经走了），白等到超时
                 return false;
             }
-            if (current.get() == null) {
-                current.set(request);
+            String key = sessionKey(request.getSessionId());
+            if (heads.get(key) == null) {
+                heads.put(key, request);
+                pendingById.put(request.getId(), request);
                 waiters.put(request.getId(), waiter);
                 return true;
             }
-            if (waiting.size() >= MAX_WAITING) {
+            Deque<Pending> queue = waiting.get(key);
+            if (queue == null) {
+                queue = new ArrayDeque<Pending>();
+                waiting.put(key, queue);
+            }
+            if (queue.size() >= MAX_WAITING) {
+                waiting.remove(key);
                 return false;
             }
-            waiting.addLast(request);
+            queue.addLast(request);
+            pendingById.put(request.getId(), request);
             waiters.put(request.getId(), waiter);
             return true;
         }
     }
 
     /**
-     * 把一条请求从排队区摘掉（仅限于已经拿到等待者的调用方）。
+     * 取会话在槽位表里的键。
+     * <p>
+     * {@link Pending#getSessionId()} 允许为 {@code null}，而映射不接受 {@code null} 键，
+     * 因此无会话的请求归入一个固定的空串槽位；它不会与任何真实会话相撞（会话标识不可为空白）。
      *
-     * @param id 请求 id
+     * @param sessionId 会话标识，可为 {@code null}
+     * @return 槽位键，保证非 {@code null}
      */
-    private void removeWaiting(String id) {
-        Iterator<Pending> iterator = waiting.iterator();
-        while (iterator.hasNext()) {
-            if (id.equals(iterator.next().getId())) {
-                iterator.remove();
-                return;
-            }
-        }
+    private static String sessionKey(String sessionId) {
+        return sessionId == null ? "" : sessionId;
     }
 
     /**

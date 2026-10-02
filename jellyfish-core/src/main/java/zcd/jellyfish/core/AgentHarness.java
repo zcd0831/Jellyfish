@@ -187,6 +187,11 @@ public class AgentHarness {
 
     /**
      * 启动一次 ReAct 回合：本门面唯一的智能入口。
+     * <p>
+     * <b>它是内核内部接缝，不是外壳接口</b>：外壳只经
+     * {@code ConversationService.submit} + {@code ShellStreams.subscribe} 两条边工作，
+     * 不再自己传监听器。保留本方法是为了让内核能把「回合执行体」与「事件发布」分开装配
+     * （发布器由 {@code ConversationService} 提供），子代理委派也仍然需要一条同步回调。
      *
      * @param sessionId 会话标识，不可为空白
      * @param userInput 用户输入，可为 {@code null}
@@ -195,6 +200,19 @@ public class AgentHarness {
      */
     public ReActTurn chat(String sessionId, String userInput, ReActListener listener) {
         return reActLooper.chat(sessionId, userInput, listener);
+    }
+
+    /**
+     * 启动一次 ReAct 回合，使用外部给定的回合标识（内核内部接缝）。
+     *
+     * @param sessionId 会话标识，不可为空白
+     * @param turnId    回合标识，不可为空白
+     * @param userInput 用户输入，可为 {@code null}
+     * @param listener  流式回调，可为 {@code null}
+     * @return 回合句柄，保证非 {@code null}
+     */
+    public ReActTurn chat(String sessionId, String turnId, String userInput, ReActListener listener) {
+        return reActLooper.chat(sessionId, turnId, userInput, listener);
     }
 
     /**

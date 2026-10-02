@@ -19,6 +19,8 @@ import zcd.jellyfish.infra.event.EventChannelOptions;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.registry.TypeRegistry;
 import zcd.jellyfish.infra.session.SessionManager;
+import zcd.jellyfish.infra.metrics.MetricsRegistry;
+import zcd.jellyfish.infra.shell.ShellIngress;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -60,7 +62,7 @@ class JellyfishPluginFactoryTest {
             new TypeRegistry(),
             new RuntimeInfoHolder(),
             new ActionQueue(),
-            sessions);
+            sessions, new ShellIngress(new MetricsRegistry()));
 
     /** 记录插件生命周期回调。 */
     private static final List<String> RECORDED = new ArrayList<>();

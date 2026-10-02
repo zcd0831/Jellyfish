@@ -1,7 +1,6 @@
 package zcd.jellyfish.tui;
 
 import zcd.jellyfish.api.extension.ToolRenderHint;
-import zcd.jellyfish.core.ReActTurn;
 import zcd.jellyfish.core.input.InputDirectiveRun;
 import zcd.jellyfish.infra.session.SessionMessage;
 import zcd.jellyfish.tui.text.VisualLine;
@@ -47,15 +46,14 @@ public final class ChatState {
     /** 上一次渲染时的窗口行数。 */
     private int viewportRows;
 
-    /** 当前进行中的回合句柄，无回合时为 {@code null}。 */
-    private ReActTurn currentTurn;
-
     /**
      * 当前进行中的输入指令句柄，无指令时为 {@code null}。
      * <p>
      * <b>为什么与回合共用暂存区</b>：{@code !} 这类指令同样会产出实时输出，复用 {@link InflightTurn}
      * 才能共用 {@link TranscriptProjector} 的同一套渲染，不必为它开第二条投影路径。
-     * 两者互斥（{@link #beginTurn} / {@link #beginDirective} 都会清掉对方），不会同时存在。
+     * <p>
+     * <b>为什么只有指令句柄、没有回合句柄</b>：在途回合与取消入口已收归内核的 {@code TurnRegistry}
+     * （{@code ConversationService.submit} 先占位、终态自动归还），本类再存一份就成了第二个真源。
      */
     private InputDirectiveRun currentDirective;
 
@@ -127,6 +125,16 @@ public final class ChatState {
     static final int MAX_NOTICES = 50;
 
     /**
+     * 同一来源的插件通知显示上限。
+     * <p>
+     * <b>为什么要有这一档而不是只看全局上限</b>：全局上限会让一个刷屏的插件把别的插件的通知
+     * 一起挤掉。按来源封顶才是「一个插件不该占满屏幕」这句话的实际含义。
+     * <p>
+     * 淘汰的是<b>该来源最早的那一条</b>：插件通知多是进度 / 状态类，留着旧的不如留新的。
+     */
+    static final int MAX_NOTICES_PER_PLUGIN = 3;
+
+    /**
      * 追加一条带命令原文的外壳提示（命令结果）。
      * <p>
      * 只由渲染线程调用。提示不进会话（见 {@link ShellNotice}），但带自己的时间戳参与投影：
@@ -155,6 +163,55 @@ public final class ChatState {
      */
     public void appendNotice(String text, ShellNotice.Kind kind) {
         appendNotice(null, text, kind);
+    }
+
+    /**
+     * 追加一条插件来源的外壳提示。
+     * <p>
+     * 与命令结果走同一个缓冲区（因此同样按时间戳参与投影），区别只在两条纪律：
+     * <ul>
+     *     <li><b>按来源封顶</b>：同一 owner 已显示满 {@link #MAX_NOTICES_PER_PLUGIN} 条时，
+     *     先把它最早的那一条挤掉——否则一个插件就能把屏幕刷满；</li>
+     *     <li><b>文本已经过滤过控制字符</b>：那是渲染面（{@code TuiApp}）的责任，这里不再改文本。
+     *     过滤必须发生在写入之前——{@code TranscriptProjector} 对提示块不做过滤（只对工具输出做）。</li>
+     * </ul>
+     *
+     * @param owner 来源 owner（插件标识或 {@code 插件标识::子标识}），不可为空白
+     * @param text  提示文本，{@code null} 或空白忽略
+     * @param kind  提示语义，不可为 {@code null}
+     */
+    public void appendPluginNotice(String owner, String text, ShellNotice.Kind kind) {
+        if (text == null || text.trim().isEmpty()) {
+            return;
+        }
+        evictOldestPluginNotice(owner);
+        if (notices.size() >= MAX_NOTICES) {
+            notices.remove(0);
+        }
+        notices.add(ShellNotice.plugin(System.currentTimeMillis(), owner, text, kind));
+        noticeVersion++;
+    }
+
+    /**
+     * 把某个来源超额的插件通知挤掉。
+     *
+     * @param owner 来源 owner
+     */
+    private void evictOldestPluginNotice(String owner) {
+        int count = 0;
+        int oldest = -1;
+        for (int i = 0; i < notices.size(); i++) {
+            if (!owner.equals(notices.get(i).getOwner())) {
+                continue;
+            }
+            if (oldest < 0) {
+                oldest = i;
+            }
+            count++;
+        }
+        if (count >= MAX_NOTICES_PER_PLUGIN && oldest >= 0) {
+            notices.remove(oldest);
+        }
     }
 
     /**
@@ -216,7 +273,7 @@ public final class ChatState {
     }
 
     /**
-     * 获取暂存区，供 {@link TuiReActListener} 写入。
+     * 获取暂存区，供 {@link TuiTurnListener} 写入。
      *
      * @return 暂存区，保证非 {@code null}
      */
@@ -225,29 +282,20 @@ public final class ChatState {
     }
 
     /**
-     * 开始一个新回合：重置暂存区并绑定回合句柄。
+     * 开始一件会产出实时输出的工作（回合或输入指令）：重置暂存区并清除指令句柄。
+     * <p>
+     * <b>为什么它是一个独立入口</b>：分流的顺序现在归内核（{@code ConversationService}），
+     * 外壳在提交之前还不知道会落进回合还是指令，但两者都要求在<b>提交之前</b>重置暂存区——
+     * 晚一步重置就会把执行线程已经写出的第一段实时输出抹掉。因此先用本方法重置，
+     * 拿到结果后指令路径再用 {@link #bindDirective} 绑定句柄；
+     * 落进非回合路时由外壳静默收回（同一渲染帧内完成，用户看不到中间态）。
      * <p>
      * 暂存区的重置必须发生在这里（而不是在某个回调里）：回调开始时模型可能还没吐出任何字符，
      * 那时已经是 {@code RUNNING}，但上一回合的终局若不先清掉，投影器会把它当成已结束回合。
-     *
-     * @param turn 回合句柄，可为 {@code null}
      */
-    public void beginTurn(ReActTurn turn) {
-        inflight.begin();
-        this.currentTurn = turn;
-        this.currentDirective = null;
-    }
-
-    /**
-     * 开始一次输入指令执行：重置暂存区。
-     * <p>
-     * <b>必须在提交执行之前调用</b>：执行线程可能在提交后的任意时刻开始产出实时输出，
-     * 晚一步重置就会把那一段抹掉。句柄随后由 {@link #bindDirective} 绑定。
-     */
-    public void beginDirective() {
+    public void beginWork() {
         inflight.begin();
         this.currentDirective = null;
-        this.currentTurn = null;
     }
 
     /**
@@ -276,36 +324,28 @@ public final class ChatState {
     }
 
     /**
-     * 绑定当前进行中的回合，供 {@code Esc} 中断。
+     * 判断当前是否有进行中的工作（回合或输入指令）。
+     * <p>
+     * 判据是暂存区状态而不是内核的回合表：它回答的是「界面此刻该不该显示进行中、该不该拒绝新输入」，
+     * 而指令不在内核的回合闸门里，只在本类里有状态。
      *
-     * @param turn 回合句柄，可为 {@code null}（表示清空）
-     */
-    public void bindTurn(ReActTurn turn) {
-        this.currentTurn = turn;
-    }
-
-    /**
-     * 判断当前是否有进行中的回合。
-     *
-     * @return 有进行中回合返回 {@code true}
+     * @return 有进行中工作返回 {@code true}
      */
     public boolean isTurnRunning() {
         return inflight.isRunning();
     }
 
     /**
-     * 中断当前正在进行的工作：优先取消 ReAct 回合，否则取消输入指令。
+     * 中断当前进行中的输入指令。
      * <p>
-     * 中断必须由渲染线程主动调用（而不是等 {@code react} 线程投递消息），否则用户按下 {@code Esc}
+     * <b>本类只负责指令</b>：回合的取消由调用方走内核的 {@code TurnRegistry.cancel(sessionId)}
+     * ——回合句柄不在本类里（见 {@link #currentDirective} 的注释）。
+     * <p>
+     * 中断必须由渲染线程主动调用（而不是等执行线程投递消息），否则用户按下 {@code Esc}
      * 之后界面上不会有任何立刻可见的反应——那与「卡死」无法区分。句柄为空或已结束时什么都不做，
      * 因此重复按 {@code Esc} 是安全的。
      */
-    public void cancelTurn() {
-        ReActTurn turn = currentTurn;
-        if (turn != null) {
-            turn.cancel();
-            return;
-        }
+    public void cancelDirective() {
         InputDirectiveRun run = currentDirective;
         if (run != null) {
             run.cancel();

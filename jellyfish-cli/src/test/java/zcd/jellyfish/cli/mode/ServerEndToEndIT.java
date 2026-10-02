@@ -46,8 +46,9 @@ class ServerEndToEndIT {
         AgentHarness harness = component.agentHarness();
         harness.bootstrap();
         JellyfishServer server = new JellyfishServer(ServerConfig.builder("127.0.0.1", 0).build(),
-                harness, component.sessionManager(), component.commandManager(), component.agentManager(),
-                component.modelManager(), component.approvalChannel(), component.healthCheck(), component.inputTransforms());
+                component.conversationService(), component.sessionManager(), component.commandManager(), component.agentManager(),
+                component.modelManager(), component.approvalChannel(), component.healthCheck(), component.turnRegistry(),
+                component.shellStreams());
         server.start();
         int boundPort = server.boundPort();
         try {
@@ -103,8 +104,9 @@ class ServerEndToEndIT {
         // 9. 停掉之后端口确实释放：可以再次绑同一端口（用新服务验证）
         JellyfishServer restarted = new JellyfishServer(
                 ServerConfig.builder("127.0.0.1", boundPort).build(),
-                harness, component.sessionManager(), component.commandManager(), component.agentManager(),
-                component.modelManager(), component.approvalChannel(), component.healthCheck(), component.inputTransforms());
+                component.conversationService(), component.sessionManager(), component.commandManager(), component.agentManager(),
+                component.modelManager(), component.approvalChannel(), component.healthCheck(), component.turnRegistry(),
+                component.shellStreams());
         try {
             restarted.start();
             assertEquals(200, get("http://127.0.0.1:" + restarted.boundPort() + "/health").status);
@@ -120,8 +122,9 @@ class ServerEndToEndIT {
         harness.bootstrap();
         JellyfishServer server = new JellyfishServer(
                 ServerConfig.builder("127.0.0.1", 0).apiKey("s3cret-api-key").build(),
-                harness, component.sessionManager(), component.commandManager(), component.agentManager(),
-                component.modelManager(), component.approvalChannel(), component.healthCheck(), component.inputTransforms());
+                component.conversationService(), component.sessionManager(), component.commandManager(), component.agentManager(),
+                component.modelManager(), component.approvalChannel(), component.healthCheck(), component.turnRegistry(),
+                component.shellStreams());
         server.start();
         String base = "http://127.0.0.1:" + server.boundPort();
         try {

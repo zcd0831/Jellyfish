@@ -588,6 +588,22 @@ public class SessionManager {
     }
 
     /**
+     * 判断指定会话是否存在。
+     * <p>
+     * <b>它与 {@link #require} 的差别是「不抛异常」</b>：需要会话存在才能继续的代码用
+     * {@code require}（fail-closed）；只是想知道「在不在」的代码用它——典型是外壳贡献的投递：
+     * 目标会话不存在时不是错误，只是一个可预期的结果。
+     * <p>
+     * 它<b>不建会话</b>，也不改变当前会话。
+     *
+     * @param sessionId 会话标识，可为 {@code null} 或空白
+     * @return 存在返回 {@code true}；标识为空白或查不到时返回 {@code false}
+     */
+    public boolean exists(String sessionId) {
+        return !StringUtils.isBlank(sessionId) && sessions.containsKey(sessionId);
+    }
+
+    /**
      * 切换当前会话。
      *
      * @param sessionId 会话标识，不可为空白

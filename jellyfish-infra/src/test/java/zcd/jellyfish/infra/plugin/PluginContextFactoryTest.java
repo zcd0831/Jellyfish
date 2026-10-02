@@ -23,6 +23,8 @@ import zcd.jellyfish.infra.event.EventChannelOptions;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.registry.TypeRegistry;
 import zcd.jellyfish.infra.session.SessionManager;
+import zcd.jellyfish.infra.metrics.MetricsRegistry;
+import zcd.jellyfish.infra.shell.ShellIngress;
 
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -53,7 +55,7 @@ class PluginContextFactoryTest {
     private final SessionManager sessions = Mockito.mock(SessionManager.class);
 
     /** 被测工厂。 */
-    private final PluginContextFactory factory = new PluginContextFactory(extensions, events, registry, new RuntimeInfoHolder(), actions, sessions);
+    private final PluginContextFactory factory = new PluginContextFactory(extensions, events, registry, new RuntimeInfoHolder(), actions, sessions, new ShellIngress(new MetricsRegistry()));
 
     @Test
     void create_should_bind_plugin_id_as_owner() {
@@ -184,13 +186,13 @@ class PluginContextFactoryTest {
     void factory_should_reject_null_dependencies() {
         // When / Then
         assertThrows(NullPointerException.class,
-                () -> new PluginContextFactory(null, events, registry, new RuntimeInfoHolder(), new ActionQueue(), sessions));
+                () -> new PluginContextFactory(null, events, registry, new RuntimeInfoHolder(), new ActionQueue(), sessions, new ShellIngress(new MetricsRegistry())));
         assertThrows(NullPointerException.class,
-                () -> new PluginContextFactory(extensions, null, registry, new RuntimeInfoHolder(), new ActionQueue(), sessions));
+                () -> new PluginContextFactory(extensions, null, registry, new RuntimeInfoHolder(), new ActionQueue(), sessions, new ShellIngress(new MetricsRegistry())));
         assertThrows(NullPointerException.class,
-                () -> new PluginContextFactory(extensions, events, null, new RuntimeInfoHolder(), new ActionQueue(), sessions));
+                () -> new PluginContextFactory(extensions, events, null, new RuntimeInfoHolder(), new ActionQueue(), sessions, new ShellIngress(new MetricsRegistry())));
         assertThrows(NullPointerException.class,
-                () -> new PluginContextFactory(extensions, events, registry, null, new ActionQueue(), sessions));
+                () -> new PluginContextFactory(extensions, events, registry, null, new ActionQueue(), sessions, new ShellIngress(new MetricsRegistry())));
     }
 
     @Test

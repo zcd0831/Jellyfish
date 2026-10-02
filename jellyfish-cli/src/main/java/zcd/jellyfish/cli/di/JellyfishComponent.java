@@ -2,7 +2,9 @@ package zcd.jellyfish.cli.di;
 
 import dagger.Component;
 import zcd.jellyfish.core.AgentHarness;
-import zcd.jellyfish.core.input.InputTransforms;
+import zcd.jellyfish.core.conversation.ConversationService;
+import zcd.jellyfish.core.conversation.ShellStreams;
+import zcd.jellyfish.core.conversation.TurnRegistry;
 import zcd.jellyfish.core.compact.ConversationCompactor;
 import zcd.jellyfish.core.input.InputDirectives;
 import zcd.jellyfish.infra.agent.AgentManager;
@@ -109,8 +111,9 @@ public interface JellyfishComponent {
     /**
      * 获取命令域服务。
      * <p>
-     * 调用点是外壳：{@code CliRunMode} 用它做「命令还是对话」的分流并执行命令，
-     * 将来的 TUI / Server 走同一条路径。
+     * 调用点分两类：外壳不再直接调用（分流已收归 {@code ConversationService}），
+     * 只有 Server 的 {@code POST /commands} 结构化入口与 {@code GET /commands*} 清单直调；
+     * TUI 只用它取清单做补全与候选查询。
      * <p>
      * 内核系统命令已由 {@code core/command/SystemCommands} 在 {@code AgentHarness.bootstrap()} 里注册。
      *
@@ -166,14 +169,40 @@ public interface JellyfishComponent {
     RuntimeInfoHolder runtimeInfoHolder();
 
     /**
-     * 获取输入改写服务。
+     * 获取会话提交服务。
      * <p>
-     * 调用点在三处外壳的输入入口：TUI 在命令判定之后、建会话之前；CLI 在命令判定之后、回合之前；
-     * Server 在占位与起回合之前。三处都排除了「命令」，也都排在「花钱与建会话」之前。
+     * 调用点是三个外壳的输入入口：分流顺序（命令判定 → 输入改写 → 输入指令 → 起回合）由它一处保证，
+     * 外壳只声明自己的 {@code SubmissionPolicy} 并处理判别式结果。
      *
-     * @return InputTransforms
+     * @return ConversationService
      */
-    InputTransforms inputTransforms();
+    ConversationService conversationService();
+
+    /**
+     * 获取在途回合表。
+     * <p>
+     * 调用点是 Server 外壳的取消端点（{@code POST /sessions/{id}/cancel}）；
+     * TUI 的 {@code Esc} 也用它。起回合时的占位与终态释放由内核的 {@code ConversationService}
+     * 自动完成，调用方不需要（也不应该）自己 acquire / release。
+     *
+     * @return TurnRegistry
+     */
+    TurnRegistry turnRegistry();
+
+    /**
+     * 获取外壳通道门面（两条 lane 的订阅入口）。
+     * <p>
+     * <b>可靠 lane</b>（回合事件）：三个外壳都在提交之前先订阅——Server 按会话订阅
+     * （避免把别的会话的事件写进自己的响应），TUI 用 {@code subscribeAll}
+     * （它从首页进入，提交之前拿不到会话标识），CLI 按当前会话订阅。
+     * <p>
+     * <b>尽力 lane</b>（插件贡献）：TUI 在 {@code onStart} 订阅一次并在每帧 {@code drainShell()}；
+     * Server 每次 {@code /chat} 订阅一次，在 SSE 写循环里冲。CLI 不订阅
+     * （它没有渲染面，{@code present} 会直接被内核挡下并回报 {@code DROPPED_NO_RENDERER}）。
+     *
+     * @return ShellStreams
+     */
+    ShellStreams shellStreams();
 
     /**
      * 获取健康检查汇总。

@@ -8,6 +8,7 @@ import zcd.jellyfish.infra.event.EventChannel;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.plugin.PF4JPluginManager;
 import zcd.jellyfish.infra.plugin.PluginContextFactory;
+import zcd.jellyfish.infra.shell.ShellIngress;
 import zcd.jellyfish.infra.plugin.PluginRuntimeConfig;
 import zcd.jellyfish.infra.plugin.RuntimeInfoHolder;
 import zcd.jellyfish.infra.registry.TypeRegistry;
@@ -67,6 +68,7 @@ public final class PluginModule {
      * @param runtimeInfo 运行时信息持有者（外壳启动期写入）
      * @param actions     动作队列
      * @param sessions    会话域服务
+     * @param shellIngress 外壳贡献信箱
      * @return 插件上下文工厂
      */
     @Provides
@@ -74,8 +76,9 @@ public final class PluginModule {
     static PluginContextFactory providePluginContextFactory(ExtensionRegistry extensions, EventChannel events,
                                                             TypeRegistry registry,
                                                             RuntimeInfoHolder runtimeInfo,
-                                                            ActionQueue actions, SessionManager sessions) {
-        return new PluginContextFactory(extensions, events, registry, runtimeInfo, actions, sessions);
+                                                            ActionQueue actions, SessionManager sessions,
+                                                            ShellIngress shellIngress) {
+        return new PluginContextFactory(extensions, events, registry, runtimeInfo, actions, sessions, shellIngress);
     }
 
     /**

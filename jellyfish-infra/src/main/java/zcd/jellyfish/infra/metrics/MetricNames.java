@@ -82,6 +82,20 @@ public final class MetricNames {
     /** 插件状态变更总次数。 */
     public static final String PLUGIN_STATE_CHANGES = "plugin.stateChanges";
 
+    /** 外壳贡献：入队成功次数。 */
+    public static final String PLUGIN_SHELL_CONTRIBUTION_ACCEPTED = "plugin.shellContribution.accepted";
+
+    /** 外壳贡献：与同 owner + 同 key 的未交付项合并的次数。 */
+    public static final String PLUGIN_SHELL_CONTRIBUTION_COALESCED = "plugin.shellContribution.coalesced";
+
+    /**
+     * 外壳贡献：未能入队的次数。
+     * <p>
+     * 把「队列满」「会话不存在」「本外壳不渲染」三档合在一处的理由：插件侧能采取的行动是同一个
+     * ——什么都不做（丢弃不是失败，重发只会把一次洪水放大成持续洪水）。诊断要分档时看日志。
+     */
+    public static final String PLUGIN_SHELL_CONTRIBUTION_DROPPED = "plugin.shellContribution.dropped";
+
     /** 仪表：事件通道已发布通知数。 */
     public static final String EVENT_PUBLISHED = "eventChannel.published";
 

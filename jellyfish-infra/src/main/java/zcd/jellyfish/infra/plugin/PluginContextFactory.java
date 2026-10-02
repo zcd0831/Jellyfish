@@ -10,6 +10,7 @@ import zcd.jellyfish.infra.event.EventChannel;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.registry.TypeRegistry;
 import zcd.jellyfish.infra.session.SessionManager;
+import zcd.jellyfish.infra.shell.ShellIngress;
 
 import javax.inject.Inject;
 import java.util.Map;
@@ -63,6 +64,9 @@ public final class PluginContextFactory {
     /** 会话域服务：会话扩展条目的唯一写入入口。 */
     private final SessionManager sessions;
 
+    /** 外壳贡献信箱：与注册同时刻按 owner 回收。 */
+    private final ShellIngress shellIngress;
+
     /** 根 {@code pluginId} → 存活标记；停止时据此让该插件的全部上下文失效。 */
     private final Map<String, ContextLifecycle> lifecycles = new ConcurrentHashMap<String, ContextLifecycle>();
 
@@ -75,16 +79,19 @@ public final class PluginContextFactory {
      * @param runtimeInfo 运行时信息持有者，不可为 {@code null}
      * @param actions     动作队列，不可为 {@code null}
      * @param sessions    会话域服务，不可为 {@code null}
+     * @param shellIngress 外壳贡献信箱，不可为 {@code null}
      */
     @Inject
     public PluginContextFactory(ExtensionRegistry extensions, EventChannel events, TypeRegistry registry,
-                               RuntimeInfoHolder runtimeInfo, ActionQueue actions, SessionManager sessions) {
+                               RuntimeInfoHolder runtimeInfo, ActionQueue actions, SessionManager sessions,
+                               ShellIngress shellIngress) {
         this.extensions = Objects.requireNonNull(extensions, "extensions must not be null");
         this.events = Objects.requireNonNull(events, "events must not be null");
         this.registry = Objects.requireNonNull(registry, "registry must not be null");
         this.runtimeInfo = Objects.requireNonNull(runtimeInfo, "runtimeInfo must not be null");
         this.actions = Objects.requireNonNull(actions, "actions must not be null");
         this.sessions = Objects.requireNonNull(sessions, "sessions must not be null");
+        this.shellIngress = Objects.requireNonNull(shellIngress, "shellIngress must not be null");
     }
 
     /**
@@ -103,7 +110,8 @@ public final class PluginContextFactory {
             LOG.warn("插件上下文被重复创建，已关闭上一条生命周期: pluginId={}", declaration.getPluginId());
             previous.close();
         }
-        return new PluginContextImpl(declaration, extensions, events, lifecycle, runtimeInfo, actions, sessions);
+        return new PluginContextImpl(declaration, extensions, events, lifecycle, runtimeInfo, actions, sessions,
+                shellIngress);
     }
 
     /**
@@ -130,6 +138,9 @@ public final class PluginContextFactory {
             // 与注册同一条存活边界、同一时刻：插件停止后，它在途排队的动作再也无人排空，
             // 留在队列里只会镀成一个永不兑现的 QUEUED
             actions.dropByOwner(pluginId);
+            // 与注册、动作队列同一条存活边界、同一时刻。顺序上必须先清空贡献：外壳随后可能收到一条
+            // PluginStateChangedEvent 触发的失效重拉，那时该 owner 的贡献应当已经不在信箱里了
+            shellIngress.reset(pluginId);
         }
         int removed = registry.removeAllUnder(pluginId, PluginOwnerNamespace.SEPARATOR);
         LOG.info("已回收插件注册: pluginId={} registrations={}", pluginId, removed);

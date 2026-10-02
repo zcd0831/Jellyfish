@@ -13,22 +13,27 @@ import dev.tamboui.tui.event.MouseEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import zcd.jellyfish.api.JellyfishException;
+import zcd.jellyfish.api.event.Subscription;
 import zcd.jellyfish.api.extension.CommandChoice;
 import zcd.jellyfish.api.extension.CommandDescriptor;
 import zcd.jellyfish.api.extension.CommandResult;
 import zcd.jellyfish.api.extension.InputTransformRequest;
-import zcd.jellyfish.api.extension.InputTransformResult;
 import zcd.jellyfish.api.extension.PermissionMode;
+import zcd.jellyfish.api.extension.ShellContribution;
+import zcd.jellyfish.api.ui.UiLine;
 import zcd.jellyfish.api.ui.UiRegion;
-import zcd.jellyfish.core.AgentHarness;
+import zcd.jellyfish.core.ReActTurn;
 import zcd.jellyfish.core.compact.ConversationCompactor;
-import zcd.jellyfish.core.input.InputDirectiveCall;
+import zcd.jellyfish.core.conversation.ConversationService;
+import zcd.jellyfish.core.conversation.Submission;
+import zcd.jellyfish.core.conversation.SubmissionPolicy;
+import zcd.jellyfish.core.conversation.ShellStreams;
+import zcd.jellyfish.core.conversation.TurnRegistry;
 import zcd.jellyfish.core.input.InputDirectiveRun;
 import zcd.jellyfish.core.input.InputDirectives;
 import zcd.jellyfish.core.input.InputReferenceCompletion;
-import zcd.jellyfish.core.input.InputTransforms;
-import zcd.jellyfish.core.ReActTurn;
 import zcd.jellyfish.infra.agent.AgentManager;
+import zcd.jellyfish.infra.support.ControlChars;
 import zcd.jellyfish.infra.command.CommandInfo;
 import zcd.jellyfish.infra.command.CommandManager;
 import zcd.jellyfish.infra.llm.LlmUsage;
@@ -60,20 +65,20 @@ import java.util.Set;
  * <p>
  * <b>它只做四件事</b>：把按键翻译成动作、把动作交给内核、把内核的产出投影到屏幕、
  * 把会话运行态与插件贡献贴到状态栏与各面板区域。
- * 任何「思考」都不在这里——智能入口只有 {@link AgentHarness#chat}，命令入口只有 {@link CommandManager}，
+ * 任何「思考」都不在这里——智能入口只有 {@link ConversationService#submit}，命令入口只有 {@link CommandManager}，
  * 与 {@code CliRunMode} 走的是同一对门面，这条口径从 CLI 轮延续下来，不另起一套。
  * <p>
  * <b>插件界面内容靠「失效时收集」而不是「每帧收集」</b>：{@link UiContributions} 只在缓存失效时
  * 被问一次（空闲时零调用，见 {@link UiCache}）。代价是<b>失效触发源必须记全</b>——漏一个就是
  * 插件内容永久陈旧，因此五处都在本类里显式置位：会话切换（{@link #syncSession}）、
- * 回合开始（{@link #startTurn}）、回合收敛（{@link #render} 里比对上一帧的「进行中」状态）、
+ * 提交（{@link #submit}）、回合收敛（{@link #render} 里比对上一帧的「进行中」状态）、
  * 命令执行后（{@link #executeCommand}），以及插件主动发布的失效事件与插件加载卸载
  * （{@link #onStart} 里订阅）。首帧由缓存初值保证。
  * <p>
  * <b>两条必须原样复用的规则</b>：
  * <ol>
- *     <li><b>分流判据只有 {@code CommandManager.isCommand}</b>——它只做语法判定、不查注册表，
- *     因此插件在启动后注册的命令也能被同一路径命中；</li>
+ *     <li><b>分流顺序由内核统一</b>（命令判定 → 输入改写 → 输入指令 → 起回合），
+ *     本类只声明 {@link SubmissionPolicy#tui()} 并处理判别式结果，<b>不自己排顺序</b>；</li>
  *     <li><b>每轮现读当前会话</b>（{@link SessionManager#current()}），不缓存 sessionId，
  *     这样 {@code /new}、{@code /resume} 之后立刻生效，界面也会跟着切到新会话的内容。</li>
  * </ol>
@@ -84,9 +89,9 @@ import java.util.Set;
  * 分支），不需要第二套界面。壳内唯一的硬约束是「不要假设当前会话一定存在」——
  * 补全、候选查询、命令分发都可能在首页发生。
  * <p>
- * <b>回合为什么是异步的</b>：{@code chat} 返回 {@link ReActTurn} 句柄并在专用线程池里推进，
- * 界面在自己的事件循环里继续跑。若在这里调 {@code await()}，界面会在整个回合期间冻住——
- * 连 {@code Esc} 都收不到。
+ * <b>回合为什么是异步的</b>：{@code ConversationService.submit} 起回合后立即返回
+ * {@link ReActTurn} 句柄，回合在专用线程池里推进，界面在自己的事件循环里继续跑。
+ * <b>本类不得调 {@code await()}</b>：那会让界面在整个回合期间冻住，连 {@code Esc} 都收不到。
  * <p>
  * <b>为什么回合进行中拒绝新输入</b>：{@code ReActLooper} 会立刻把用户消息追加进会话，
  * 并发提交两条消息会让历史里的顺序与用户实际发送顺序不一致。拒绝比静默排队更可解释——
@@ -99,8 +104,31 @@ public final class TuiApp extends ToolkitApp {
     /** 日志。 */
     private static final Logger LOG = LoggerFactory.getLogger(TuiApp.class);
 
-    /** 智能入口。 */
-    private final AgentHarness harness;
+    /** 会话提交服务：分流与起回合的唯一入口。 */
+    private final ConversationService conversations;
+
+    /**
+     * 在途回合表（内核拥有）：{@code Esc} 取消回合的唯一入口。
+     * <p>
+     * <b>为什么不自己存回合句柄</b>：在途状态与取消入口归内核之后，外壳再存一份就成了第二个真源，
+     * 而两者不一致时的表现是「按 {@code Esc} 没反应」这种最难归因的 bug。
+     */
+    private final TurnRegistry turnRegistry;
+
+    /**
+     * 可靠 lane：回合事件的订阅入口。
+     * <p>
+     * <b>用 {@code subscribeAll} 而不是按会话订阅</b>：TUI 从首页进入，而会话是
+     * {@code ConversationService.submit} 内部才建的——提交之前它<b>不可能</b>知道会话标识。
+     * 进程内它是唯一的消费者，所有事件都写进同一个暂存区，因此不需要按会话过滤。
+     */
+    private final ShellStreams streams;
+
+    /** 可靠 lane 的订阅句柄，在 {@code onStop} 里释放。 */
+    private Subscription turnSubscription;
+
+    /** 尽力 lane（插件贡献）的订阅句柄，在 {@code onStop} 里释放。 */
+    private Subscription contributionSubscription;
 
     /** 命令域服务。 */
     private final CommandManager commands;
@@ -135,14 +163,6 @@ public final class TuiApp extends ToolkitApp {
 
     /** 输入指令服务：{@code !} / {@code @} 的解析、执行与补全全在内核，外壳只渲染与分流。 */
     private final InputDirectives inputDirectives;
-
-    /**
-     * 输入改写服务：命令判定之后、指令解析与建会话之前的那一道扩展点。
-     * <p>
-     * 它与 {@link #inputDirectives} 的分工是「任意文本改写 / 短路」与「标记式语法」——
-     * 两者在管道里相邻，但管的是两件事。
-     */
-    private final InputTransforms inputTransforms;
 
     /**
      * 本进程内新建会话的待生效默认值。
@@ -280,7 +300,9 @@ public final class TuiApp extends ToolkitApp {
     /**
      * 构造 TUI 外壳。
      *
-     * @param harness  智能入口，不可为 {@code null}
+     * @param conversations 会话提交服务，不可为 {@code null}
+     * @param turnRegistry 在途回合表（内核拥有），不可为 {@code null}
+     * @param streams 可靠 lane，不可为 {@code null}
      * @param commands 命令域服务，不可为 {@code null}
      * @param sessions 会话域服务，不可为 {@code null}
      * @param models   模型门面，不可为 {@code null}
@@ -289,15 +311,17 @@ public final class TuiApp extends ToolkitApp {
      * @param approvals 人工审批通道，不可为 {@code null}
      * @param compactor 会话压缩器，不可为 {@code null}
      * @param inputDirectives 输入指令服务，不可为 {@code null}
-     * @param inputTransforms 输入改写服务，不可为 {@code null}
      * @param thinkingExpanded 启动时是否展开思考过程（{@code --show-thinking} 置为 {@code true}）
      * @param sessionDefaults 本进程内新建会话的待生效默认值，不可为 {@code null}
      */
-    public TuiApp(AgentHarness harness, CommandManager commands, SessionManager sessions, ModelManager models,
-                  AgentManager agents, UiContributions uiContributions, ApprovalChannel approvals,
-                  ConversationCompactor compactor, InputDirectives inputDirectives, InputTransforms inputTransforms,
-                  boolean thinkingExpanded, SessionDefaults sessionDefaults) {
-        this.harness = Objects.requireNonNull(harness, "harness must not be null");
+    public TuiApp(ConversationService conversations, TurnRegistry turnRegistry, ShellStreams streams,
+                  CommandManager commands,
+                  SessionManager sessions, ModelManager models, AgentManager agents,
+                  UiContributions uiContributions, ApprovalChannel approvals, ConversationCompactor compactor,
+                  InputDirectives inputDirectives, boolean thinkingExpanded, SessionDefaults sessionDefaults) {
+        this.conversations = Objects.requireNonNull(conversations, "conversations must not be null");
+        this.turnRegistry = Objects.requireNonNull(turnRegistry, "turnRegistry must not be null");
+        this.streams = Objects.requireNonNull(streams, "streams must not be null");
         this.commands = Objects.requireNonNull(commands, "commands must not be null");
         this.sessions = Objects.requireNonNull(sessions, "sessions must not be null");
         this.models = Objects.requireNonNull(models, "models must not be null");
@@ -306,7 +330,6 @@ public final class TuiApp extends ToolkitApp {
         this.approvals = Objects.requireNonNull(approvals, "approvals must not be null");
         this.compactor = Objects.requireNonNull(compactor, "compactor must not be null");
         this.inputDirectives = Objects.requireNonNull(inputDirectives, "inputDirectives must not be null");
-        this.inputTransforms = Objects.requireNonNull(inputTransforms, "inputTransforms must not be null");
         this.sessionDefaults = Objects.requireNonNull(sessionDefaults, "sessionDefaults must not be null");
         this.uiCache = new UiCache(uiContributions);
         this.pluginPanelsEnabled = pluginPanelsEnabled();
@@ -379,6 +402,22 @@ public final class TuiApp extends ToolkitApp {
         runner().eventRouter().addGlobalHandler(new ScrollFallback());
         // 插件改了内容它会主动说一声；回调在事件通道的订阅者线程，因此只置标记不做别的
         uiContributions.onInvalidated(uiCache::invalidate);
+        // 可靠 lane 的订阅必须在任何提交之前建立：回合一启动就会产出事件，晚订阅会丢掉开头那一段
+        turnSubscription = streams.subscribeAll(new TuiTurnListener(chatState.getInflight()));
+        // 尽力 lane 没有时序要求：它的队列会替插件把贡献存住，直到本线程来取（见 render()）
+        contributionSubscription = streams.subscribeShell(this::applyContribution);
+    }
+
+    @Override
+    protected void onStop() {
+        if (turnSubscription != null) {
+            turnSubscription.close();
+            turnSubscription = null;
+        }
+        if (contributionSubscription != null) {
+            contributionSubscription.close();
+            contributionSubscription = null;
+        }
     }
 
     @Override
@@ -389,6 +428,9 @@ public final class TuiApp extends ToolkitApp {
         // 每帧只取一次消息快照：Session.getMessages() 返回防御性副本，重复调用会白白多分配一份
         List<SessionMessage> messages = session == null ? null : session.getMessages();
         syncSession(sessionId);
+        // 插件贡献只能在渲染线程上落地（改的是界面状态），因此交付点就是这一帧。
+        // 先交付再取快照：一条 INVALIDATED 刚置的脏标记因此能在同一帧里生效，不必等到下一帧。
+        streams.drainShell();
         // 回合从「进行中」变为「已收敛」是插件内容最容易过期的时刻（工具刚改完状态），在这里补一次失效。
         // 终局判定放在渲染线程，因此能覆盖完成 / 报错 / 取消全部收敛路径，不必让三个回调各发一遍。
         boolean turnRunning = chatState.isTurnRunning();
@@ -469,7 +511,7 @@ public final class TuiApp extends ToolkitApp {
      * @return 浮层；都没有内容时返回空浮层
      */
     private Overlay buildOverlay(int width) {
-        ApprovalChannel.Pending pending = approvals.pending().orElse(null);
+        ApprovalChannel.Pending pending = pendingApproval();
         if (pending != null) {
             syncApproval(pending);
             return new Overlay(ApprovalPrompt.TITLE, ApprovalPrompt.render(pending, approvalPicker, width));
@@ -536,6 +578,19 @@ public final class TuiApp extends ToolkitApp {
         }
         chatState.clearDirective();
         chatState.getInflight().finish(InflightTurn.Outcome.COMPLETED, null);
+    }
+
+    /**
+     * 取当前会话的待审批请求。
+     * <p>
+     * <b>按会话取而不是取全局单槽位</b>：审批头槽位现在是每会话一个，
+     * 取全局会把别的会话的审批画到本界面上（多客户端下直接是错的信息）。
+     * 首页（无会话）时归到无会话槽位，与内核的键一致。
+     *
+     * @return 待审批请求；本会话没有时返回 {@code null}
+     */
+    private ApprovalChannel.Pending pendingApproval() {
+        return approvals.pending(currentSessionIdOrNull()).orElse(null);
     }
 
     /**
@@ -629,17 +684,15 @@ public final class TuiApp extends ToolkitApp {
     /**
      * 处理用户提交。
      * <p>
-     * <b>首页上的分流完全交给命令域</b>：{@code CommandManager.shouldRunAsCommand} 回答
-     * 「这条输入在当前上下文下该不该当命令」。外壳不再维护一份「哪些命令在首页不建会话」的名字表——
-     * 那份知识归命令自己的名片（{@code CommandDescriptor.sessionRequired}），
-     * 否则插件新注册一条命令时，外壳无从得知它需不需要会话。
+     * <b>分流顺序不在本类</b>：命令判定 → 输入改写 → 输入指令 → 起回合这四条顺序是内核不变量，
+     * 统一在 {@link ConversationService#submit} 一处实现（见该方法注释）。本类只做两件事：
+     * 声明自己的策略（{@link SubmissionPolicy#tui()}：命令 + 指令 + 首页按需建会话），
+     * 以及把 {@link Submission} 的判别式结果变成界面上的一步动作。
      * <p>
-     * 走到 {@code false} 分支的就是「要发给模型」的那一类：普通文本，或者<b>在首页手敲了一条需要会话的
-     * 命令</b>（{@code /compact}）——按约定它当作用户的话发出去。
-     * <p>
-     * <b>输入指令排在命令域之后、对话之前</b>：{@code !} 这类行首标记与 {@code /} 不会撞车，
-     * 而它需要会话（结果要落进历史），因此到了这一步就先建会话再交给内核解析。没有插件认领时
-     * 返回空，输入原样变成一次普通对话——这正是「卸了插件就没有那个语法」的落点。
+     * <b>暂存区为什么在提交之前重置</b>：回合 / 指令一提交，{@code react} 线程就可能开始产出实时输出，
+     * 晚一步重置就会把那一段抹掉。但提交之前我们还不知道会落进哪一条路，因此先重置（
+     * {@link ChatState#beginWork}），落进非回合路时再静默收回——两者在同一渲染帧内完成，
+     * 用户看不到任何中间态。
      */
     private void submit() {
         if (input.isBlank()) {
@@ -666,80 +719,89 @@ public final class TuiApp extends ToolkitApp {
             return;
         }
         String sessionId = currentSessionIdOrNull();
-        if (commands.shouldRunAsCommand(text, sessionId != null)) {
-            executeCommand(text, sessionId);
-            return;
-        }
-        // 输入改写：必须排在命令判定之后（插件改不动用户显式的命令）、指令解析之前
-        // （指令按改写后的文本解析），以及建会话之前——否则首页上拦不下输入，
-        // 「handled 时不建会话」这条约定在首页上就不成立
-        InputTransformResult transformed = inputTransforms.transform(sessionId, text, InputTransformRequest.Source.TUI);
-        if (transformed.isHandled()) {
-            chatState.appendNotice(text, noticeOf(transformed.getNotice()), ShellNotice.Kind.INFO);
-            uiCache.invalidate();
-            return;
-        }
-        if (transformed.hasText()) {
-            text = transformed.getText();
-        }
-        if (sessionId == null) {
-            // 首页上要发给模型或交给输入指令：先建会话，界面随之进入会话页
-            sessionId = createSession();
-        }
-        if (startDirective(text, sessionId)) {
-            return;
-        }
-        startTurn(text, sessionId);
-    }
-
-    /**
-     * 尝试把一行输入当作输入指令启动。
-     * <p>
-     * <b>解析放在重置暂存区之前，但执行之后</b>：解析是同步的纯函数（没有指令就什么都不做），
-     * 先把暂存区重置再提交执行，才不会把执行线程可能已经写出的第一段实时输出抹掉。
-     *
-     * @param text      用户输入原文
-     * @param sessionId 当前会话标识
-     * @return 已启动指令返回 {@code true}；无人认领返回 {@code false}（调用方按普通对话处理）
-     */
-    private boolean startDirective(String text, String sessionId) {
-        Optional<InputDirectiveCall> call = inputDirectives.resolve(sessionId, text);
-        if (!call.isPresent()) {
-            return false;
-        }
-        // 必须先重置：执行线程在提交后的任意时刻就可能开始产出实时输出
-        chatState.beginDirective();
-        uiCache.invalidate();
+        // 先重置暂存区（回合 / 指令一提交就可能有实时输出），落点确认后再绑定或静默收回
+        chatState.beginWork();
         try {
-            InputDirectiveRun run = inputDirectives.start(sessionId, call.get(),
-                    new TuiReActListener(chatState.getInflight()));
-            chatState.bindDirective(run);
+            Submission submission = conversations.submit(sessionId, text,
+                    InputTransformRequest.Source.TUI, SubmissionPolicy.tui());
+            applySubmission(text, submission);
         } catch (JellyfishException e) {
-            LOG.warn("TUI 输入指令启动失败：{}", e.getMessage());
+            LOG.warn("TUI 提交失败：{}", e.getMessage());
             chatState.getInflight().finish(InflightTurn.Outcome.ERROR, e.getMessage());
+        } finally {
+            // 提交是插件内容可能变化的起点（回合可能马上改待办），也可能刚改了当前会话
+            uiCache.invalidate();
         }
-        return true;
     }
 
     /**
-     * 执行一条命令：带候选时打开二级选择页，否则把结果作为外壳提示贴上屏幕。
+     * 把一个提交结果落到界面上。
+     * <p>
+     * <b>为什么非回合路要把暂存区静默收回</b>：{@link #submit} 已经先重置过暂存区（那是回合 / 指令
+     * 实时输出的前提），而命令与「被插件接过去」两种落点不产生流式输出，不收回来就会让界面永远停在
+     * 「正在生成」——而那条进度标记恰恰是用户判断「卡没卡死」的唯一依据。
+     *
+     * @param text       用户输入原文（用于回显与命令候选）
+     * @param submission 提交结果，保证非 {@code null}
+     */
+    private void applySubmission(String text, Submission submission) {
+        switch (submission.getKind()) {
+            case STARTED_DIRECTIVE:
+                chatState.bindDirective(submission.getDirectiveRun());
+                break;
+            case STARTED_TURN:
+                // 回合句柄归内核的 TurnRegistry，本类不再存；占位与释放都由 submit 自动完成
+                break;
+            case EXECUTED_COMMAND:
+                chatState.getInflight().finish(InflightTurn.Outcome.COMPLETED, null);
+                applyCommandResult(text, submission.getCommandResult());
+                break;
+            case HANDLED_INPUT:
+                chatState.getInflight().finish(InflightTurn.Outcome.COMPLETED, null);
+                chatState.appendNotice(text, noticeOf(submission.getNotice()), ShellNotice.Kind.INFO);
+                break;
+            case REJECTED:
+            default:
+                // TUI 用 CREATE_IF_NEEDED，不会落 NO_SESSION；空输入在 submit() 开头已拦下
+                chatState.getInflight().finish(InflightTurn.Outcome.COMPLETED, null);
+                break;
+        }
+    }
+
+    /**
+     * 把一条命令结果落到界面上。
+     * <p>
+     * 与 {@link #executeCommand} 的分工：那条路是外壳自己发起的命令（插件快捷键、二级选择页确认），
+     * 这条路是提交管线分流出来的命令。两者共用本方法，保证「命令结果长什么样」只有一个实现。
+     *
+     * @param text   命令原文
+     * @param result 命令结果，不可为 {@code null}
+     */
+    private void applyCommandResult(String text, CommandResult result) {
+        // 命令可能改了当前会话（/new /resume /delete）：先把会话切换的副作用落实（清掉旧会话的提示、
+        // 重收集插件贡献），再把本次结果贴上去。否则下一帧 syncSession 会把刚贴的命令结果
+        // 当成「旧会话留下的提示」一并清掉，用户看不到任何反馈。
+        syncSession(currentSessionIdOrNull());
+        if (result.hasChoices()) {
+            // 命令要求挑一个取值：打开二级选择页，不再把列表文本重复贴到屏幕上
+            picker.open(text.trim(), result.getChoices());
+            return;
+        }
+        chatState.appendNotice(text, withShellUsage(text, result), kindOf(result.getKind()));
+    }
+
+    /**
+     * 执行一条外壳自己发起的命令：带候选时打开二级选择页，否则把结果作为外壳提示贴上屏幕。
+     * <p>
+     * 调用点是插件快捷键与二级选择页确认——那两条路上的命令已经是外壳选定的，
+     * 不经提交管线（提交管线管的是「用户敲进来的一段文本该往哪走」）。
      *
      * @param text      命令原文
      * @param sessionId 当前会话标识
      */
     private void executeCommand(String text, String sessionId) {
         try {
-            CommandResult result = commands.execute(text, sessionId);
-            // 命令可能改了当前会话（/new /resume /delete）：先把会话切换的副作用落实（清掉旧会话的提示、
-            // 重收集插件贡献），再把本次结果贴上去。否则下一帧 syncSession 会把刚贴的命令结果
-            // 当成「旧会话留下的提示」一并清掉，用户看不到任何反馈。
-            syncSession(currentSessionIdOrNull());
-            if (result.hasChoices()) {
-                // 命令要求挑一个取值：打开二级选择页，不再把列表文本重复贴到屏幕上
-                picker.open(text.trim(), result.getChoices());
-                return;
-            }
-            chatState.appendNotice(text, withShellUsage(text, result), kindOf(result.getKind()));
+            applyCommandResult(text, commands.execute(text, sessionId));
         } catch (JellyfishException e) {
             LOG.warn("TUI 命令执行失败：{}", e.getMessage());
             chatState.appendNotice(text, "命令执行失败：" + e.getMessage(), ShellNotice.Kind.ERROR);
@@ -1011,6 +1073,78 @@ public final class TuiApp extends ToolkitApp {
         return notice == null || notice.trim().isEmpty() ? "输入已被插件接过去" : notice;
     }
 
+    /**
+     * 把一条插件贡献落到界面上。
+     * <p>
+     * <b>它在渲染线程上被调用</b>（{@code render} 里的 {@code drainShell}），因此可以直接改
+     * {@code ChatState} 与缓存，不需要任何线程切换。
+     * <p>
+     * <b>两种 kind 的落点不同</b>：{@code NOTICE} 进提示缓冲区（与会话消息按时间戳归并，
+     * 但它不是会话消息）；{@code INVALIDATED} 只置脏标记——面板与状态栏的<b>内容</b>仍然靠拉取，
+     * 推送只负责说「该重新拉了」（见 {@code constraints/shells.md}）。
+     *
+     * @param owner        贡献者 owner
+     * @param contribution 贡献
+     */
+    private void applyContribution(String owner, ShellContribution contribution) {
+        if (contribution.getKind() == ShellContribution.Kind.INVALIDATED) {
+            uiCache.invalidate();
+            return;
+        }
+        String text = textOf(contribution);
+        if (text.isEmpty()) {
+            // 空内容 = 不显示。它<b>不是</b>「清空此前的通知」——清空只有时间与条数上限两条路径
+            return;
+        }
+        chatState.appendPluginNotice(owner, text, kindOf(contribution.getSeverity()));
+    }
+
+    /**
+     * 取一条通知的纯文本。
+     * <p>
+     * <b>控制字符必须在这里滤掉</b>：文本来自插件，一个 {@code ESC} 序列足以改写整屏。
+     * 与 {@code MarkdownRenderer} / {@code ApprovalPrompt} / 工具输出同一处理位置——
+     * 渲染边界。{@code TranscriptProjector} 对提示块不做过滤（只对工具输出做），
+     * 因此过滤不能指望下游。
+     * <p>
+     * <b>折行、截断都不在这里</b>：本方法只滤控制字符，行数与宽度归渲染侧。
+     *
+     * @param contribution 通知贡献
+     * @return 纯文本，每个 {@code UiLine} 一行
+     */
+    private static String textOf(ShellContribution contribution) {
+        StringBuilder sb = new StringBuilder();
+        for (UiLine line : contribution.getLines()) {
+            String filtered = ControlChars.strip(line.text());
+            // 全空白的行也是空行：留着它只会让提示块多出一个看不见的缩进行
+            if (filtered == null || filtered.trim().isEmpty()) {
+                continue;
+            }
+            if (sb.length() > 0) {
+                sb.append('\n');
+            }
+            sb.append(filtered);
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 把插件通知的严重程度映射成外壳提示语义。
+     *
+     * @param severity 严重程度
+     * @return 提示语义
+     */
+    private static ShellNotice.Kind kindOf(ShellContribution.Severity severity) {
+        switch (severity) {
+            case WARN:
+                return ShellNotice.Kind.WARN;
+            case ERROR:
+                return ShellNotice.Kind.ERROR;
+            default:
+                return ShellNotice.Kind.INFO;
+        }
+    }
+
     private static ShellNotice.Kind kindOf(CommandResult.Kind kind) {
         switch (kind) {
             case ERROR:
@@ -1081,24 +1215,18 @@ public final class TuiApp extends ToolkitApp {
     }
 
     /**
-     * 发起一次 ReAct 回合。
-     *
-     * @param text      用户输入
-     * @param sessionId 当前会话标识
+     * 中断当前正在进行的工作（{@code Esc} 的落点）：优先取消回合，否则取消输入指令。
+     * <p>
+     * <b>回合走内核、指令走本地的分工不是权宜</b>：在途回合与取消入口已收归内核的 {@code TurnRegistry}
+     * （三个外壳共享同一条保证），而输入指令不在那个闸门里（它的完成只能轮询），因此指令仍由本类取消。
+     * 两者互斥，所以先问回合、没命中再问指令就足够。
      */
-    private void startTurn(String text, String sessionId) {
-        // 必须先重置暂存区：上一回合的终局若不清掉，投影器会把新回合的流式正文当成「已结束回合」而不显示
-        chatState.beginTurn(null);
-        // 回合开始是插件内容可能变化的起点（例如模型马上要改待办），先让下一帧重问一遍
-        uiCache.invalidate();
-        TuiReActListener listener = new TuiReActListener(chatState.getInflight());
-        try {
-            ReActTurn turn = harness.chat(sessionId, text, listener);
-            chatState.bindTurn(turn);
-        } catch (JellyfishException e) {
-            LOG.warn("TUI 回合启动失败：{}", e.getMessage());
-            chatState.getInflight().finish(InflightTurn.Outcome.ERROR, e.getMessage());
+    private void cancelCurrentWork() {
+        String sessionId = currentSessionIdOrNull();
+        if (sessionId != null && turnRegistry.cancel(sessionId)) {
+            return;
         }
+        chatState.cancelDirective();
     }
 
     /**
@@ -1106,27 +1234,14 @@ public final class TuiApp extends ToolkitApp {
      * <p>
      * TUI 现在从首页（无会话）进入，因此「没有当前会话」是合法状态而不是接线错误：
      * 首页上补全候选查询、二级选择页确认、命令分发都可能在没有会话时发生。
-     * 需要会话的路径（发起回合）必须先经 {@link #createSession()} 建会话。
+     * 需要会话的路径（发起回合、输人指令）由内核的 {@code CREATE_IF_NEEDED} 策略按需建会话，
+     * 建好之后的标识从 {@link Submission#getSessionId()} 拿。
      *
      * @return 当前会话标识，没有当前会话时为 {@code null}
      */
     private String currentSessionIdOrNull() {
         Session session = sessions.current();
         return session == null ? null : session.getSessionId();
-    }
-
-    /**
-     * 在首页建一个新会话并切为当前。
-     * <p>
-     * 这是「首页 → 会话页」的唯一入口：用户真正要发起对话或执行命令时才建会话，
-     * 因此「进来看看」不会留下空会话文件——会话持久化是 {@code create} 的一等职责，建了就一定落盘。
-     *
-     * @return 新会话的标识，保证非 {@code null}
-     */
-    private String createSession() {
-        Session session = sessions.createDefault();
-        sessions.switchTo(session.getSessionId());
-        return session.getSessionId();
     }
 
     /**
@@ -1310,7 +1425,7 @@ public final class TuiApp extends ToolkitApp {
                 toggleMouseCapture();
                 return EventResult.HANDLED;
             }
-            if (approvals.pending().isPresent()) {
+            if (pendingApproval() != null) {
                 return handleApproval(action);
             }
             if (picker.isActive()) {
@@ -1336,10 +1451,10 @@ public final class TuiApp extends ToolkitApp {
                     submit();
                     return EventResult.HANDLED;
                 case CANCEL:
-                    // 先收起浮层再谈中断：无进行中工作时时 cancelTurn 是空操作，两者可以共存
+                    // 先收起浮层再谈中断：无进行中工作时时 cancelCurrentWork 是空操作，两者可以共存
                     completion.dismiss();
                     referenceCompletion.dismiss();
-                    chatState.cancelTurn();
+                    cancelCurrentWork();
                     return EventResult.HANDLED;
                 case TOGGLE_THINKING:
                     toggleThinking();
@@ -1479,7 +1594,7 @@ public final class TuiApp extends ToolkitApp {
          * @return 处理结果
          */
         private EventResult handleApproval(InputAction action) {
-            ApprovalChannel.Pending pending = approvals.pending().orElse(null);
+            ApprovalChannel.Pending pending = pendingApproval();
             if (pending == null) {
                 // 本帧刚被超时 / 关闭裁决掉：不把这次按键算成任何操作
                 return EventResult.HANDLED;
@@ -1497,7 +1612,7 @@ public final class TuiApp extends ToolkitApp {
                     return EventResult.HANDLED;
                 case CANCEL:
                     resolveApproval(pending, false);
-                    chatState.cancelTurn();
+                    cancelCurrentWork();
                     return EventResult.HANDLED;
                 case QUIT:
                     exitShell();

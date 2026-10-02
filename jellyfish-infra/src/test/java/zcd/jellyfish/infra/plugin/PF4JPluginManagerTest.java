@@ -21,6 +21,8 @@ import zcd.jellyfish.infra.config.PluginsSettings;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.registry.TypeRegistry;
 import zcd.jellyfish.infra.session.SessionManager;
+import zcd.jellyfish.infra.metrics.MetricsRegistry;
+import zcd.jellyfish.infra.shell.ShellIngress;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -91,7 +93,7 @@ class PF4JPluginManagerTest {
         eventChannel.start();
         eventChannel.subscribe("test", PluginStateChangedEvent.class,
                 event -> stateChanges.add(event.getPluginId() + "=" + event.getState()));
-        contexts = new PluginContextFactory(extensions, eventChannel, registry, new RuntimeInfoHolder(), new ActionQueue(), sessions);
+        contexts = new PluginContextFactory(extensions, eventChannel, registry, new RuntimeInfoHolder(), new ActionQueue(), sessions, new ShellIngress(new MetricsRegistry()));
     }
 
     @AfterEach

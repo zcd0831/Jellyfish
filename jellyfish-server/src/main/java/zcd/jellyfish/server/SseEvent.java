@@ -4,7 +4,7 @@ package zcd.jellyfish.server;
  * 一条待写出的 SSE 事件：事件名 + 载荷 + 是否终态。
  * <p>
  * <b>为什么把「终态」标记放在事件上，而不是让发送线程自己判断类型</b>：终态是「这条事件写完就该关流」的
- * 唯一判据，而它只有产生事件的一方（{@link SseReActListener}）最清楚。放在这里，写循环就只剩
+ * 唯一判据，而它只有产生事件的一方（{@link SseTurnListener}）最清楚。放在这里，写循环就只剩
  * 「写一条、看标记」两步，不需要再认识 {@code done} / {@code cancelled} / {@code error} 三个名字。
  * <p>
  * 不可变，可安全跨线程传递。
@@ -21,6 +21,19 @@ public final class SseEvent {
 
     /** 是否终态（写完即关流）。 */
     private final boolean terminal;
+
+    /**
+     * 构造一条非终态事件。
+     * <p>
+     * 绝大多数事件都不是终态（只有收敛 / 取消 / 被拦下 / 异常那四种才是），
+     * 因此给一条不提终态的捷径。
+     *
+     * @param name    事件名
+     * @param payload 载荷对象
+     */
+    public SseEvent(String name, Object payload) {
+        this(name, payload, false);
+    }
 
     /**
      * 构造事件。

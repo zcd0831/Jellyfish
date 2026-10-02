@@ -4,22 +4,24 @@ import io.undertow.server.HttpServerExchange;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import zcd.jellyfish.api.JellyfishException;
+import zcd.jellyfish.api.event.Subscription;
 import zcd.jellyfish.api.extension.InputTransformRequest;
-import zcd.jellyfish.api.extension.InputTransformResult;
-import zcd.jellyfish.core.AgentHarness;
-import zcd.jellyfish.core.ReActTurn;
-import zcd.jellyfish.core.input.InputTransforms;
+import zcd.jellyfish.core.conversation.ConversationService;
+import zcd.jellyfish.core.conversation.ShellStreams;
+import zcd.jellyfish.core.conversation.Submission;
+import zcd.jellyfish.core.conversation.SubmissionPolicy;
+import zcd.jellyfish.core.conversation.TurnInProgressException;
+import zcd.jellyfish.core.conversation.TurnRegistry;
 import zcd.jellyfish.infra.session.SessionManager;
 import zcd.jellyfish.server.ApprovalBridge;
 import zcd.jellyfish.server.ServerConfig;
-import zcd.jellyfish.server.SessionTurns;
+import zcd.jellyfish.server.SseContributionListener;
 import zcd.jellyfish.server.SseEvent;
-import zcd.jellyfish.server.SseReActListener;
+import zcd.jellyfish.server.SseTurnListener;
 import zcd.jellyfish.server.dto.ApprovalDto;
 import zcd.jellyfish.server.dto.ApprovalResolvedEvent;
 import zcd.jellyfish.server.dto.ChatRequest;
 import zcd.jellyfish.server.dto.InputHandledEvent;
-import zcd.jellyfish.server.dto.TurnStartEvent;
 import zcd.jellyfish.server.http.ApiException;
 import zcd.jellyfish.server.http.JsonBody;
 import zcd.jellyfish.server.http.PathParams;
@@ -27,19 +29,27 @@ import zcd.jellyfish.server.http.Responses;
 import zcd.jellyfish.server.http.SseWriter;
 
 import java.io.IOException;
+import java.util.Objects;
 import java.util.Optional;
-import java.util.UUID;
 import java.util.concurrent.Semaphore;
 
 /**
  * {@code POST /sessions/{id}/chat} 的处理器：把一次 ReAct 回合以 SSE 流式返回。
  * <p>
  * <b>单写者模型</b>：socket 的写全部发生在本处理器所在的工作线程上（循环里 {@code poll → write}），
- * {@code react} 线程只往 {@link SseReActListener} 的队列里投事件。这样输出流只有一个写者、
+ * 可靠 lane 的订阅者只往 {@link SseTurnListener} 的队列里投事件。这样输出流只有一个写者、
  * 不需要锁；而客户端断开时 {@code write} 直接抛 {@link IOException}，天然就是取消信号。
  * <p>
- * <b>占位早于起回合</b>：{@link SessionTurns#acquire} 在 {@code harness.chat} 之前调用——
- * 回合任务一提交就会 append 用户消息，若「先起回合再判断冲突」，被拒的请求已经污染了会话历史。
+ * <b>先订阅再提交</b>：回合一启动（{@code submit} 内部）就会产出事件，晚订阅会丢掉开头的
+ * {@code turn_start} 与第一批增量。因此订阅在 {@code submit} 之前建立，响应结束时关闭。
+ * <p>
+ * <b>占位早于起回合</b>：并发回合的互斥由内核的 {@code TurnRegistry} 在 {@code submit} 内部保证
+ * （{@code submit} 先占槽位再起回合），因此本类不再自己维护槽位表——它只把
+ * {@link TurnInProgressException} 翻译成 409。
+ * <p>
+ * <b>分流不在本类</b>：输入改写、命令与指令都在 {@link ConversationService#submit} 里按内核不变量
+ * 的顺序完成；本类声明 {@link SubmissionPolicy#serverChat()}（只有对话：不执行命令、不解析指令），
+ * 因此 {@code /help} 与 {@code !ls} 与改造前一样是发给模型的普通文本。
  * <p>
  * <b>并发上限</b>：每个在途回合会占用一个 Undertow 工作线程直到结束（可达数分钟），
  * 因此用 {@link ServerConfig#getMaxStreams()} 封顶，超限直接 503 而不是排队——
@@ -58,14 +68,17 @@ public final class ChatHandler {
     /** 日志。 */
     private static final Logger LOG = LoggerFactory.getLogger(ChatHandler.class);
 
-    /** 智能入口。 */
-    private final AgentHarness harness;
+    /** 会话提交服务：分流与起回合的唯一入口。 */
+    private final ConversationService conversations;
+
+    /** 可靠 lane：回合事件的订阅入口。 */
+    private final ShellStreams streams;
+
+    /** 在途回合表：断连时取消本会话的回合。 */
+    private final TurnRegistry turns;
 
     /** 会话域服务，仅用于「会话不存在」的 404。 */
     private final SessionManager sessions;
-
-    /** 每会话在途回合表。 */
-    private final SessionTurns turns;
 
     /** 运行参数。 */
     private final ServerConfig config;
@@ -73,30 +86,27 @@ public final class ChatHandler {
     /** 审批桥。 */
     private final ApprovalBridge approvals;
 
-    /** 输入改写服务：命令判定之后、占位与起回合之前的那一道扩展点。 */
-    private final InputTransforms inputTransforms;
-
     /** 并发流许可。 */
     private final Semaphore streamPermit;
 
     /**
      * 构造处理器。
      *
-     * @param harness   智能入口，不可为 {@code null}
-     * @param sessions  会话域服务，不可为 {@code null}
-     * @param turns     在途回合表，不可为 {@code null}
-     * @param config    运行参数，不可为 {@code null}
+     * @param conversations 会话提交服务，不可为 {@code null}
+     * @param streams  可靠 lane，不可为 {@code null}
+     * @param turns    在途回合表（内核拥有），不可为 {@code null}
+     * @param sessions 会话域服务，不可为 {@code null}
+     * @param config   运行参数，不可为 {@code null}
      * @param approvals 审批桥，不可为 {@code null}
-     * @param inputTransforms 输入改写服务，不可为 {@code null}
      */
-    public ChatHandler(AgentHarness harness, SessionManager sessions, SessionTurns turns,
-                       ServerConfig config, ApprovalBridge approvals, InputTransforms inputTransforms) {
-        this.harness = harness;
+    public ChatHandler(ConversationService conversations, ShellStreams streams, TurnRegistry turns,
+                       SessionManager sessions, ServerConfig config, ApprovalBridge approvals) {
+        this.conversations = Objects.requireNonNull(conversations, "conversations must not be null");
+        this.streams = Objects.requireNonNull(streams, "streams must not be null");
+        this.turns = Objects.requireNonNull(turns, "turns must not be null");
         this.sessions = sessions;
-        this.turns = turns;
         this.config = config;
         this.approvals = approvals;
-        this.inputTransforms = inputTransforms;
         this.streamPermit = new Semaphore(config.getMaxStreams());
     }
 
@@ -110,44 +120,66 @@ public final class ChatHandler {
         String sessionId = params.get("id");
         String message = readMessage(exchange);
         requireSession(sessionId);
-        // 输入改写：排在占位与起回合之前——被插件接过去的输入不该占一个在途回合槽位，
-        // 也没有理由往会话里 append 一条用户消息（那正是「不建会话、不起回合」的含义）
-        InputTransformResult transformed = inputTransforms.transform(sessionId, message,
-                InputTransformRequest.Source.SERVER);
-        if (transformed.isHandled()) {
-            writeHandled(exchange, sessionId, noticeOf(transformed.getNotice()));
-            return;
-        }
-        if (transformed.hasText()) {
-            message = transformed.getText();
-        }
-        Semaphore slot = turns.acquire(sessionId);
+        // 并发流许可先于 submit：submit 会起回合，而回合任务一提交就会 append 用户消息，
+        // 资源不足时事后拒绝已经污染了历史
         if (!streamPermit.tryAcquire()) {
-            turns.release(sessionId, slot);
             throw new ApiException(Responses.SERVICE_UNAVAILABLE, "TOO_MANY_STREAMS",
                     "并发流已达上限 " + config.getMaxStreams() + "，请稍后再试");
         }
-        ReActTurn turn = null;
+        // 先订阅再提交：turnId 由内核生成并随事件一起到达，因此本类不再自己造标识
+        SseTurnListener listener = new SseTurnListener(sessionId);
+        Subscription subscription = streams.subscribe(sessionId, listener);
+        // 尽力 lane 没有时序要求：它的信箱会替插件把贡献存住，直到本流的写循环来取
+        SseContributionListener contributions = new SseContributionListener(sessionId);
+        Subscription contributionSubscription = streams.subscribeShell(contributions);
+        Submission submission;
+        try {
+            submission = conversations.submit(sessionId, message, InputTransformRequest.Source.SERVER,
+                    SubmissionPolicy.serverChat());
+        } catch (TurnInProgressException e) {
+            // 同一会话已有在途回合：这是并发冲突，不是服务故障，也不是客户端写错了请求
+            contributionSubscription.close();
+            subscription.close();
+            streamPermit.release();
+            throw new ApiException(Responses.CONFLICT, "TURN_IN_PROGRESS", e.getMessage());
+        } catch (RuntimeException e) {
+            contributionSubscription.close();
+            subscription.close();
+            streamPermit.release();
+            throw e;
+        }
+        if (submission.getKind() == Submission.Kind.HANDLED_INPUT) {
+            // 输入被插件接过去了：没有回合，也没 append 用户消息（submit 保证），不占并发流
+            contributionSubscription.close();
+            subscription.close();
+            streamPermit.release();
+            writeHandled(exchange, sessionId, noticeOf(submission.getNotice()));
+            return;
+        }
+        if (submission.getKind() != Submission.Kind.STARTED_TURN) {
+            // 两个都不可能到达：BLANK_INPUT 已被 readMessage 拦下，NO_SESSION 已被 requireSession 拦下
+            contributionSubscription.close();
+            subscription.close();
+            streamPermit.release();
+            throw new ApiException(Responses.BAD_REQUEST, Responses.CODE_BAD_REQUEST,
+                    "/chat 只接受对话消息，命令请用 POST /sessions/{id}/commands");
+        }
         String emittedApprovalId = null;
         try {
-            // turnId 由外壳生成：它是 SSE 的关联标识，必须在 chat 之前就确定，否则早期回调会带 null
-            String turnId = UUID.randomUUID().toString();
-            SseReActListener listener = new SseReActListener(sessionId, turnId);
-            turn = harness.chat(sessionId, message, listener);
-            turns.bind(sessionId, turn);
             SseWriter writer = SseWriter.prepare(exchange);
-            writer.event("turn_start", new TurnStartEvent(turnId, sessionId));
-            emittedApprovalId = streamUntilTerminal(writer, listener, sessionId, emittedApprovalId);
+            emittedApprovalId = streamUntilTerminal(writer, listener, contributions, sessionId,
+                    emittedApprovalId);
         } catch (IOException e) {
             // 客户端断开：这是最正常的取消来源，不记为错误
             LOG.info("SSE 客户端断开，取消回合: sessionId={}", sessionId);
-            cancelQuietly(turn);
+            cancelQuietly(sessionId);
             approvals.rejectIfPending(emittedApprovalId);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            cancelQuietly(turn);
+            cancelQuietly(sessionId);
         } finally {
-            turns.release(sessionId, slot);
+            contributionSubscription.close();
+            subscription.close();
             streamPermit.release();
             exchange.endExchange();
         }
@@ -189,28 +221,57 @@ public final class ChatHandler {
      * 消费事件直到终态。
      *
      * @param writer             SSE 写出器
-     * @param listener           监听器
+     * @param listener           可靠 lane 的订阅者（它自带队列）
+     * @param contributions      尽力 lane 的订阅者（插件贡献，自带队列）
      * @param sessionId          会话标识
      * @param emittedApprovalId  已推送给客户端的审批请求 id，可为 {@code null}
      * @return 循环结束时仍待审批的请求 id，可为 {@code null}
      * @throws IOException          客户端断开或写出失败时抛出
      * @throws InterruptedException 等待被中断时抛出
      */
-    private String streamUntilTerminal(SseWriter writer, SseReActListener listener, String sessionId,
+    private String streamUntilTerminal(SseWriter writer, SseTurnListener listener,
+                                       SseContributionListener contributions, String sessionId,
                                        String emittedApprovalId) throws IOException, InterruptedException {
         String pending = emittedApprovalId;
+        int idleSeconds = 0;
         while (true) {
-            SseEvent event = listener.poll(config.getKeepaliveSeconds());
-            if (event == null) {
+            // 一秒一片地等，而不是一次等满 keepalive 间隔：回合事件一到就走（与改造前一致），
+            // 而插件贡献的延后最多一秒。直接等满的话，一条通知可能要十几秒才露到屏幕上
+            SseEvent event = listener.poll(1);
+            if (event != null) {
+                writer.event(event.getName(), event.getPayload());
+                if (event.isTerminal()) {
+                    return pending;
+                }
+            } else if (++idleSeconds >= config.getKeepaliveSeconds()) {
+                // keepalive 的语义没变：连续空闲满一个间隔就发一帧注释，把中间设备与客户端的超时推开
                 writer.comment("keepalive");
-                pending = syncApproval(writer, sessionId, pending);
-                continue;
-            }
-            writer.event(event.getName(), event.getPayload());
-            if (event.isTerminal()) {
-                return pending;
+                idleSeconds = 0;
             }
             pending = syncApproval(writer, sessionId, pending);
+            flushContributions(writer, contributions);
+        }
+    }
+
+    /**
+     * 交付本流收到的插件贡献。
+     * <p>
+     * <b>取（{@code drainShell}）与写分开</b>：取只会把信箱里的条目同步扇出给本进程内全部
+     * 尽力 lane 订阅者（各自按会话过滤后入自己的队列），而写只发生在本线程上——
+     * socket 单写者这条纪律因此不因为多了一条 lane 而改变。
+     * <p>
+     * <b>为什么由本线程来取</b>：交付必须发生在写线程上，否则「客户端慢」的代价会转嫁到
+     * 插件的线程上。这是尽力 lane 的全部意义（可丢、不阻塞）。
+     *
+     * @param writer        SSE 写出器
+     * @param contributions 本流的贡献订阅者
+     * @throws IOException 写出失败时抛出
+     */
+    private void flushContributions(SseWriter writer, SseContributionListener contributions) throws IOException {
+        streams.drainShell();
+        SseEvent event;
+        while ((event = contributions.pollNow()) != null) {
+            writer.event(event.getName(), event.getPayload());
         }
     }
 
@@ -271,16 +332,13 @@ public final class ChatHandler {
     }
 
     /**
-     * 尽力取消回合，忽略取消本身的异常。
+     * 尽力取消本会话的在途回合，忽略取消本身的异常。
      *
-     * @param turn 回合句柄，可为 {@code null}
+     * @param sessionId 会话标识
      */
-    private static void cancelQuietly(ReActTurn turn) {
-        if (turn == null) {
-            return;
-        }
+    private void cancelQuietly(String sessionId) {
         try {
-            turn.cancel();
+            turns.cancel(sessionId);
         } catch (RuntimeException e) {
             LOG.warn("取消回合失败（忽略）: {}", e.getMessage());
         }

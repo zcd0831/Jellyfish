@@ -5,8 +5,9 @@ import io.undertow.server.HttpHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import zcd.jellyfish.api.JellyfishException;
-import zcd.jellyfish.core.AgentHarness;
-import zcd.jellyfish.core.input.InputTransforms;
+import zcd.jellyfish.core.conversation.ConversationService;
+import zcd.jellyfish.core.conversation.ShellStreams;
+import zcd.jellyfish.core.conversation.TurnRegistry;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.command.CommandManager;
 import zcd.jellyfish.infra.metrics.HealthCheck;
@@ -51,8 +52,8 @@ public final class JellyfishServer {
     /** 运行参数。 */
     private final ServerConfig config;
 
-    /** 智能入口。 */
-    private final AgentHarness harness;
+    /** 会话提交服务：分流与起回合的唯一入口。 */
+    private final ConversationService conversations;
 
     /** 会话域服务。 */
     private final SessionManager sessions;
@@ -72,11 +73,11 @@ public final class JellyfishServer {
     /** 健康检查汇总。 */
     private final HealthCheck healthCheck;
 
-    /** 输入改写服务：本次输入要不要换一段 / 要不要整个接过去。 */
-    private final InputTransforms inputTransforms;
+    /** 在途回合表（内核拥有）：只用于取消端点。 */
+    private final TurnRegistry turns;
 
-    /** 在途回合表。 */
-    private final SessionTurns turns = new SessionTurns();
+    /** 可靠 lane：交给 chat 处理器做订阅。 */
+    private final ShellStreams streams;
 
     /** 停止信号。 */
     private final CountDownLatch shutdown = new CountDownLatch(1);
@@ -94,26 +95,30 @@ public final class JellyfishServer {
      * 构造服务外壳。
      *
      * @param config      运行参数，不可为 {@code null}
-     * @param harness     智能入口，不可为 {@code null}
+     * @param conversations 会话提交服务，不可为 {@code null}
      * @param sessions    会话域服务，不可为 {@code null}
      * @param commands    命令域服务，不可为 {@code null}
      * @param agents      agent 门面，不可为 {@code null}
      * @param models      模型门面，不可为 {@code null}
      * @param approvals   内核审批通道，不可为 {@code null}
      * @param healthCheck 健康检查汇总，不可为 {@code null}
+     * @param turns       在途回合表（内核拥有），不可为 {@code null}
+     * @param streams     可靠 lane，不可为 {@code null}
      */
-    public JellyfishServer(ServerConfig config, AgentHarness harness, SessionManager sessions,
+    public JellyfishServer(ServerConfig config, ConversationService conversations, SessionManager sessions,
                            CommandManager commands, AgentManager agents, ModelManager models,
-                           ApprovalChannel approvals, HealthCheck healthCheck, InputTransforms inputTransforms) {
+                           ApprovalChannel approvals, HealthCheck healthCheck, TurnRegistry turns,
+                           ShellStreams streams) {
         this.config = config;
-        this.harness = harness;
+        this.conversations = conversations;
         this.sessions = sessions;
         this.commands = commands;
         this.agents = agents;
         this.models = models;
         this.approvals = new ApprovalBridge(approvals);
         this.healthCheck = healthCheck;
-        this.inputTransforms = inputTransforms;
+        this.turns = turns;
+        this.streams = streams;
     }
 
     /**
@@ -223,7 +228,7 @@ public final class JellyfishServer {
      */
     private HttpHandler buildRouter() {
         SessionHandlers sessionHandlers = new SessionHandlers(config, sessions, agents, models, turns);
-        ChatHandler chatHandler = new ChatHandler(harness, sessions, turns, config, approvals, inputTransforms);
+        ChatHandler chatHandler = new ChatHandler(conversations, streams, turns, sessions, config, approvals);
         CommandHandlers commandHandlers = new CommandHandlers(commands, config);
         ApprovalHandlers approvalHandlers = new ApprovalHandlers(approvals, config);
         HealthHandler healthHandler = new HealthHandler(healthCheck);

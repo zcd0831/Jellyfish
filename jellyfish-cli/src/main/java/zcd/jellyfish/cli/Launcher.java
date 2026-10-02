@@ -129,20 +129,23 @@ public final class Launcher {
     RunMode modeFor(StartupOptions options) {
         switch (options.getMode()) {
             case TUI:
-                return new TuiRunMode(component.agentHarness(), component.commandManager(),
+                return new TuiRunMode(component.conversationService(), component.turnRegistry(),
+                        component.shellStreams(),
+                        component.commandManager(),
                         component.sessionManager(), component.modelManager(), component.agentManager(),
                         component.extensionRegistry(), component.eventChannel(), component.runtimeInfoHolder(),
                         component.approvalChannel(),
-                        component.conversationCompactor(), component.inputDirectives(), component.inputTransforms(),
+                        component.conversationCompactor(), component.inputDirectives(),
                         console, component.sessionDefaults());
             case SERVER:
-                return new ServerRunMode(component.agentHarness(), component.commandManager(),
+                return new ServerRunMode(component.conversationService(), component.commandManager(),
                         component.sessionManager(), component.modelManager(), component.agentManager(),
-                        component.approvalChannel(), component.healthCheck(), component.inputTransforms(), console);
+                        component.approvalChannel(), component.healthCheck(), component.turnRegistry(),
+                        component.shellStreams(), console);
             case CLI:
             default:
-                return new CliRunMode(component.agentHarness(), component.commandManager(),
-                        component.sessionManager(), component.inputTransforms(), console);
+                return new CliRunMode(component.conversationService(), component.shellStreams(),
+                        component.sessionManager(), console);
         }
     }
 

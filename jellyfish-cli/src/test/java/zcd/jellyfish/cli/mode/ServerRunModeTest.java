@@ -4,16 +4,17 @@ import org.junit.jupiter.api.Test;
 import zcd.jellyfish.cli.ExitCodes;
 import zcd.jellyfish.cli.StartupOptions;
 import zcd.jellyfish.cli.console.RecordingConsoleIO;
-import zcd.jellyfish.core.AgentHarness;
-import zcd.jellyfish.core.input.InputTransforms;
+import zcd.jellyfish.core.conversation.ConversationService;
+import zcd.jellyfish.core.conversation.ShellStreams;
+import zcd.jellyfish.core.conversation.TurnRegistry;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.command.CommandManager;
-import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.metrics.HealthCheck;
 import zcd.jellyfish.infra.model.ModelManager;
 import zcd.jellyfish.infra.permission.ApprovalChannel;
-import zcd.jellyfish.infra.registry.TypeRegistry;
 import zcd.jellyfish.infra.session.SessionManager;
+import zcd.jellyfish.infra.metrics.MetricsRegistry;
+import zcd.jellyfish.infra.shell.ShellIngress;
 import zcd.jellyfish.server.ServerConfig;
 
 import java.util.Collections;
@@ -46,18 +47,20 @@ class ServerRunModeTest {
     /** 会话域服务。 */
     private final SessionManager sessions = mock(SessionManager.class);
 
-    /** 智能入口。 */
-    private final AgentHarness harness = mock(AgentHarness.class);
+    /** 会话提交服务。 */
+    private final ConversationService conversations = mock(ConversationService.class);
+
+    /** 在途回合表。 */
+    private final TurnRegistry turns = new TurnRegistry();
+
+    /** 可靠 lane。 */
+    private final ShellStreams streams = new ShellStreams(new ShellIngress(new MetricsRegistry()));
 
     /** 审批通道。 */
     private final ApprovalChannel approvals = new ApprovalChannel();
 
     /** 健康检查汇总。 */
     private final HealthCheck healthCheck = new HealthCheck(Collections.emptyList());
-
-    /** 真实输入改写服务（未注册处理器，等价于原样放行）。 */
-    private final InputTransforms inputTransforms =
-            new InputTransforms(new ExtensionRegistry(new TypeRegistry()));
 
     /**
      * 构造模式实例。
@@ -66,23 +69,23 @@ class ServerRunModeTest {
      * @return 模式实例
      */
     private ServerRunMode mode(RecordingConsoleIO console) {
-        return new ServerRunMode(harness, commands, sessions, models, agents, approvals, healthCheck,
-                inputTransforms, console);
+        return new ServerRunMode(conversations, commands, sessions, models, agents, approvals, healthCheck, turns,
+                streams, console);
     }
 
     @Test
     void constructor_should_reject_null_collaborators() {
         RecordingConsoleIO console = new RecordingConsoleIO(null);
         assertThrows(NullPointerException.class, () -> new ServerRunMode(
-                null, commands, sessions, models, agents, approvals, healthCheck, inputTransforms, console));
+                null, commands, sessions, models, agents, approvals, healthCheck, turns, streams, console));
         assertThrows(NullPointerException.class, () -> new ServerRunMode(
-                harness, null, sessions, models, agents, approvals, healthCheck, inputTransforms, console));
+                conversations, null, sessions, models, agents, approvals, healthCheck, turns, streams, console));
         assertThrows(NullPointerException.class, () -> new ServerRunMode(
-                harness, commands, null, models, agents, approvals, healthCheck, inputTransforms, console));
+                conversations, commands, null, models, agents, approvals, healthCheck, turns, streams, console));
         assertThrows(NullPointerException.class, () -> new ServerRunMode(
-                harness, commands, sessions, models, agents, approvals, healthCheck, null, console));
+                conversations, commands, sessions, models, agents, approvals, null, turns, streams, console));
         assertThrows(NullPointerException.class, () -> new ServerRunMode(
-                harness, commands, sessions, models, agents, approvals, healthCheck, inputTransforms, null));
+                conversations, commands, sessions, models, agents, approvals, healthCheck, null, streams, console));
     }
 
     @Test

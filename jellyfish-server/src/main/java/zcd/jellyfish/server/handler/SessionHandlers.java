@@ -12,7 +12,7 @@ import zcd.jellyfish.infra.session.SessionManager;
 import zcd.jellyfish.infra.session.SessionSnapshots;
 import zcd.jellyfish.infra.session.SessionUsage;
 import zcd.jellyfish.server.ServerConfig;
-import zcd.jellyfish.server.SessionTurns;
+import zcd.jellyfish.core.conversation.TurnRegistry;
 import zcd.jellyfish.server.dto.CancelResult;
 import zcd.jellyfish.server.dto.CreateSessionRequest;
 import zcd.jellyfish.server.dto.SessionSummary;
@@ -57,7 +57,7 @@ public final class SessionHandlers {
     private final ModelManager models;
 
     /** 每会话在途回合表，用于取消。 */
-    private final SessionTurns turns;
+    private final TurnRegistry turns;
 
     /**
      * 构造会话处理器。
@@ -66,10 +66,10 @@ public final class SessionHandlers {
      * @param sessions 会话域服务，不可为 {@code null}
      * @param agents   agent 门面，不可为 {@code null}
      * @param models   模型门面，不可为 {@code null}
-     * @param turns    每会话在途回合表，不可为 {@code null}
+     * @param turns    在途回合表（内核拥有），不可为 {@code null}
      */
     public SessionHandlers(ServerConfig config, SessionManager sessions, AgentManager agents, ModelManager models,
-                           SessionTurns turns) {
+                           TurnRegistry turns) {
         this.config = config;
         this.sessions = sessions;
         this.agents = agents;

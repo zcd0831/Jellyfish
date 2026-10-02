@@ -212,8 +212,25 @@ public class ReActLooper implements AutoCloseable {
      * @return 回合句柄，保证非 {@code null}
      */
     public ReActTurn chat(String sessionId, String userInput, ReActListener listener) {
+        return chat(sessionId, UUID.randomUUID().toString(), userInput, listener);
+    }
+
+    /**
+     * 启动一次 ReAct 回合，使用外部给定的回合标识。
+     * <p>
+     * <b>标识为什么要由外部给</b>：外壳事件流上的 {@code turnId} 必须在回合启动之前就确定，
+     * 否则订阅者收到的第一批事件会带不上它（而它们恰恰是最早的增量）。
+     * 调用方是 {@code ConversationService}：它先生成标识、建好发布器，再起回合。
+     *
+     * @param sessionId 会话标识，不可为空白
+     * @param turnId    回合标识，不可为空白
+     * @param userInput 用户输入，可为 {@code null}
+     * @param listener  流式回调，可为 {@code null}（等价于 {@link ReActListener#NOOP}）
+     * @return 回合句柄，保证非 {@code null}
+     */
+    public ReActTurn chat(String sessionId, String turnId, String userInput, ReActListener listener) {
         ReActListener effective = listener == null ? ReActListener.NOOP : listener;
-        ReActTurnImpl turn = new ReActTurnImpl();
+        ReActTurnImpl turn = new ReActTurnImpl(turnId);
         // 先登记再起回合：与外壳的回合闸门同理。反过来的话，「起回合」与「插件第一次投递」之间的
         // 动作会白跑一趟，而那个窗口在真实使用里正好是「插件收到回合开始事件」那一刻
         actionDispatcher.beginTurn(sessionId);

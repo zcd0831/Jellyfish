@@ -30,7 +30,7 @@ import java.util.concurrent.atomic.AtomicReference;
 final class ReActTurnImpl implements ReActTurn, CancellationToken {
 
     /** 回合标识。 */
-    private final String turnId = UUID.randomUUID().toString();
+    private final String turnId;
 
     /**
      * 取消令牌本体：取消标志与回调都寄存在它那里。
@@ -50,6 +50,29 @@ final class ReActTurnImpl implements ReActTurn, CancellationToken {
      * 对它调 {@link #await()} 会以「尚未提交」失败——调用方本来就不应该等一个同步返回的对象。
      */
     private volatile Future<ReActResult> future;
+
+    /**
+     * 构造一个回合（标识由内部生成）。
+     */
+    ReActTurnImpl() {
+        this(UUID.randomUUID().toString());
+    }
+
+    /**
+     * 构造一个回合，使用外部给定的标识。
+     * <p>
+     * <b>为什么要允许外部给标识</b>：外壳事件流上的 {@code turnId} 必须在回合启动<b>之前</b>就由
+     * 内核确定（订阅者靠它关联整轮事件），而句柄是 {@code chat} 返回之后才有的。
+     * 若内部再生成一个，同一条回合就会有两个标识，而它们在任何地方都不一致。
+     *
+     * @param turnId 回合标识，不可为空白
+     */
+    ReActTurnImpl(String turnId) {
+        if (turnId == null || turnId.trim().isEmpty()) {
+            throw new JellyfishException("turnId must not be blank");
+        }
+        this.turnId = turnId;
+    }
 
     /**
      * 构造一个内联回合：不提交执行器，由调用方在自己的线程上跑循环。

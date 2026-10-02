@@ -6,26 +6,23 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import zcd.jellyfish.api.JellyfishException;
-import zcd.jellyfish.api.event.RegisterOptions;
 import zcd.jellyfish.api.extension.CommandResult;
 import zcd.jellyfish.api.extension.InputTransformRequest;
-import zcd.jellyfish.api.extension.InputTransformResult;
 import zcd.jellyfish.cli.ExitCodes;
 import zcd.jellyfish.cli.SessionTestSupport;
 import zcd.jellyfish.cli.StartupOptions;
 import zcd.jellyfish.cli.console.RecordingConsoleIO;
-import zcd.jellyfish.core.AgentHarness;
-import zcd.jellyfish.core.ReActResult;
-import zcd.jellyfish.core.ReActTurn;
-import zcd.jellyfish.core.input.InputTransforms;
-import zcd.jellyfish.infra.command.CommandManager;
-import zcd.jellyfish.infra.extension.ExtensionRegistry;
-import zcd.jellyfish.infra.registry.TypeRegistry;
+import zcd.jellyfish.core.conversation.ConversationService;
+import zcd.jellyfish.core.conversation.ShellStreams;
+import zcd.jellyfish.core.conversation.ShellTurnEvent;
+import zcd.jellyfish.core.conversation.Submission;
+import zcd.jellyfish.core.conversation.SubmissionPolicy;
 import zcd.jellyfish.infra.session.Session;
 import zcd.jellyfish.infra.session.SessionManager;
+import zcd.jellyfish.infra.metrics.MetricsRegistry;
+import zcd.jellyfish.infra.shell.ShellIngress;
 
-import java.util.ArrayList;
-import java.util.List;
+import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -38,7 +35,14 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * {@link CliRunMode} 的单元测试：验证输入来源、命令与 LLM 的分流、命令三态与回合三态的退出码。
+ * {@link CliRunMode} 的单元测试：验证「提交结果 + 终态事件 → stdout / stderr / 退出码」的映射。
+ * <p>
+ * <b>分流本身不在本测试范围</b>：命令判定、输入改写与输入指令的顺序是
+ * {@code ConversationService} 的职责，在 core 模块测；这里只钉住外壳这一侧：
+ * 拿到每种 {@link Submission.Kind} 与每种终态 {@link ShellTurnEvent.Kind} 之后写了什么、返回哪个退出码。
+ * <p>
+ * <b>事件怎么产生</b>：由被 mock 的 {@code ConversationService} 在 {@code submit} 里同步发布到真的
+ * {@link ShellStreams} 上——而 CLI 的订阅在 {@code submit} 之前就已建立，因此这条路径与真实一致。
  *
  * @author zcd
  */
@@ -46,16 +50,10 @@ import static org.mockito.Mockito.when;
 class CliRunModeTest {
 
     @Mock
-    private AgentHarness harness;
-
-    @Mock
-    private CommandManager commands;
+    private ConversationService conversations;
 
     @Mock
     private SessionManager sessions;
-
-    @Mock
-    private ReActTurn turn;
 
     private Session session;
 
@@ -63,11 +61,8 @@ class CliRunModeTest {
 
     private RecordingConsoleIO console;
 
-    /** 真实输入改写服务与它背后的注册表：新用例靠注册处理器验证接线。 */
-    private final ExtensionRegistry registry = new ExtensionRegistry(new TypeRegistry());
-
-    /** 输入改写服务。 */
-    private final InputTransforms inputTransforms = new InputTransforms(registry);
+    /** 真可靠 lane：外壳在 submit 之前订阅它，mock 在 submit 内发布。 */
+    private ShellStreams streams;
 
     private CliRunMode mode;
 
@@ -76,41 +71,56 @@ class CliRunModeTest {
         console = new RecordingConsoleIO(null);
         session = SessionTestSupport.newSession();
         sessionId = session.getSessionId();
-        mode = new CliRunMode(harness, commands, sessions, inputTransforms, console);
+        streams = new ShellStreams(new ShellIngress(new MetricsRegistry()));
+        mode = new CliRunMode(conversations, streams, sessions, console);
+    }
+
+    /**
+     * 桩：一次提交起回合，并在提交时同步发布事件（STARTED 已自动发布）。
+     *
+     * @param message 消息
+     * @param emit    额外发布的事件，可为 {@code null}
+     */
+    private void givenTurn(String message, Consumer<ShellStreams> emit) {
+        when(conversations.submit(eq(sessionId), eq(message), eq(InputTransformRequest.Source.CLI),
+                any(SubmissionPolicy.class))).thenAnswer(invocation -> {
+                    streams.publish(ShellTurnEvent.started(sessionId, "t1"));
+                    if (emit != null) {
+                        emit.accept(streams);
+                    }
+                    return Submission.turn(sessionId, "t1");
+                });
     }
 
     @Test
-    void run_should_chat_when_input_is_not_command() {
+    void run_should_return_ok_when_turn_completes() {
         givenCurrentSession();
-        when(commands.isCommand("你好")).thenReturn(false);
-        when(harness.chat(eq(sessionId), eq("你好"), any())).thenReturn(turn);
-        when(turn.await()).thenReturn(ReActResult.completed(sessionId, "你好呀", 1));
+        givenTurn("你好", lane -> lane.publish(ShellTurnEvent.completed(sessionId, "t1", "你好呀", 1, false)));
 
         int code = mode.run(options("你好"));
 
         assertEquals(ExitCodes.OK, code);
-        verify(harness).chat(eq(sessionId), eq("你好"), any());
-        verify(commands, never()).execute(any(), any());
     }
 
     @Test
-    void run_should_execute_command_and_not_chat_when_input_is_command() {
+    void run_should_exit_ok_and_write_output_when_command_executed() {
         givenCurrentSession();
-        when(commands.isCommand("/help")).thenReturn(true);
-        when(commands.execute("/help", sessionId)).thenReturn(CommandResult.ok("帮助文本"));
+        when(conversations.submit(eq(sessionId), eq("/help"), eq(InputTransformRequest.Source.CLI),
+                any(SubmissionPolicy.class)))
+                .thenReturn(Submission.command(sessionId, CommandResult.ok("帮助文本")));
 
         int code = mode.run(options("/help"));
 
         assertEquals(ExitCodes.OK, code);
         assertEquals("帮助文本\n", console.out());
-        verify(harness, never()).chat(any(), any(), any());
     }
 
     @Test
     void run_should_keep_command_output_ending_intact() {
         givenCurrentSession();
-        when(commands.isCommand("/x")).thenReturn(true);
-        when(commands.execute("/x", sessionId)).thenReturn(CommandResult.ok("多行\n"));
+        when(conversations.submit(eq(sessionId), eq("/x"), eq(InputTransformRequest.Source.CLI),
+                any(SubmissionPolicy.class)))
+                .thenReturn(Submission.command(sessionId, CommandResult.ok("多行\n")));
 
         mode.run(options("/x"));
 
@@ -120,8 +130,9 @@ class CliRunModeTest {
     @Test
     void run_should_write_nothing_when_command_has_no_output() {
         givenCurrentSession();
-        when(commands.isCommand("/silent")).thenReturn(true);
-        when(commands.execute("/silent", sessionId)).thenReturn(CommandResult.ok(null));
+        when(conversations.submit(eq(sessionId), eq("/silent"), eq(InputTransformRequest.Source.CLI),
+                any(SubmissionPolicy.class)))
+                .thenReturn(Submission.command(sessionId, CommandResult.ok(null)));
 
         int code = mode.run(options("/silent"));
 
@@ -133,9 +144,10 @@ class CliRunModeTest {
     @Test
     void run_should_return_ok_when_command_unknown() {
         givenCurrentSession();
-        when(commands.isCommand("/nosuch")).thenReturn(true);
-        when(commands.execute("/nosuch", sessionId))
-                .thenReturn(CommandResult.unknown("未知命令：/nosuch（输入 /help 查看可用命令）"));
+        when(conversations.submit(eq(sessionId), eq("/nosuch"), eq(InputTransformRequest.Source.CLI),
+                any(SubmissionPolicy.class)))
+                .thenReturn(Submission.command(sessionId,
+                        CommandResult.unknown("未知命令：/nosuch（输入 /help 查看可用命令）")));
 
         int code = mode.run(options("/nosuch"));
 
@@ -147,8 +159,9 @@ class CliRunModeTest {
     @Test
     void run_should_return_runtime_error_and_use_stderr_when_command_failed() {
         givenCurrentSession();
-        when(commands.isCommand("/resume")).thenReturn(true);
-        when(commands.execute("/resume", sessionId)).thenReturn(CommandResult.error("会话不存在：x"));
+        when(conversations.submit(eq(sessionId), eq("/resume"), eq(InputTransformRequest.Source.CLI),
+                any(SubmissionPolicy.class)))
+                .thenReturn(Submission.command(sessionId, CommandResult.error("会话不存在：x")));
 
         int code = mode.run(options("/resume"));
 
@@ -160,12 +173,38 @@ class CliRunModeTest {
     @Test
     void run_should_fall_back_to_generic_message_when_command_error_has_no_output() {
         givenCurrentSession();
-        when(commands.isCommand("/x")).thenReturn(true);
-        when(commands.execute("/x", sessionId)).thenReturn(CommandResult.error(null));
+        when(conversations.submit(eq(sessionId), eq("/x"), eq(InputTransformRequest.Source.CLI),
+                any(SubmissionPolicy.class)))
+                .thenReturn(Submission.command(sessionId, CommandResult.error(null)));
 
         mode.run(options("/x"));
 
         assertEquals("命令执行失败。\n", console.err());
+    }
+
+    @Test
+    void run_should_write_notice_and_skip_turn_when_input_handled() {
+        givenCurrentSession();
+        when(conversations.submit(eq(sessionId), eq("?help"), eq(InputTransformRequest.Source.CLI),
+                any(SubmissionPolicy.class)))
+                .thenReturn(Submission.handled(sessionId, "先看看这份清单"));
+
+        int code = mode.run(options("?help"));
+
+        assertEquals(ExitCodes.OK, code);
+        assertTrue(console.out().contains("先看看这份清单"), console.out());
+    }
+
+    @Test
+    void run_should_fall_back_to_generic_notice_when_plugin_gives_none() {
+        givenCurrentSession();
+        when(conversations.submit(eq(sessionId), eq("?x"), eq(InputTransformRequest.Source.CLI),
+                any(SubmissionPolicy.class)))
+                .thenReturn(Submission.handled(sessionId, null));
+
+        mode.run(options("?x"));
+
+        assertTrue(console.out().contains("输入已被插件接过去"), console.out());
     }
 
     @Test
@@ -174,12 +213,12 @@ class CliRunModeTest {
 
         assertEquals(ExitCodes.USAGE_ERROR, code);
         assertTrue(console.err().contains("没有输入"));
-        verify(harness, never()).chat(any(), any(), any());
+        verify(conversations, never()).submit(any(), any(), any(), any());
     }
 
     @Test
     void run_should_return_usage_error_when_stdin_blank() {
-        CliRunMode stdinMode = new CliRunMode(harness, commands, sessions, inputTransforms, new RecordingConsoleIO("  \n"));
+        CliRunMode stdinMode = new CliRunMode(conversations, streams, sessions, new RecordingConsoleIO("  \n"));
 
         int code = stdinMode.run(StartupOptions.builder(StartupOptions.Mode.CLI).build());
 
@@ -189,40 +228,42 @@ class CliRunModeTest {
     @Test
     void run_should_read_stdin_when_prompt_absent() {
         givenCurrentSession();
-        CliRunMode stdinMode = new CliRunMode(harness, commands, sessions, inputTransforms, new RecordingConsoleIO("来自管道\n"));
-        when(commands.isCommand("来自管道\n")).thenReturn(false);
-        when(harness.chat(eq(sessionId), eq("来自管道\n"), any())).thenReturn(turn);
-        when(turn.await()).thenReturn(ReActResult.completed(sessionId, "收到", 1));
+        RecordingConsoleIO stdinConsole = new RecordingConsoleIO("来自管道\n");
+        CliRunMode stdinMode = new CliRunMode(conversations, streams, sessions, stdinConsole);
+        when(conversations.submit(eq(sessionId), eq("来自管道\n"), eq(InputTransformRequest.Source.CLI),
+                any(SubmissionPolicy.class))).thenAnswer(invocation -> {
+                    streams.publish(ShellTurnEvent.started(sessionId, "t1"));
+                    streams.publish(ShellTurnEvent.completed(sessionId, "t1", "收到", 1, false));
+                    return Submission.turn(sessionId, "t1");
+                });
 
         int code = stdinMode.run(StartupOptions.builder(StartupOptions.Mode.CLI).build());
 
         assertEquals(ExitCodes.OK, code);
-        verify(harness).chat(eq(sessionId), eq("来自管道\n"), any());
     }
 
     @Test
-    void run_should_return_runtime_error_when_turn_failed() {
+    void run_should_return_runtime_error_when_turn_failed_without_listener_report() {
         givenCurrentSession();
-        when(commands.isCommand("boom")).thenReturn(false);
-        when(harness.chat(eq(sessionId), eq("boom"), any())).thenReturn(turn);
-        when(turn.await()).thenThrow(new JellyfishException("模型调用失败"));
+        when(conversations.submit(eq(sessionId), eq("boom"), eq(InputTransformRequest.Source.CLI),
+                any(SubmissionPolicy.class))).thenThrow(new JellyfishException("流被中断"));
 
         int code = mode.run(options("boom"));
 
         assertEquals(ExitCodes.RUNTIME_ERROR, code);
-        assertTrue(console.err().contains("模型调用失败"));
+        assertTrue(console.err().contains("流被中断"));
     }
 
     @Test
     void run_should_not_duplicate_error_when_listener_already_reported_it() {
+        // 终态 ERROR 已经把原因写到 stderr；随后 submit 抛出时不应再打一遍
         givenCurrentSession();
-        when(commands.isCommand("boom")).thenReturn(false);
-        when(harness.chat(eq(sessionId), eq("boom"), any())).thenAnswer(invocation -> {
-            invocation.getArgument(2, zcd.jellyfish.core.ReActListener.class)
-                    .onError(new JellyfishException("模型调用失败"));
-            return turn;
-        });
-        when(turn.await()).thenThrow(new JellyfishException("模型调用失败"));
+        when(conversations.submit(eq(sessionId), eq("boom"), eq(InputTransformRequest.Source.CLI),
+                any(SubmissionPolicy.class))).thenAnswer(invocation -> {
+                    streams.publish(ShellTurnEvent.started(sessionId, "t1"));
+                    streams.publish(ShellTurnEvent.error(sessionId, "t1", new JellyfishException("模型调用失败")));
+                    throw new JellyfishException("模型调用失败");
+                });
 
         mode.run(options("boom"));
 
@@ -232,13 +273,11 @@ class CliRunModeTest {
     @Test
     void run_should_return_truncated_when_turn_not_converged() {
         givenCurrentSession();
-        when(commands.isCommand("长任务")).thenReturn(false);
-        when(harness.chat(eq(sessionId), eq("长任务"), any())).thenReturn(turn);
-        when(turn.await()).thenReturn(ReActResult.truncated(sessionId, "达到上限", 16));
+        givenTurn("长任务", lane -> lane.publish(
+                ShellTurnEvent.completed(sessionId, "t1", "达到上限", 16, true)));
 
         int code = mode.run(options("长任务"));
 
-        // 截断提示由 listener.onComplete 负责（已在 CliReActListenerTest 覆盖），这里只钉退出码
         assertEquals(ExitCodes.TRUNCATED, code);
     }
 
@@ -246,24 +285,20 @@ class CliRunModeTest {
     void run_should_return_turn_blocked_when_plugin_blocks_turn() {
         // 被插件拦下不是运行失败：脚本对它的补救动作（改请求 / 找人确认）与对 4（看日志排故障）完全不同
         givenCurrentSession();
-        when(commands.isCommand("提交")).thenReturn(false);
-        when(harness.chat(eq(sessionId), eq("提交"), any())).thenReturn(turn);
-        when(turn.await()).thenReturn(ReActResult.blocked(sessionId, "工作区不干净"));
+        givenTurn("提交", lane -> lane.publish(ShellTurnEvent.blocked(sessionId, "t1", "工作区不干净")));
 
         int code = mode.run(options("提交"));
 
         assertEquals(ExitCodes.TURN_BLOCKED, code);
         // stdout 是「回答」的通道，而被拦下的回合没有回答；理由由监听器写进 stderr
-        // （监听器侧的断言在 CliReActListenerTest）
         assertTrue(console.out().isEmpty());
+        assertTrue(console.err().contains("回合被拦下"));
     }
 
     @Test
     void run_should_return_runtime_error_when_turn_cancelled() {
         givenCurrentSession();
-        when(commands.isCommand("取消")).thenReturn(false);
-        when(harness.chat(eq(sessionId), eq("取消"), any())).thenReturn(turn);
-        when(turn.await()).thenReturn(ReActResult.cancelled(sessionId, 1));
+        givenTurn("取消", lane -> lane.publish(ShellTurnEvent.cancelled(sessionId, "t1")));
 
         int code = mode.run(options("取消"));
 
@@ -273,9 +308,7 @@ class CliRunModeTest {
     @Test
     void run_should_read_current_session_each_time() {
         givenCurrentSession();
-        when(commands.isCommand("你好")).thenReturn(false);
-        when(harness.chat(eq(sessionId), eq("你好"), any())).thenReturn(turn);
-        when(turn.await()).thenReturn(ReActResult.completed(sessionId, "ok", 1));
+        givenTurn("你好", lane -> lane.publish(ShellTurnEvent.completed(sessionId, "t1", "ok", 1, false)));
 
         mode.run(options("你好"));
 
@@ -292,12 +325,10 @@ class CliRunModeTest {
     @Test
     void run_should_enable_thinking_display_when_option_given() {
         givenCurrentSession();
-        when(commands.isCommand("你好")).thenReturn(false);
-        when(harness.chat(eq(sessionId), eq("你好"), any())).thenAnswer(invocation -> {
-            invocation.getArgument(2, zcd.jellyfish.core.ReActListener.class).onThinking("思考中");
-            return turn;
+        givenTurn("你好", lane -> {
+            lane.publish(ShellTurnEvent.thinking(sessionId, "t1", "思考中"));
+            lane.publish(ShellTurnEvent.completed(sessionId, "t1", "ok", 1, false));
         });
-        when(turn.await()).thenReturn(ReActResult.completed(sessionId, "ok", 1));
 
         mode.run(options("你好", true));
 
@@ -307,12 +338,10 @@ class CliRunModeTest {
     @Test
     void run_should_hide_thinking_by_default() {
         givenCurrentSession();
-        when(commands.isCommand("你好")).thenReturn(false);
-        when(harness.chat(eq(sessionId), eq("你好"), any())).thenAnswer(invocation -> {
-            invocation.getArgument(2, zcd.jellyfish.core.ReActListener.class).onThinking("思考中");
-            return turn;
+        givenTurn("你好", lane -> {
+            lane.publish(ShellTurnEvent.thinking(sessionId, "t1", "思考中"));
+            lane.publish(ShellTurnEvent.completed(sessionId, "t1", "ok", 1, false));
         });
-        when(turn.await()).thenReturn(ReActResult.completed(sessionId, "ok", 1));
 
         mode.run(options("你好"));
 
@@ -320,61 +349,35 @@ class CliRunModeTest {
     }
 
     @Test
-    void run_should_write_notice_and_skip_turn_when_input_handled() {
-        // 被接过去的输入不进对话：不建回合、不调模型，只贴一条提示
+    void run_should_pass_cli_policy_to_submit() {
+        // CLI 的策略是「执行命令 + 不解析输入指令 + 必须有会话」：这里钉住外壳确实声明了它
         givenCurrentSession();
-        when(commands.isCommand("?help")).thenReturn(false);
-        registry.contribute("quick", InputTransformRequest.class, null,
-                request -> InputTransformResult.handled("先看看这份清单"), RegisterOptions.DEFAULT);
+        givenTurn("你好", lane -> lane.publish(ShellTurnEvent.completed(sessionId, "t1", "ok", 1, false)));
 
-        int code = mode.run(options("?help"));
+        mode.run(options("你好"));
 
-        assertEquals(ExitCodes.OK, code);
-        assertTrue(console.out().contains("先看看这份清单"), console.out());
-        verify(harness, never()).chat(any(), any(), any());
+        verify(conversations).submit(eq(sessionId), eq("你好"), eq(InputTransformRequest.Source.CLI),
+                eq(SubmissionPolicy.cli()));
     }
 
     @Test
-    void run_should_pass_replaced_text_to_turn() {
-        // 替换后的文本才是进回合的那一份：审批、轨迹行与会话里落库的都是它
+    void run_should_return_runtime_error_when_submission_is_rejected() {
         givenCurrentSession();
-        when(commands.isCommand("继续")).thenReturn(false);
-        when(harness.chat(eq(sessionId), eq("附上上下文：继续"), any())).thenReturn(turn);
-        when(turn.await()).thenReturn(ReActResult.completed(sessionId, "好", 1));
-        registry.contribute("ctx", InputTransformRequest.class, null,
-                request -> InputTransformResult.replace("附上上下文：" + request.getText()),
-                RegisterOptions.DEFAULT);
+        when(conversations.submit(eq(sessionId), eq("你好"), eq(InputTransformRequest.Source.CLI),
+                any(SubmissionPolicy.class)))
+                .thenReturn(Submission.rejected(null, Submission.RejectReason.NO_SESSION));
 
-        mode.run(options("继续"));
+        int code = mode.run(options("你好"));
 
-        verify(harness).chat(eq(sessionId), eq("附上上下文：继续"), any());
-    }
-
-    @Test
-    void run_should_not_transform_command() {
-        // 命令域是用户最显式的意图：一个插件不该能把 /help 改写成别的东西
-        givenCurrentSession();
-        when(commands.isCommand("/help")).thenReturn(true);
-        when(commands.execute("/help", sessionId)).thenReturn(CommandResult.ok("帮助"));
-        List<String> seen = new ArrayList<String>();
-        registry.contribute("probe", InputTransformRequest.class, null, request -> {
-            seen.add(request.getText());
-            return InputTransformResult.continueAsIs();
-        }, RegisterOptions.DEFAULT);
-
-        int code = mode.run(options("/help"));
-
-        assertEquals(ExitCodes.OK, code);
-        assertTrue(seen.isEmpty(), "命令不该进变换链：" + seen);
+        assertEquals(ExitCodes.RUNTIME_ERROR, code);
     }
 
     @Test
     void constructor_should_reject_null_collaborators() {
-        assertThrows(NullPointerException.class, () -> new CliRunMode(null, commands, sessions, inputTransforms, console));
-        assertThrows(NullPointerException.class, () -> new CliRunMode(harness, null, sessions, inputTransforms, console));
-        assertThrows(NullPointerException.class, () -> new CliRunMode(harness, commands, null, inputTransforms, console));
-        assertThrows(NullPointerException.class, () -> new CliRunMode(harness, commands, sessions, null, console));
-        assertThrows(NullPointerException.class, () -> new CliRunMode(harness, commands, sessions, inputTransforms, null));
+        assertThrows(NullPointerException.class, () -> new CliRunMode(null, streams, sessions, console));
+        assertThrows(NullPointerException.class, () -> new CliRunMode(conversations, null, sessions, console));
+        assertThrows(NullPointerException.class, () -> new CliRunMode(conversations, streams, null, console));
+        assertThrows(NullPointerException.class, () -> new CliRunMode(conversations, streams, sessions, null));
     }
 
     /**

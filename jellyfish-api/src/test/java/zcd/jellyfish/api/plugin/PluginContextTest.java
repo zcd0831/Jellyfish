@@ -13,6 +13,8 @@ import zcd.jellyfish.api.extension.CommandRequest;
 import zcd.jellyfish.api.extension.CommandResult;
 import zcd.jellyfish.api.extension.ExtensionHandler;
 import zcd.jellyfish.api.extension.ExtensionRequest;
+import zcd.jellyfish.api.extension.ShellContribution;
+import zcd.jellyfish.api.extension.ShellContributionStatus;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -253,6 +255,13 @@ class PluginContextTest {
         @Override
         public java.util.List<SessionExtensionEntry> extensionEntries(String sessionId) {
             throw new UnsupportedOperationException("extensionEntries is not part of this stub");
+        }
+
+        @Override
+        public ShellContributionStatus present(ShellContribution contribution) {
+            // 桩类只保留「有这个方法」这一点形状；投递语义（按 owner 分桶、合并、满即丢、
+            // 不建会话、不起回合）由 ShellIngressTest 与 PluginContextImplTest 覆盖
+            throw new UnsupportedOperationException("present is not part of this stub");
         }
     }
 }

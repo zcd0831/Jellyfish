@@ -21,6 +21,8 @@ import zcd.jellyfish.infra.event.EventChannelOptions;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.plugin.PF4JPluginManager;
 import zcd.jellyfish.infra.plugin.PluginContextFactory;
+import zcd.jellyfish.infra.metrics.MetricsRegistry;
+import zcd.jellyfish.infra.shell.ShellIngress;
 import zcd.jellyfish.infra.plugin.PluginProperties;
 import zcd.jellyfish.infra.plugin.PluginRuntimeConfig;
 import zcd.jellyfish.infra.plugin.RuntimeInfoHolder;
@@ -110,7 +112,8 @@ class PluginModuleTest {
 
         // When
         PluginContextFactory factory = PluginModule.providePluginContextFactory(extensions, events, registry,
-                new RuntimeInfoHolder(), new ActionQueue(), org.mockito.Mockito.mock(zcd.jellyfish.infra.session.SessionManager.class));
+                new RuntimeInfoHolder(), new ActionQueue(),
+                org.mockito.Mockito.mock(zcd.jellyfish.infra.session.SessionManager.class), new ShellIngress(new MetricsRegistry()));
         PluginContext context = factory.create(PluginDeclaration.of("plugin-a"));
         Subscription subscription = context.observe(ConfigWarningEvent.class, event -> {
                     // 仅用于产生一条订阅
@@ -131,7 +134,8 @@ class PluginModuleTest {
                 new ExtensionRegistry(registry),
                 events,
                 registry,
-                new RuntimeInfoHolder(), new ActionQueue(), org.mockito.Mockito.mock(zcd.jellyfish.infra.session.SessionManager.class));
+                new RuntimeInfoHolder(), new ActionQueue(),
+                org.mockito.Mockito.mock(zcd.jellyfish.infra.session.SessionManager.class), new ShellIngress(new MetricsRegistry()));
 
         // When
         PF4JPluginManager manager = PluginModule.providePluginManager(factory,

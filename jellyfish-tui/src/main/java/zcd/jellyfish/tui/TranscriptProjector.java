@@ -902,7 +902,7 @@ public final class TranscriptProjector {
      * 取运行中工具的参数显示文本。
      * <p>
      * <b>为什么运行期不读 assistant 消息里的参数</b>：工具还没返回，结果消息尚未落库，
-     * 而这条轨迹本身就是「工具在跑」的唯一显示处。参数由 {@code ReActListener.onToolCallStarted}
+     * 而这条轨迹本身就是「工具在跑」的唯一显示处。参数由 {@code ShellTurnEvent.Kind#TOOL_STARTED}
      * 带进暂存区，与完成后从会话读到的参数是同一份输入的两种载体。
      *
      * @param inflight 暂存区快照

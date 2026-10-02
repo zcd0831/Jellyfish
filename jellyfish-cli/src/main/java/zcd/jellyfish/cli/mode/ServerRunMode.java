@@ -7,8 +7,9 @@ import zcd.jellyfish.api.RuntimeInfo;
 import zcd.jellyfish.cli.ExitCodes;
 import zcd.jellyfish.cli.StartupOptions;
 import zcd.jellyfish.cli.console.ConsoleIO;
-import zcd.jellyfish.core.AgentHarness;
-import zcd.jellyfish.core.input.InputTransforms;
+import zcd.jellyfish.core.conversation.ConversationService;
+import zcd.jellyfish.core.conversation.ShellStreams;
+import zcd.jellyfish.core.conversation.TurnRegistry;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.command.CommandManager;
 import zcd.jellyfish.infra.metrics.HealthCheck;
@@ -45,8 +46,8 @@ public final class ServerRunMode implements RunMode {
     /** 日志。 */
     private static final Logger LOG = LoggerFactory.getLogger(ServerRunMode.class);
 
-    /** 智能入口。 */
-    private final AgentHarness harness;
+    /** 会话提交服务：分流与起回合的唯一入口。 */
+    private final ConversationService conversations;
 
     /** 命令域服务。 */
     private final CommandManager commands;
@@ -66,36 +67,41 @@ public final class ServerRunMode implements RunMode {
     /** 健康检查汇总。 */
     private final HealthCheck healthCheck;
 
+    /** 在途回合表（内核拥有）：只用于取消端点。 */
+    private final TurnRegistry turns;
+
+    /** 可靠 lane：交给服务外壳构造 chat 处理器。 */
+    private final ShellStreams streams;
+
     /** 输出面板。 */
     private final ConsoleIO console;
-
-    /** 输入改写服务：交给自己构造的服务外壳，由它在起回合前问一遍插件。 */
-    private final InputTransforms inputTransforms;
 
     /**
      * 构造 Server 模式。
      *
-     * @param harness     智能入口，不可为 {@code null}
+     * @param conversations 会话提交服务，不可为 {@code null}
      * @param commands    命令域服务，不可为 {@code null}
      * @param sessions    会话域服务，不可为 {@code null}
      * @param models      模型门面，不可为 {@code null}
      * @param agents      agent 门面，不可为 {@code null}
      * @param approvals   人工审批通道，不可为 {@code null}
      * @param healthCheck 健康检查汇总，不可为 {@code null}
-     * @param inputTransforms 输入改写服务，不可为 {@code null}
+     * @param turns       在途回合表（内核拥有），不可为 {@code null}
+     * @param streams     可靠 lane，不可为 {@code null}
      * @param console     输出面板，不可为 {@code null}
      */
-    public ServerRunMode(AgentHarness harness, CommandManager commands, SessionManager sessions,
+    public ServerRunMode(ConversationService conversations, CommandManager commands, SessionManager sessions,
                          ModelManager models, AgentManager agents, ApprovalChannel approvals,
-                         HealthCheck healthCheck, InputTransforms inputTransforms, ConsoleIO console) {
-        this.harness = Objects.requireNonNull(harness, "harness must not be null");
+                         HealthCheck healthCheck, TurnRegistry turns, ShellStreams streams, ConsoleIO console) {
+        this.conversations = Objects.requireNonNull(conversations, "conversations must not be null");
         this.commands = Objects.requireNonNull(commands, "commands must not be null");
         this.sessions = Objects.requireNonNull(sessions, "sessions must not be null");
         this.models = Objects.requireNonNull(models, "models must not be null");
         this.agents = Objects.requireNonNull(agents, "agents must not be null");
         this.approvals = Objects.requireNonNull(approvals, "approvals must not be null");
         this.healthCheck = Objects.requireNonNull(healthCheck, "healthCheck must not be null");
-        this.inputTransforms = Objects.requireNonNull(inputTransforms, "inputTransforms must not be null");
+        this.turns = Objects.requireNonNull(turns, "turns must not be null");
+        this.streams = Objects.requireNonNull(streams, "streams must not be null");
         this.console = Objects.requireNonNull(console, "console must not be null");
     }
 
@@ -110,8 +116,8 @@ public final class ServerRunMode implements RunMode {
         ServerConfig config = ServerConfig.builder(options.getHost(), options.getPort())
                 .apiKey(resolveApiKey(options, System.getenv()))
                 .build();
-        JellyfishServer server = new JellyfishServer(config, harness, sessions, commands, agents, models,
-                approvals, healthCheck, inputTransforms);
+        JellyfishServer server = new JellyfishServer(config, conversations, sessions, commands, agents, models,
+                approvals, healthCheck, turns, streams);
         try {
             server.start();
         } catch (JellyfishException e) {

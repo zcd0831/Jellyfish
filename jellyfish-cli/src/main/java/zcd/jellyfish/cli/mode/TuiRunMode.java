@@ -7,10 +7,11 @@ import zcd.jellyfish.api.RuntimeInfo;
 import zcd.jellyfish.cli.ExitCodes;
 import zcd.jellyfish.cli.StartupOptions;
 import zcd.jellyfish.cli.console.ConsoleIO;
-import zcd.jellyfish.core.AgentHarness;
 import zcd.jellyfish.core.compact.ConversationCompactor;
+import zcd.jellyfish.core.conversation.ConversationService;
+import zcd.jellyfish.core.conversation.ShellStreams;
+import zcd.jellyfish.core.conversation.TurnRegistry;
 import zcd.jellyfish.core.input.InputDirectives;
-import zcd.jellyfish.core.input.InputTransforms;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.command.CommandManager;
 import zcd.jellyfish.infra.event.EventChannel;
@@ -30,7 +31,7 @@ import java.util.Optional;
 /**
  * TUI 模式：交互式终端界面，用 TamboUI 构建。
  * <p>
- * <b>本类只做接线</b>：三个内核门面（{@code AgentHarness} / {@code CommandManager} / {@code SessionManager}）
+ * <b>本类只做接线</b>：三个内核门面（{@code ConversationService} / {@code CommandManager} / {@code SessionManager}）
  * 加一个模型门面交给 {@link TuiApp}，然后把异常收敛成退出码。界面、投影、滚动、按键全在
  * {@code jellyfish-tui} 里——这样 {@code Launcher} 与启动参数解析一行不用改，
  * 与 {@code CliRunMode} 保持对称。
@@ -41,7 +42,7 @@ import java.util.Optional;
  * <p>
  * <b>与 CLI 模式共享的规则（原样复用，不另起一套）</b>：
  * <ol>
- *     <li>智能入口只有 {@code AgentHarness.chat}，命令入口只有 {@code CommandManager}；</li>
+ *     <li>智能入口只有 {@code ConversationService.submit}，命令入口只有 {@code CommandManager}；</li>
  *     <li>命令与对话的分流判据只有 {@code CommandManager.isCommand}；</li>
  *     <li>每轮<b>现读</b>当前会话（{@code SessionManager.current()}），不缓存 sessionId；</li>
  *     <li>{@code /exit} 归外壳，不注册为命令。</li>
@@ -61,8 +62,14 @@ public final class TuiRunMode implements RunMode {
     /** 外壳在事件通道上的订阅来源标识。 */
     private static final String UI_OWNER = "tui";
 
-    /** 智能入口：ReAct 回合的唯一门面。 */
-    private final AgentHarness harness;
+    /** 会话提交服务：分流与起回合的唯一入口。 */
+    private final ConversationService conversations;
+
+    /** 在途回合表（内核拥有）：界面 {@code Esc} 取消回合用。 */
+    private final TurnRegistry turns;
+
+    /** 可靠 lane：交给界面订阅回合事件。 */
+    private final ShellStreams streams;
 
     /** 命令域服务：解析与分发命令。 */
     private final CommandManager commands;
@@ -99,9 +106,6 @@ public final class TuiRunMode implements RunMode {
     /** 输入指令服务：界面把 {@code !} / {@code @} 交给它，自己不做解析与执行。 */
     private final InputDirectives inputDirectives;
 
-    /** 输入改写服务：命令判定之后、指令解析与建会话之前的那一道扩展点。 */
-    private final InputTransforms inputTransforms;
-
     /** 输出面板：只在进入备用屏之前用于报告启动期错误。 */
     private final ConsoleIO console;
 
@@ -111,7 +115,9 @@ public final class TuiRunMode implements RunMode {
     /**
      * 构造 TUI 模式。
      *
-     * @param harness    智能入口，不可为 {@code null}
+     * @param conversations 会话提交服务，不可为 {@code null}
+     * @param turns      在途回合表（内核拥有），不可为 {@code null}
+     * @param streams    可靠 lane，不可为 {@code null}
      * @param commands   命令域服务，不可为 {@code null}
      * @param sessions   会话域服务，不可为 {@code null}
      * @param models     模型门面，不可为 {@code null}
@@ -122,16 +128,20 @@ public final class TuiRunMode implements RunMode {
      * @param approvals  人工审批通道，不可为 {@code null}
      * @param compactor  会话压缩器，不可为 {@code null}
      * @param inputDirectives 输入指令服务，不可为 {@code null}
-     * @param inputTransforms 输入改写服务，不可为 {@code null}
      * @param console    输出面板，不可为 {@code null}
+     * @param sessionDefaults 本进程内新建会话的待生效默认值，不可为 {@code null}
      */
-    public TuiRunMode(AgentHarness harness, CommandManager commands, SessionManager sessions,
+    public TuiRunMode(ConversationService conversations, TurnRegistry turns, ShellStreams streams,
+                      CommandManager commands,
+                      SessionManager sessions,
                       ModelManager models, AgentManager agents, ExtensionRegistry extensions,
                       EventChannel events, RuntimeInfoHolder runtimeInfo, ApprovalChannel approvals,
                       ConversationCompactor compactor,
-                      InputDirectives inputDirectives, InputTransforms inputTransforms, ConsoleIO console,
+                      InputDirectives inputDirectives, ConsoleIO console,
                       SessionDefaults sessionDefaults) {
-        this.harness = Objects.requireNonNull(harness, "harness must not be null");
+        this.conversations = Objects.requireNonNull(conversations, "conversations must not be null");
+        this.turns = Objects.requireNonNull(turns, "turns must not be null");
+        this.streams = Objects.requireNonNull(streams, "streams must not be null");
         this.commands = Objects.requireNonNull(commands, "commands must not be null");
         this.sessions = Objects.requireNonNull(sessions, "sessions must not be null");
         this.models = Objects.requireNonNull(models, "models must not be null");
@@ -142,7 +152,6 @@ public final class TuiRunMode implements RunMode {
         this.approvals = Objects.requireNonNull(approvals, "approvals must not be null");
         this.compactor = Objects.requireNonNull(compactor, "compactor must not be null");
         this.inputDirectives = Objects.requireNonNull(inputDirectives, "inputDirectives must not be null");
-        this.inputTransforms = Objects.requireNonNull(inputTransforms, "inputTransforms must not be null");
         this.console = Objects.requireNonNull(console, "console must not be null");
         this.sessionDefaults = Objects.requireNonNull(sessionDefaults, "sessionDefaults must not be null");
     }
@@ -177,8 +186,8 @@ public final class TuiRunMode implements RunMode {
         // 否则启动瞬间发生的工具调用会拿不到审批者而被按拒绝处理。
         approvals.attach();
         try {
-            new TuiApp(harness, commands, sessions, models, agents, uiContributions, approvals,
-                    compactor, inputDirectives, inputTransforms, options.isShowThinking(), sessionDefaults).run();
+            new TuiApp(conversations, turns, streams, commands, sessions, models, agents, uiContributions,
+                    approvals, compactor, inputDirectives, options.isShowThinking(), sessionDefaults).run();
             return ExitCodes.OK;
         } catch (JellyfishException e) {
             // 回合未收敛仍然只算正常结束：它是「答完了但没收敛」，不是执行失败。

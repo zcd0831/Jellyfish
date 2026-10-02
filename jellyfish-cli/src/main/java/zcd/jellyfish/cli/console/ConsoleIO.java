@@ -30,7 +30,7 @@ public interface ConsoleIO {
     /**
      * 向标准输出原样写出文本（不追加换行），并立即刷新。
      * <p>
-     * 回答与命令结果走这里；这是「可被脚本消费」的那条流。回答由 {@code CliReActListener}
+     * 回答与命令结果走这里；这是「可被脚本消费」的那条流。回答由 {@code CliTurnListener}
      * 按回合缓冲后整体写出，因此通常一次调用就是完整回答。
      *
      * @param text 文本，可为 {@code null}（忽略）

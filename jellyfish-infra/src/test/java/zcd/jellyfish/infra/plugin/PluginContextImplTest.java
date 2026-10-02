@@ -3,6 +3,7 @@ package zcd.jellyfish.infra.plugin;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import zcd.jellyfish.api.JellyfishException;
+import zcd.jellyfish.api.RuntimeInfo;
 import zcd.jellyfish.api.action.ActionFailureReason;
 import zcd.jellyfish.api.action.ActionHandle;
 import zcd.jellyfish.api.action.ActionStatus;
@@ -14,16 +15,21 @@ import zcd.jellyfish.api.event.notification.ConfigWarningEvent;
 import zcd.jellyfish.api.extension.CommandRequest;
 import zcd.jellyfish.api.extension.CommandResult;
 import zcd.jellyfish.api.extension.ExtensionHandler;
+import zcd.jellyfish.api.extension.ShellContribution;
+import zcd.jellyfish.api.extension.ShellContributionStatus;
 import zcd.jellyfish.api.extension.ToolDescriptor;
 import zcd.jellyfish.api.extension.ToolCallRequest;
 import zcd.jellyfish.api.extension.ToolCallResult;
 import zcd.jellyfish.api.plugin.PluginDeclaration;
+import zcd.jellyfish.api.ui.UiLine;
 import zcd.jellyfish.infra.action.ActionQueue;
 import zcd.jellyfish.infra.event.EventChannel;
 import zcd.jellyfish.infra.event.EventChannelOptions;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.registry.TypeRegistry;
 import zcd.jellyfish.infra.session.SessionManager;
+import zcd.jellyfish.infra.metrics.MetricsRegistry;
+import zcd.jellyfish.infra.shell.ShellIngress;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -37,7 +43,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.any;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /**
  * {@link PluginContextImpl} 的单元测试：验证四个注册/发布入口都绑定 {@code pluginId}。
@@ -244,7 +253,7 @@ class PluginContextImplTest {
         // Given：注册窗口是插件存活期，停止之后一律拒绝——否则会留下幽灵注册
         ContextLifecycle lifecycle = new ContextLifecycle();
         PluginContextImpl closable = new PluginContextImpl(
-                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle, new RuntimeInfoHolder(), new ActionQueue(), sessions);
+                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle, new RuntimeInfoHolder(), new ActionQueue(), sessions, new ShellIngress(new MetricsRegistry()));
         lifecycle.close();
 
         // When / Then
@@ -258,7 +267,7 @@ class PluginContextImplTest {
         // Given
         ContextLifecycle lifecycle = new ContextLifecycle();
         PluginContextImpl closable = new PluginContextImpl(
-                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle, new RuntimeInfoHolder(), new ActionQueue(), sessions);
+                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle, new RuntimeInfoHolder(), new ActionQueue(), sessions, new ShellIngress(new MetricsRegistry()));
         lifecycle.close();
 
         // When / Then
@@ -272,7 +281,7 @@ class PluginContextImplTest {
         // Given
         ContextLifecycle lifecycle = new ContextLifecycle();
         PluginContextImpl closable = new PluginContextImpl(
-                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle, new RuntimeInfoHolder(), new ActionQueue(), sessions);
+                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle, new RuntimeInfoHolder(), new ActionQueue(), sessions, new ShellIngress(new MetricsRegistry()));
         lifecycle.close();
 
         // When / Then
@@ -287,7 +296,7 @@ class PluginContextImplTest {
         // Given
         ContextLifecycle lifecycle = new ContextLifecycle();
         PluginContextImpl closable = new PluginContextImpl(
-                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle, new RuntimeInfoHolder(), new ActionQueue(), sessions);
+                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle, new RuntimeInfoHolder(), new ActionQueue(), sessions, new ShellIngress(new MetricsRegistry()));
         lifecycle.close();
 
         // When / Then：停止之后的发布同样属于幽灵行为，不能静默丢掉了事
@@ -300,7 +309,7 @@ class PluginContextImplTest {
         ContextLifecycle lifecycle = new ContextLifecycle();
         PluginContextImpl closable = new PluginContextImpl(
                 PluginDeclaration.of("plugin-a"), extensions, events, lifecycle,
-                new RuntimeInfoHolder(), new ActionQueue(), sessions);
+                new RuntimeInfoHolder(), new ActionQueue(), sessions, new ShellIngress(new MetricsRegistry()));
         lifecycle.close();
 
         // When / Then
@@ -313,7 +322,7 @@ class PluginContextImplTest {
         // Given：正常存活的上下文，但目标会话没有在途回合
         ActionQueue actions = new ActionQueue();
         PluginContextImpl alive = new PluginContextImpl(PluginDeclaration.of("plugin-a"), extensions,
-                events, new ContextLifecycle(), new RuntimeInfoHolder(), actions, sessions);
+                events, new ContextLifecycle(), new RuntimeInfoHolder(), actions, sessions, new ShellIngress(new MetricsRegistry()));
 
         // When
         ActionHandle handle = alive.submit(
@@ -330,7 +339,7 @@ class PluginContextImplTest {
         // Given：子上下文也握着注册能力，若它们各有一份标记，回收根上下文就管不住它们
         ContextLifecycle lifecycle = new ContextLifecycle();
         PluginContextImpl parent = new PluginContextImpl(
-                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle, new RuntimeInfoHolder(), new ActionQueue(), sessions);
+                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle, new RuntimeInfoHolder(), new ActionQueue(), sessions, new ShellIngress(new MetricsRegistry()));
         PluginContextImpl child = (PluginContextImpl) parent.subContext("jira");
 
         // When
@@ -390,7 +399,7 @@ class PluginContextImplTest {
         ContextLifecycle lifecycle = new ContextLifecycle();
         PluginContextImpl closable = new PluginContextImpl(
                 PluginDeclaration.of("plugin-a"), extensions, events, lifecycle,
-                new RuntimeInfoHolder(), new ActionQueue(), sessions);
+                new RuntimeInfoHolder(), new ActionQueue(), sessions, new ShellIngress(new MetricsRegistry()));
         lifecycle.close();
 
         assertThrows(JellyfishException.class, () -> closable.putExtensionEntry("s1", "k", null));
@@ -403,12 +412,153 @@ class PluginContextImplTest {
         // Given：上一条的反面 —— 失效只在关闭之后生效，关闭之前照常注册
         ContextLifecycle lifecycle = new ContextLifecycle();
         PluginContextImpl closable = new PluginContextImpl(
-                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle, new RuntimeInfoHolder(), new ActionQueue(), sessions);
+                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle, new RuntimeInfoHolder(), new ActionQueue(), sessions, new ShellIngress(new MetricsRegistry()));
 
         // When
         closable.handle(ToolCallRequest.class, "calc", request -> new ToolCallResult("calc", "ok"));
 
         // Then
         assertEquals(1, extensions.handlers(ToolCallRequest.class, "calc").size());
+    }
+
+    @Test
+    void present_should_enqueue_when_shell_renders_and_session_exists() {
+        // Given
+        ShellIngress ingress = new ShellIngress(new MetricsRegistry());
+        PluginContextImpl context = contextWith(RuntimeInfo.tui(true), ingress);
+        when(sessions.exists("s1")).thenReturn(true);
+
+        // When
+        ShellContributionStatus status = context.present(notice(ShellContribution.Scope.SESSION, "s1"));
+
+        // Then
+        assertEquals(ShellContributionStatus.ACCEPTED, status);
+        assertEquals(1, ingress.drain().size());
+    }
+
+    @Test
+    void present_should_report_dropped_when_session_does_not_exist_and_never_create_it() {
+        // Given：这是「插件不能新开会话」这条硬约束的落点之一
+        ShellIngress ingress = new ShellIngress(new MetricsRegistry());
+        PluginContextImpl context = contextWith(RuntimeInfo.tui(true), ingress);
+        when(sessions.exists("ghost")).thenReturn(false);
+
+        // When
+        ShellContributionStatus status = context.present(notice(ShellContribution.Scope.SESSION, "ghost"));
+
+        // Then
+        assertEquals(ShellContributionStatus.DROPPED_NO_SESSION, status);
+        assertTrue(ingress.drain().isEmpty());
+        verify(sessions, never()).create(any(), any(), any(), any());
+        verify(sessions, never()).createDefault();
+        verify(sessions, never()).require("ghost");
+    }
+
+    @Test
+    void present_should_report_dropped_when_session_id_is_blank() {
+        ShellIngress ingress = new ShellIngress(new MetricsRegistry());
+        PluginContextImpl context = contextWith(RuntimeInfo.tui(true), ingress);
+        when(sessions.exists(null)).thenReturn(false);
+
+        assertEquals(ShellContributionStatus.DROPPED_NO_SESSION,
+                context.present(notice(ShellContribution.Scope.SESSION, null)));
+        assertTrue(ingress.drain().isEmpty());
+    }
+
+    @Test
+    void present_should_report_dropped_when_this_shell_has_no_renderer() {
+        // Given：-cli 单次调用没有界面，收了也没人来取
+        ShellIngress ingress = new ShellIngress(new MetricsRegistry());
+        PluginContextImpl context = contextWith(RuntimeInfo.cli(false), ingress);
+
+        // When
+        ShellContributionStatus status = context.present(notice(ShellContribution.Scope.SHELL, null));
+
+        // Then
+        assertEquals(ShellContributionStatus.DROPPED_NO_RENDERER, status);
+        assertTrue(ingress.drain().isEmpty());
+        // 没有渲染面时连会话都不必问
+        verify(sessions, never()).exists(any());
+    }
+
+    @Test
+    void present_should_accept_shell_scope_without_session_lookup() {
+        // Given：SHELL scope 与任何会话无关，不该顺手去查一次会话
+        ShellIngress ingress = new ShellIngress(new MetricsRegistry());
+        PluginContextImpl context = contextWith(RuntimeInfo.server(false), ingress);
+
+        // When
+        ShellContributionStatus status = context.present(notice(ShellContribution.Scope.SHELL, null));
+
+        // Then
+        assertEquals(ShellContributionStatus.ACCEPTED, status);
+        verify(sessions, never()).exists(any());
+    }
+
+    @Test
+    void present_should_treat_unknown_runtime_info_as_no_renderer() {
+        // Given：嵌入式用法拿不到外壳种类，保守一侧是「不收」
+        ShellIngress ingress = new ShellIngress(new MetricsRegistry());
+        PluginContextImpl context = contextWith(RuntimeInfo.unknown(), ingress);
+
+        assertEquals(ShellContributionStatus.DROPPED_NO_RENDERER,
+                context.present(notice(ShellContribution.Scope.SHELL, null)));
+    }
+
+    @Test
+    void present_should_use_full_owner_namespace_so_child_contexts_stay_attributable() {
+        // When：子上下文推的贡献按子身份归因，回收与显示上限都据此分桶
+        ShellIngress ingress = new ShellIngress(new MetricsRegistry());
+        PluginContextImpl context = contextWith(RuntimeInfo.tui(true), ingress);
+        when(sessions.exists("s1")).thenReturn(true);
+        ((PluginContextImpl) context.subContext("jira")).present(notice(ShellContribution.Scope.SESSION, "s1"));
+
+        // Then
+        assertEquals("plugin-a::jira", ingress.drain().get(0).getOwner());
+    }
+
+    @Test
+    void present_should_reject_null_contribution() {
+        assertThrows(JellyfishException.class, () -> context.present(null));
+    }
+
+    @Test
+    void present_should_fail_when_context_already_closed() {
+        // Given
+        ContextLifecycle lifecycle = new ContextLifecycle();
+        PluginContextImpl closable = new PluginContextImpl(
+                PluginDeclaration.of("plugin-a"), extensions, events, lifecycle,
+                new RuntimeInfoHolder(), new ActionQueue(), sessions, new ShellIngress(new MetricsRegistry()));
+        lifecycle.close();
+
+        // When / Then
+        assertThrows(JellyfishException.class,
+                () -> closable.present(notice(ShellContribution.Scope.SHELL, null)));
+    }
+
+    /**
+     * 造一个用给定运行时信息与信箱的上下文。
+     *
+     * @param info    运行时信息
+     * @param ingress 信箱
+     * @return 上下文
+     */
+    private PluginContextImpl contextWith(RuntimeInfo info, ShellIngress ingress) {
+        RuntimeInfoHolder holder = new RuntimeInfoHolder();
+        holder.set(info);
+        return new PluginContextImpl(PluginDeclaration.of("plugin-a"), extensions, events,
+                new ContextLifecycle(), holder, new ActionQueue(), sessions, ingress);
+    }
+
+    /**
+     * 造一条通知。
+     *
+     * @param scope     作用域
+     * @param sessionId 会话标识
+     * @return 贡献
+     */
+    private static ShellContribution notice(ShellContribution.Scope scope, String sessionId) {
+        return ShellContribution.notice(scope, sessionId, null, ShellContribution.Severity.INFO,
+                Collections.singletonList(UiLine.of("x")));
     }
 }

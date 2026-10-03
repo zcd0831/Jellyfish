@@ -1,6 +1,6 @@
 # 设计：子代理运行时（agent run）（P0–P3 总纲）
 
-> **状态：设计已定（决策见第 5 节）；P0 / P1 / P2 已落地，P3 见分册 [`subagent-runtime-p3.md`](subagent-runtime-p3.md)。**
+> **状态：设计已定（决策见第 5 节）；P0 / P1 / P2 / P3 全部落地（P3 分册：[`subagent-runtime-p3.md`](subagent-runtime-p3.md)）。**
 > 本文是子代理从「父回合里的一个阻塞工具调用」升级为「一等公民 agent run」的设计与落地计划。
 > 对外口径见 [architecture.md](../architecture.md) 与 [constraints/react-compact.md](../constraints/react-compact.md)；
 > 施工按第 11 节的阶段顺序推进，每阶段独立可合并、可回滚。
@@ -10,7 +10,7 @@
 | P0 | agent run 原语 + 并行调度 + governor | **已落地**（S1–S5：`RunRegistry` / `RunScheduler` / `AgentRuntime` / `RunContext`+`RunTree` / 墙钟与 token 预算 / `tryAcquireSpawn` / `cancelTree` 与孤儿清理） |
 | P1 | 观测（run 事件 + 面板）与归档 | **已落地**（`RunEventBus` + `AgentRunEvent` + `SubAgentPanel` + `SubAgentArchive`；`-server` SSE 发 `run_started`/`run_finished`） |
 | P2 | 声明式编排 spec（插件） | **已落地**（分册：[`subagent-runtime-p2.md`](subagent-runtime-p2.md)：api 委派端口 + core 适配器 + 插件 `jellyfish-plugin-workflow` + 编排面板 + 端到端） |
-| P3 | 共享任务列表（agent 团队远景） | **待设计**（分册：[`subagent-runtime-p3.md`](subagent-runtime-p3.md)） |
+| P3 | 共享任务列表（agent 团队远景） | **已落地**（分册：[`subagent-runtime-p3.md`](subagent-runtime-p3.md)：工具携带调用者身份 + run 通知桥 + todo 插件的认领/完成与「谁在做」） |
 
 > **P0 分册**：[`subagent-runtime-p0.md`](subagent-runtime-p0.md)（原语签名、`RunRegistry` / `RunScheduler` 边界、
 > `RunScope` 去 `ThreadLocal` 的迁移路径、governor 落地与测试计划）。本文只保留机制与阶段；
@@ -22,7 +22,7 @@
 > 面向插件的委派端口、workflow 插件形态、落地记录）。**已落地。**
 >
 > **P3 分册**：[`subagent-runtime-p3.md`](subagent-runtime-p3.md)（共享任务列表与 run 间消息：
-> 归属、并发语义、派生权限收窄、阶段划分）。**待确认。**
+> 归属、并发语义、派生权限与解耦纪律、落地记录）。**已落地。**
 
 ---
 
@@ -313,7 +313,7 @@ public final class AgentRuntime {
 | **P0** | `AgentRuntime` 原语 + `RunRegistry` + `RunScheduler` + governor；`runNested` 由内联改调度；`RunScope` 去 `ThreadLocal` | 无 | 中（核心机制变更，但 `task` 的对外语义不变） |
 | **P1** | run 事件（运行时总线）+ 面板（`core` 的 `PanelContribution`）+ 归档（独立命名空间与配额） | P0 | 高（面板与归档可整体摘除） |
 | **P2** | 声明式 spec 插件（引擎 + spec 工具 + 提示词贡献） | P0 / P1 | 高（插件卸载即回退到 `task` 薄工具） |
-| **P3** | 共享任务列表（agent 团队远景：任务容器 + run 间消息） | P2 | 高（纯新增面） |
+| **P3** | 共享任务列表（agent 团队远景：任务容器 + run 间消息）——**已落地**：调用者身份（`ToolCallRequest`）+ run 通知桥（`RunObservationBridge`）+ todo 插件的认领/完成与「谁在做」；**run 间消息不做**（分册 D-P3-5） | P2 | 高（纯新增面） |
 
 每阶段独立可合并、可回滚；合并前必须同步第 12 节的文档清单。
 
@@ -351,7 +351,7 @@ public final class AgentRuntime {
 | `docs/constraints/react-compact.md` | **子代理（嵌套回合）** 整节按本设计重写：删「内联绝不进池」的禁令，改为「独立执行资源 + 等待不占槽」与 governor；补 run 身份与并行语义 |
 | `docs/architecture.md` | 「子代理」条目与「已知边界与后续项」：删「并行/链式/工作流编排明确不做」，改为「声明式 spec 支持、命令式脚本不做」；补 agent run 分层图 |
 | `docs/constraints/session-config.md` | `SessionKind.EPHEMERAL` 的落盘语义从「不落盘」改为「归档到独立命名空间、不可 resume」；补 governor 配置字段 |
-| `docs/constraints/extensions.md` | 明确内核原语是句柄式异步、不在关键路径同步回调插件；run 事件的呈现口径（运行时总线 + 外壳订阅） |
+| `docs/constraints/extensions.md` | 明确内核原语是句柄式异步、不在关键路径同步回调插件；run 事件的呈现口径（运行时总线 + 外壳订阅）；**P3 补**：工具请求携带的调用期设施（含调用者身份）与 `AgentRunProgressEvent` 的三条边界 |
 | `docs/constraints/shells.md` | 面板以 `PanelContribution` 提供；run 事件对三外壳的呈现口径 |
 | `docs/configuration.md` | 新增 `subAgent` 的 governor 字段与缺省值表 |
 | `README.md` | 如子代理的用户可见行为（并行、面板、配置）变化，同步 FAQ 与命令速查 |
@@ -365,5 +365,5 @@ public final class AgentRuntime {
 2. **归档命名空间的具体位置**：独立根目录 vs 会话目录下的独立子目录；独立配额的默认阈值取多少。
 3. **面板的版式与交互**：TUI 上占哪块区域、如何与现有「运行中的工具」区域共存、如何选中查看某个 run。
 4. **spec 的结构**：步骤/依赖/并发/聚合/静态条件的具体字段；由 workflow 插件在 P2 定义。
-5. **P3 的任务列表归属**：任务是内核容器还是插件容器；run 间消息是否需要（以及如何收窄）权限面。
+5. **P3 的任务列表归属**（**已答**：容器与任务列表都已存在，内核只需交出调用者身份，并发靠插件自己的锁；run 间消息**不做**，理由见 P3 分册 D-P3-5）
 6. **无进展检测**：是否引入、判据用什么（连续 N 轮零新增信息）。

@@ -12,11 +12,11 @@ import zcd.jellyfish.api.event.RegisterOptions;
 import zcd.jellyfish.api.extension.SessionDeleteRequest;
 import zcd.jellyfish.api.extension.SessionMessageSnapshot;
 import zcd.jellyfish.api.extension.SessionPersistRequest;
+import zcd.jellyfish.api.extension.SessionMessageSnapshot;
 import zcd.jellyfish.api.extension.SessionRestoreRequest;
 import zcd.jellyfish.api.extension.SessionRestoreResult;
 import zcd.jellyfish.api.extension.SessionSnapshot;
 import zcd.jellyfish.api.extension.SessionUsageSnapshot;
-import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.llm.LlmMessage;
@@ -82,7 +82,7 @@ class SessionManagerPersistenceTest {
     void create_should_notPersistNewSession() {
         List<SessionSnapshot> persisted = capturePersistedSnapshots();
 
-        Session session = manager.create(null, null, null, null);
+        Session session = manager.create(null, null, null);
 
         assertTrue(persisted.isEmpty(), "空会话在进程退出后自然消失");
         assertSame(session, manager.require(session.getSessionId()));
@@ -91,33 +91,31 @@ class SessionManagerPersistenceTest {
     @Test
     @DisplayName("没有持久化插件时一切照旧：没有插件是合法状态")
     void create_should_workWithoutAnyPersistPlugin() {
-        Session session = manager.create(null, null, null, null);
+        Session session = manager.create(null, null, null);
 
         assertEquals(1, manager.all().size());
         assertSame(session, manager.require(session.getSessionId()));
     }
 
     @Test
-    @DisplayName("追加消息、改标题、绑 agent、切模型、切模式都要落盘")
+    @DisplayName("追加消息、改标题、绑 agent、切模型都要落盘")
     void everyMutation_should_persist() {
         List<SessionSnapshot> persisted = capturePersistedSnapshots();
-        Session session = manager.create(null, null, null, null);
+        Session session = manager.create(null, null, null);
         String sessionId = session.getSessionId();
 
         manager.appendMessage(sessionId, LlmMessage.user("你好"), null);
         manager.updateTitle(sessionId, "标题");
         manager.bindAgent(sessionId, "coder");
         manager.switchModel(sessionId, "openai", "gpt-4o");
-        manager.setPermissionMode(sessionId, PermissionMode.PLAN);
 
-        // 5 次变更，各落一次（创建本身不落盘，回合外也走即时落盘）
-        assertEquals(5, persisted.size());
+        // 4 次变更，各落一次（创建本身不落盘，回合外也走即时落盘）
+        assertEquals(4, persisted.size());
         SessionSnapshot last = persisted.get(persisted.size() - 1);
         assertEquals("标题", last.getTitle());
         assertEquals("coder", last.getAgentId());
         assertEquals("openai", last.getProvider());
         assertEquals("gpt-4o", last.getModel());
-        assertEquals(PermissionMode.PLAN, last.getPermissionMode());
         assertEquals(1, last.getMessages().size());
     }
 
@@ -125,7 +123,7 @@ class SessionManagerPersistenceTest {
     @DisplayName("关闭会话前先落盘，且关闭后的快照仍带着最后一轮内容")
     void close_should_persistLastSnapshot() {
         List<SessionSnapshot> persisted = capturePersistedSnapshots();
-        String sessionId = manager.create(null, null, null, null).getSessionId();
+        String sessionId = manager.create(null, null, null).getSessionId();
         manager.appendMessage(sessionId, LlmMessage.assistant("再见"), null);
 
         manager.close(sessionId);
@@ -138,7 +136,7 @@ class SessionManagerPersistenceTest {
     @Test
     @DisplayName("落盘失败必须上抛：静默吞掉等于下一次启动悄悄少一段历史")
     void appendMessage_should_propagate_whenPersistFails() {
-        String sessionId = manager.create(null, null, null, null).getSessionId();
+        String sessionId = manager.create(null, null, null).getSessionId();
         extensions.contribute("broken", SessionPersistRequest.class, null, request -> {
             throw new JellyfishException("磁盘满了");
         }, RegisterOptions.DEFAULT);
@@ -157,7 +155,7 @@ class SessionManagerPersistenceTest {
             }
             return null;
         }, RegisterOptions.DEFAULT);
-        String sessionId = manager.create(null, null, null, null).getSessionId();
+        String sessionId = manager.create(null, null, null).getSessionId();
         failNext[0] = true;
 
         assertThrows(JellyfishException.class, () -> manager.close(sessionId));
@@ -173,7 +171,7 @@ class SessionManagerPersistenceTest {
             deleted.add(request.getSessionId());
             return null;
         }, RegisterOptions.DEFAULT);
-        String sessionId = manager.create(null, null, null, null).getSessionId();
+        String sessionId = manager.create(null, null, null).getSessionId();
 
         Session removed = manager.delete(sessionId);
 
@@ -187,7 +185,7 @@ class SessionManagerPersistenceTest {
     @DisplayName("删除不落盘最后快照：close 才落盘，delete 是「不要了」")
     void delete_should_notPersistSnapshot() {
         List<SessionSnapshot> persisted = capturePersistedSnapshots();
-        String sessionId = manager.create(null, null, null, null).getSessionId();
+        String sessionId = manager.create(null, null, null).getSessionId();
 
         manager.delete(sessionId);
 
@@ -200,7 +198,7 @@ class SessionManagerPersistenceTest {
         extensions.contribute("broken", SessionDeleteRequest.class, null, request -> {
             throw new JellyfishException("文件删不掉");
         }, RegisterOptions.DEFAULT);
-        String sessionId = manager.create(null, null, null, null).getSessionId();
+        String sessionId = manager.create(null, null, null).getSessionId();
 
         assertThrows(JellyfishException.class, () -> manager.delete(sessionId));
 
@@ -210,7 +208,7 @@ class SessionManagerPersistenceTest {
     @Test
     @DisplayName("删除当前会话后当前指针置空，外壳据此回首页")
     void delete_should_clearCurrent_whenCurrentDeleted() {
-        Session session = manager.create(null, null, null, null);
+        Session session = manager.create(null, null, null);
         manager.switchTo(session.getSessionId());
 
         manager.delete(session.getSessionId());
@@ -248,7 +246,7 @@ class SessionManagerPersistenceTest {
     @Test
     @DisplayName("会话已存在时保留内存里那一份，不覆盖正在进行的会话")
     void restore_should_skipExistingSession() {
-        Session existing = manager.create(null, null, null, null);
+        Session existing = manager.create(null, null, null);
         contributeRestore(SessionRestoreResult.of(Collections.singletonList(snapshot(existing.getSessionId()))));
 
         int imported = manager.restore();
@@ -289,7 +287,7 @@ class SessionManagerPersistenceTest {
     @DisplayName("应用压缩要落盘，且落盘的那一份已经带着摘要与边界")
     void applyCompaction_should_persist() {
         List<SessionSnapshot> persisted = capturePersistedSnapshots();
-        Session session = manager.create(null, null, null, null);
+        Session session = manager.create(null, null, null);
         String sessionId = session.getSessionId();
         manager.appendMessage(sessionId, LlmMessage.user("一"), null);
         manager.appendMessage(sessionId, LlmMessage.user("二"), null);
@@ -307,7 +305,7 @@ class SessionManagerPersistenceTest {
     @Test
     @DisplayName("压缩边界必须指向会话里真实存在的消息，否则当场抛错")
     void applyCompaction_should_reject_unknownBoundary() {
-        String sessionId = manager.create(null, null, null, null).getSessionId();
+        String sessionId = manager.create(null, null, null).getSessionId();
 
         assertThrows(JellyfishException.class,
                 () -> manager.applyCompaction(sessionId, "摘要", "ghost", 0));
@@ -316,7 +314,7 @@ class SessionManagerPersistenceTest {
     @Test
     @DisplayName("压缩落盘失败必须上抛：内存里已推进的边界会等下一次落盘补上")
     void applyCompaction_should_propagate_whenPersistFails() {
-        String sessionId = manager.create(null, null, null, null).getSessionId();
+        String sessionId = manager.create(null, null, null).getSessionId();
         manager.appendMessage(sessionId, LlmMessage.user("一"), null);
         String boundary = manager.messagesOf(sessionId).get(0).getMessageId();
         extensions.contribute("broken", SessionPersistRequest.class, null, request -> {
@@ -333,7 +331,7 @@ class SessionManagerPersistenceTest {
     @DisplayName("不产生消息的用量也要落盘：压缩的 token 花在会话之外")
     void recordUsage_should_persistWithoutAddingMessage() {
         List<SessionSnapshot> persisted = capturePersistedSnapshots();
-        String sessionId = manager.create(null, null, null, null).getSessionId();
+        String sessionId = manager.create(null, null, null).getSessionId();
 
         manager.recordUsage(sessionId, new zcd.jellyfish.infra.llm.LlmUsage(10, 5, 15));
 
@@ -358,7 +356,7 @@ class SessionManagerPersistenceTest {
     @DisplayName("回合内的消息追加只标脏，一条都不落盘")
     void appendMessage_should_defer_whenTurnInProgress() {
         List<SessionSnapshot> persisted = capturePersistedSnapshots();
-        String sessionId = manager.create(null, null, null, null).getSessionId();
+        String sessionId = manager.create(null, null, null).getSessionId();
 
         manager.beginTurn(sessionId);
         manager.appendMessage(sessionId, LlmMessage.user("一"), null);
@@ -371,7 +369,7 @@ class SessionManagerPersistenceTest {
     @DisplayName("整个回合只落一次，快照带着回合内的全部消息")
     void flush_should_persistOnceForWholeTurn() {
         List<SessionSnapshot> persisted = capturePersistedSnapshots();
-        String sessionId = manager.create(null, null, null, null).getSessionId();
+        String sessionId = manager.create(null, null, null).getSessionId();
 
         manager.beginTurn(sessionId);
         manager.appendMessage(sessionId, LlmMessage.user("一"), null);
@@ -386,7 +384,7 @@ class SessionManagerPersistenceTest {
     @DisplayName("flush 之后的追加回到即时落盘，不会一直攒着")
     void appendMessage_should_persistImmediately_afterFlush() {
         List<SessionSnapshot> persisted = capturePersistedSnapshots();
-        String sessionId = manager.create(null, null, null, null).getSessionId();
+        String sessionId = manager.create(null, null, null).getSessionId();
         manager.beginTurn(sessionId);
         manager.appendMessage(sessionId, LlmMessage.user("一"), null);
         manager.flush(sessionId);
@@ -399,7 +397,7 @@ class SessionManagerPersistenceTest {
     @Test
     @DisplayName("flush 落盘失败只记 WARN，不上抛：回合已收敛，失败补救不了")
     void flush_should_notPropagate_whenPersistFails() {
-        String sessionId = manager.create(null, null, null, null).getSessionId();
+        String sessionId = manager.create(null, null, null).getSessionId();
         extensions.contribute("broken", SessionPersistRequest.class, null, request -> {
             throw new JellyfishException("磁盘满了");
         }, RegisterOptions.DEFAULT);
@@ -422,7 +420,7 @@ class SessionManagerPersistenceTest {
             persisted.add(request.getSnapshot());
             return null;
         }, RegisterOptions.DEFAULT);
-        String sessionId = manager.create(null, null, null, null).getSessionId();
+        String sessionId = manager.create(null, null, null).getSessionId();
         manager.beginTurn(sessionId);
         manager.appendMessage(sessionId, LlmMessage.user("你好"), null);
         manager.flush(sessionId);
@@ -439,7 +437,7 @@ class SessionManagerPersistenceTest {
     @DisplayName("flushAll 也能落下来的回合正在进行的会话")
     void flushAll_should_persistDirtySession_whenTurnStillInProgress() {
         List<SessionSnapshot> persisted = capturePersistedSnapshots();
-        String sessionId = manager.create(null, null, null, null).getSessionId();
+        String sessionId = manager.create(null, null, null).getSessionId();
         manager.beginTurn(sessionId);
         manager.appendMessage(sessionId, LlmMessage.user("你好"), null);
 
@@ -471,7 +469,7 @@ class SessionManagerPersistenceTest {
             written.add(request.getSnapshot().getMessages().size());
             return null;
         }, RegisterOptions.DEFAULT);
-        String sessionId = manager.create(null, null, null, null).getSessionId();
+        String sessionId = manager.create(null, null, null).getSessionId();
 
         // When：两个线程各自追加一条消息，走的都是即时落盘
         Thread first = new Thread(() -> manager.appendMessage(sessionId, LlmMessage.user("一"), null));
@@ -511,7 +509,7 @@ class SessionManagerPersistenceTest {
             order.add("delete");
             return null;
         }, RegisterOptions.DEFAULT);
-        String sessionId = manager.create(null, null, null, null).getSessionId();
+        String sessionId = manager.create(null, null, null).getSessionId();
 
         // When：一次落盘卡在途中时删这个会话
         Thread persist = new Thread(() -> manager.appendMessage(sessionId, LlmMessage.user("一"), null));
@@ -574,7 +572,7 @@ class SessionManagerPersistenceTest {
         SessionMessageSnapshot message = SessionMessageSnapshot.of("m-1", 1L, LlmMessage.ROLE_USER, "你好",
                 null, null, null, null);
         return SessionSnapshot.of(sessionId, 1L, 2L, "标题", "coder", "openai", "gpt-4o",
-                PermissionMode.NORMAL, Collections.singletonList(message),
+                Collections.singletonList(message),
                 new SessionUsageSnapshot(0L, 0L, 0L, 0L, 0L, 0L));
     }
 }

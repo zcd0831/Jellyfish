@@ -1,7 +1,6 @@
 package zcd.jellyfish.cli;
 
 import zcd.jellyfish.api.JellyfishException;
-import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.server.ServerConfig;
 
 import java.util.ArrayList;
@@ -60,9 +59,6 @@ public final class StartupOptionsParser {
     /** 模型旗标。 */
     private static final String FLAG_MODEL = "--model";
 
-    /** 权限模式旗标。 */
-    private static final String FLAG_PERMISSION_MODE = "--mode";
-
     /** 端口旗标。 */
     private static final String FLAG_PORT = "--port";
 
@@ -80,12 +76,6 @@ public final class StartupOptionsParser {
 
     /** 详细日志旗标。 */
     private static final String FLAG_VERBOSE = "--verbose";
-
-    /** 权限模式取值：计划模式。 */
-    private static final String VALUE_PLAN = "plan";
-
-    /** 权限模式取值：常规模式。 */
-    private static final String VALUE_NORMAL = "normal";
 
     /** 端口上界。 */
     private static final int MAX_PORT = 65535;
@@ -106,8 +96,6 @@ public final class StartupOptionsParser {
             + "      --agent <agentId>   新会话绑定的 agent（仅 -cli；TUI 用 /agent，Server 用 POST /sessions）\n"
             + "      --model <provider/模型>\n"
             + "                          新会话指定的模型，必须含 \"/\"（仅 -cli；TUI 用 /model）\n"
-            + "      --mode <plan|normal>\n"
-            + "                          新会话的权限模式（仅 -cli；TUI 用 /mode）\n"
             + "      --port <端口>       服务器端口（仅 -server，等价于 -server 的位置参数）\n"
             + "      --host <地址>       服务器绑定地址（仅 -server），缺省 " + StartupOptions.DEFAULT_HOST + "\n"
             + "      --api-key <密钥>    服务器 API key（仅 -server）；不配则不鉴权，也可用环境变量\n"
@@ -151,7 +139,6 @@ public final class StartupOptionsParser {
         String agentId = null;
         String provider = null;
         String model = null;
-        PermissionMode permissionMode = null;
         Integer portOption = null;
         String hostOption = null;
         String apiKeyOption = null;
@@ -188,8 +175,6 @@ public final class StartupOptionsParser {
                 String[] split = splitModel(cursor.requireValue(arg));
                 provider = split[0];
                 model = split[1];
-            } else if (FLAG_PERMISSION_MODE.equals(arg)) {
-                permissionMode = parsePermissionMode(cursor.requireValue(arg));
             } else if (FLAG_PORT.equals(arg)) {
                 portOption = parsePort(FLAG_PORT, cursor.requireValue(arg));
             } else if (FLAG_HOST.equals(arg)) {
@@ -204,7 +189,7 @@ public final class StartupOptionsParser {
                 positionals.add(arg);
             }
         }
-        return build(mode, prompt, sessionId, agentId, provider, model, permissionMode, portOption, hostOption,
+        return build(mode, prompt, sessionId, agentId, provider, model, portOption, hostOption,
                 apiKeyOption, showThinking, showToolArgs, verbose, help, version, positionals);
     }
 
@@ -217,7 +202,6 @@ public final class StartupOptionsParser {
      * @param agentId        agent 标识，可为 {@code null}
      * @param provider       provider 名，可为 {@code null}
      * @param model          模型名，可为 {@code null}
-     * @param permissionMode 权限模式，可为 {@code null}
      * @param portOption     {@code --port} 取值，可为 {@code null}
      * @param hostOption     {@code --host} 取值，可为 {@code null}
      * @param showThinking   是否显示思考过程
@@ -230,7 +214,7 @@ public final class StartupOptionsParser {
      * @throws JellyfishException 参数组合非法时抛出
      */
     private static StartupOptions build(StartupOptions.Mode mode, String prompt, String sessionId, String agentId,
-                                        String provider, String model, PermissionMode permissionMode,
+                                        String provider, String model,
                                         Integer portOption, String hostOption, String apiKeyOption,
                                         boolean showThinking, boolean showToolArgs, boolean verbose,
                                         boolean help, boolean version, List<String> positionals) {
@@ -239,7 +223,7 @@ public final class StartupOptionsParser {
             StartupOptions.Mode displayMode = mode == null ? StartupOptions.Mode.CLI : mode;
             return StartupOptions.builder(displayMode)
                     .prompt(prompt).sessionId(sessionId).agentId(agentId).model(provider, model)
-                    .permissionMode(permissionMode).port(StartupOptions.DEFAULT_PORT).host(hostOption)
+                    .port(StartupOptions.DEFAULT_PORT).host(hostOption)
                     .apiKey(apiKeyOption).showThinking(showThinking).showToolArgs(showToolArgs)
                     .verbose(verbose).help(help).version(version)
                     .build();
@@ -253,8 +237,6 @@ public final class StartupOptionsParser {
                 "TUI 用 /agent 设置，Server 在 POST /sessions 请求体里指定");
         requireCliOnly(mode, provider != null || model != null, "--model",
                 "TUI 用 /model 设置，Server 在 POST /sessions 请求体里指定");
-        requireCliOnly(mode, permissionMode != null, "--mode",
-                "TUI 用 /mode 设置，Server 在 POST /sessions 请求体里指定");
         requireCliOnly(mode, showToolArgs, FLAG_SHOW_TOOL_ARGS,
                 "TUI 用 Ctrl+E / /toolargs 在界面上切（同样是全局开关）");
         if (mode == StartupOptions.Mode.SERVER && showThinking) {
@@ -266,9 +248,9 @@ public final class StartupOptionsParser {
         }
         if (mode == StartupOptions.Mode.SERVER && sessionId != null) {
             // Server 的会话由 HTTP path 显式寻址，启动参数指向单个会话没有意义；
-            // 而 -server 下 --agent/--model/--mode 降级为「新建会话的默认值」，因此仍允许。
+            // 而 -server 下 --agent/--model 降级为「新建会话的默认值」，因此仍允许。
             throw new JellyfishException("-server 不支持 --session：会话由 HTTP 接口按 id 寻址"
-                    + "（--agent/--model/--mode 仍可作为新建会话的默认值）");
+                    + "（--agent/--model 仍可作为新建会话的默认值）");
         }
         if (positionals.size() > 1) {
             throw new JellyfishException("位置参数过多：" + positionals);
@@ -285,7 +267,7 @@ public final class StartupOptionsParser {
         }
         return StartupOptions.builder(mode)
                 .prompt(prompt).sessionId(sessionId).agentId(agentId).model(provider, model)
-                .permissionMode(permissionMode).port(port).host(hostOption).apiKey(apiKeyOption)
+                .port(port).host(hostOption).apiKey(apiKeyOption)
                 .showThinking(showThinking).showToolArgs(showToolArgs)
                 .verbose(verbose).help(help).version(version).build();
     }
@@ -359,23 +341,6 @@ public final class StartupOptionsParser {
                     + "（可用 /model 命令查看可用模型）");
         }
         return new String[] {value.substring(0, slash).trim(), value.substring(slash + 1).trim()};
-    }
-
-    /**
-     * 解析权限模式取值，大小写不敏感。
-     *
-     * @param value 取值
-     * @return 权限模式
-     * @throws JellyfishException 取值不是 {@code plan} / {@code normal} 时抛出
-     */
-    private static PermissionMode parsePermissionMode(String value) {
-        if (VALUE_PLAN.equalsIgnoreCase(value)) {
-            return PermissionMode.PLAN;
-        }
-        if (VALUE_NORMAL.equalsIgnoreCase(value)) {
-            return PermissionMode.NORMAL;
-        }
-        throw new JellyfishException(FLAG_PERMISSION_MODE + " 只支持 plan 或 normal：" + value);
     }
 
     /**

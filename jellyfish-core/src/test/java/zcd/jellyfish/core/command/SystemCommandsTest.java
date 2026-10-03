@@ -27,7 +27,6 @@ import zcd.jellyfish.infra.llm.LlmStreamListener;
 import zcd.jellyfish.infra.model.ResolvedModel;
 import zcd.jellyfish.api.extension.CommandChoice;
 import zcd.jellyfish.api.extension.CommandResult;
-import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.command.CommandInfo;
 import zcd.jellyfish.infra.command.CommandManager;
@@ -143,9 +142,9 @@ class SystemCommandsTest {
                 .map(info -> info.getName()).collect(Collectors.toList());
 
         // Then
-        assertTrue(names.containsAll(Arrays.asList("help", "new", "session", "resume", "model", "agent", "mode",
+        assertTrue(names.containsAll(Arrays.asList("help", "new", "session", "resume", "model", "agent",
                 "status", "usage", "delete", "compact", "reload")));
-        assertEquals(12, names.size());
+        assertEquals(11, names.size());
     }
 
     @Test
@@ -353,37 +352,6 @@ class SystemCommandsTest {
     }
 
     @Test
-    void mode_with_argument_should_set_pending_default_when_session_missing() {
-        // Given
-        assertNull(sessionManager.current());
-
-        // When
-        CommandResult result = commandManager.execute("/mode plan");
-
-        // Then
-        assertEquals(CommandResult.Kind.OK, result.getKind());
-        assertNull(sessionManager.current());
-        assertEquals(PermissionMode.PLAN, sessionDefaults.snapshot().getPermissionMode());
-        assertEquals(PermissionMode.PLAN, sessionManager.createDefault().getPermissionMode());
-    }
-
-    @Test
-    void mode_without_argument_should_show_pending_default_when_session_missing() {
-        // Given：首页上先设过默认权限模式
-        commandManager.execute("/mode plan");
-
-        // When
-        CommandResult result = commandManager.execute("/mode");
-
-        // Then：候选要标出待生效的那个，否则 /mode 在首页敲下去是一片空白
-        assertEquals(CommandResult.Kind.OK, result.getKind());
-        assertTrue(result.getOutput().contains("plan"));
-        assertTrue(result.hasChoices());
-        assertTrue(result.getChoices().stream()
-                .anyMatch(choice -> "plan".equals(choice.getValue()) && choice.isCurrent()));
-    }
-
-    @Test
     void agent_without_argument_should_list_agents() {
         // Given
         when(agentManager.all()).thenReturn(Collections.singletonList(definition("coder")));
@@ -436,25 +404,6 @@ class SystemCommandsTest {
     }
 
     @Test
-    void mode_should_show_and_switch_permission_mode() {
-        // Given
-        commandManager.execute("/new");
-
-        // When
-        CommandResult show = commandManager.execute("/mode");
-        CommandResult plan = commandManager.execute("/mode plan");
-        CommandResult invalid = commandManager.execute("/mode bogus");
-
-        // Then
-        assertTrue(show.getOutput().contains("normal"));
-        assertTrue(show.hasChoices());
-        assertEquals("normal", show.getChoices().get(1).getValue());
-        assertTrue(show.getChoices().get(1).isCurrent());
-        assertEquals(PermissionMode.PLAN, sessionManager.current().getPermissionMode());
-        assertEquals(CommandResult.Kind.ERROR, invalid.getKind());
-    }
-
-    @Test
     void status_and_usage_should_render_current_session_state() {
         // Given
         commandManager.execute("/new");
@@ -473,7 +422,7 @@ class SystemCommandsTest {
     @Test
     void commands_should_report_error_when_no_current_session() {
         // When / Then：必须读会话内容的命令在无当前会话时应明确报错而不是 NPE。
-        // /mode 与 /model 不在此列：它们在首页降级为「设置下次会话的默认值」，是能执行的。
+        // /model 不在此列：它在首页降级为「设置下次会话的默认值」，是能执行的。
         assertEquals(CommandResult.Kind.ERROR, commandManager.execute("/status").getKind());
         assertEquals(CommandResult.Kind.ERROR, commandManager.execute("/usage").getKind());
         assertEquals(CommandResult.Kind.ERROR, commandManager.execute("/compact").getKind());
@@ -507,20 +456,6 @@ class SystemCommandsTest {
         // Then
         assertEquals(1, options.size());
         assertEquals("openai/gpt-4o", options.get(0).getValue());
-    }
-
-    @Test
-    void options_should_expose_mode_choices_with_current_mode_marked() {
-        // Given
-        commandManager.execute("/new");
-
-        // When
-        List<CommandChoice> options = commandManager.options("mode", null);
-
-        // Then：plan(0) / normal(1)，新会话默认 normal
-        assertEquals(2, options.size());
-        assertEquals("plan", options.get(0).getValue());
-        assertTrue(options.get(1).isCurrent());
     }
 
     @Test

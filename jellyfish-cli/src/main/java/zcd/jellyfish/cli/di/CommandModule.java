@@ -10,7 +10,7 @@ import dagger.Module;
  * <p>
  * <b>本模块不注册任何命令处理器</b>：系统命令与插件命令同源，都经 {@code ExtensionRegistry.handle(...)}
  * 落同一份注册表，命令域只负责解析、分发与清单。内核系统命令（{@code /help} / {@code /new} / {@code /session} /
- * {@code /resume} / {@code /model} / {@code /agent} / {@code /mode} / {@code /status} / {@code /usage} /
+ * {@code /resume} / {@code /model} / {@code /agent} / {@code /status} / {@code /usage} /
  * {@code /delete} / {@code /compact} / {@code /reload}）已由 {@code core/command/SystemCommands} 以 owner = {@code "core"} 注册；
  * {@code /todo} 归 {@code jellyfish-plugin-todo}，{@code /exit} 归外壳。
  *

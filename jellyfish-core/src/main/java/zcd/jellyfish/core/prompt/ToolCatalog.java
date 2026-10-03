@@ -58,7 +58,7 @@ import java.util.Objects;
  * {@code ToolExecutor} 直接调用它仍然会执行。清单是「建议」，权限是「约束」。
  * <p>
  * <b>内建的诊断路径不冻结</b>：{@link #tools()} 与 {@link #tools(ToolFilter)} 每次现取，
- * 它们看不到激活判定（没有会话就没有 agentId / 权限模式可供判定），仅供「现在装了什么」这类问题。
+ * 它们看不到激活判定（没有会话就没有会话级事实可供判定），仅供「现在装了什么」这类问题。
  *
  * @author zcd
  */
@@ -112,7 +112,7 @@ public class ToolCatalog {
      * 实时列出经过滤的工具定义。
      * <p>
      * 与 {@link #tools(Session, ToolFilter)} 的差别有两条：<b>不冻结</b>，且<b>不做工具激活判定</b>
-     * （没有会话就没有 agentId 与权限模式可交）。给「只想看看现在有什么」
+     * （没有会话就没有 agentId 可交）。给「只想看看现在有什么」
      * 的诊断类调用点用（也正因为不冻结，测试可以直接改注册表观察结果）。
      * <p>
      * <b>过滤只作用于清单</b>：被滤掉的工具仍然可以在执行期被调用（只是模型看不到它，
@@ -131,8 +131,8 @@ public class ToolCatalog {
      * 列出某个会话可用的工具定义：<b>清单在该会话首次用到时冻结</b>，此后不再变化。
      * <p>
      * 这是请求路径唯一该用的入口，理由见类注释。传会话而不是会话标识，是因为冻结那一刻还要把
-     * {@code agentId} 与权限模式交给工具激活判定；散着传三个都可能为 {@code null} 的字符串，
-     * 调用点很容易传错位，而会话本就是这三者的唯一来源。
+     * 会话身份交给工具激活判定；散着传几个都可能为 {@code null} 的字符串，
+     * 调用点很容易传错位，而会话本就是这些事实的唯一来源。
      *
      * @param session 会话运行态；{@code null} 表示无从归属，退化成实时取一份（不冻结）
      * @param filter  过滤器，不可为 {@code null}
@@ -232,7 +232,7 @@ public class ToolCatalog {
             return false;
         }
         ToolActivationRequest request = new ToolActivationRequest(session.getSessionId(), session.getAgentId(),
-                descriptor, session.getPermissionMode());
+                descriptor);
         for (HandlerBinding<ToolActivationRequest, ToolActivation> binding : bindings) {
             ToolActivation activation;
             try {

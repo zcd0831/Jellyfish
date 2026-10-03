@@ -2,7 +2,6 @@ package zcd.jellyfish.api.event.notification;
 
 import zcd.jellyfish.api.event.AbstractJellyfishEvent;
 import zcd.jellyfish.api.extension.PermissionDecision;
-import zcd.jellyfish.api.extension.PermissionMode;
 
 /**
  * 权限判定审计事件：每次判定结束后广播，<b>放行也发</b>。
@@ -21,9 +20,6 @@ public final class PermissionDecidedEvent extends AbstractJellyfishEvent {
     /** 被检查的工具名。 */
     private final String toolName;
 
-    /** 判定时的会话权限模式。 */
-    private final PermissionMode mode;
-
     /** 最终判定结论。 */
     private final PermissionDecision.Outcome outcome;
 
@@ -38,19 +34,17 @@ public final class PermissionDecidedEvent extends AbstractJellyfishEvent {
      *
      * @param agentId   发起调用的 agentId，可为 {@code null}
      * @param toolName  被检查的工具名
-     * @param mode      判定时的会话权限模式
      * @param outcome   最终判定结论（ASK 已由内核降级，不会出现在事件里）
      * @param reason    判定理由，可为 {@code null}
      * @param source    判定来源：{@code "core"} 或拦截插件的 pluginId
      * @param sessionId 会话标识，可为 {@code null}
      */
-    public PermissionDecidedEvent(String agentId, String toolName, PermissionMode mode,
+    public PermissionDecidedEvent(String agentId, String toolName,
                                   PermissionDecision.Outcome outcome, String reason, String source,
                                   String sessionId) {
         super(sessionId);
         this.agentId = agentId;
         this.toolName = toolName;
-        this.mode = mode;
         this.outcome = outcome;
         this.reason = reason;
         this.source = source;
@@ -72,15 +66,6 @@ public final class PermissionDecidedEvent extends AbstractJellyfishEvent {
      */
     public String getToolName() {
         return toolName;
-    }
-
-    /**
-     * 获取判定时的会话权限模式。
-     *
-     * @return 权限模式
-     */
-    public PermissionMode getMode() {
-        return mode;
     }
 
     /**

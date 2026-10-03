@@ -11,7 +11,6 @@ import zcd.jellyfish.api.event.RegisterOptions;
 import zcd.jellyfish.api.extension.ExtensionHandler;
 import zcd.jellyfish.api.extension.PermissionCheckRequest;
 import zcd.jellyfish.api.extension.PermissionDecision;
-import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.api.extension.ToolCallRequest;
 import zcd.jellyfish.api.extension.ToolCallResult;
 import zcd.jellyfish.core.tool.ToolExecutor;
@@ -149,8 +148,7 @@ class ToolCallIdentityTest {
         // Given：一个顶层回合派出了一个子 run（子会话 + 该 run 的上下文）
         Session parent = sessionManager.createDefault();
         runContexts.open(1, 3);
-        Session child = sessionManager.createEphemeral(parent.getSessionId(), "worker", null, null,
-                PermissionMode.NORMAL);
+        Session child = sessionManager.createEphemeral(parent.getSessionId(), "worker", null, null);
         runContexts.set(new RunContext(new RunTree(1, 3, 0L, 0L), 1, "run-1", "root-1", null));
 
         // When

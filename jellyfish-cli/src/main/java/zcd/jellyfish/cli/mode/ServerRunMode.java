@@ -34,7 +34,7 @@ import java.util.Objects;
  * {@code ExitCodes} 都定义在 {@code jellyfish-cli}，放进去会形成 {@code cli → server → cli} 循环依赖。
  * <p>
  * <b>启动参数在 Server 下的含义</b>：{@code --port} / {@code --host} 决定绑定；{@code --agent} /
- * {@code --model} / {@code --mode} 是<b>新建会话的默认值</b>（落进 {@link ServerConfig}），
+ * {@code --model} 是<b>新建会话的默认值</b>（落进 {@link ServerConfig}），
  * 不在启动期落到任何会话上；{@code --session} 已在参数解析阶段判为用法错误。
  * <p>
  * <b>为什么绑定失败退 3 而不是 4</b>：端口被占用是「启动条件不具备」，与配置写错同类，脚本应当直接放弃；

@@ -209,8 +209,10 @@
   `jellyfish.json` 里插件配置段的变化由 `/reload` 按差异重启对应插件。
 - **插件启用 / 禁用名单与逐插件配置段**在 `jellyfish.json` 的 `plugins` 段；字段语义与合并规则见
   [configuration.md](../configuration.md) 的 `plugins` 一节。
-- **只读白名单**：只有用户配置一个来源（`plugins.configurations.<pluginId>.readOnlyTools`），工具描述符里
-  没有「只读」这个字段；语义见 [permissions.md](permissions.md)。
+- **模式类授权的名单不回内核**：内核不持有「模式」概念（没有字段、没有枚举、没有 `/mode`）。
+  按模式收窄的授权是插件的一条普通拦截，名单也就归插件自己的配置段（官方 plan 插件即
+  `plugins.configurations.jellyfish-plan.readOnlyTools`）；工具描述符里没有「只读」这个字段，语义见
+  [permissions.md](permissions.md)。
 
 ## 改动检查清单
 

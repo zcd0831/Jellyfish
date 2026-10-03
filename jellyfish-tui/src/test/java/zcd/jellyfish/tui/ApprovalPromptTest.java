@@ -3,7 +3,6 @@ package zcd.jellyfish.tui;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import zcd.jellyfish.api.extension.CommandChoice;
-import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.infra.permission.ApprovalChannel;
 import zcd.jellyfish.tui.text.VisualLine;
 
@@ -74,7 +73,7 @@ class ApprovalPromptTest {
         // Given
         Map<String, Object> arguments = new LinkedHashMap<String, Object>();
         arguments.put("path", "src/main/App.java");
-        ApprovalChannel.Pending pending = pending("write_file", arguments, PermissionMode.PLAN);
+        ApprovalChannel.Pending pending = pending("write_file", arguments);
 
         // When
         List<String> body = texts(render(pending, activePicker()));
@@ -83,7 +82,7 @@ class ApprovalPromptTest {
         assertTrue(body.get(0).startsWith(" 工具 write_file"), body.toString());
         assertTrue(body.get(1).contains("\"path\": \"src/main/App.java\""), body.toString());
         assertTrue(body.stream().anyMatch(line -> line.contains("策略要求人工审批")), body.toString());
-        assertTrue(body.stream().anyMatch(line -> line.contains("模式 plan")), body.toString());
+        assertTrue(body.stream().anyMatch(line -> line.contains("会话 a1b2c3d4")), body.toString());
     }
 
     @Test
@@ -95,7 +94,7 @@ class ApprovalPromptTest {
         arguments.put("path", "a.txt");
 
         // When
-        String body = String.join("\n", texts(render(pending("bash", arguments, null), activePicker())));
+        String body = String.join("\n", texts(render(pending("bash", arguments), activePicker())));
 
         // Then
         assertTrue(body.contains("sk-real-secret"), body);
@@ -107,7 +106,7 @@ class ApprovalPromptTest {
     @DisplayName("参数空时显示占位而不是空括号")
     void render_should_showPlaceholder_when_noArguments() {
         // When
-        List<String> body = texts(render(pending("list_dir", null, null), activePicker()));
+        List<String> body = texts(render(pending("list_dir", null), activePicker()));
 
         // Then
         assertTrue(body.get(1).contains("-"), body.toString());
@@ -121,7 +120,7 @@ class ApprovalPromptTest {
         arguments.put("path", "a\u001b[2Jb\rc\u202ed.txt");
 
         // When
-        String body = String.join("", texts(render(pending("write_file", arguments, null), activePicker())));
+        String body = String.join("", texts(render(pending("write_file", arguments), activePicker())));
 
         // Then
         assertFalse(body.contains("\u001b"), "ESC 必须被剔除");
@@ -142,7 +141,7 @@ class ApprovalPromptTest {
         arguments.put("content", content.toString());
 
         // When
-        List<String> body = texts(render(pending("write_file", arguments, null), activePicker()));
+        List<String> body = texts(render(pending("write_file", arguments), activePicker()));
 
         // Then：省略提示出现，且没有任何一行超出可用列数
         assertTrue(body.stream().anyMatch(line -> line.contains("已省略")), body.toString());
@@ -156,7 +155,7 @@ class ApprovalPromptTest {
     @DisplayName("选择页未激活时不渲染选项区，只留字段区")
     void render_should_skipOptions_when_pickerInactive() {
         // When
-        List<String> body = texts(ApprovalPrompt.render(pending("write_file", null, null),
+        List<String> body = texts(ApprovalPrompt.render(pending("write_file", null),
                 new CommandChoicePicker(), WIDTH));
 
         // Then
@@ -168,7 +167,7 @@ class ApprovalPromptTest {
     @DisplayName("选项区的键位提示是审批语义：Esc 是「拒绝并中断」而不是「取消」")
     void render_should_useApprovalHint() {
         // When
-        List<String> body = texts(render(pending("write_file", null, null), activePicker()));
+        List<String> body = texts(render(pending("write_file", null), activePicker()));
 
         // Then
         assertTrue(body.stream().anyMatch(line -> line.contains("允许一次")), body.toString());
@@ -186,7 +185,7 @@ class ApprovalPromptTest {
     void render_should_skipReasonLine_whenReasonBlank() {
         // When
         ApprovalChannel.Pending blank = new ApprovalChannel.Pending("a1b2c3d4e5f6", "agent-a",
-                "write_file", null, PermissionMode.NORMAL, "  ");
+                "write_file", null, "  ");
         List<String> body = texts(render(blank, activePicker()));
 
         // Then
@@ -220,12 +219,10 @@ class ApprovalPromptTest {
      *
      * @param toolName  工具名
      * @param arguments 参数
-     * @param mode      权限模式，可为 {@code null}
      * @return 请求
      */
-    private static ApprovalChannel.Pending pending(String toolName, Map<String, Object> arguments,
-                                                   PermissionMode mode) {
-        return new ApprovalChannel.Pending("a1b2c3d4e5f6", "agent-a", toolName, arguments, mode,
+    private static ApprovalChannel.Pending pending(String toolName, Map<String, Object> arguments) {
+        return new ApprovalChannel.Pending("a1b2c3d4e5f6", "agent-a", toolName, arguments,
                 "agent 策略要求人工审批该工具");
     }
 

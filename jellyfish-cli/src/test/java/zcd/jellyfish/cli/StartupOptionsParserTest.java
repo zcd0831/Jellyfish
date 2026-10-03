@@ -5,7 +5,6 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import zcd.jellyfish.api.JellyfishException;
-import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.server.ServerConfig;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -200,15 +199,6 @@ class StartupOptionsParserTest {
 
     @ParameterizedTest
     @ValueSource(strings = {"-tui", "-server"})
-    void parse_should_fail_when_permission_mode_given_outside_cli(String mode) {
-        JellyfishException error = assertThrows(JellyfishException.class,
-                () -> StartupOptionsParser.parse(new String[] {mode, "--mode", "plan"}));
-
-        assertTrue(error.getMessage().contains("--mode 只在 -cli 下被接受"));
-    }
-
-    @ParameterizedTest
-    @ValueSource(strings = {"-tui", "-server"})
     void parse_should_fail_when_print_given_outside_cli(String mode) {
         JellyfishException error = assertThrows(JellyfishException.class,
                 () -> StartupOptionsParser.parse(new String[] {mode, "-p", "hello"}));
@@ -304,27 +294,6 @@ class StartupOptionsParserTest {
         assertEquals("a/b/c", options.getModel());
     }
 
-    @ParameterizedTest
-    @CsvSource({
-            "plan, PLAN",
-            "PLAN, PLAN",
-            "normal, NORMAL",
-            "Normal, NORMAL"
-    })
-    void parse_should_resolve_permission_mode_case_insensitively(String value, PermissionMode expected) {
-        StartupOptions options = StartupOptionsParser.parse(new String[] {"-cli", "--mode", value});
-
-        assertEquals(expected, options.getPermissionMode());
-    }
-
-    @Test
-    void parse_should_fail_when_permission_mode_invalid() {
-        JellyfishException error = assertThrows(JellyfishException.class,
-                () -> StartupOptionsParser.parse(new String[] {"-cli", "--mode", "yolo"}));
-
-        assertTrue(error.getMessage().contains("只支持 plan 或 normal"));
-    }
-
     @Test
     void parse_should_keep_agent_and_session() {
         StartupOptions options = StartupOptionsParser.parse(
@@ -359,7 +328,6 @@ class StartupOptionsParserTest {
         assertFalse(options.isVerbose());
         assertFalse(options.isHelp());
         assertFalse(options.isVersion());
-        assertNull(options.getPermissionMode());
         assertNull(options.getAgentId());
         assertNull(options.getSessionId());
         assertNull(options.getProvider());

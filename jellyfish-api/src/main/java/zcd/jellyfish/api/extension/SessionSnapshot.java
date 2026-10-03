@@ -45,9 +45,6 @@ public final class SessionSnapshot {
     /** 会话当前 model 名，{@code null} 表示跟随默认。 */
     private final String model;
 
-    /** 会话当前权限模式，不可为 {@code null}。 */
-    private final PermissionMode permissionMode;
-
     /** 会话消息列表，可为 {@code null}（等价空列表）。 */
     private final List<SessionMessageSnapshot> messages;
 
@@ -83,7 +80,7 @@ public final class SessionSnapshot {
      * 而 Jackson 只在「恰好一个可见构造器」时才认它为隐式创建器；多出一个重载会让整个快照类型
      * <b>直接反序列化失败</b>，代价是整段会话读不回来。因此新增字段时不要加「兼容构造器」，
      * 兼容入口请改用静态工厂（见
-     * {@link #of(String, long, long, String, String, String, String, PermissionMode, List, SessionUsageSnapshot)}）。
+     * {@link #of(String, long, long, String, String, String, String, List, SessionUsageSnapshot)}）。
      *
      * @param sessionId      会话标识，不可为空白
      * @param createdAt      创建时间戳（epoch millis）
@@ -92,7 +89,6 @@ public final class SessionSnapshot {
      * @param agentId        agentId，可为 {@code null}
      * @param provider       provider 名，可为 {@code null}
      * @param model          model 名，可为 {@code null}
-     * @param permissionMode 权限模式，不可为 {@code null}
      * @param messages       消息列表，可为 {@code null}
      * @param usage          累计用量，可为 {@code null}
      * @param compaction     压缩摘要，可为 {@code null}
@@ -100,18 +96,15 @@ public final class SessionSnapshot {
      * @param parentSessionId 派生该会话的父会话标识，可为 {@code null}
      * @param forkPointMessageId 分支点消息标识，可为 {@code null}
      * @param extensionEntries 扩展条目，可为 {@code null}（等价空列表）
-     * @throws JellyfishException 会话标识为空白或权限模式为 {@code null} 时抛出
+     * @throws JellyfishException 会话标识为空白时抛出
      */
     public SessionSnapshot(String sessionId, long createdAt, long updatedAt, String title, String agentId,
-                           String provider, String model, PermissionMode permissionMode,
+                           String provider, String model,
                            List<SessionMessageSnapshot> messages, SessionUsageSnapshot usage,
                            SessionCompactionSnapshot compaction, SessionKind kind, String parentSessionId,
                            String forkPointMessageId, List<SessionExtensionEntry> extensionEntries) {
         if (sessionId == null || sessionId.trim().isEmpty()) {
             throw new JellyfishException("session id must not be blank");
-        }
-        if (permissionMode == null) {
-            throw new JellyfishException("permission mode must not be null");
         }
         this.sessionId = sessionId;
         this.createdAt = createdAt;
@@ -120,7 +113,6 @@ public final class SessionSnapshot {
         this.agentId = agentId;
         this.provider = provider;
         this.model = model;
-        this.permissionMode = permissionMode;
         this.messages = copyMessages(messages);
         this.usage = usage;
         this.compaction = compaction;
@@ -134,7 +126,7 @@ public final class SessionSnapshot {
      * 构造不含压缩摘要、会话种类与扩展条目的会话快照（旧签名的兼容入口）。
      * <p>
      * 与构造器等价，只是不能写成构造器重载（见
-     * {@link #SessionSnapshot(String, long, long, String, String, String, String, PermissionMode, List,
+     * {@link #SessionSnapshot(String, long, long, String, String, String, String, List,
      * SessionUsageSnapshot, SessionCompactionSnapshot, SessionKind, String, String, List)}）。
      * <p>
      * <b>缺的那四个字段按「普通根会话、无扩展条目」补</b>：老快照没有它们，这就是它们的含义——
@@ -147,18 +139,17 @@ public final class SessionSnapshot {
      * @param agentId        agentId，可为 {@code null}
      * @param provider       provider 名，可为 {@code null}
      * @param model          model 名，可为 {@code null}
-     * @param permissionMode 权限模式，不可为 {@code null}
      * @param messages       消息列表，可为 {@code null}
      * @param usage          累计用量，可为 {@code null}
      * @return 不含压缩摘要的会话快照
-     * @throws JellyfishException 会话标识为空白或权限模式为 {@code null} 时抛出
+     * @throws JellyfishException 会话标识为空白时抛出
      */
     public static SessionSnapshot of(String sessionId, long createdAt, long updatedAt, String title,
                                      String agentId, String provider, String model,
-                                     PermissionMode permissionMode, List<SessionMessageSnapshot> messages,
+                                     List<SessionMessageSnapshot> messages,
                                      SessionUsageSnapshot usage) {
         return new SessionSnapshot(sessionId, createdAt, updatedAt, title, agentId, provider, model,
-                permissionMode, messages, usage, null, SessionKind.NORMAL, null, null, null);
+                messages, usage, null, SessionKind.NORMAL, null, null, null);
     }
 
     /**
@@ -222,15 +213,6 @@ public final class SessionSnapshot {
      */
     public String getModel() {
         return model;
-    }
-
-    /**
-     * 获取会话当前权限模式。
-     *
-     * @return 权限模式，保证非 {@code null}
-     */
-    public PermissionMode getPermissionMode() {
-        return permissionMode;
     }
 
     /**

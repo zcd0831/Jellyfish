@@ -2,11 +2,10 @@ package zcd.jellyfish.infra.session;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.api.extension.SessionMessageSnapshot;
-import zcd.jellyfish.api.extension.ToolMetadata;
 import zcd.jellyfish.api.extension.SessionSnapshot;
 import zcd.jellyfish.api.extension.SessionToolCallSnapshot;
+import zcd.jellyfish.api.extension.ToolMetadata;
 import zcd.jellyfish.infra.llm.LlmMessage;
 import zcd.jellyfish.infra.llm.LlmToolCall;
 import zcd.jellyfish.infra.llm.LlmUsage;
@@ -46,7 +45,6 @@ class SessionSnapshotsTest {
         assertEquals("coder", snapshot.getAgentId());
         assertEquals("openai", snapshot.getProvider());
         assertEquals("gpt-4o", snapshot.getModel());
-        assertEquals(PermissionMode.PLAN, snapshot.getPermissionMode());
         assertEquals(4, snapshot.getMessages().size());
         assertNotNull(snapshot.getUsage());
         // 每条消息都算一次调用计数，未返回用量的消息也计入
@@ -120,7 +118,7 @@ class SessionSnapshotsTest {
     @Test
     @DisplayName("从未压缩过的会话回放后压缩仍为空，不能被填成空摘要")
     void restore_should_keepMissingCompactionAsNull() {
-        Session session = new Session("session-3", null, null, null, null, CREATED_AT);
+        Session session = new Session("session-3", null, null, null, CREATED_AT);
 
         Session restored = Session.restore(SessionSnapshots.capture(session));
 
@@ -154,7 +152,7 @@ class SessionSnapshotsTest {
     @Test
     @DisplayName("为空的标题与 agent 必须保持为空，不能被填成默认值")
     void restore_should_keepNullFields_when_absent() {
-        Session session = new Session("session-2", null, null, null, null, CREATED_AT);
+        Session session = new Session("session-2", null, null, null, CREATED_AT);
 
         Session restored = Session.restore(SessionSnapshots.capture(session));
 
@@ -162,7 +160,6 @@ class SessionSnapshotsTest {
         assertNull(restored.getAgentId());
         assertNull(restored.getProvider());
         assertNull(restored.getModel());
-        assertEquals(PermissionMode.NORMAL, restored.getPermissionMode());
         assertEquals(0, restored.size());
     }
 
@@ -184,7 +181,7 @@ class SessionSnapshotsTest {
      * @return 会话运行态
      */
     private static Session fullSession() {
-        Session session = new Session("session-1", "coder", "openai", "gpt-4o", PermissionMode.PLAN, CREATED_AT);
+        Session session = new Session("session-1", "coder", "openai", "gpt-4o", CREATED_AT);
         session.setTitle("标题");
         session.append(SessionMessage.of(LlmMessage.user("你好")));
         session.append(SessionMessage.of(
@@ -214,7 +211,6 @@ class SessionSnapshotsTest {
         assertEquals(expected.getAgentId(), actual.getAgentId());
         assertEquals(expected.getProvider(), actual.getProvider());
         assertEquals(expected.getModel(), actual.getModel());
-        assertEquals(expected.getPermissionMode(), actual.getPermissionMode());
         assertEquals(expected.getUsage().getPromptTokens(), actual.getUsage().getPromptTokens());
         assertEquals(expected.getUsage().getCompletionTokens(), actual.getUsage().getCompletionTokens());
         assertEquals(expected.getUsage().getTotalTokens(), actual.getUsage().getTotalTokens());

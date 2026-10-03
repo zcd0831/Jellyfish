@@ -1,6 +1,5 @@
 package zcd.jellyfish.server.dto;
 
-import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.api.extension.SessionUsageSnapshot;
 
 /**
@@ -33,9 +32,6 @@ public final class SessionSummary {
     /** 模型名，可为 {@code null}。 */
     private final String model;
 
-    /** 权限模式。 */
-    private final PermissionMode permissionMode;
-
     /** 创建时间戳（epoch millis）。 */
     private final long createdAt;
 
@@ -56,21 +52,19 @@ public final class SessionSummary {
      * @param agentId        agentId，可为 {@code null}
      * @param provider       provider 名，可为 {@code null}
      * @param model          模型名，可为 {@code null}
-     * @param permissionMode 权限模式
      * @param createdAt      创建时间戳
      * @param updatedAt      最后变更时间戳
      * @param messageCount   消息条数
      * @param usage          累计用量
      */
     public SessionSummary(String sessionId, String title, String agentId, String provider, String model,
-                          PermissionMode permissionMode, long createdAt, long updatedAt, int messageCount,
+                          long createdAt, long updatedAt, int messageCount,
                           SessionUsageSnapshot usage) {
         this.sessionId = sessionId;
         this.title = title;
         this.agentId = agentId;
         this.provider = provider;
         this.model = model;
-        this.permissionMode = permissionMode;
         this.createdAt = createdAt;
         this.updatedAt = updatedAt;
         this.messageCount = messageCount;
@@ -120,15 +114,6 @@ public final class SessionSummary {
      */
     public String getModel() {
         return model;
-    }
-
-    /**
-     * 获取权限模式。
-     *
-     * @return 权限模式
-     */
-    public PermissionMode getPermissionMode() {
-        return permissionMode;
     }
 
     /**

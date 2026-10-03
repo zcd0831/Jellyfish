@@ -35,25 +35,20 @@ public final class PermissionCheckRequest extends ExtensionRequest<PermissionVer
     /** 工具参数，只读。 */
     private final Map<String, Object> arguments;
 
-    /** 当时的会话权限模式。 */
-    private final PermissionMode mode;
-
     /**
      * 构造权限检查请求。
      * <p>
      * {@code agentId} 允许为空：未绑定 agent 时视为「无策略」，由内核按 fail-open 处理，
-     * 因此这里不做校验；{@code mode} 为空时按 {@link PermissionMode#NORMAL} 处理，
-     * 避免调用点与处理器到处判空。
+     * 因此这里不做校验。
      *
      * @param agentId   发起调用的 agentId，可为 {@code null}
      * @param toolName  待检查的工具名，不可为空白
      * @param arguments 工具参数，可为 {@code null}
-     * @param mode      会话权限模式，可为 {@code null}
      * @param sessionId 会话标识，可为 {@code null}
      * @throws JellyfishException 工具名为空白时抛出
      */
     public PermissionCheckRequest(String agentId, String toolName, Map<String, Object> arguments,
-                                  PermissionMode mode, String sessionId) {
+                                  String sessionId) {
         super(PermissionVerdict.class, sessionId);
         if (toolName == null || toolName.trim().isEmpty()) {
             throw new JellyfishException("tool name must not be blank");
@@ -63,11 +58,10 @@ public final class PermissionCheckRequest extends ExtensionRequest<PermissionVer
         this.arguments = arguments == null
                 ? Collections.<String, Object>emptyMap()
                 : Collections.unmodifiableMap(new LinkedHashMap<>(arguments));
-        this.mode = mode == null ? PermissionMode.NORMAL : mode;
     }
 
     /**
-     * 构造常规模式下的进程级请求（无会话）。
+     * 构造进程级请求（无会话）。
      *
      * @param agentId   发起调用的 agentId，可为 {@code null}
      * @param toolName  待检查的工具名，不可为空白
@@ -75,7 +69,7 @@ public final class PermissionCheckRequest extends ExtensionRequest<PermissionVer
      * @throws JellyfishException 工具名为空白时抛出
      */
     public PermissionCheckRequest(String agentId, String toolName, Map<String, Object> arguments) {
-        this(agentId, toolName, arguments, null, null);
+        this(agentId, toolName, arguments, null);
     }
 
     @Override
@@ -108,14 +102,5 @@ public final class PermissionCheckRequest extends ExtensionRequest<PermissionVer
      */
     public Map<String, Object> getArguments() {
         return arguments;
-    }
-
-    /**
-     * 获取会话权限模式。
-     *
-     * @return 权限模式，保证非 {@code null}
-     */
-    public PermissionMode getMode() {
-        return mode;
     }
 }

@@ -87,7 +87,7 @@ class SubAgentArchiveTest {
     @Test
     void archive_should_write_runIdentity_andFullTranscript() throws IOException {
         // Given：一个已终结的 run 与一个带消息的子会话
-        Session child = sessionManager.createEphemeral("s-parent", "coder", null, null, null);
+        Session child = sessionManager.createEphemeral("s-parent", "coder", null, null);
         sessionManager.appendMessage(child.getSessionId(),
                 new LlmMessage("assistant", "查完了，结论如下", null, null,
                         Collections.emptyList()),

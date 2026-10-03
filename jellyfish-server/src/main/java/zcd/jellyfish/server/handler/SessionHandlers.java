@@ -2,7 +2,6 @@ package zcd.jellyfish.server.handler;
 
 import io.undertow.server.HttpServerExchange;
 import zcd.jellyfish.api.JellyfishException;
-import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.api.extension.SessionSnapshot;
 import zcd.jellyfish.api.extension.SessionUsageSnapshot;
 import zcd.jellyfish.infra.agent.AgentManager;
@@ -88,10 +87,9 @@ public final class SessionHandlers {
         String agentId = text(request == null ? null : request.getAgentId());
         String provider = text(request == null ? null : request.getProvider());
         String model = text(request == null ? null : request.getModel());
-        PermissionMode mode = parseMode(request == null ? null : request.getPermissionMode());
         requireAgentExists(agentId);
         requireModelExists(provider, model);
-        Session session = sessions.create(agentId, provider, model, mode);
+        Session session = sessions.create(agentId, provider, model);
         Responses.writeJson(exchange, Responses.CREATED, SessionSnapshots.capture(session));
     }
 
@@ -188,38 +186,8 @@ public final class SessionHandlers {
                 usage.getPromptTokens(), usage.getCompletionTokens(), usage.getTotalTokens(), usage.getLlmCalls(),
                 usage.getCacheReadTokens(), usage.getCacheWriteTokens());
         return new SessionSummary(session.getSessionId(), session.getTitle(), session.getAgentId(),
-                session.getProvider(), session.getModel(), session.getPermissionMode(), session.getCreatedAt(),
+                session.getProvider(), session.getModel(), session.getCreatedAt(),
                 session.getUpdatedAt(), session.size(), usageSnapshot);
-    }
-
-    /**
-     * 解析权限模式：空值取缺省，非法值回 400。
-     *
-     * @param raw       请求体里的模式名，可为 {@code null}
-     * @param fallback  缺省模式，可为 {@code null}
-     * @return 权限模式，可能为 {@code null}（两者都为空时）
-     * @throws ApiException 模式名非法时抛出
-     */
-    /**
-     * 解析权限模式名。
-     * <p>
-     * <b>未给定返回 {@code null} 而不是 NORMAL</b>：{@code null} 交给内核按会话默认处理，
-     * 这里自作主张填一个默认值，会把「内核的默认」与「HTTP 层的默认」变成两处知识。
-     *
-     * @param raw 权限模式名，可为 {@code null}
-     * @return 权限模式；未给定时为 {@code null}
-     * @throws ApiException 取值不是已知权限模式时抛出
-     */
-    private static PermissionMode parseMode(String raw) {
-        if (raw == null || raw.trim().isEmpty()) {
-            return null;
-        }
-        try {
-            return PermissionMode.valueOf(raw.trim().toUpperCase());
-        } catch (IllegalArgumentException e) {
-            throw new ApiException(Responses.BAD_REQUEST, Responses.CODE_BAD_REQUEST,
-                    "权限模式只能是 NORMAL 或 PLAN，收到：" + raw);
-        }
     }
 
     /**

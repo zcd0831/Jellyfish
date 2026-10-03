@@ -7,7 +7,7 @@ package zcd.jellyfish.server;
  * {@code jellyfish-cli}，形成 {@code cli → server → cli} 循环。这里只保留「Server 真正需要的那几项」，
  * 由 {@code ServerRunMode} 从 {@code StartupOptions} 映射过来——映射本身很薄，而依赖方向不能反转。
  * <p>
- * <b>没有「新建会话的缺省 agent / 模型 / 权限模式」</b>：那几项由调用方在
+ * <b>没有「新建会话的缺省 agent / 模型」</b>：那两项由调用方在
  * {@code POST /sessions} 的请求体里直接给定，不给就在内核里按配置默认值解析（模型默认值归
  * {@code models.json}，agent 默认值恒为内置）。服务端再存一份启动参数默认值，只会多出
  * 「到底哪一层生效」这本账。

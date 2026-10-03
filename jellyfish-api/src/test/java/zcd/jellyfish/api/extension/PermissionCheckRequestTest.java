@@ -12,7 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * {@link PermissionCheckRequest} 的单元测试：验证类型级路由、结果类型、参数只读与模式缺省。
+ * {@link PermissionCheckRequest} 的单元测试：验证类型级路由、结果类型与参数只读。
  *
  * @author zcd
  */
@@ -37,23 +37,20 @@ class PermissionCheckRequestTest {
     }
 
     @Test
-    void constructor_should_default_mode_to_normal_and_session_to_null() {
+    void constructor_should_default_session_to_null() {
         // When
         PermissionCheckRequest request = new PermissionCheckRequest("agent-a", "read_file", null);
 
         // Then
-        assertEquals(PermissionMode.NORMAL, request.getMode());
         assertNull(request.getSessionId());
     }
 
     @Test
-    void constructor_should_keep_provided_mode_and_session() {
+    void constructor_should_keep_provided_session() {
         // When
-        PermissionCheckRequest request = new PermissionCheckRequest("agent-a", "read_file", null,
-                PermissionMode.PLAN, "session-1");
+        PermissionCheckRequest request = new PermissionCheckRequest("agent-a", "read_file", null, "session-1");
 
         // Then
-        assertEquals(PermissionMode.PLAN, request.getMode());
         assertEquals("session-1", request.getSessionId());
         assertEquals("agent-a", request.getAgentId());
         assertEquals("read_file", request.getToolName());

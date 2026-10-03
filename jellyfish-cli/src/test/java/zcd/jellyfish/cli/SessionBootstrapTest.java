@@ -6,7 +6,6 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import zcd.jellyfish.api.JellyfishException;
-import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.model.ModelManager;
 import zcd.jellyfish.infra.session.Session;
@@ -54,7 +53,7 @@ class SessionBootstrapTest {
     @Test
     void ensureCurrentSession_should_create_and_switch_when_no_current_session() {
         when(sessions.current()).thenReturn(null);
-        when(sessions.create(null, null, null, null)).thenReturn(session);
+        when(sessions.create(null, null, null)).thenReturn(session);
 
         Session actual = bootstrap.ensureCurrentSession(StartupOptions.builder(StartupOptions.Mode.CLI).build());
 
@@ -69,7 +68,7 @@ class SessionBootstrapTest {
         Session actual = bootstrap.ensureCurrentSession(StartupOptions.builder(StartupOptions.Mode.CLI).build());
 
         assertSame(session, actual);
-        verify(sessions, never()).create(null, null, null, null);
+        verify(sessions, never()).create(null, null, null);
     }
 
     @Test
@@ -80,7 +79,7 @@ class SessionBootstrapTest {
                 StartupOptions.builder(StartupOptions.Mode.CLI).sessionId("abc").build());
 
         assertSame(session, actual);
-        verify(sessions, never()).create(null, null, null, null);
+        verify(sessions, never()).create(null, null, null);
     }
 
     @Test
@@ -96,10 +95,10 @@ class SessionBootstrapTest {
     @Test
     void ensureCurrentSession_should_pass_overrides_into_created_session() {
         when(sessions.current()).thenReturn(null);
-        when(sessions.create("coder", "openai", "gpt-4o", PermissionMode.PLAN)).thenReturn(session);
+        when(sessions.create("coder", "openai", "gpt-4o")).thenReturn(session);
 
         Session actual = bootstrap.ensureCurrentSession(StartupOptions.builder(StartupOptions.Mode.CLI)
-                .agentId("coder").model("openai", "gpt-4o").permissionMode(PermissionMode.PLAN).build());
+                .agentId("coder").model("openai", "gpt-4o").build());
 
         assertSame(session, actual);
         verify(agents).require("coder");
@@ -112,11 +111,10 @@ class SessionBootstrapTest {
         when(sessions.current()).thenReturn(session);
 
         bootstrap.ensureCurrentSession(StartupOptions.builder(StartupOptions.Mode.CLI)
-                .agentId("coder").model("openai", "gpt-4o").permissionMode(PermissionMode.PLAN).build());
+                .agentId("coder").model("openai", "gpt-4o").build());
 
         verify(sessions).bindAgent(sessionId, "coder");
         verify(sessions).switchModel(sessionId, "openai", "gpt-4o");
-        verify(sessions).setPermissionMode(sessionId, PermissionMode.PLAN);
     }
 
     @Test
@@ -136,7 +134,7 @@ class SessionBootstrapTest {
                 StartupOptions.builder(StartupOptions.Mode.CLI).model("openai", "gpt-4o").build()));
 
         assertEquals("模型不存在：openai/gpt-4o（可用 /model 命令查看可用模型）", error.getMessage());
-        verify(sessions, never()).create(null, null, null, null);
+        verify(sessions, never()).create(null, null, null);
     }
 
     @Test
@@ -147,13 +145,13 @@ class SessionBootstrapTest {
                 StartupOptions.builder(StartupOptions.Mode.CLI).agentId("ghost").build()));
 
         assertEquals("agent 不存在：ghost（可用 /agent 命令查看可用 agent）", error.getMessage());
-        verify(sessions, never()).create(null, null, null, null);
+        verify(sessions, never()).create(null, null, null);
     }
 
     @Test
     void ensureCurrentSession_should_tolerate_empty_agent_configuration() {
         when(sessions.current()).thenReturn(null);
-        when(sessions.create(null, null, null, null)).thenReturn(session);
+        when(sessions.create(null, null, null)).thenReturn(session);
 
         Session actual = bootstrap.ensureCurrentSession(StartupOptions.builder(StartupOptions.Mode.CLI).build());
 
@@ -167,9 +165,9 @@ class SessionBootstrapTest {
 
         Session actual = bootstrap.ensureCurrentSession(StartupOptions.builder(StartupOptions.Mode.TUI).build());
 
-        // TUI 首页：不建会话（覆盖项只归 CLI，解析器已拦住 TUI 带 --agent/--model/--mode）
+        // TUI 首页：不建会话（覆盖项只归 CLI，解析器已拦住 TUI 带 --agent/--model）
         assertNull(actual);
-        verify(sessions, never()).create(null, null, null, null);
+        verify(sessions, never()).create(null, null, null);
     }
 
     @Test
@@ -180,7 +178,7 @@ class SessionBootstrapTest {
                 StartupOptions.builder(StartupOptions.Mode.TUI).sessionId("abc").build());
 
         assertSame(session, actual);
-        verify(sessions, never()).create(null, null, null, null);
+        verify(sessions, never()).create(null, null, null);
     }
 
     @Test
@@ -190,7 +188,7 @@ class SessionBootstrapTest {
         Session actual = bootstrap.ensureCurrentSession(StartupOptions.builder(StartupOptions.Mode.TUI).build());
 
         assertSame(session, actual);
-        verify(sessions, never()).create(null, null, null, null);
+        verify(sessions, never()).create(null, null, null);
     }
 
     @Test
@@ -201,7 +199,7 @@ class SessionBootstrapTest {
 
         // Server 恒不建会话：会话由 HTTP 接口按 id 寻址，启动时先建一个只会留下没人用过的空文件
         assertNull(actual);
-        verify(sessions, never()).create(null, null, null, null);
+        verify(sessions, never()).create(null, null, null);
     }
 
     @Test

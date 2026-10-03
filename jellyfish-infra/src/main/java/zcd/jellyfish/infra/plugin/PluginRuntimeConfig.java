@@ -20,8 +20,8 @@ import java.util.Set;
  * 启用 / 禁用名单与各插件配置段来自 {@code jellyfish.json} 的 {@code plugins} 段
  * （{@link PluginsSettings}）。插件管理器只认本对象，不感知配置层的读取与合并逻辑。
  * <p>
- * <b>引用稳定、快照可换</b>：本对象在构造期就被注入 {@code PF4JPluginManager} 与
- * {@code ReadOnlyTools}，而配置要到 {@code runtimeConfig.refresh()} 之后才可用（那时这些协作者
+ * <b>引用稳定、快照可换</b>：本对象在构造期就被注入 {@code PF4JPluginManager}，而配置要到
+ * {@code runtimeConfig.refresh()} 之后才可用（那时这些协作者
  * 早已构造完毕）。因此不靠「重建对象」发布新值，而是让 {@link #refresh(List, PluginsSettings)}
  * 整体替换内部那份不可变快照——与 {@code RuntimeConfig} + {@code RuntimeSnapshot} 同款做法。
  * <p>
@@ -160,11 +160,11 @@ public final class PluginRuntimeConfig {
     /**
      * 获取全部插件配置段。
      * <p>
-     * 供<b>不按 pluginId 逐个查询</b>的消费方使用：例如权限模块要把各插件声明的只读工具白名单
+     * 供<b>不按 pluginId 逐个查询</b>的消费方使用：例如权限模块要把各插件声明的只读名单
      * 合并成一张全局工具名集合，它并不关心「哪个插件声明的」。
      * <p>
      * 同一快照期内的返回值<b>恒为同一实例</b>：消费方可以用引用比较判断「快照是否换过」，
-     * 从而避免每次调用都重新解析（见 {@code ReadOnlyTools}）。
+     * 从而避免每次调用都重新解析。
      *
      * @return 不可变映射（pluginId → 该插件配置段），无配置时为空映射而非 {@code null}
      */

@@ -50,7 +50,7 @@ public final class SessionSnapshots {
         }
         return new SessionSnapshot(session.getSessionId(), session.getCreatedAt(), session.getUpdatedAt(),
                 session.getTitle(), session.getAgentId(), session.getProvider(), session.getModel(),
-                session.getPermissionMode(), messages, captureUsage(session.getUsage()),
+                messages, captureUsage(session.getUsage()),
                 captureCompaction(session.getCompaction()), session.getKind(), session.getParentSessionId(),
                 session.getForkPointMessageId(), session.getExtensionEntries());
     }

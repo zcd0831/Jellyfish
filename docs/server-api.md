@@ -27,7 +27,7 @@
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| `POST` | `/sessions` | 建会话（body 可选 `agentId`/`provider`/`model`/`permissionMode`，缺省取 `--agent`/`--model`/`--mode`；body 可省略） |
+| `POST` | `/sessions` | 建会话（body 可选 `agentId`/`provider`/`model`，缺省取 `--agent`/`--model`；body 可省略） |
 | `GET` | `/sessions` | 会话摘要列表（不含消息正文），按最后变更时间倒序 |
 | `GET` | `/sessions/{id}` | 完整会话快照（含消息与用量） |
 | `DELETE` | `/sessions/{id}` | 删除会话（含插件持久化） |
@@ -99,7 +99,8 @@
 ## 会话语义
 
 - **会话一律按路径里的 id 寻址**；`-server` 不支持 `--session`（写了判用法错误退 `2`），
-  `--agent` / `--model` / `--mode` 降级为「新建会话的默认值」。启动期不预建任何会话。
+  `--agent` / `--model` 降级为「新建会话的默认值」。启动期不预建任何会话。
+  想新建一个就处于某个模式（例如 plan）的会话，建完再走插件提供的命令（`/plan on`）。
 - **同会话同时只允许一个回合**：第二个请求返回 `409`（避免两个回合把消息历史交错写坏）；要打断就用
   `POST /sessions/{id}/cancel`，或直接断开 SSE 连接（服务端据此取消回合）。
 - **人工审批走 HTTP**：`askTools` 里的工具会在流里推 `approval_required`，客户端拿 `requestId` 调

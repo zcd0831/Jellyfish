@@ -162,10 +162,10 @@
 ## Server
 
 - **会话一律按 path 里的 id 寻址，不读 `SessionManager.current()`**：那是进程级单指针，多客户端下不成立。
-  残留的只有 `/model` `/agent` `/mode` 的「选中标记」——那些只读 `current()`，Server 下退化为无标记（外观问题）。
+  残留的只有 `/model` `/agent` 的「选中标记」——那两者只读 `current()`，Server 下退化为无标记（外观问题）。
 - **启动期不建会话**：`SessionBootstrap.deferCreation` 就是「不是 CLI」——TUI 先进首页、Server 按 id 寻址，
-  两者启动期都没有「当前会话」这个概念。**`--agent` / `--model` / `--mode` 只归 CLI**：CLI 不能交互，
-  新会话的初始值只能靠参数给；TUI 用 `/agent` `/model` `/mode` 命令，Server 用 `POST /sessions` 的请求体
+  两者启动期都没有「当前会话」这个概念。**`--agent` / `--model` 只归 CLI**：CLI 不能交互，
+  新会话的初始值只能靠参数给；TUI 用 `/agent` `/model` 命令，Server 用 `POST /sessions` 的请求体
   （不再有「服务级默认值」这一层，模型默认值归 `models.json`）。**其余模式带上这些参数一律判用法错误退 2**，
   `-p` / `--show-thinking` 同理——**拒绝而不是静默忽略**。
 - **一会话一在途回合（内核不变量）**：`TurnRegistry` 用非重入的 `Semaphore(1)` 占位，且**占位早于 `AgentHarness.chat`**

@@ -8,7 +8,6 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.event.EventPublisher;
-import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.core.ReActListener;
 import zcd.jellyfish.core.ReActLooper;
 import zcd.jellyfish.core.ReActResult;
@@ -128,14 +127,14 @@ class SubAgentLauncherTest {
         // 默认设置对所有用例都一样，个别用例自己覆盖
         lenient().when(runtimeConfig.getSubAgentSettings()).thenReturn(new SubAgentSettings());
         // 默认不过滤工具（无策略即全放行），个别用例自己覆盖
-        lenient().when(permissionManager.usableTools(any(), any())).thenReturn(toolName -> true);
+        lenient().when(permissionManager.usableTools(any())).thenReturn(toolName -> true);
     }
 
     @Test
     void run_should_reject_when_disabled() {
         // Given
         when(runtimeConfig.getSubAgentSettings()).thenReturn(new SubAgentSettings(false, null, null, null, null, null, null, null));
-        Session parent = parent(PermissionMode.NORMAL, null);
+        Session parent = parent(null);
 
         // When
         SubAgentOutcome outcome = launcher.run(call(parent, SCOUT, "查一下"), null);
@@ -149,7 +148,7 @@ class SubAgentLauncherTest {
     @Test
     void run_should_reject_when_no_active_scope() {
         // Given：不在任何回合里（没有作用域）
-        Session parent = parent(PermissionMode.NORMAL, null);
+        Session parent = parent(null);
 
         // When
         SubAgentOutcome outcome = launcher.run(call(parent, SCOUT, "查一下"), null);
@@ -164,7 +163,7 @@ class SubAgentLauncherTest {
     void run_should_reject_when_depth_limit_exhausted() {
         // Given：maxDepth = 0 表示禁止委派
         runContexts.open(0, 8);
-        Session parent = parent(PermissionMode.NORMAL, null);
+        Session parent = parent(null);
 
         // When
         SubAgentOutcome outcome = launcher.run(call(parent, SCOUT, "查一下"), null);
@@ -179,7 +178,7 @@ class SubAgentLauncherTest {
         // Given：预算只有 1，已经被用掉
         runContexts.open(8, 1);
         runContexts.current().tryAcquireSpawn();
-        Session parent = parent(PermissionMode.NORMAL, null);
+        Session parent = parent(null);
 
         // When
         SubAgentOutcome outcome = launcher.run(call(parent, SCOUT, "查一下"), null);
@@ -194,7 +193,7 @@ class SubAgentLauncherTest {
         // Given：模型瞎猜了一个类型
         when(agentManager.all()).thenReturn(Arrays.asList(definition(true), definitionOf("writer", false)));
         runContexts.open(8, 8);
-        Session parent = parent(PermissionMode.NORMAL, null);
+        Session parent = parent(null);
 
         // When
         SubAgentOutcome outcome = launcher.run(call(parent, "ghost", "查一下"), null);
@@ -211,7 +210,7 @@ class SubAgentLauncherTest {
         // Given
         when(agentManager.find(SCOUT)).thenReturn(definitionOf(SCOUT, false));
         runContexts.open(8, 8);
-        Session parent = parent(PermissionMode.NORMAL, null);
+        Session parent = parent(null);
 
         // When
         SubAgentOutcome outcome = launcher.run(call(parent, SCOUT, "查一下"), null);
@@ -226,7 +225,7 @@ class SubAgentLauncherTest {
         // Given：父会话绑的就是 scout
         when(agentManager.find(SCOUT)).thenReturn(definition(true));
         runContexts.open(8, 8);
-        Session parent = parent(PermissionMode.NORMAL, SCOUT);
+        Session parent = parent(SCOUT);
 
         // When
         SubAgentOutcome outcome = launcher.run(call(parent, SCOUT, "查一下"), null);
@@ -239,7 +238,7 @@ class SubAgentLauncherTest {
     @Test
     void run_should_reject_when_prompt_blank() {
         // Given：子代理看不到本次对话，空任务等于让它自由发挥
-        Session parent = parent(PermissionMode.NORMAL, null);
+        Session parent = parent(null);
 
         // When
         SubAgentOutcome outcome = launcher.run(call(parent, SCOUT, "   "), null);
@@ -256,7 +255,7 @@ class SubAgentLauncherTest {
         when(sessionModelResolver.resolveByAgentOrDefault(SCOUT))
                 .thenThrow(new JellyfishException("model not found: openai/ghost"));
         runContexts.open(8, 8);
-        Session parent = parent(PermissionMode.NORMAL, null);
+        Session parent = parent(null);
 
         // When
         SubAgentOutcome outcome = launcher.run(call(parent, SCOUT, "查一下"), null);
@@ -274,7 +273,7 @@ class SubAgentLauncherTest {
         when(agentManager.find(SCOUT)).thenReturn(definition(true));
         when(sessionModelResolver.resolveByAgentOrDefault(SCOUT)).thenReturn(resolvedModel());
         runContexts.open(8, 8);
-        Session parent = parent(PermissionMode.NORMAL, null);
+        Session parent = parent(null);
         stubNestedTurn("子代理答复", 2);
         ArgumentCaptor<Session> childCaptor = ArgumentCaptor.forClass(Session.class);
 
@@ -301,7 +300,7 @@ class SubAgentLauncherTest {
         when(agentManager.find(SCOUT)).thenReturn(definition(true));
         when(sessionModelResolver.resolveByAgentOrDefault(SCOUT)).thenReturn(resolvedModel());
         runContexts.open(8, 8);
-        Session parent = parent(PermissionMode.NORMAL, null);
+        Session parent = parent(null);
         stubNestedTurn("子代理答复", 2);
         ArgumentCaptor<Session> childCaptor = ArgumentCaptor.forClass(Session.class);
         ArgumentCaptor<AgentRunSnapshot> runCaptor = ArgumentCaptor.forClass(AgentRunSnapshot.class);
@@ -325,7 +324,7 @@ class SubAgentLauncherTest {
         when(agentManager.find(SCOUT)).thenReturn(definition(true));
         when(sessionModelResolver.resolveByAgentOrDefault(SCOUT)).thenReturn(resolvedModel());
         runContexts.open(8, 8);
-        Session parent = parent(PermissionMode.NORMAL, null);
+        Session parent = parent(null);
         CountDownLatch running = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         when(reActLooper.runNested(any(Session.class), any(), any(), any(), anyInt(), any()))
@@ -360,7 +359,7 @@ class SubAgentLauncherTest {
         when(agentManager.find(SCOUT)).thenReturn(definition(true));
         when(sessionModelResolver.resolveByAgentOrDefault(SCOUT)).thenReturn(resolvedModel());
         runContexts.open(8, 8);
-        Session parent = parent(PermissionMode.NORMAL, null);
+        Session parent = parent(null);
         CountDownLatch bothRunning = new CountDownLatch(2);
         when(reActLooper.runNested(any(Session.class), any(), any(), any(), anyInt(), any()))
                 .thenAnswer(invocation -> {
@@ -387,7 +386,7 @@ class SubAgentLauncherTest {
         when(agentManager.find(SCOUT)).thenReturn(definition(true));
         when(sessionModelResolver.resolveByAgentOrDefault(SCOUT)).thenReturn(resolvedModel());
         runContexts.open(8, 8);
-        Session parent = parent(PermissionMode.NORMAL, null);
+        Session parent = parent(null);
         stubNestedTurn("子代理答复", 2);
         SubAgentRunHandle handle = launcher.spawn(call(parent, SCOUT, "查一下"), null);
 
@@ -408,7 +407,7 @@ class SubAgentLauncherTest {
 
         // When
         SubAgentRunHandle handle = launcher.spawn(
-                call(parent(PermissionMode.NORMAL, null), SCOUT, "查一下"), null);
+                call(parent(null), SCOUT, "查一下"), null);
 
         // Then：没有 run、没有子会话、没有归档；调用方仍然只走 spawn → await
         assertTrue(handle.isSettled());
@@ -419,23 +418,21 @@ class SubAgentLauncherTest {
     }
 
     @Test
-    void run_should_inherit_parent_permission_mode_and_not_model() {
-        // Given：父会话是 PLAN（只读）
+    void run_should_leave_model_to_sub_agent_definition() {
+        // Given
         when(agentManager.find(SCOUT)).thenReturn(definition(true));
         when(sessionModelResolver.resolveByAgentOrDefault(SCOUT)).thenReturn(resolvedModel());
         runContexts.open(8, 8);
-        Session parent = parent(PermissionMode.PLAN, null);
+        Session parent = parent(null);
         stubNestedTurn("答复", 1);
         ArgumentCaptor<Session> childCaptor = ArgumentCaptor.forClass(Session.class);
 
         // When
         launcher.run(call(parent, SCOUT, "查一下"), null);
 
-        // Then：权限模式必须继承（子代理不该比派它的会话更宽松），
-        // 而 provider / model 留空——它们由子代理自己的 agent 定义决定，不继承父会话
+        // Then：provider / model 留空——它们由子代理自己的 agent 定义决定，不继承父会话
         verify(reActLooper).runNested(childCaptor.capture(), any(), any(), any(), anyInt(), any());
         Session child = childCaptor.getValue();
-        assertEquals(PermissionMode.PLAN, child.getPermissionMode());
         assertNull(child.getProvider());
         assertNull(child.getModel());
     }
@@ -447,7 +444,7 @@ class SubAgentLauncherTest {
         when(agentManager.find(SCOUT)).thenReturn(definition(true));
         when(sessionModelResolver.resolveByAgentOrDefault(SCOUT)).thenReturn(resolvedModel());
         runContexts.open(8, 8);
-        Session parent = parent(PermissionMode.NORMAL, null);
+        Session parent = parent(null);
         stubNestedTurn("答复", 1);
 
         // When
@@ -463,7 +460,7 @@ class SubAgentLauncherTest {
         when(agentManager.find(SCOUT)).thenReturn(definition(true));
         when(sessionModelResolver.resolveByAgentOrDefault(SCOUT)).thenReturn(resolvedModel());
         runContexts.open(8, 8);
-        Session parent = parent(PermissionMode.NORMAL, null);
+        Session parent = parent(null);
         stubNestedTurn("答复", 2);
 
         // When
@@ -483,7 +480,7 @@ class SubAgentLauncherTest {
         when(agentManager.find(SCOUT)).thenReturn(definition(true));
         when(sessionModelResolver.resolveByAgentOrDefault(SCOUT)).thenReturn(resolvedModel());
         runContexts.open(8, 8);
-        Session parent = parent(PermissionMode.NORMAL, null);
+        Session parent = parent(null);
         when(reActLooper.runNested(any(Session.class), any(), any(), any(), anyInt(), any()))
                 .thenReturn(ReActResult.truncated("s-1", "已达上限", 8));
 
@@ -502,7 +499,7 @@ class SubAgentLauncherTest {
         when(agentManager.find(SCOUT)).thenReturn(definition(true));
         when(sessionModelResolver.resolveByAgentOrDefault(SCOUT)).thenReturn(resolvedModel());
         runContexts.open(8, 8);
-        Session parent = parent(PermissionMode.NORMAL, null);
+        Session parent = parent(null);
         when(reActLooper.runNested(any(Session.class), any(), any(), any(), anyInt(), any()))
                 .thenAnswer(invocation -> {
                     Session child = invocation.getArgument(0);
@@ -533,7 +530,7 @@ class SubAgentLauncherTest {
         when(agentManager.find(SCOUT)).thenReturn(definition(true));
         when(sessionModelResolver.resolveByAgentOrDefault(SCOUT)).thenReturn(resolvedModel());
         runContexts.open(8, 8);
-        Session parent = parent(PermissionMode.NORMAL, null);
+        Session parent = parent(null);
         when(reActLooper.runNested(any(Session.class), any(), any(), any(), anyInt(), any()))
                 .thenAnswer(invocation -> {
                     Session child = invocation.getArgument(0);
@@ -555,7 +552,7 @@ class SubAgentLauncherTest {
         when(agentManager.find(SCOUT)).thenReturn(definition(true));
         when(sessionModelResolver.resolveByAgentOrDefault(SCOUT)).thenReturn(resolvedModel());
         runContexts.open(8, 8);
-        Session parent = parent(PermissionMode.NORMAL, null);
+        Session parent = parent(null);
         when(reActLooper.runNested(any(Session.class), any(), any(), any(), anyInt(), any()))
                 .thenReturn(ReActResult.cancelled("s-1", 1));
 
@@ -574,7 +571,7 @@ class SubAgentLauncherTest {
         when(agentManager.find(SCOUT)).thenReturn(definition(true));
         when(sessionModelResolver.resolveByAgentOrDefault(SCOUT)).thenReturn(resolvedModel());
         runContexts.open(8, 8);
-        Session parent = parent(PermissionMode.NORMAL, null);
+        Session parent = parent(null);
         when(reActLooper.runNested(any(Session.class), any(), any(), any(), anyInt(), any()))
                 .thenThrow(new JellyfishException("网络断了"));
         ArgumentCaptor<Session> childCaptor = ArgumentCaptor.forClass(Session.class);
@@ -595,7 +592,7 @@ class SubAgentLauncherTest {
         when(agentManager.find(SCOUT)).thenReturn(definition(true));
         when(sessionModelResolver.resolveByAgentOrDefault(SCOUT)).thenReturn(resolvedModel());
         runContexts.open(8, 8);
-        Session parent = parent(PermissionMode.NORMAL, null);
+        Session parent = parent(null);
         stubNestedTurn("答复", 1);
 
         // When
@@ -611,9 +608,9 @@ class SubAgentLauncherTest {
         // Given：子代理的 agent 配置只允许只读工具
         when(agentManager.find(SCOUT)).thenReturn(definition(true));
         when(sessionModelResolver.resolveByAgentOrDefault(SCOUT)).thenReturn(resolvedModel());
-        when(permissionManager.usableTools(eq(SCOUT), any())).thenReturn("read_file"::equals);
+        when(permissionManager.usableTools(eq(SCOUT))).thenReturn("read_file"::equals);
         runContexts.open(8, 8);
-        Session parent = parent(PermissionMode.NORMAL, null);
+        Session parent = parent(null);
         stubNestedTurn("答复", 1);
         ArgumentCaptor<ToolFilter> filterCaptor = ArgumentCaptor.forClass(ToolFilter.class);
 
@@ -628,30 +625,31 @@ class SubAgentLauncherTest {
     }
 
     @Test
-    void run_should_compute_filter_with_parent_permission_mode() {
-        // Given：父会话处于 PLAN 模式（权限模式继承给子代理）
+    void run_should_compute_filter_from_child_agent_policy_only() {
+        // Given
         when(agentManager.find(SCOUT)).thenReturn(definition(true));
         when(sessionModelResolver.resolveByAgentOrDefault(SCOUT)).thenReturn(resolvedModel());
+        when(permissionManager.usableTools(eq(SCOUT))).thenReturn("read_file"::equals);
         runContexts.open(8, 8);
-        Session parent = parent(PermissionMode.PLAN, null);
+        Session parent = parent(null);
         stubNestedTurn("答复", 1);
 
         // When
         launcher.run(call(parent, SCOUT, "查一下"), null);
 
-        // Then：PLAN 会把清单额外收窄到只读工具，判据必须按 PLAN 算
-        verify(permissionManager).usableTools(eq(SCOUT), eq(PermissionMode.PLAN));
+        // Then：清单过滤只认 agent 策略——按模式收窄（例如「只跑只读工具」）是插件在执行期表达的策略，
+        // 它不在过滤判据里，否则同一个工具会在「清单里有、执行时被拒」之间反复横跳
+        verify(permissionManager).usableTools(eq(SCOUT));
     }
 
     /**
      * 构造一个父会话。
      *
-     * @param mode    权限模式
      * @param agentId 绑定的 agentId，可为 {@code null}
      * @return 父会话运行态
      */
-    private Session parent(PermissionMode mode, String agentId) {
-        return sessionManager.create(agentId == null ? "jellyfish" : agentId, null, null, mode);
+    private Session parent(String agentId) {
+        return sessionManager.create(agentId == null ? "jellyfish" : agentId, null, null);
     }
 
     /**

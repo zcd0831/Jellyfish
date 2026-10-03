@@ -7,7 +7,6 @@ import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.event.EventPublisher;
 import zcd.jellyfish.api.extension.CancellationToken;
 import zcd.jellyfish.api.extension.ExtensionHandler;
-import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.api.extension.ToolCallResult;
 import zcd.jellyfish.api.extension.ToolMetadata;
 import zcd.jellyfish.api.extension.TurnBeforeRequest;
@@ -733,14 +732,13 @@ public class ReActLooper implements AutoCloseable {
         int depth = scope == null ? 0 : scope.getDepth();
         String sessionId = session.getSessionId();
         String agentId = session.getAgentId();
-        PermissionMode mode = session.getPermissionMode();
         String input = userInput;
         boolean replaced = false;
         for (ExtensionHandler<TurnBeforeRequest, TurnDirective> handler : handlers) {
             TurnDirective directive;
             try {
                 directive = extensions.invoke(handler,
-                        new TurnBeforeRequest(sessionId, agentId, input, nested, depth, mode));
+                        new TurnBeforeRequest(sessionId, agentId, input, nested, depth));
             } catch (RuntimeException e) {
                 LOG.warn("回合开始前处理器抛错，按放行处理: sessionId={}", sessionId, e);
                 continue;

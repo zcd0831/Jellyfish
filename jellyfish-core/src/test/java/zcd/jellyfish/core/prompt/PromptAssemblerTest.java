@@ -7,7 +7,6 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import zcd.jellyfish.api.event.EventPublisher;
 import zcd.jellyfish.api.event.RegisterOptions;
-import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.api.extension.PromptContribution;
 import zcd.jellyfish.api.extension.PromptContributionRequest;
 import zcd.jellyfish.api.extension.PromptPlacement;
@@ -1154,7 +1153,7 @@ class PromptAssemblerTest {
     private static SessionSnapshot orphanSnapshot() {
         SessionMessageSnapshot message = SessionMessageSnapshot.of("m-1", 1L, LlmMessage.ROLE_USER, "一",
                 null, null, null, null);
-        return new SessionSnapshot("s-1", 1L, 2L, null, null, null, null, PermissionMode.NORMAL,
+        return new SessionSnapshot("s-1", 1L, 2L, null, null, null, null,
                 Collections.singletonList(message), null,
                 SessionCompactionSnapshot.of("孤儿摘要", "ghost", 3L),
                 SessionKind.NORMAL, null, null, null);

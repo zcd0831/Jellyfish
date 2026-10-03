@@ -2,7 +2,6 @@ package zcd.jellyfish.infra.session;
 
 import org.junit.jupiter.api.Test;
 import zcd.jellyfish.api.JellyfishException;
-import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.api.extension.SessionKind;
 import zcd.jellyfish.infra.llm.LlmMessage;
 import zcd.jellyfish.infra.llm.LlmUsage;
@@ -31,13 +30,12 @@ class SessionTest {
     @Test
     void constructor_should_apply_defaults_when_optional_values_missing() {
         // When
-        Session session = new Session("session-1", null, null, null, null, CREATED_AT);
+        Session session = new Session("session-1", null, null, null, CREATED_AT);
 
         // Then
         assertEquals("session-1", session.getSessionId());
         assertEquals(CREATED_AT, session.getCreatedAt());
         assertEquals(CREATED_AT, session.getUpdatedAt());
-        assertEquals(PermissionMode.NORMAL, session.getPermissionMode());
         assertSame(SessionUsage.EMPTY, session.getUsage());
         assertEquals(0, session.size());
         assertNull(session.getTitle());
@@ -49,19 +47,18 @@ class SessionTest {
     @Test
     void constructor_should_keep_initial_selections() {
         // When
-        Session session = new Session("session-1", "coder", "openai", "gpt-4o", PermissionMode.PLAN, CREATED_AT);
+        Session session = new Session("session-1", "coder", "openai", "gpt-4o", CREATED_AT);
 
         // Then
         assertEquals("coder", session.getAgentId());
         assertEquals("openai", session.getProvider());
         assertEquals("gpt-4o", session.getModel());
-        assertEquals(PermissionMode.PLAN, session.getPermissionMode());
     }
 
     @Test
     void getParentSessionId_should_return_null_when_root_session() {
         // When
-        Session session = new Session("session-1", null, null, null, null, CREATED_AT);
+        Session session = new Session("session-1", null, null, null, CREATED_AT);
 
         // Then
         assertNull(session.getParentSessionId());
@@ -71,7 +68,7 @@ class SessionTest {
     @Test
     void isEphemeral_should_return_true_when_parent_session_given() {
         // When
-        Session session = new Session("session-2", "scout", null, null, null, CREATED_AT,
+        Session session = new Session("session-2", "scout", null, null, CREATED_AT,
                 SessionKind.EPHEMERAL, "session-1", null);
 
         // Then
@@ -82,7 +79,7 @@ class SessionTest {
     @Test
     void append_should_keep_order_and_size() {
         // Given
-        Session session = new Session("session-1", null, null, null, null, CREATED_AT);
+        Session session = new Session("session-1", null, null, null, CREATED_AT);
 
         // When
         session.append(SessionMessage.of(LlmMessage.user("第一句")));
@@ -100,7 +97,7 @@ class SessionTest {
     @Test
     void append_should_accumulate_usage_and_count_calls_without_usage() {
         // Given
-        Session session = new Session("session-1", null, null, null, null, CREATED_AT);
+        Session session = new Session("session-1", null, null, null, CREATED_AT);
 
         // When
         session.append(SessionMessage.of(LlmMessage.assistant("有用量"), new LlmUsage(3, 4, 7)));
@@ -117,7 +114,7 @@ class SessionTest {
     @Test
     void append_should_advance_updated_at() {
         // Given
-        Session session = new Session("session-1", null, null, null, null, CREATED_AT);
+        Session session = new Session("session-1", null, null, null, CREATED_AT);
 
         // When
         session.append(SessionMessage.of(LlmMessage.user("hi")));
@@ -129,7 +126,7 @@ class SessionTest {
     @Test
     void getMessages_should_return_snapshot_not_affected_by_later_appends() {
         // Given
-        Session session = new Session("session-1", null, null, null, null, CREATED_AT);
+        Session session = new Session("session-1", null, null, null, CREATED_AT);
         session.append(SessionMessage.of(LlmMessage.user("hi")));
 
         // When
@@ -144,7 +141,7 @@ class SessionTest {
     @Test
     void getMessages_should_be_unmodifiable() {
         // Given
-        Session session = new Session("session-1", null, null, null, null, CREATED_AT);
+        Session session = new Session("session-1", null, null, null, CREATED_AT);
         session.append(SessionMessage.of(LlmMessage.user("hi")));
 
         // When / Then
@@ -155,7 +152,7 @@ class SessionTest {
     @Test
     void setTitle_should_replace_title() {
         // Given
-        Session session = new Session("session-1", null, null, null, null, CREATED_AT);
+        Session session = new Session("session-1", null, null, null, CREATED_AT);
 
         // When
         session.setTitle("重构会话模块");
@@ -167,7 +164,7 @@ class SessionTest {
     @Test
     void setAgentId_should_replace_and_allow_unbind() {
         // Given
-        Session session = new Session("session-1", "coder", null, null, null, CREATED_AT);
+        Session session = new Session("session-1", "coder", null, null, CREATED_AT);
 
         // When
         session.setAgentId(null);
@@ -179,7 +176,7 @@ class SessionTest {
     @Test
     void setModel_should_replace_provider_and_model_together() {
         // Given
-        Session session = new Session("session-1", null, "openai", "gpt-4o", null, CREATED_AT);
+        Session session = new Session("session-1", null, "openai", "gpt-4o", CREATED_AT);
 
         // When
         session.setModel("ollama", "qwen3");
@@ -192,7 +189,7 @@ class SessionTest {
     @Test
     void setModel_should_treat_null_as_follow_default() {
         // Given
-        Session session = new Session("session-1", null, "openai", "gpt-4o", null, CREATED_AT);
+        Session session = new Session("session-1", null, "openai", "gpt-4o", CREATED_AT);
 
         // When
         session.setModel(null, null);
@@ -205,7 +202,7 @@ class SessionTest {
     @Test
     void indexOfMessage_should_return_position_and_minusOne_when_absent() {
         // Given
-        Session session = new Session("session-1", null, null, null, null, CREATED_AT);
+        Session session = new Session("session-1", null, null, null, CREATED_AT);
         session.append(SessionMessage.of(LlmMessage.user("一")));
         session.append(SessionMessage.of(LlmMessage.user("二")));
 
@@ -218,7 +215,7 @@ class SessionTest {
     @Test
     void recordUsage_should_accumulate_without_adding_message() {
         // Given：上下文压缩这类「不产生消息的调用」只该涨用量
-        Session session = new Session("session-1", null, null, null, null, CREATED_AT);
+        Session session = new Session("session-1", null, null, null, CREATED_AT);
 
         // When
         session.recordUsage(new LlmUsage(10, 5, 15));
@@ -232,7 +229,7 @@ class SessionTest {
     @Test
     void setCompaction_should_replace_and_allow_clearing() {
         // Given
-        Session session = new Session("session-1", null, null, null, null, CREATED_AT);
+        Session session = new Session("session-1", null, null, null, CREATED_AT);
 
         // When / Then
         assertNull(session.getCompaction());
@@ -246,17 +243,5 @@ class SessionTest {
     void compaction_should_reject_blank_fields() {
         assertThrows(JellyfishException.class, () -> new SessionCompaction(" ", "m-1", 0L, 0));
         assertThrows(JellyfishException.class, () -> new SessionCompaction("摘要", null, 0L, 0));
-    }
-
-    @Test
-    void setPermissionMode_should_fall_back_to_normal_when_null() {
-        // Given
-        Session session = new Session("session-1", null, null, null, PermissionMode.PLAN, CREATED_AT);
-
-        // When
-        session.setPermissionMode(null);
-
-        // Then
-        assertEquals(PermissionMode.NORMAL, session.getPermissionMode());
     }
 }

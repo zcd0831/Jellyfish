@@ -13,7 +13,6 @@ import zcd.jellyfish.api.extension.ExtensionException;
 import zcd.jellyfish.api.extension.ExtensionHandler;
 import zcd.jellyfish.api.extension.PermissionCheckRequest;
 import zcd.jellyfish.api.extension.PermissionDecision;
-import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.api.extension.ToolArgumentDecision;
 import zcd.jellyfish.api.extension.ToolArgumentPreRequest;
 import zcd.jellyfish.api.extension.ToolCallRequest;
@@ -179,12 +178,11 @@ public class ToolExecutor {
         ReActListener effective = listener == null ? ReActListener.NOOP : listener;
         String sessionId = session.getSessionId();
         String agentId = session.getAgentId();
-        PermissionMode mode = session.getPermissionMode();
         // 第 2 步：参数改写。本类里最不能挪的一处位置，两个理由：
         //   · 必须在权限判定之前，否则审批浮层显示参数 A、真正执行参数 B（TOCTOU）；
         //   · 必须在 onToolCallStarted 之前，否则轨迹行与 --show-tool-args 打出来的是旧参数，
         //     与审批记录、与会话里落库的 toolCalls 不是同一份（四个显示面共用一份文本是既有纪律）
-        ToolArgumentDecision decision = transformArguments(agentId, toolName, arguments, mode, source, sessionId);
+        ToolArgumentDecision decision = transformArguments(agentId, toolName, arguments, source, sessionId);
         Map<String, Object> effectiveArguments = decision.isReplace() ? decision.getArguments() : arguments;
         events.publish(new ToolCallStartedEvent(toolCallId, toolName, sessionId));
         effective.onToolCallStarted(toolCallId, toolName, effectiveArguments);
@@ -254,13 +252,12 @@ public class ToolExecutor {
      * @param agentId   发起调用的 agentId，可为 {@code null}
      * @param toolName  工具名
      * @param arguments 当前参数，可为 {@code null}
-     * @param mode      权限模式
      * @param source    发起方
      * @param sessionId 会话标识
      * @return 最终裁定；链上没有可用的处理器时为 {@link ToolArgumentDecision#abstain()}
      */
     private ToolArgumentDecision transformArguments(String agentId, String toolName, Map<String, Object> arguments,
-                                                    PermissionMode mode, ToolArgumentPreRequest.Source source,
+                                                    ToolArgumentPreRequest.Source source,
                                                     String sessionId) {
         List<ExtensionHandler<ToolArgumentPreRequest, ToolArgumentDecision>> handlers =
                 extensions.handlers(ToolArgumentPreRequest.class, null);
@@ -273,7 +270,7 @@ public class ToolExecutor {
             ToolArgumentDecision decision;
             try {
                 decision = extensions.invoke(handler, new ToolArgumentPreRequest(agentId, toolName, current,
-                        mode, source, sessionId));
+                        source, sessionId));
             } catch (RuntimeException e) {
                 LOG.warn("参数改写处理器抛错，按不改处理: sessionId={} tool={}", sessionId, toolName, e);
                 continue;
@@ -393,7 +390,7 @@ public class ToolExecutor {
     private ToolCallResult invokeTool(Session session, CancellationToken cancellation, String toolCallId,
                                       String toolName, Map<String, Object> arguments, ToolOutputSink sink) {
         PermissionDecision decision = permissionManager.decide(new PermissionCheckRequest(session.getAgentId(),
-                toolName, arguments, session.getPermissionMode(), session.getSessionId()));
+                toolName, arguments, session.getSessionId()));
         if (decision.isDenied()) {
             return new ToolCallResult(toolName, "权限拒绝：" + messageOf(decision.getReason()));
         }

@@ -52,9 +52,6 @@ public final class ToolArgumentPreRequest extends ExtensionRequest<ToolArgumentD
     /** 当前参数，只读。 */
     private final Map<String, Object> arguments;
 
-    /** 当时的会话权限模式。 */
-    private final PermissionMode mode;
-
     /** 发起方。 */
     private final Source source;
 
@@ -62,19 +59,17 @@ public final class ToolArgumentPreRequest extends ExtensionRequest<ToolArgumentD
      * 构造参数改写请求。
      * <p>
      * {@code agentId} 允许为空：未绑定 agent 时视为「无策略」，与 {@code PermissionCheckRequest}
-     * 同口径；{@code mode} 为空时按 {@link PermissionMode#NORMAL} 处理，避免调用点与处理器到处判空。
-     * 参数做了防御性拷贝，插件改不动内核手里那份。
+     * 同口径。参数做了防御性拷贝，插件改不动内核手里那份。
      *
      * @param agentId   发起调用的 agentId，可为 {@code null}
      * @param toolName  待执行的工具名，不可为空白
      * @param arguments 当前参数，可为 {@code null}
-     * @param mode      会话权限模式，可为 {@code null}
      * @param source    发起方，可为 {@code null}（按 {@link Source#MODEL} 处理）
      * @param sessionId 会话标识，可为 {@code null}
      * @throws JellyfishException 工具名为空白时抛出
      */
     public ToolArgumentPreRequest(String agentId, String toolName, Map<String, Object> arguments,
-                                  PermissionMode mode, Source source, String sessionId) {
+                                  Source source, String sessionId) {
         super(ToolArgumentDecision.class, sessionId);
         if (toolName == null || toolName.trim().isEmpty()) {
             throw new JellyfishException("tool name must not be blank");
@@ -84,7 +79,6 @@ public final class ToolArgumentPreRequest extends ExtensionRequest<ToolArgumentD
         this.arguments = arguments == null
                 ? Collections.<String, Object>emptyMap()
                 : Collections.unmodifiableMap(new LinkedHashMap<String, Object>(arguments));
-        this.mode = mode == null ? PermissionMode.NORMAL : mode;
         this.source = source == null ? Source.MODEL : source;
     }
 
@@ -120,15 +114,6 @@ public final class ToolArgumentPreRequest extends ExtensionRequest<ToolArgumentD
      */
     public Map<String, Object> getArguments() {
         return arguments;
-    }
-
-    /**
-     * 获取会话权限模式。
-     *
-     * @return 权限模式，保证非 {@code null}
-     */
-    public PermissionMode getMode() {
-        return mode;
     }
 
     /**

@@ -46,7 +46,7 @@ import java.util.Objects;
  * （另打 WARN 日志）。唯一的例外是 api 侧值对象的构造期校验——那是编程错误，立即抛。
  * <p>
  * <b>系统命令已落地</b>：{@code /help} {@code /new} {@code /session} {@code /resume} {@code /model}
- * {@code /agent} {@code /mode} {@code /status} {@code /usage} {@code /delete} {@code /compact} {@code /reload} 由
+ * {@code /agent} {@code /status} {@code /usage} {@code /delete} {@code /compact} {@code /reload} 由
  * {@code core/command/SystemCommands} 以 owner = {@code "core"} 注册进同一份注册表（本类仍不注册任何处理器）；
  * {@code /todo} 归 {@code jellyfish-plugin-todo}，与其它插件命令同源；{@code /exit} 归外壳。
  *

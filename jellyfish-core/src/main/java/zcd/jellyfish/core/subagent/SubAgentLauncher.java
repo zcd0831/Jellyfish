@@ -263,10 +263,9 @@ public class SubAgentLauncher {
         Session child = null;
         String runId = null;
         try {
-            // 权限模式继承父会话：子代理不该比派它的那个会话更宽松。
             // 模型与 provider 留空——它们由子代理自己的 agent 定义决定，不继承父会话。
             child = sessionManager.createEphemeral(parent.getSessionId(), call.getAgentId(),
-                    null, null, parent.getPermissionMode());
+                    null, null);
             // 执行体是「在 agent-run 线程上跑一次嵌套回合」：句柄同时是取消令牌，取消与超时都能掐断它的 LLM 流
             final Session childSession = child;
             AgentRunRequest request = new AgentRunRequest(parent.getSessionId(), call.getAgentId(),
@@ -335,15 +334,18 @@ public class SubAgentLauncher {
      * 组装子代理这一轮能看到哪些工具的过滤。
      * <p>
      * 判据取自 {@code PermissionManager}，与执行期判定同一份规则：子代理只该看到自己那份 agent 配置
-     * 允许的工具，不该被邀请去调用一个会被拒的东西。权限模式继承父会话（只在 PLAN 下额外收窄到只读），
-     * 但<a>主会话的工具清单不受影响</a>——过滤只随嵌套回合传递。
+     * 允许的工具，不该被邀请去调用一个会被拒的东西。但<a>主会话的工具清单不受影响</a>——
+     * 过滤只随嵌套回合传递。
+     * <p>
+     * <b>这里只有 agent 策略，没有模式类策略</b>：按模式收窄的工具（例如 plan 模式）是插件在
+     * 执行期用权限扩展点表达的，它不在清单过滤的判据里，因此子代理的清单不会因父会话开着某个模式而变化。
      *
      * @param call   委派请求
      * @param parent 父会话运行态
      * @return 过滤器，保证非 {@code null}
      */
     private ToolFilter toolFilterOf(SubAgentCall call, Session parent) {
-        return ToolFilter.of(permissionManager.usableTools(call.getAgentId(), parent.getPermissionMode()));
+        return ToolFilter.of(permissionManager.usableTools(call.getAgentId()));
     }
 
     /**

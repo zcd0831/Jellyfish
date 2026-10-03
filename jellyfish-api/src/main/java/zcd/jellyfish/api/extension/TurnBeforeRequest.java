@@ -39,24 +39,17 @@ public final class TurnBeforeRequest extends ExtensionRequest<TurnDirective> {
     /** 委派深度：顶层回合为 {@code 0}。 */
     private final int depth;
 
-    /** 当时的会话权限模式。 */
-    private final PermissionMode mode;
-
     /**
      * 构造回合开始前请求。
-     * <p>
-     * {@code mode} 为空时按 {@link PermissionMode#NORMAL} 处理，避免调用点与处理器到处判空。
      *
      * @param sessionId 会话标识，不可为空白
      * @param agentId   会话所属的 agentId，可为 {@code null}
      * @param input     本次回合的输入文本，可为 {@code null}
      * @param nested    是否嵌套回合
      * @param depth     委派深度
-     * @param mode      会话权限模式，可为 {@code null}
      * @throws JellyfishException 会话标识为空白时抛出
      */
-    public TurnBeforeRequest(String sessionId, String agentId, String input, boolean nested, int depth,
-                             PermissionMode mode) {
+    public TurnBeforeRequest(String sessionId, String agentId, String input, boolean nested, int depth) {
         super(TurnDirective.class, sessionId);
         if (sessionId == null || sessionId.trim().isEmpty()) {
             throw new JellyfishException("session id must not be blank");
@@ -65,7 +58,6 @@ public final class TurnBeforeRequest extends ExtensionRequest<TurnDirective> {
         this.input = input;
         this.nested = nested;
         this.depth = depth;
-        this.mode = mode == null ? PermissionMode.NORMAL : mode;
     }
 
     @Override
@@ -110,14 +102,5 @@ public final class TurnBeforeRequest extends ExtensionRequest<TurnDirective> {
      */
     public int getDepth() {
         return depth;
-    }
-
-    /**
-     * 获取会话权限模式。
-     *
-     * @return 权限模式，保证非 {@code null}
-     */
-    public PermissionMode getMode() {
-        return mode;
     }
 }

@@ -3,7 +3,6 @@ package zcd.jellyfish.infra.permission;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import zcd.jellyfish.api.extension.PermissionDecision;
-import zcd.jellyfish.api.extension.PermissionMode;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
@@ -405,9 +404,6 @@ public class ApprovalChannel {
         /** 工具参数，只读。 */
         private final Map<String, Object> arguments;
 
-        /** 当时的会话权限模式。 */
-        private final PermissionMode mode;
-
         /** 策略给出的审批理由原文。 */
         private final String reason;
 
@@ -421,11 +417,10 @@ public class ApprovalChannel {
          * @param agentId   发起调用的 agentId，可为 {@code null}
          * @param toolName  待审批的工具名，不可为空白
          * @param arguments 工具参数，可为 {@code null}
-         * @param mode      会话权限模式，可为 {@code null}
          * @param reason    策略给出的审批理由，可为 {@code null}
          */
         public Pending(String sessionId, String agentId, String toolName, Map<String, Object> arguments,
-                       PermissionMode mode, String reason) {
+                       String reason) {
             this.id = UUID.randomUUID().toString();
             this.sessionId = sessionId;
             this.agentId = agentId;
@@ -433,7 +428,6 @@ public class ApprovalChannel {
             this.arguments = arguments == null
                     ? Collections.<String, Object>emptyMap()
                     : Collections.unmodifiableMap(new LinkedHashMap<String, Object>(arguments));
-            this.mode = mode;
             this.reason = reason;
             this.timestamp = System.currentTimeMillis();
         }
@@ -481,15 +475,6 @@ public class ApprovalChannel {
          */
         public Map<String, Object> getArguments() {
             return arguments;
-        }
-
-        /**
-         * 获取会话权限模式。
-         *
-         * @return 权限模式，可能为 {@code null}
-         */
-        public PermissionMode getMode() {
-            return mode;
         }
 
         /**

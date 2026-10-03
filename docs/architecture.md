@@ -71,10 +71,12 @@ jellyfish-tui（TUI 外壳）  jellyfish-server（HTTP 外壳）  →  jellyfish
 子代理（嵌套）回合同样不开窗，插件也没有任何中止回合或召回已投行动作的入口
 （边界细则见 [constraints/extensions.md](constraints/extensions.md) 的「插件动作的能力边界」）。
 
-权限只能收紧不能放宽：插件拦截是三态（`ABSTAIN` / `ASK` / `DENY`），**没有 `ALLOW`**。只读白名单**只有一个来源**：
-`plugins.configurations.<pluginId>.readOnlyTools`，即「用户说哪些工具在 PLAN 下可用」。工具描述符里曾经有一个由提供方
-声明的 `readOnly`，它与用户配置取并集——那让白名单**只增不减**、判定权还落在提供方手里（MCP 那一侧的提供方甚至是
-不受信的外部进程），因此该字段已整个移除。代价是 **PLAN 开箱为空**：没配任何名字时 PLAN 拒掉全部工具，这是刻意的
+权限只能收紧不能放宽：插件拦截是三态（`ABSTAIN` / `ASK` / `DENY`），**没有 `ALLOW`**。内核**不持有任何「模式」概念**：
+「只读运行」「先出计划再动手」这类按模式收窄的授权，是插件用同一个类型级扩展点（`PermissionCheckRequest`）表达的
+一条普通拦截——官方 `jellyfish-plugin-plan` 就是这么做的（`plugins.configurations.jellyfish-plan.readOnlyTools`
+即「用户说哪些工具在它开启时可用」）。早先这一层由内核自己实现，并允许工具提供方在描述符里自称只读、与用户配置取并集——
+那让名单**只增不减**、判定权还落在提供方手里（MCP 那一侧的提供方甚至是不受信的外部进程），因此该字段与内核那一层都已整个移除。
+代价是**不装那个插件就没有这类模式**，而装了之后也**开箱为空**：没配任何名字时它拒掉全部工具，这是刻意的
 （「用户没表态」与「用户不准」在白名单语义下是同一件事）。
 
 **缓存相关的两个扩展点只开放「旋钮」，不开放「内容」**：`RequestTuningRequest` 的结果类型只有缓存路由键、
@@ -337,7 +339,7 @@ flowchart TB
                 InputMgr["InputDirectives<br>输入指令：! / @（外壳中立）"]
                 ModelMgr["ModelManager<br>Provider/Model 注册与路由"]
                 LLMClient["LLMClient<br>统一 LLM 调用抽象"]
-                PermMgr["PermissionManager<br>核心策略 → PLAN 白名单 → 插件拦截"]
+                PermMgr["PermissionManager<br>核心策略 → 插件拦截"]
                 SubAgentMgr["SubAgentLauncher + task 工具<br>子代理委派 + 嵌套回合"]
             end
 

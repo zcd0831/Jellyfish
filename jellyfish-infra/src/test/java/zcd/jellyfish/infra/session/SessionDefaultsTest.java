@@ -2,7 +2,6 @@ package zcd.jellyfish.infra.session;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import zcd.jellyfish.api.extension.PermissionMode;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -21,7 +20,7 @@ class SessionDefaultsTest {
     private final SessionDefaults defaults = new SessionDefaults();
 
     @Test
-    @DisplayName("初始四项全空：等于「全部跟随更下层的默认」")
+    @DisplayName("初始三项全空：等于「全部跟随更下层的默认」")
     void snapshot_should_beEmptyByDefault() {
         // When
         SessionDefaults.Values values = defaults.snapshot();
@@ -31,7 +30,6 @@ class SessionDefaultsTest {
         assertNull(values.getAgentId());
         assertNull(values.getProvider());
         assertNull(values.getModel());
-        assertNull(values.getPermissionMode());
     }
 
     @Test
@@ -47,7 +45,6 @@ class SessionDefaultsTest {
         assertEquals("coder", defaults.snapshot().getAgentId());
         assertEquals("openai", defaults.snapshot().getProvider());
         assertEquals("gpt-4o", defaults.snapshot().getModel());
-        assertNull(defaults.snapshot().getPermissionMode());
         assertFalse(defaults.snapshot().isEmpty());
     }
 
@@ -64,21 +61,5 @@ class SessionDefaultsTest {
         // Then：快照是值对象，持它的一方不会被「稍后的一次修改」偷改
         assertEquals("gpt-4o", before.getModel());
         assertEquals("llama3", defaults.snapshot().getModel());
-    }
-
-    @Test
-    @DisplayName("权限模式可单独设置，且可显式清回「跟随缺省」")
-    void setPermissionMode_should_beIndependentlySettable() {
-        // When
-        defaults.setPermissionMode(PermissionMode.PLAN);
-
-        // Then
-        assertEquals(PermissionMode.PLAN, defaults.snapshot().getPermissionMode());
-
-        // When：null 表示恢复为「跟随会话自身的缺省」，不是「设成某个未知值」
-        defaults.setPermissionMode(null);
-
-        // Then
-        assertNull(defaults.snapshot().getPermissionMode());
     }
 }

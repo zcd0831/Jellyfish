@@ -756,7 +756,7 @@ class ReActLooperTest {
         when(permissionManager.decide(any(PermissionCheckRequest.class)))
                 .thenReturn(PermissionDecision.allow(null));
         ReActLooper looper = newLooper();
-        Session child = sessionManager.createEphemeral("parent-1", "scout", null, null, null);
+        Session child = sessionManager.createEphemeral("parent-1", "scout", null, null);
         List<String> nestedThreads = new ArrayList<String>();
         List<String> parentThreads = new ArrayList<String>();
         ReActListener nestedListener = new ReActListener() {
@@ -803,7 +803,7 @@ class ReActLooperTest {
         when(permissionManager.decide(any(PermissionCheckRequest.class)))
                 .thenReturn(PermissionDecision.allow(null));
         ReActLooper looper = newLooper();
-        Session child = sessionManager.createEphemeral("parent-1", "scout", null, null, null);
+        Session child = sessionManager.createEphemeral("parent-1", "scout", null, null);
         List<Integer> depthInside = new ArrayList<Integer>();
         List<Integer> depthAfter = new ArrayList<Integer>();
         ReActListener nestedListener = new ReActListener() {
@@ -838,7 +838,7 @@ class ReActLooperTest {
         when(permissionManager.decide(any(PermissionCheckRequest.class)))
                 .thenReturn(PermissionDecision.allow(null));
         ReActLooper looper = newLooper();
-        Session child = sessionManager.createEphemeral("parent-1", "scout", null, null, null);
+        Session child = sessionManager.createEphemeral("parent-1", "scout", null, null);
         List<ReActResult> nestedResults = new ArrayList<ReActResult>();
         registerTool("read", request -> new ToolCallResult("read", "ok"));
         registerTool("delegate", request -> {
@@ -869,7 +869,7 @@ class ReActLooperTest {
         when(permissionManager.decide(any(PermissionCheckRequest.class)))
                 .thenReturn(PermissionDecision.allow(null));
         ReActLooper looper = newLooper();
-        Session child = sessionManager.createEphemeral("parent-1", "scout", null, null, null);
+        Session child = sessionManager.createEphemeral("parent-1", "scout", null, null);
         CancellationTokenSource cancelled = new CancellationTokenSource();
         cancelled.cancel();
         List<ReActResult> nestedResults = new ArrayList<ReActResult>();
@@ -892,7 +892,7 @@ class ReActLooperTest {
     @Test
     void runNested_should_throw_when_no_active_scope() {
         // Given：没有任何顶层回合在跑，因此没有作用域
-        Session child = sessionManager.createEphemeral("parent-1", "scout", null, null, null);
+        Session child = sessionManager.createEphemeral("parent-1", "scout", null, null);
 
         // When / Then：不在回合作用域内的嵌套回合不受深度与预算约束，因此必须当场报错
         assertThrows(JellyfishException.class,

@@ -22,7 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * {@link PluginRuntimeConfig} 的单元测试：验证缺省语义、快照替换与「同一快照期内引用稳定」这条
- * 供 {@code ReadOnlyTools} 依赖的约定。
+ * 供插件配置段的消费方依赖的约定。
  * <p>
  * 扫描目录与名单来自两个不同来源（{@code config.json} 与 {@code jellyfish.json}），
  * 因此 {@code refresh} 是两个入参；目录条目的清洗（展开 {@code ~}、丢弃空白）归 {@code RuntimeConfig}，

@@ -15,7 +15,6 @@ import zcd.jellyfish.api.event.notification.SessionCreatedEvent;
 import zcd.jellyfish.api.event.notification.SessionMessageAppendedEvent;
 import zcd.jellyfish.api.extension.ExtensionHandler;
 import zcd.jellyfish.api.extension.LifecycleVerdict;
-import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.api.extension.SessionBeforeCloseRequest;
 import zcd.jellyfish.api.extension.SessionBeforeForkRequest;
 import zcd.jellyfish.api.extension.SessionDeleteRequest;
@@ -49,15 +48,14 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * 会话域服务：会话隔离、消息列表、token 统计，以及会话内当前 agentId / 当前模型 / 当前权限模式的
- * 会话级切换。
+ * 会话域服务：会话隔离、消息列表、token 统计，以及会话内当前 agentId / 当前模型的会话级切换。
  * <p>
  * 与 {@code ModelManager} / {@code AgentManager} 的差异：那两者是「配置驱动的只读索引 + 装载事件」，
  * 本类是<b>可变运行态</b>——不读配置、不建索引、不广播装载事件，只维护「sessionId → Session」表与一个
  * 进程内的当前会话指针。
  * <p>
- * <b>唯一变更入口</b>：所有会话运行态变更（追加消息 / 改标题 / 绑 agent / 切模型 / 切权限模式 /
- * 应用压缩 / 记一次不产生消息的用量）
+ * <b>唯一变更入口</b>：所有会话运行态变更（追加消息 / 改标题 / 绑 agent / 切模型 /
+ * 应用压缩 / 记一次不产生消息的用量 / 读写插件扩展条目）
  * 都必须经本类。因为这些变更要连带做两件横切的事——广播通知、同步落盘扩展点
  * （架构图 {@code SessionMgr ==> ExtReg}）——集中在一处才不会每个调用点各写一遍。
  * <p>
@@ -122,7 +120,7 @@ public class SessionManager {
     /** 会话表：sessionId → 会话运行态。 */
     private final Map<String, Session> sessions = new ConcurrentHashMap<String, Session>();
 
-    /** 本进程内「新建会话时使用的默认值」，由首页上的 {@code /model} {@code /agent} {@code /mode} 写入。 */
+    /** 本进程内「新建会话时使用的默认值」，由首页上的 {@code /model} {@code /agent} 写入。 */
     private final SessionDefaults sessionDefaults;
 
     /**
@@ -167,7 +165,7 @@ public class SessionManager {
      * {@code null}</b>——「一个 agent 都没配」是合法状态（全员 fail-open），不应让会话创建失败。
      * <p>
      * <b>未指定的那几项先落到「本进程的待生效默认值」上</b>（{@link SessionDefaults}）：它由首页上的
-     * {@code /model} {@code /agent} {@code /mode} 写入，表达的是「我接下来这次对话要用它」。
+     * {@code /model} {@code /agent} 写入，表达的是「我接下来这次对话要用它」。
      * 那里也没设过才回到最下层——agent 走内置默认，provider / model 留 {@code null}。
      * <p>
      * <b>为什么 provider / model 仍然可以留 {@code null}</b>：它们只影响路由，{@code null} 表示
@@ -185,17 +183,15 @@ public class SessionManager {
      * @param agentId        agent 标识，可为空白（按默认 agent 绑定）
      * @param provider       provider 名，可为 {@code null}（按待生效默认值、其次跟随默认）
      * @param model          model 名，可为 {@code null}（按待生效默认值、其次跟随默认）
-     * @param permissionMode 权限模式，可为 {@code null}（按待生效默认值、其次 NORMAL）
      * @return 新建的会话运行态
      */
-    public Session create(String agentId, String provider, String model, PermissionMode permissionMode) {
+    public Session create(String agentId, String provider, String model) {
         SessionDefaults.Values defaults = sessionDefaults.snapshot();
         String requestedAgentId = agentId == null ? defaults.getAgentId() : agentId;
         String boundAgentId = StringUtils.isBlank(requestedAgentId) ? resolveDefaultAgentId() : requestedAgentId;
         Session session = new Session(UUID.randomUUID().toString(), boundAgentId,
                 provider == null ? defaults.getProvider() : provider,
                 model == null ? defaults.getModel() : model,
-                permissionMode == null ? defaults.getPermissionMode() : permissionMode,
                 System.currentTimeMillis());
         // 刻意不落盘：空会话不留文件，第一次真实变更时再落（见方法注释）
         sessions.put(session.getSessionId(), session);
@@ -206,22 +202,22 @@ public class SessionManager {
     /**
      * 按待生效默认值创建一个会话。
      * <p>
-     * <b>四项全部传 {@code null}</b>（而不是显式传 {@code NORMAL}）：{@code null} 表示
-     * 「按本进程的待生效默认值，其次按更下层的默认」，这正是首页上 {@code /mode plan} 能生效的前提。
-     * 传 {@code NORMAL} 会把那一层默认值直接跳过。
+     * <b>两项全部传 {@code null}</b>（而不是显式传具体值）：{@code null} 表示
+     * 「按本进程的待生效默认值，其次按更下层的默认」，这正是首页上 {@code /model} 能生效的前提。
+     * 传具体值会把那一层默认值直接跳过。
      *
      * @return 新建的会话运行态
      */
     public Session createDefault() {
-        return create(null, null, null, null);
+        return create(null, null, null);
     }
 
     /**
      * 创建一个子代理会话：与 {@link #create} 的差别只有两处，都写在方法名里。
      * <p>
      * <b>不读待生效默认值</b>：{@link SessionDefaults} 表达的是「我接下来这次对话要用它」，
-     * 而子代理的身份（agentId）、模型与权限模式完全由委派方给定，跟首页上那个选择无关；
-     * 传 {@code null} 的项直接落到更下层默认（模型走全局默认，权限走 NORMAL）。
+     * 而子代理的身份（agentId）与模型完全由委派方给定，跟首页上那个选择无关；
+     * 传 {@code null} 的项直接落到更下层默认（模型走全局默认）。
      * <p>
      * <b>会话仍是真实会话</b>：进会话表、能追加消息、生命周期事件照发（携带父会话标识）。
      * 它不进 {@link #all()}、不落盘：前者因为「子代理不是用户可切换的会话」，
@@ -234,18 +230,16 @@ public class SessionManager {
      * @param agentId         agent 标识，可为空白（按默认 agent 绑定）
      * @param provider        provider 名，可为 {@code null}（跟随全局默认）
      * @param model           model 名，可为 {@code null}（跟随全局默认）
-     * @param permissionMode  权限模式，可为 {@code null}（按 {@link PermissionMode#NORMAL} 处理）
      * @return 新建的子代理会话运行态
      * @throws JellyfishException 父会话标识为空白时抛出
      */
-    public Session createEphemeral(String parentSessionId, String agentId, String provider, String model,
-                                   PermissionMode permissionMode) {
+    public Session createEphemeral(String parentSessionId, String agentId, String provider, String model) {
         if (StringUtils.isBlank(parentSessionId)) {
             throw new JellyfishException("parentSessionId must not be blank");
         }
         String boundAgentId = StringUtils.isBlank(agentId) ? resolveDefaultAgentId() : agentId;
         Session session = new Session(UUID.randomUUID().toString(), boundAgentId, provider, model,
-                permissionMode, System.currentTimeMillis(), SessionKind.EPHEMERAL, parentSessionId, null);
+                System.currentTimeMillis(), SessionKind.EPHEMERAL, parentSessionId, null);
         sessions.put(session.getSessionId(), session);
         publish(new SessionCreatedEvent(boundAgentId, session.getSessionId(), parentSessionId));
         return session;
@@ -297,7 +291,7 @@ public class SessionManager {
         }
         List<SessionMessage> copied = source.getMessages().subList(0, cutIndex + 1);
         Session forked = new Session(UUID.randomUUID().toString(), source.getAgentId(), source.getProvider(),
-                source.getModel(), source.getPermissionMode(), System.currentTimeMillis(),
+                source.getModel(), System.currentTimeMillis(),
                 SessionKind.FORKED, sessionId, copied.get(cutIndex).getMessageId());
         forked.setTitle(title == null ? forkTitleOf(source) : title);
         // 复制消息但<b>不累加它们的 token 用量</b>：那是源会话花掉的钱，
@@ -1127,21 +1121,6 @@ public class SessionManager {
     public Session switchModel(String sessionId, String provider, String model) {
         Session session = require(sessionId);
         session.setModel(provider, model);
-        persist(session);
-        return session;
-    }
-
-    /**
-     * 切换会话权限模式。
-     *
-     * @param sessionId      会话标识，不可为空白
-     * @param permissionMode 权限模式，{@code null} 按 {@link PermissionMode#NORMAL} 处理
-     * @return 变更后的会话运行态
-     * @throws JellyfishException 会话不存在时抛出
-     */
-    public Session setPermissionMode(String sessionId, PermissionMode permissionMode) {
-        Session session = require(sessionId);
-        session.setPermissionMode(permissionMode);
         persist(session);
         return session;
     }

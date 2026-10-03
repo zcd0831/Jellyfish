@@ -3,11 +3,9 @@ package zcd.jellyfish.infra.permission;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import zcd.jellyfish.api.event.EventPublisher;
-import zcd.jellyfish.api.event.notification.ConfigWarningEvent;
 import zcd.jellyfish.api.event.notification.PermissionDecidedEvent;
 import zcd.jellyfish.api.extension.PermissionCheckRequest;
 import zcd.jellyfish.api.extension.PermissionDecision;
-import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.api.extension.PermissionVerdict;
 import zcd.jellyfish.infra.config.PermissionApprovalSettings;
 import zcd.jellyfish.infra.config.RuntimeConfig;
@@ -18,7 +16,6 @@ import javax.inject.Inject;
 import javax.inject.Singleton;
 import java.time.Duration;
 import java.util.Objects;
-import java.util.Set;
 import java.util.function.Predicate;
 
 /**
@@ -27,7 +24,7 @@ import java.util.function.Predicate;
  * 判定分三层，顺序固定、只收紧不放宽：
  * <ol>
  *     <li><b>核心策略</b>（普通 Java 代码，不开扩展点）：agent 策略的显式拒绝 &gt; 需人工审批 &gt;
- *     允许范围收窄 &gt; PLAN 只读白名单；</li>
+ *     允许范围收窄；</li>
  *     <li><b>插件拦截</b>：类型级扩展点，按 {@code order} 升序调用，结论取最严
  *     （{@code DENY > ASK > ABSTAIN}），遇 {@code DENY} 短路；</li>
  *     <li><b>ASK 处理</b>：经 {@link ApprovalChannel} 向审批者提问，无审批者 / 超时 / 异常一律拒绝，
@@ -37,8 +34,11 @@ import java.util.function.Predicate;
  * 但事件只是观察者，改不了判定结果。
  * <p>
  * <b>fail-open 的适用域</b>：只有「取不到策略」（未绑定 agent、无策略）才按放行处理；
- * 一旦策略生效，它的否定结论（PLAN 白名单、允许范围收窄）就是硬结论——否则 PLAN 模式会形同虚设。
+ * 一旦策略生效，它的否定结论（显式拒绝、允许范围收窄）就是硬结论。
  * 插件侧的三态裁定同样只能收紧：它没有「放行」这一态，因此不存在插件把核心策略的拒绝改回放行的路径。
+ * <p>
+ * <b>模式类策略（例如只跑只读工具）不在这里</b>：它们是插件用同一个类型级扩展点表达的一条普通拦截，
+ * 因此内核不持有「有哪些模式」的知识，装不装那个插件就是唯一的分界。
  * <p>
  * <b>编排写在这里是刻意的</b>：注册表只提供「有序查找」与「执行单个处理器」，调用几个、何时短路、
  * 异常怎么处置全部由本调用点决定（与「组合规则属于调用方」一致）。
@@ -57,15 +57,8 @@ public class PermissionManager {
     /** 审批结论的来源标识，写进审计事件：一眼能分出「策略直接拒绝」与「人在审批框上拒绝」。 */
     public static final String APPROVAL_SOURCE = "approval";
 
-    /** PLAN 被拒时给出的「去哪儿声明」提示：拒绝文案与空白名单告警共用一份，避免两处说法漂移。 */
-    private static final String READ_ONLY_DECLARATION_HINT =
-            "请在 plugins.configurations.<pluginId>.readOnlyTools 里声明 PLAN 下允许使用的工具名";
-
     /** 策略来源，将来由 AgentManager 实现。 */
     private final PermissionPolicyProvider policies;
-
-    /** 只读工具集合，PLAN 模式的判据。 */
-    private final ReadOnlyTools readOnlyTools;
 
     /** 同步扩展点策略，用于插件拦截。 */
     private final ExtensionRegistry extensions;
@@ -79,25 +72,19 @@ public class PermissionManager {
     /** 运行时配置，用于现读审批超时。 */
     private final RuntimeConfig runtimeConfig;
 
-    /** 上次就「PLAN 白名单为空」发过告警所依据的白名单快照，用于「每种配置只喊一次」。 */
-    private volatile Set<String> emptyWhitelistWarnedFor;
-
     /**
      * 构造权限管理器。
      *
      * @param policies      策略来源
-     * @param readOnlyTools 只读工具集合
      * @param extensions    同步扩展点策略
      * @param events        审计事件发布入口
      * @param approvals     人工审批通道
      * @param runtimeConfig 运行时配置，提供审批超时
      */
     @Inject
-    public PermissionManager(PermissionPolicyProvider policies, ReadOnlyTools readOnlyTools,
-                             ExtensionRegistry extensions, EventPublisher events,
-                             ApprovalChannel approvals, RuntimeConfig runtimeConfig) {
+    public PermissionManager(PermissionPolicyProvider policies, ExtensionRegistry extensions,
+                             EventPublisher events, ApprovalChannel approvals, RuntimeConfig runtimeConfig) {
         this.policies = Objects.requireNonNull(policies, "policies must not be null");
-        this.readOnlyTools = Objects.requireNonNull(readOnlyTools, "readOnlyTools must not be null");
         this.extensions = Objects.requireNonNull(extensions, "extensions must not be null");
         this.events = Objects.requireNonNull(events, "events must not be null");
         this.approvals = Objects.requireNonNull(approvals, "approvals must not be null");
@@ -153,26 +140,25 @@ public class PermissionManager {
      * <b>为什么复用 {@link #evaluatePolicy}</b>：清单过滤与执行期判定必须给出同一个答案——
      * 清单里出现了、执行时却被拒，模型会白跑一轮；反过来，清单里没有、执行时其实可用，
      * 模型就永远用不上它。两处各写一遍规则，迟早会在某个边界上分叉
-     * （PLAN 与允许名单的先后、ASK 算不算可用……），因此这里直接问同一个判定函数。
+     * （显式拒绝与允许名单的先后、ASK 算不算可用……），因此这里直接问同一个判定函数。
      * <p>
      * <b>纯判定</b>：只走核心策略，<b>不</b>询问审批、<b>不</b>派发插件拦截、<b>不</b>发审计事件。
-     * 插件拦截与审批都是「本次调用」才能回答的问题（要看参数、要问人），无法在清单阶段预判；
-     * 它们只会让调用更严，因此「清单里留着、执行时被拦下」是它们本就该有的表现。
+     * 插件拦截（含各种按模式收窄的策略）与审批都是「本次调用」才能回答的问题（要看参数、要问人），
+     * 无法在清单阶段预判；它们只会让调用更严，因此「清单里留着、执行时被拦下」是它们本就该有的表现。
      * <p>
      * 注意 {@code ASK} <b>不算被拒</b>：那个工具是可用的（只是要人点一下批准），
      * 从清单里拿掉会让「只读命令免打扰、写类命令要审批」这套配置直接失效。
      *
      * @param agentId agent 标识，可为 {@code null}（无策略，按 fail-open 全放行）
-     * @param mode    会话权限模式，可为 {@code null}（按 {@link PermissionMode#NORMAL} 处理）
      * @return 判据，保证非 {@code null}
      */
-    public Predicate<String> usableTools(String agentId, PermissionMode mode) {
+    public Predicate<String> usableTools(String agentId) {
         return toolName -> !evaluatePolicy(
-                new PermissionCheckRequest(agentId, toolName, null, mode, null)).isDenied();
+                new PermissionCheckRequest(agentId, toolName, null)).isDenied();
     }
 
     /**
-     * 核心策略判定：优先级为「显式拒绝 &gt; 需审批 &gt; 允许收窄 &gt; PLAN 白名单」。
+     * 核心策略判定：优先级为「显式拒绝 &gt; 需审批 &gt; 允许收窄」。
      *
      * @param request 权限检查请求
      * @return 判定结果，可能是 ALLOW / DENY / ASK
@@ -189,42 +175,7 @@ public class PermissionManager {
         if (!policy.allows(toolName)) {
             return PermissionDecision.deny("工具不在 agent 允许范围内");
         }
-        if (request.getMode() == PermissionMode.PLAN && !readOnlyTools.contains(toolName)) {
-            // PLAN 是白名单语义：集合为空时同样拒绝（属「策略已生效但集合为空」，不是「取不到策略」）
-            warnIfPlanWhitelistIsEmpty(toolName);
-            return PermissionDecision.deny("PLAN 模式仅允许只读工具（" + READ_ONLY_DECLARATION_HINT + "）");
-        }
         return PermissionDecision.allow(null);
-    }
-
-    /**
-     * 在「PLAN 因白名单为空而拒绝」时补一条配置告警，每种配置只发一次。
-     * <p>
-     * <b>为什么挂在拒绝上，而不是启动时发</b>：只读白名单为空是 PLAN 的合法配置（就是「一个都不许」），
-     * 缺省模式又不是 PLAN——启动时无条件喊一次，会对绝大多数根本不用 PLAN 的用户造成纯噪音，
-     * 喊多了还会把真正需要看见的告警淹掉。而「刚被 PLAN 拒了一次」正是用户第一次需要这条信息的时刻：
-     * 此时他看到的拒绝文案是「仅允许只读工具」，不说清去哪儿声明，他只能去翻配置文档。
-     * <p>
-     * <b>为什么去重键是白名单快照本身</b>：{@code ReadOnlyTools} 每次重算会给出一个新的集合实例，
-     * 因此引用比较恰好等于「这份配置是否已经喊过」。用户改完配置后若仍然是空集合，会再喊一次——
-     * 那是新的一份配置，不能算重复。判定本身不依赖告警，发出失败也不影响拒绝结论。
-     *
-     * @param toolName 被拒的工具名，进告警文案便于定位
-     */
-    private void warnIfPlanWhitelistIsEmpty(String toolName) {
-        Set<String> names = readOnlyTools.names();
-        if (!names.isEmpty() || names == emptyWhitelistWarnedFor) {
-            return;
-        }
-        emptyWhitelistWarnedFor = names;
-        try {
-            events.publish(new ConfigWarningEvent(PermissionSettings.READ_ONLY_TOOLS,
-                    "PLAN 模式下工具「" + toolName + "」被拒，且只读白名单为空（PLAN 下所有工具都会被拒）："
-                            + READ_ONLY_DECLARATION_HINT));
-        } catch (RuntimeException e) {
-            // 告警只是提示，发不出去不改变判定（审批链路上任何一环都不该因为可观测性而失败）
-            LOG.warn("只读白名单为空的告警发布失败", e);
-        }
     }
 
     /**
@@ -265,7 +216,7 @@ public class PermissionManager {
         PermissionApprovalSettings settings = runtimeConfig.getPermissionApprovalSettings();
         Duration timeout = Duration.ofSeconds(settings.getApprovalTimeoutSeconds());
         ApprovalChannel.Pending pending = new ApprovalChannel.Pending(request.getSessionId(),
-                request.getAgentId(), request.getToolName(), request.getArguments(), request.getMode(),
+                request.getAgentId(), request.getToolName(), request.getArguments(),
                 decision.getReason());
         PermissionDecision verdict = approvals.request(pending, timeout);
         String reason = reasonOf(decision) + "；" + reasonOf(verdict);
@@ -292,7 +243,7 @@ public class PermissionManager {
     private void publishAudit(PermissionCheckRequest request, PermissionDecision decision, String source) {
         try {
             events.publish(new PermissionDecidedEvent(request.getAgentId(), request.getToolName(),
-                    request.getMode(), decision.getOutcome(), decision.getReason(), source,
+                    decision.getOutcome(), decision.getReason(), source,
                     request.getSessionId()));
         } catch (RuntimeException e) {
             LOG.warn("权限审计事件发布失败: tool={}", request.getToolName(), e);

@@ -8,7 +8,6 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import zcd.jellyfish.api.event.EventPublisher;
 import zcd.jellyfish.api.extension.CancellationToken;
-import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.api.subagent.DelegationHandle;
 import zcd.jellyfish.api.subagent.DelegationRequest;
 import zcd.jellyfish.api.subagent.DelegationResult;
@@ -127,7 +126,7 @@ class SubAgentDelegationEndToEndTest {
         lenient().when(runtimeConfig.getReactSettings()).thenReturn(
                 new ReactSettings(null, null, null, null, null, null,
                         new ToolOutputSettings(archiveRoot.toString(), 0, 0L, null, null)));
-        lenient().when(permissionManager.usableTools(any(), any())).thenReturn(toolName -> true);
+        lenient().when(permissionManager.usableTools(any())).thenReturn(toolName -> true);
         RunRegistry registry = new RunRegistry();
         RunScheduler scheduler = new RunScheduler(runContexts, registry, new RunEventBus(), runtimeConfig);
         runtime = new AgentRuntime(registry, runContexts, scheduler);
@@ -144,7 +143,7 @@ class SubAgentDelegationEndToEndTest {
         when(sessionModelResolver.resolveByAgentOrDefault(SCOUT)).thenReturn(new ResolvedModel(
                 new Provider("openai", "openai", null, null, null), new Model("gpt-4o", "gpt-4o", 0, 0)));
         runContexts.open(8, 8);
-        Session parent = sessionManager.create("jellyfish", null, null, PermissionMode.NORMAL);
+        Session parent = sessionManager.create("jellyfish", null, null);
         stubNestedTurn("结论", 2);
 
         // When：连发两个派生（扇出），再逐个等
@@ -180,7 +179,7 @@ class SubAgentDelegationEndToEndTest {
     void port_should_reject_with_the_kernel_admission_reason_when_no_turn_is_running() {
         // Given：没有进行中的回合（没有 open 过作用域）
         // 刻意不打桩 agentManager.find：准入在「有没有回合」这一步就停了，走不到查类型
-        Session parent = sessionManager.create("jellyfish", null, null, PermissionMode.NORMAL);
+        Session parent = sessionManager.create("jellyfish", null, null);
 
         // When
         DelegationResult result = port.spawn(new DelegationRequest(parent.getSessionId(), SCOUT, "查一下",

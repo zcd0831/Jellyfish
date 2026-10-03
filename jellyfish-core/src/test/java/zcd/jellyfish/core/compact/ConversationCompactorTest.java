@@ -15,7 +15,6 @@ import zcd.jellyfish.api.extension.CompactionPreRequest;
 import zcd.jellyfish.api.extension.CompactionStrategy;
 import zcd.jellyfish.api.extension.CompactionStrategyRequest;
 import zcd.jellyfish.api.extension.CompactionTrigger;
-import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.api.extension.SessionCompactionSnapshot;
 import zcd.jellyfish.api.extension.SessionMessageSnapshot;
 import zcd.jellyfish.api.extension.SessionRestoreRequest;
@@ -1067,7 +1066,7 @@ class ConversationCompactorTest {
     private static ExtensionRegistry restoringExtensions(String boundaryMessageId) {
         ExtensionRegistry registry = newRecordingExtensions();
         SessionSnapshot snapshot = new SessionSnapshot(RESTORED_SESSION_ID, 1L, 2L, null, null, null, null,
-                PermissionMode.NORMAL, messagesOf(4), null,
+                messagesOf(4), null,
                 SessionCompactionSnapshot.of("孤儿摘要", boundaryMessageId, 3L),
                 SessionKind.NORMAL, null, null, null);
         registry.contribute("restorer", SessionRestoreRequest.class, null,

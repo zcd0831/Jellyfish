@@ -187,7 +187,8 @@
 {
   "plugins": {
     "configurations": {
-      "jellyfish-tools": { "readOnlyTools": ["read_file", "list_dir"] }
+      "jellyfish-plan": { "readOnlyTools": ["read_file", "list_dir", "grep_files"] },
+      "jellyfish-todo": { "todoDir": "~/.jellyfish/todos" }
     }
   },
   "react": {
@@ -232,9 +233,10 @@
   「不额外限定」（全部插件都加载），显式写 `[]` 表示「一个都不启用」；`disabled` 不声明与写 `[]` 等价，都不禁用任何插件。
   同一个 pluginId 同时出现在两份名单里时按**禁用**处理，并发一条配置告警。
 - `plugins.configurations.<pluginId>`：单个插件的配置段，逐插件的键值见插件自己的文档。
-- 上文示例里的 `readOnlyTools` 是**只读白名单的唯一来源**：用户写哪些工具名，PLAN 模式下就只有哪些可用
+- 模式类授权（例如「只跑只读工具」）由插件提供：官方 `jellyfish-plugin-plan` 的白名单写在
+  `plugins.configurations.jellyfish-plan.readOnlyTools`，用户写哪些工具名，它开启时就只有哪些可用
   （工具提供方无法自称只读，描述符里已无该字段；详见
-  [architecture.md](architecture.md#扩展层两条通道各管一件事)）。**不写就等于 PLAN 下全部不可用**——
+  [architecture.md](architecture.md#扩展层两条通道各管一件事)）。**不写就等于开启时全部不可用**——
   白名单语义下「用户没表态」与「用户不准」是同一件事。
 
 ### `react`（ReAct 循环）

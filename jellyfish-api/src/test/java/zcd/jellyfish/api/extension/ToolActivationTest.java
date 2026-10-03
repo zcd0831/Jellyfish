@@ -52,14 +52,12 @@ class ToolActivationTest {
         ToolDescriptor descriptor = new ToolDescriptor("mcp_search", "搜索", Collections.emptyMap(),
                 Collections.<String>emptyList());
 
-        ToolActivationRequest request = new ToolActivationRequest("s1", "coder", descriptor,
-                PermissionMode.PLAN);
+        ToolActivationRequest request = new ToolActivationRequest("s1", "coder", descriptor);
 
         assertEquals("s1", request.getSessionId());
         assertEquals("coder", request.getAgentId());
         assertEquals("mcp_search", request.getToolName());
         assertEquals(descriptor, request.getDescriptor());
-        assertEquals(PermissionMode.PLAN, request.getPermissionMode());
         assertEquals(ToolActivation.class, request.getResultType());
         // 类型级扩展点：一个工具该不该出现可以由多个插件各自表态
         assertNull(request.getRouteKey());
@@ -67,7 +65,7 @@ class ToolActivationTest {
 
     @Test
     void request_should_tolerate_null_descriptor() {
-        ToolActivationRequest request = new ToolActivationRequest("s1", null, null, null);
+        ToolActivationRequest request = new ToolActivationRequest("s1", null, null);
 
         assertNull(request.getToolName());
         assertNull(request.getDescriptor());

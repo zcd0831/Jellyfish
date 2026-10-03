@@ -18,7 +18,6 @@ import zcd.jellyfish.api.extension.CommandChoice;
 import zcd.jellyfish.api.extension.CommandDescriptor;
 import zcd.jellyfish.api.extension.CommandResult;
 import zcd.jellyfish.api.extension.InputTransformRequest;
-import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.api.extension.ShellContribution;
 import zcd.jellyfish.api.ui.UiLine;
 import zcd.jellyfish.api.ui.UiRegion;
@@ -1285,12 +1284,12 @@ public final class TuiApp extends ToolkitApp {
         String provider = resolved == null ? session.getProvider() : resolved.getProviderName();
         String model = resolved == null ? session.getModel() : resolved.getModelName();
         int contextLength = resolved == null ? 0 : resolved.getModel().getContextLength();
-        return new StatusBarView.Info(session.getAgentId(), provider, model, session.getPermissionMode(),
+        return new StatusBarView.Info(session.getAgentId(), provider, model,
                 System.getProperty("user.dir"), contextTokens, contextLength, session.getUsage());
     }
 
     /**
-     * 装配首页（无会话）状态栏数据：展示「将要使用的」agent、模型与权限模式。
+     * 装配首页（无会话）状态栏数据：展示「将要使用的」agent 与模型。
      * <p>
      * 首页没有会话，但状态栏也不应该是一片空白：用户正要看的就是「现在如果用，会用哪个 agent 与模型」，
      * 而 {@code /model} {@code /agent} {@code /mode} 在首页改的就是这份待生效默认值
@@ -1315,9 +1314,7 @@ public final class TuiApp extends ToolkitApp {
         }
         SessionDefaults.Values defaults = sessionDefaults.snapshot();
         String agentId = defaults.getAgentId() == null ? defaultAgentId() : defaults.getAgentId();
-        PermissionMode mode = defaults.getPermissionMode() == null
-                ? PermissionMode.NORMAL : defaults.getPermissionMode();
-        return new StatusBarView.Info(agentId, provider, model, mode,
+        return new StatusBarView.Info(agentId, provider, model,
                 System.getProperty("user.dir"), 0L, contextLength, null);
     }
 

@@ -17,7 +17,6 @@ import zcd.jellyfish.api.event.notification.SessionCreatedEvent;
 import zcd.jellyfish.api.event.notification.SessionMessageAppendedEvent;
 import zcd.jellyfish.api.extension.ExtensionHandler;
 import zcd.jellyfish.api.extension.LifecycleVerdict;
-import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.api.extension.SessionBeforeCloseRequest;
 import zcd.jellyfish.api.extension.SessionBeforeForkRequest;
 import zcd.jellyfish.api.extension.SessionKind;
@@ -91,7 +90,7 @@ class SessionManagerTest {
         when(agentManager.resolveDefault()).thenReturn(definition(CODER));
 
         // When
-        Session session = manager().create(null, null, null, null);
+        Session session = manager().create(null, null, null);
 
         // Then
         assertEquals(CODER, session.getAgentId());
@@ -103,7 +102,7 @@ class SessionManagerTest {
         when(agentManager.resolveDefault()).thenReturn(null);
 
         // When
-        Session session = manager().create("  ", null, null, null);
+        Session session = manager().create("  ", null, null);
 
         // Then
         assertNull(session.getAgentId());
@@ -112,7 +111,7 @@ class SessionManagerTest {
     @Test
     void create_should_prefer_explicit_agent_over_default() {
         // When
-        Session session = manager().create("writer", null, null, null);
+        Session session = manager().create("writer", null, null);
 
         // Then
         assertEquals("writer", session.getAgentId());
@@ -122,21 +121,20 @@ class SessionManagerTest {
     void createEphemeral_should_throw_when_parent_blank() {
         // When / Then
         assertThrows(JellyfishException.class,
-                () -> manager().createEphemeral("  ", CODER, null, null, null));
+                () -> manager().createEphemeral("  ", CODER, null, null));
     }
 
     @Test
     void createEphemeral_should_keep_parent_link_and_explicit_selections() {
         // When
         Session session = manager()
-                .createEphemeral("parent-1", "scout", "openai", "gpt-4o", PermissionMode.PLAN);
+                .createEphemeral("parent-1", "scout", "openai", "gpt-4o");
 
         // Then
         assertEquals("parent-1", session.getParentSessionId());
         assertEquals("scout", session.getAgentId());
         assertEquals("openai", session.getProvider());
         assertEquals("gpt-4o", session.getModel());
-        assertEquals(PermissionMode.PLAN, session.getPermissionMode());
     }
 
     @Test
@@ -145,7 +143,7 @@ class SessionManagerTest {
         when(agentManager.resolveDefault()).thenReturn(definition(CODER));
 
         // When
-        Session session = manager().createEphemeral("parent-1", "  ", null, null, null);
+        Session session = manager().createEphemeral("parent-1", "  ", null, null);
 
         // Then
         assertEquals(CODER, session.getAgentId());
@@ -161,7 +159,7 @@ class SessionManagerTest {
         SessionManager manager = new SessionManager(agentManager, events, extensions, defaults);
 
         // When
-        Session session = manager.createEphemeral("parent-1", null, null, null, null);
+        Session session = manager.createEphemeral("parent-1", null, null, null);
 
         // Then
         assertEquals(CODER, session.getAgentId());
@@ -171,7 +169,7 @@ class SessionManagerTest {
     @Test
     void createEphemeral_should_publish_created_event_with_parent() {
         // When
-        manager().createEphemeral("parent-1", CODER, null, null, null);
+        manager().createEphemeral("parent-1", CODER, null, null);
 
         // Then
         SessionCreatedEvent event = publishedEvent(SessionCreatedEvent.class);
@@ -182,10 +180,10 @@ class SessionManagerTest {
     void createEphemeral_should_not_appear_in_all() {
         // Given
         SessionManager manager = manager();
-        manager.create(CODER, null, null, null);
+        manager.create(CODER, null, null);
 
         // When
-        manager.createEphemeral("parent-1", CODER, null, null, null);
+        manager.createEphemeral("parent-1", CODER, null, null);
 
         // Then
         assertEquals(1, manager.all().size());
@@ -197,7 +195,7 @@ class SessionManagerTest {
         // Given
         AtomicInteger persists = countingPersistHandler();
         SessionManager manager = manager();
-        Session session = manager.createEphemeral("parent-1", CODER, null, null, null);
+        Session session = manager.createEphemeral("parent-1", CODER, null, null);
 
         // When
         manager.appendMessage(session.getSessionId(), LlmMessage.user("hello"), null);
@@ -211,7 +209,7 @@ class SessionManagerTest {
         // Given：同一处理器下普通会话仍然即时落盘，证明计数手段本身有效
         AtomicInteger persists = countingPersistHandler();
         SessionManager manager = manager();
-        Session session = manager.create(CODER, null, null, null);
+        Session session = manager.create(CODER, null, null);
 
         // When
         manager.appendMessage(session.getSessionId(), LlmMessage.user("hello"), null);
@@ -224,7 +222,7 @@ class SessionManagerTest {
     void appendMessage_should_publishLlmCallEvent_withTokenAndCacheCounts() {
         // Given
         SessionManager manager = manager();
-        Session session = manager.create(CODER, null, null, null);
+        Session session = manager.create(CODER, null, null);
 
         // When：一次「总输入 100、其中命中 80」的调用随 assistant 消息落会话
         manager.appendMessage(session.getSessionId(), LlmMessage.assistant("ok"),
@@ -243,7 +241,7 @@ class SessionManagerTest {
     void publishCallFailure_should_carryStatusCode_andSessionAttribution() {
         // Given
         SessionManager manager = manager();
-        Session session = manager.create(CODER, "openai", "gpt-4o", null);
+        Session session = manager.create(CODER, "openai", "gpt-4o");
 
         // When：端点以 400 拒收某个字段
         manager.publishCallFailure(session.getSessionId(), "gpt-4o",
@@ -262,7 +260,7 @@ class SessionManagerTest {
     void publishCallFailure_should_notTreatRateLimitAsRejected() {
         // Given：429 是暂时性的，与 400 的处理完全相反
         SessionManager manager = manager();
-        Session session = manager.create(CODER, "openai", "gpt-4o", null);
+        Session session = manager.create(CODER, "openai", "gpt-4o");
 
         // When
         manager.publishCallFailure(session.getSessionId(), null,
@@ -278,7 +276,7 @@ class SessionManagerTest {
     void publishCallFailure_should_useZeroStatusAndSessionModel_when_notHttpFailure() {
         // Given：网络异常不是 HTTP 层面的失败，而模型标识可以由会话补上
         SessionManager manager = manager();
-        Session session = manager.create(CODER, "openai", "gpt-4o", null);
+        Session session = manager.create(CODER, "openai", "gpt-4o");
 
         // When
         manager.publishCallFailure(session.getSessionId(), null,
@@ -309,7 +307,7 @@ class SessionManagerTest {
     void appendMessage_should_notPublishLlmCallEvent_when_usageIsAbsent() {
         // Given
         SessionManager manager = manager();
-        Session session = manager.create(CODER, null, null, null);
+        Session session = manager.create(CODER, null, null);
 
         // When：工具结果等消息不带用量
         manager.appendMessage(session.getSessionId(), LlmMessage.user("hi"), null);
@@ -322,7 +320,7 @@ class SessionManagerTest {
     void recordUsage_should_publishLlmCallEvent_forCallsWithoutMessage() {
         // Given：/compact 的摘要调用不产生会话消息
         SessionManager manager = manager();
-        Session session = manager.create(CODER, null, null, null);
+        Session session = manager.create(CODER, null, null);
 
         // When
         manager.recordUsage(session.getSessionId(), new LlmUsage(200, 5, 205, 150, 0));
@@ -337,7 +335,7 @@ class SessionManagerTest {
     void recordUsage_should_merge_session_usage_with_call_count() {
         // Given：一次嵌套回合的累计用量（多次调用）
         SessionManager manager = manager();
-        Session session = manager.create(CODER, null, null, null);
+        Session session = manager.create(CODER, null, null);
         SessionUsage nested = new SessionUsage(5L, 7L, 12L, 3L);
 
         // When
@@ -352,7 +350,7 @@ class SessionManagerTest {
     void close_should_ask_hook_before_persisting_when_user_requested() {
         // Given：关闭前钩子排在落盘之前——排在之后就没有「拦下」可言，收尾动作也只会晚于持久化
         SessionManager manager = manager();
-        Session session = manager.create(CODER, null, null, null);
+        Session session = manager.create(CODER, null, null);
         List<String> order = new ArrayList<String>();
         extensions.contribute("guard", SessionBeforeCloseRequest.class, null, request -> {
             order.add("hook:" + request.getReason() + ":" + request.isVetoSupported());
@@ -374,7 +372,7 @@ class SessionManagerTest {
     void close_should_reject_when_hook_cancels_user_request() {
         // Given：用户主动关闭是唯一有意义的否决场景
         SessionManager manager = manager();
-        Session session = manager.create(CODER, null, null, null);
+        Session session = manager.create(CODER, null, null);
         extensions.contribute("guard", SessionBeforeCloseRequest.class, null,
                 request -> LifecycleVerdict.cancel("还有未保存的改动"), RegisterOptions.DEFAULT);
 
@@ -390,7 +388,7 @@ class SessionManagerTest {
     void close_should_ignore_veto_when_shutdown() {
         // Given：关机路径不允许被插件拖住——否则结果是「本该关掉的会话留在了表里」
         SessionManager manager = manager();
-        Session session = manager.create(CODER, null, null, null);
+        Session session = manager.create(CODER, null, null);
         extensions.contribute("guard", SessionBeforeCloseRequest.class, null,
                 request -> LifecycleVerdict.cancel("等等我"), RegisterOptions.DEFAULT);
 
@@ -405,7 +403,7 @@ class SessionManagerTest {
     void close_should_ignore_veto_when_internal() {
         // Given：内部收尾（瞬时子代理会话跑完）同样不由用户发起，也不允许被拖住
         SessionManager manager = manager();
-        Session session = manager.createEphemeral("parent-1", CODER, null, null, null);
+        Session session = manager.createEphemeral("parent-1", CODER, null, null);
         extensions.contribute("guard", SessionBeforeCloseRequest.class, null,
                 request -> LifecycleVerdict.cancel("等等我"), RegisterOptions.DEFAULT);
 
@@ -420,7 +418,7 @@ class SessionManagerTest {
     void close_should_proceed_when_hook_throws() {
         // Given：钩子坏掉不该把关不掉的会话留在进程里
         SessionManager manager = manager();
-        Session session = manager.create(CODER, null, null, null);
+        Session session = manager.create(CODER, null, null);
         extensions.contribute("broken", SessionBeforeCloseRequest.class, null, request -> {
             throw new IllegalStateException("插件崩了");
         }, RegisterOptions.DEFAULT);
@@ -436,7 +434,7 @@ class SessionManagerTest {
     void close_should_not_ask_hook_when_no_handler_registered() {
         // Given：0 handler 是兼容性承诺
         SessionManager manager = manager();
-        Session session = manager.create(CODER, null, null, null);
+        Session session = manager.create(CODER, null, null);
 
         // When
         Session closed = manager.close(session.getSessionId(), SessionBeforeCloseRequest.Reason.USER_REQUEST);
@@ -450,7 +448,7 @@ class SessionManagerTest {
     void close_should_publish_closed_event_with_parent_when_ephemeral() {
         // Given
         SessionManager manager = manager();
-        Session session = manager.createEphemeral("parent-1", CODER, null, null, null);
+        Session session = manager.createEphemeral("parent-1", CODER, null, null);
 
         // When
         manager.close(session.getSessionId());
@@ -462,15 +460,14 @@ class SessionManagerTest {
     }
 
     @Test
-    void create_should_keep_explicit_model_and_permission_mode() {
+    void create_should_keep_explicit_model_and_agent() {
         // When
         Session session = manager()
-                .create(CODER, "openai", "gpt-4o", PermissionMode.PLAN);
+                .create(CODER, "openai", "gpt-4o");
 
         // Then
         assertEquals("openai", session.getProvider());
         assertEquals("gpt-4o", session.getModel());
-        assertEquals(PermissionMode.PLAN, session.getPermissionMode());
         assertEquals(CODER, session.getAgentId());
     }
 
@@ -478,7 +475,7 @@ class SessionManagerTest {
     void create_should_generate_session_id_and_register_it() {
         // When
         SessionManager manager = manager();
-        Session session = manager.create(CODER, null, null, null);
+        Session session = manager.create(CODER, null, null);
 
         // Then
         assertNotNull(session.getSessionId());
@@ -493,7 +490,7 @@ class SessionManagerTest {
         SessionManager manager = manager();
 
         // When
-        Session session = manager.create(null, null, null, null);
+        Session session = manager.create(null, null, null);
 
         // Then
         SessionCreatedEvent event = publishedEvent(SessionCreatedEvent.class);
@@ -505,19 +502,18 @@ class SessionManagerTest {
     void create_should_not_change_current_session() {
         // When
         SessionManager manager = manager();
-        manager.create(CODER, null, null, null);
+        manager.create(CODER, null, null);
 
         // Then：并发创建不应互相抢占当前指针
         assertNull(manager.current());
     }
 
     @Test
-    void createDefault_should_create_session_with_normal_mode() {
+    void createDefault_should_leave_model_unset() {
         // When
         Session session = manager().createDefault();
 
-        // Then：没有任何待生效默认值时，权限模式落到 NORMAL、模型留空（由调用点按配置默认解析）
-        assertEquals(PermissionMode.NORMAL, session.getPermissionMode());
+        // Then：没有任何待生效默认值时，模型留空（由调用点按配置默认解析）
         assertNull(session.getProvider());
         assertNull(session.getModel());
     }
@@ -528,17 +524,15 @@ class SessionManagerTest {
         SessionDefaults pending = new SessionDefaults();
         pending.setAgentId(CODER);
         pending.setModel("openai", "gpt-4o");
-        pending.setPermissionMode(PermissionMode.PLAN);
         SessionManager manager = new SessionManager(agentManager, events, extensions, pending);
 
         // When
         Session session = manager.createDefault();
 
-        // Then：四项都从待生效默认值填进来——这就是「首页设了 /model，下一条消息就真的用它」
+        // Then：几项都从待生效默认值填进来——这就是「首页设了 /model，下一条消息就真的用它」
         assertEquals(CODER, session.getAgentId());
         assertEquals("openai", session.getProvider());
         assertEquals("gpt-4o", session.getModel());
-        assertEquals(PermissionMode.PLAN, session.getPermissionMode());
     }
 
     @Test
@@ -547,33 +541,31 @@ class SessionManagerTest {
         SessionDefaults pending = new SessionDefaults();
         pending.setAgentId(CODER);
         pending.setModel("openai", "gpt-4o");
-        pending.setPermissionMode(PermissionMode.PLAN);
         SessionManager manager = new SessionManager(agentManager, events, extensions, pending);
 
-        // When：调用方显式指定了全部四项（如 CLI 的 --agent / --model / --mode）
-        Session session = manager.create("writer", "ollama", "llama3", PermissionMode.NORMAL);
+        // When：调用方显式指定了全部项（如 CLI 的 --agent / --model）
+        Session session = manager.create("writer", "ollama", "llama3");
 
         // Then：参数优先，待生效默认值只在「没指定」时才管用
         assertEquals("writer", session.getAgentId());
         assertEquals("ollama", session.getProvider());
         assertEquals("llama3", session.getModel());
-        assertEquals(PermissionMode.NORMAL, session.getPermissionMode());
     }
 
     @Test
     void create_should_keep_modelNull_when_neitherArgumentNorDefaultGiven() {
-        // Given：只设了权限模式，没设模型
+        // Given：待生效默认值里只设了 agent
         SessionDefaults pending = new SessionDefaults();
-        pending.setPermissionMode(PermissionMode.PLAN);
+        pending.setAgentId(CODER);
         SessionManager manager = new SessionManager(agentManager, events, extensions, pending);
 
         // When
-        Session session = manager.create(null, null, null, null);
+        Session session = manager.create(null, null, null);
 
         // Then：provider / model 留 null = 「跟随配置默认」，不能在创建期就把它们解析掉
         assertNull(session.getProvider());
         assertNull(session.getModel());
-        assertEquals(PermissionMode.PLAN, session.getPermissionMode());
+        assertEquals(CODER, session.getAgentId());
     }
 
     @Test
@@ -598,8 +590,8 @@ class SessionManagerTest {
     void switchTo_should_make_session_current() {
         // Given
         SessionManager manager = manager();
-        Session first = manager.create(CODER, null, null, null);
-        Session second = manager.create(CODER, null, null, null);
+        Session first = manager.create(CODER, null, null);
+        Session second = manager.create(CODER, null, null);
 
         // When
         manager.switchTo(second.getSessionId());
@@ -619,7 +611,7 @@ class SessionManagerTest {
     void close_should_remove_session_and_publish_snapshot() {
         // Given
         SessionManager manager = manager();
-        Session session = manager.create(CODER, null, null, null);
+        Session session = manager.create(CODER, null, null);
         manager.appendMessage(session.getSessionId(), LlmMessage.user("hi"), null);
 
         // When
@@ -639,7 +631,7 @@ class SessionManagerTest {
     void close_should_clear_current_when_current_session_closed() {
         // Given
         SessionManager manager = manager();
-        Session session = manager.create(CODER, null, null, null);
+        Session session = manager.create(CODER, null, null);
         manager.switchTo(session.getSessionId());
 
         // When
@@ -653,8 +645,8 @@ class SessionManagerTest {
     void close_should_keep_current_when_other_session_closed() {
         // Given
         SessionManager manager = manager();
-        Session first = manager.create(CODER, null, null, null);
-        Session second = manager.create(CODER, null, null, null);
+        Session first = manager.create(CODER, null, null);
+        Session second = manager.create(CODER, null, null);
         manager.switchTo(second.getSessionId());
 
         // When
@@ -685,7 +677,7 @@ class SessionManagerTest {
     void appendMessage_should_accumulate_usage_and_publish_event() {
         // Given
         SessionManager manager = manager();
-        Session session = manager.create(CODER, null, null, null);
+        Session session = manager.create(CODER, null, null);
 
         // When
         SessionMessage message = manager.appendMessage(session.getSessionId(),
@@ -705,7 +697,7 @@ class SessionManagerTest {
     void appendMessage_should_publish_user_role_for_user_message() {
         // Given
         SessionManager manager = manager();
-        Session session = manager.create(CODER, null, null, null);
+        Session session = manager.create(CODER, null, null);
 
         // When
         manager.appendMessage(session.getSessionId(), LlmMessage.user("hi"), null);
@@ -719,7 +711,7 @@ class SessionManagerTest {
         // Given：通知是可丢弃通道，发不出去不该影响会话状态
         doThrow(new IllegalStateException("channel closed")).when(events).publish(any());
         SessionManager manager = manager();
-        Session session = manager.create(CODER, null, null, null);
+        Session session = manager.create(CODER, null, null);
 
         // When
         manager.appendMessage(session.getSessionId(), LlmMessage.user("hi"), null);
@@ -732,7 +724,7 @@ class SessionManagerTest {
     void messagesOf_should_return_unmodifiable_snapshot() {
         // Given
         SessionManager manager = manager();
-        Session session = manager.create(CODER, null, null, null);
+        Session session = manager.create(CODER, null, null);
         manager.appendMessage(session.getSessionId(), LlmMessage.user("hi"), null);
 
         // When
@@ -748,7 +740,7 @@ class SessionManagerTest {
     void llmMessagesOf_should_project_message_bodies() {
         // Given
         SessionManager manager = manager();
-        Session session = manager.create(CODER, null, null, null);
+        Session session = manager.create(CODER, null, null);
         manager.appendMessage(session.getSessionId(), LlmMessage.user("hi"), null);
         manager.appendMessage(session.getSessionId(), LlmMessage.assistant("hello"), null);
 
@@ -771,8 +763,8 @@ class SessionManagerTest {
     void updateTitle_should_only_affect_target_session() {
         // Given
         SessionManager manager = manager();
-        Session first = manager.create(CODER, null, null, null);
-        Session second = manager.create(CODER, null, null, null);
+        Session first = manager.create(CODER, null, null);
+        Session second = manager.create(CODER, null, null);
 
         // When
         manager.updateTitle(first.getSessionId(), "第一个会话");
@@ -786,8 +778,8 @@ class SessionManagerTest {
     void bindAgent_should_only_affect_target_session() {
         // Given
         SessionManager manager = manager();
-        Session first = manager.create(CODER, null, null, null);
-        Session second = manager.create(CODER, null, null, null);
+        Session first = manager.create(CODER, null, null);
+        Session second = manager.create(CODER, null, null);
 
         // When
         manager.bindAgent(first.getSessionId(), "writer");
@@ -801,8 +793,8 @@ class SessionManagerTest {
     void switchModel_should_only_affect_target_session() {
         // Given
         SessionManager manager = manager();
-        Session first = manager.create(CODER, null, null, null);
-        Session second = manager.create(CODER, null, null, null);
+        Session first = manager.create(CODER, null, null);
+        Session second = manager.create(CODER, null, null);
 
         // When
         manager.switchModel(first.getSessionId(), "ollama", "qwen3");
@@ -814,26 +806,26 @@ class SessionManagerTest {
     }
 
     @Test
-    void setPermissionMode_should_only_affect_target_session() {
+    void switchModel_should_leave_other_session_untouched() {
         // Given
         SessionManager manager = manager();
-        Session first = manager.create(CODER, null, null, null);
-        Session second = manager.create(CODER, null, null, null);
+        Session first = manager.create(CODER, null, null);
+        Session second = manager.create(CODER, null, null);
 
         // When
-        manager.setPermissionMode(first.getSessionId(), PermissionMode.PLAN);
+        manager.switchModel(first.getSessionId(), "openai", "gpt-4o");
 
         // Then
-        assertEquals(PermissionMode.PLAN, first.getPermissionMode());
-        assertEquals(PermissionMode.NORMAL, second.getPermissionMode());
+        assertEquals("gpt-4o", first.getModel());
+        assertNull(second.getModel());
     }
 
     @Test
     void sessions_should_be_isolated_from_each_other() {
         // Given
         SessionManager manager = manager();
-        Session first = manager.create(CODER, null, null, null);
-        Session second = manager.create(CODER, null, null, null);
+        Session first = manager.create(CODER, null, null);
+        Session second = manager.create(CODER, null, null);
 
         // When：交替追加
         manager.appendMessage(first.getSessionId(), LlmMessage.user("a1"), new LlmUsage(1, 1, 2));
@@ -855,7 +847,7 @@ class SessionManagerTest {
     void all_should_return_unmodifiable_collection() {
         // Given
         SessionManager manager = manager();
-        manager.create(CODER, null, null, null);
+        manager.create(CODER, null, null);
 
         // When / Then
         assertThrows(UnsupportedOperationException.class, () -> manager.all().clear());
@@ -1009,7 +1001,7 @@ class SessionManagerTest {
     @Test
     void fork_should_throw_when_no_history() {
         SessionManager manager = manager();
-        Session source = manager.create(CODER, null, null, null);
+        Session source = manager.create(CODER, null, null);
 
         assertThrows(JellyfishException.class, () -> manager.fork(source.getSessionId(), null, null));
     }
@@ -1028,7 +1020,7 @@ class SessionManagerTest {
     @Test
     void putExtensionEntry_should_write_and_read_back_under_owner_namespace() {
         SessionManager manager = manager();
-        Session session = manager.create(CODER, null, null, null);
+        Session session = manager.create(CODER, null, null);
 
         manager.putExtensionEntry(session.getSessionId(), "plugin-a", "plugin-a::checked",
                 java.util.Collections.singletonMap("files", 3));
@@ -1043,7 +1035,7 @@ class SessionManagerTest {
     @Test
     void putExtensionEntry_should_replace_existing_without_growing_count() {
         SessionManager manager = manager();
-        Session session = manager.create(CODER, null, null, null);
+        Session session = manager.create(CODER, null, null);
         manager.putExtensionEntry(session.getSessionId(), "plugin-a", "plugin-a::k", null);
 
         manager.putExtensionEntry(session.getSessionId(), "plugin-a", "plugin-a::k",
@@ -1055,7 +1047,7 @@ class SessionManagerTest {
     @Test
     void putExtensionEntry_should_reject_value_over_limit() {
         SessionManager manager = manager();
-        Session session = manager.create(CODER, null, null, null);
+        Session session = manager.create(CODER, null, null);
         StringBuilder huge = new StringBuilder();
         for (int index = 0; index < SessionManager.EXTENSION_VALUE_MAX_BYTES + 100; index++) {
             huge.append('x');
@@ -1073,7 +1065,7 @@ class SessionManagerTest {
     @Test
     void putExtensionEntry_should_reject_too_many_entries() {
         SessionManager manager = manager();
-        Session session = manager.create(CODER, null, null, null);
+        Session session = manager.create(CODER, null, null);
         for (int index = 0; index < SessionManager.EXTENSION_ENTRY_MAX_COUNT; index++) {
             manager.putExtensionEntry(session.getSessionId(), "plugin-a", "plugin-a::k" + index, null);
         }
@@ -1089,7 +1081,7 @@ class SessionManagerTest {
     @Test
     void putExtensionEntry_should_reject_too_long_key() {
         SessionManager manager = manager();
-        Session session = manager.create(CODER, null, null, null);
+        Session session = manager.create(CODER, null, null);
         StringBuilder key = new StringBuilder("plugin-a::");
         while (key.length() <= SessionManager.EXTENSION_KEY_MAX_CHARS) {
             key.append('k');
@@ -1102,7 +1094,7 @@ class SessionManagerTest {
     @Test
     void removeExtensionEntry_should_be_noop_when_absent() {
         SessionManager manager = manager();
-        Session session = manager.create(CODER, null, null, null);
+        Session session = manager.create(CODER, null, null);
 
         manager.removeExtensionEntry(session.getSessionId(), "plugin-a::ghost");
 
@@ -1112,7 +1104,7 @@ class SessionManagerTest {
     @Test
     void removeExtensionEntry_should_drop_entry() {
         SessionManager manager = manager();
-        Session session = manager.create(CODER, null, null, null);
+        Session session = manager.create(CODER, null, null);
         manager.putExtensionEntry(session.getSessionId(), "plugin-a", "plugin-a::k", null);
 
         manager.removeExtensionEntry(session.getSessionId(), "plugin-a::k");
@@ -1124,7 +1116,7 @@ class SessionManagerTest {
     void putExtensionEntry_should_persist_immediately_outside_turn() {
         SessionManager manager = manager();
         AtomicInteger persists = countingPersistHandler();
-        Session session = manager.create(CODER, null, null, null);
+        Session session = manager.create(CODER, null, null);
         int before = persists.get();
 
         manager.putExtensionEntry(session.getSessionId(), "plugin-a", "plugin-a::k", null);
@@ -1137,7 +1129,7 @@ class SessionManagerTest {
         // 回合内只标脏：与消息追加同一纪律，不新增第三条落盘路径
         SessionManager manager = manager();
         AtomicInteger persists = countingPersistHandler();
-        Session session = manager.create(CODER, null, null, null);
+        Session session = manager.create(CODER, null, null);
         manager.beginTurn(session.getSessionId());
         int before = persists.get();
 
@@ -1191,7 +1183,7 @@ class SessionManagerTest {
         // 老快照没有 kind 字段：那时 parentSessionId 非空只可能是子代理会话。
         // 当成普通会话会让它被落盘并进列表——那正是「一字段两用」带来的静默数据丢失
         SessionSnapshot legacy = new SessionSnapshot("s-legacy", 1L, 1L, null, CODER, null, null,
-                PermissionMode.NORMAL, null, null, null, null, "parent-1", null, null);
+                null, null, null, null, "parent-1", null, null);
 
         assertEquals(SessionKind.EPHEMERAL, legacy.getKind());
         assertTrue(Session.restore(legacy).isEphemeral());
@@ -1204,7 +1196,7 @@ class SessionManagerTest {
      * @return 源会话
      */
     private Session conversation(SessionManager manager) {
-        Session session = manager.create(CODER, "openai", "gpt-4o", PermissionMode.NORMAL);
+        Session session = manager.create(CODER, "openai", "gpt-4o");
         manager.appendMessage(session.getSessionId(), LlmMessage.user("读文件"), null);
         manager.appendMessage(session.getSessionId(), LlmMessage.assistant("好的",
                 java.util.Collections.singletonList(new zcd.jellyfish.infra.llm.LlmToolCall(0,

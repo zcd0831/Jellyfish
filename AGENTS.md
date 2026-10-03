@@ -90,7 +90,7 @@ jellyfish-infra/src/main/java/zcd/jellyfish/infra/
 ├── model/                      # 模型注册与路由 ModelManager / SessionModelResolver（会话 → 模型的唯一解释器）
 ├── llm/                        # LLM 调用抽象与厂商实现
 ├── plugin/                     # 插件运行时 PF4JPluginManager / PluginRuntimeConfig / JellyfishPluginAdapter
-├── permission/                 # 权限判定 PermissionManager / ApprovalChannel / PermissionPolicy / ReadOnlyTools
+├── permission/                 # 权限判定 PermissionManager / ApprovalChannel / PermissionPolicy
 ├── ui/                         # UI 贡献门面 UiContributions
 ├── shell/                      # 外壳贡献信箱 ShellIngress（每 owner 有界 · 同 key 合并 · 满即丢）
 ├── metrics/                    # 指标与健康检查 MetricsRegistry / MetricsSubscriber / HealthCheck
@@ -162,7 +162,7 @@ jellyfish-tui/src/main/java/zcd/jellyfish/tui/
 - **`ToolExecutor` 是权限 → 路由 → 截断的唯一执行点**，模型调用与输入指令共用它。
 - **`ExtensionRegistry`（同步、不可丢）与 `EventChannel`（异步、可丢）是内核与插件之间唯一边界**；
   判据是「能否丢弃」而不是「有没有返回值」。禁止引入第三方事件总线。
-- **权限三层**：核心策略 → PLAN 只读白名单 → 插件拦截；插件拦截三态且**没有 `ALLOW`**，
+- **权限两层**：核心策略 → 插件拦截；插件拦截三态且**没有 `ALLOW`**，
   审批 fail-closed（无审批者 / 超时 / 中断一律拒绝）。
 - **`CommandManager` 无状态、对外壳中立**；「需不需要会话」由命令自己声明（`sessionRequired` 缺省 `true`）。
 - **提示词组装**：`PromptAssembler`；裁剪只裁本次请求（`ContextWindow` 成组丢弃），历史一条不动。
@@ -177,7 +177,7 @@ jellyfish-tui/src/main/java/zcd/jellyfish/tui/
   [docs/design/subagent-runtime-p1.md](docs/design/subagent-runtime-p1.md)、
   [docs/design/subagent-runtime-p2.md](docs/design/subagent-runtime-p2.md)。
 - **跨边界载荷必须是 `api` 侧快照值类型**，且快照类型恰好只有一个可见构造器；**`-parameters` 不许去掉**。
-- **`-tui` / `-server` 的启动期都不建会话**；`--agent` / `--model` / `--mode` / `-p` / `--show-thinking` 只归 CLI，
+- **`-tui` / `-server` 的启动期都不建会话**；`--agent` / `--model` / `-p` / `--show-thinking` 只归 CLI，
   其余模式带上它们一律判用法错误退 2（**拒绝而不是静默忽略**）。
 - **生命周期收尾顺序**：`flushAll()` → `InputDirectives.close()` → `pluginManager.close()`（落盘经扩展点派发给插件，
   插件一停就没人接了）。

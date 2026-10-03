@@ -2,7 +2,6 @@ package zcd.jellyfish.api.event.notification;
 
 import org.junit.jupiter.api.Test;
 import zcd.jellyfish.api.extension.PermissionDecision;
-import zcd.jellyfish.api.extension.PermissionMode;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -19,15 +18,14 @@ class PermissionDecidedEventTest {
     @Test
     void getters_should_return_constructor_values() {
         // Given
-        PermissionDecidedEvent event = new PermissionDecidedEvent("agent-a", "write_file", PermissionMode.PLAN,
-                PermissionDecision.Outcome.DENY, "PLAN 模式仅允许只读工具", "core", "session-1");
+        PermissionDecidedEvent event = new PermissionDecidedEvent("agent-a", "write_file",
+                PermissionDecision.Outcome.DENY, "只读模式下仅允许白名单内的工具", "core", "session-1");
 
         // Then
         assertEquals("agent-a", event.getAgentId());
         assertEquals("write_file", event.getToolName());
-        assertEquals(PermissionMode.PLAN, event.getMode());
         assertEquals(PermissionDecision.Outcome.DENY, event.getOutcome());
-        assertEquals("PLAN 模式仅允许只读工具", event.getReason());
+        assertEquals("只读模式下仅允许白名单内的工具", event.getReason());
         assertEquals("core", event.getSource());
         assertEquals("session-1", event.getSessionId());
     }
@@ -35,7 +33,7 @@ class PermissionDecidedEventTest {
     @Test
     void getters_should_keep_plugin_source_when_intercepted_by_plugin() {
         // Given
-        PermissionDecidedEvent event = new PermissionDecidedEvent("agent-a", "bash", PermissionMode.NORMAL,
+        PermissionDecidedEvent event = new PermissionDecidedEvent("agent-a", "bash",
                 PermissionDecision.Outcome.DENY, "危险命令", "guard-plugin", null);
 
         // Then
@@ -46,7 +44,7 @@ class PermissionDecidedEventTest {
     @Test
     void meta_should_be_filled_when_constructed() {
         // Given
-        PermissionDecidedEvent event = new PermissionDecidedEvent(null, "read_file", PermissionMode.NORMAL,
+        PermissionDecidedEvent event = new PermissionDecidedEvent(null, "read_file",
                 PermissionDecision.Outcome.ALLOW, null, "core", null);
 
         // Then
@@ -59,7 +57,7 @@ class PermissionDecidedEventTest {
     @Test
     void belongsToSession_should_match_session_id() {
         // Given
-        PermissionDecidedEvent event = new PermissionDecidedEvent("agent-a", "read_file", PermissionMode.NORMAL,
+        PermissionDecidedEvent event = new PermissionDecidedEvent("agent-a", "read_file",
                 PermissionDecision.Outcome.ALLOW, null, "core", "session-1");
 
         // Then

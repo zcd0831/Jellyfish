@@ -1,6 +1,5 @@
 package zcd.jellyfish.tui;
 
-import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.infra.session.SessionUsage;
 import zcd.jellyfish.tui.text.DisplayWidth;
 
@@ -10,9 +9,12 @@ import java.util.List;
  * 状态栏：把会话运行态压成一行文本。
  * <p>
  * <b>为什么是纯函数式的取文本而不是直接画元素</b>：状态栏要显示的字段全部来自会话与外壳运行态，
- * 这些状态是长期存在、随时可被命令改写的（{@code /model}、{@code /agent}、{@code /mode} 都改会话）。
+ * 这些状态是长期存在、随时可被命令改写的（{@code /model}、{@code /agent} 都改会话）。
  * 因此外壳每帧<b>现读</b>并装配成 {@link Info}，这里只负责把它渲染成一行——纯函数便于单测，
  * 也不会出现「换了模型，状态栏还写着旧的」这种缓存陈旧问题。
+ * <p>
+ * <b>权限模式这类插件能力不在这里</b>：内核不再持有「有哪些模式」的知识，插件用
+ * {@code StatusLineContributionRequest} 往状态栏尾部追加自己的片段（见 {@link #appendFragments}）。
  *
  * @author zcd
  */
@@ -73,7 +75,7 @@ public final class StatusBarView {
     /**
      * 渲染状态栏文本。
      * <p>
-     * 字段顺序固定为：agent · provider/model · 权限模式 · 工作目录 · 上下文 · token 用量。
+     * 字段顺序固定为：agent · provider/model · 工作目录 · 上下文 · token 用量。
      * 前段是「我是谁、在哪、用什么模型」，后段是「这轮对话的规模」，便于从左到右扫读。
      *
      * @param info 状态栏数据，可为 {@code null}
@@ -86,8 +88,6 @@ public final class StatusBarView {
         StringBuilder sb = new StringBuilder();
         sb.append(" ").append(orUnknown(info.getAgentId()));
         sb.append(SEPARATOR).append(modelLabel(info.getProvider(), info.getModel()));
-        sb.append(SEPARATOR).append(info.getPermissionMode() == null
-                ? UNKNOWN : info.getPermissionMode().name().toLowerCase());
         sb.append(SEPARATOR).append(workingDirLabel(info.getWorkingDir()));
         sb.append(SEPARATOR).append(contextLabel(info.getContextTokens(), info.getContextLength()));
         sb.append(SEPARATOR).append(usageLabel(info.getUsage()));
@@ -291,9 +291,6 @@ public final class StatusBarView {
         /** 当前生效的 model 名，可为 {@code null}。 */
         private final String model;
 
-        /** 当前权限模式，可为 {@code null}。 */
-        private final PermissionMode permissionMode;
-
         /** 进程工作目录，可为 {@code null}。 */
         private final String workingDir;
 
@@ -312,18 +309,16 @@ public final class StatusBarView {
          * @param agentId       当前 agentId，可为 {@code null}
          * @param provider      当前生效的 provider 名，可为 {@code null}
          * @param model         当前生效的 model 名，可为 {@code null}
-         * @param permissionMode 当前权限模式，可为 {@code null}
          * @param workingDir    进程工作目录，可为 {@code null}
          * @param contextTokens 最近一次调用的输入 token 数
          * @param contextLength 模型上下文窗口，未知时为 0 或负数
          * @param usage         会话 token 累计用量，可为 {@code null}
          */
-        public Info(String agentId, String provider, String model, PermissionMode permissionMode,
+        public Info(String agentId, String provider, String model,
                     String workingDir, long contextTokens, int contextLength, SessionUsage usage) {
             this.agentId = agentId;
             this.provider = provider;
             this.model = model;
-            this.permissionMode = permissionMode;
             this.workingDir = workingDir;
             this.contextTokens = contextTokens;
             this.contextLength = contextLength;
@@ -355,15 +350,6 @@ public final class StatusBarView {
          */
         public String getModel() {
             return model;
-        }
-
-        /**
-         * 获取当前权限模式。
-         *
-         * @return 权限模式，可为 {@code null}
-         */
-        public PermissionMode getPermissionMode() {
-            return permissionMode;
         }
 
         /**

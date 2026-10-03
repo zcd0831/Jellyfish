@@ -24,7 +24,7 @@ public final class SessionTestSupport {
     }
 
     /**
-     * 创建一个真实会话（无 agent、无模型、常规权限模式）。
+     * 创建一个真实会话（无 agent、无模型）。
      *
      * @return 会话运行态，保证非 {@code null}
      */

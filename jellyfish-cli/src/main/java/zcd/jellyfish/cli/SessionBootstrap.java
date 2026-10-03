@@ -12,7 +12,7 @@ import java.util.Objects;
  * 启动期会话保证：让外壳在进入主流程前拿到「当前会话」，并把启动参数里的覆盖项落上去。
  * <p>
  * <b>为什么需要这一步</b>：三种模式的所有智能入口（{@code AgentHarness.chat}）与大部分系统命令
- * （{@code /model} {@code /agent} {@code /mode} {@code /status}）都要求「当前会话」存在，
+ * （{@code /model} {@code /agent} {@code /status}）都要求「当前会话」存在，
  * 而会话是纯内存运行态、进程启动时一个都没有。把「建第一个会话」放在 {@code Launcher} 这一层，
  * 三种模式共享同一条规则，模式实现本身不必关心自己是不是第一个。
  * <p>
@@ -22,7 +22,7 @@ import java.util.Objects;
  * 「谁都没用过」的文件。CLI 是单次调用，没有首页这个概念，因此始终在启动期建会话。
  * 详见 {@link #deferCreation(StartupOptions)}。
  * <p>
- * <b>启动参数里的覆盖项（{@code --agent} / {@code --model} / {@code --mode}）只归 CLI</b>：
+ * <b>启动参数里的覆盖项（{@code --agent} / {@code --model}）只归 CLI</b>：
  * 解析器已经拦住「非 CLI 带这些参数」，因此这里不必再操心「覆盖项要不要暂存到首条输入」——
  * TUI 是用 {@code /agent} 等命令改「下次会话的默认值」，Server 是用请求体指定，两者都不靠参数。
  * <p>
@@ -84,8 +84,7 @@ public final class SessionBootstrap {
             // 刻意不建：外壳要先显示首页，等用户真正要用了再建（见类注释）
             return null;
         }
-        Session created = sessions.create(options.getAgentId(), options.getProvider(), options.getModel(),
-                options.getPermissionMode());
+        Session created = sessions.create(options.getAgentId(), options.getProvider(), options.getModel());
         sessions.switchTo(created.getSessionId());
         return created;
     }
@@ -125,7 +124,7 @@ public final class SessionBootstrap {
     /**
      * 把覆盖项应用到既有会话上。
      * <p>
-     * 覆盖项只归 CLI（{@code --agent} / {@code --model} / {@code --mode}），且只在这一种情形下走到：
+     * 覆盖项只归 CLI（{@code --agent} / {@code --model}），且只在这一种情形下走到：
      * CLI 带 {@code --session} 切到已有会话后，再把覆盖项落上去。
      *
      * @param options 启动参数
@@ -139,9 +138,6 @@ public final class SessionBootstrap {
         }
         if (options.getModel() != null) {
             sessions.switchModel(sessionId, options.getProvider(), options.getModel());
-        }
-        if (options.getPermissionMode() != null) {
-            sessions.setPermissionMode(sessionId, options.getPermissionMode());
         }
         return session;
     }

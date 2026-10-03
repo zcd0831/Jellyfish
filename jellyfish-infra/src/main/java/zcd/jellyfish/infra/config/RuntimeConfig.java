@@ -533,7 +533,7 @@ public class RuntimeConfig {
     private static PluginsSettings mergePluginsSettings(PluginsSettings global, PluginsSettings project) {
         Map<String, Map<String, Object>> configurations = new LinkedHashMap<>();
         putPluginConfigurations(configurations, global);
-        // 同名插件配置段整对象替换：`readOnlyTools` 这类声明必须整段生效或整段不生效，不能半新半旧
+        // 同名插件配置段整对象替换：插件声明的名单类配置必须整段生效或整段不生效，不能半新半旧
         putPluginConfigurations(configurations, project);
         return new PluginsSettings(
                 listOverride(project, global, PluginsSettings::isEnabledDeclared, PluginsSettings::getEnabled),

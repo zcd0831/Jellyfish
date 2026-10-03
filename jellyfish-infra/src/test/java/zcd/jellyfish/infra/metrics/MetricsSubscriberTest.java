@@ -15,7 +15,6 @@ import zcd.jellyfish.api.event.notification.ToolCallCompletedEvent;
 import zcd.jellyfish.api.event.notification.ToolCallStartedEvent;
 import zcd.jellyfish.api.extension.CommandResult;
 import zcd.jellyfish.api.extension.PermissionDecision;
-import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.api.extension.TokenUsageSnapshot;
 import zcd.jellyfish.infra.event.EventChannel;
 import zcd.jellyfish.infra.event.EventChannelOptions;
@@ -277,7 +276,7 @@ class MetricsSubscriberTest {
      * @return 事件
      */
     private static PermissionDecidedEvent permission(PermissionDecision.Outcome outcome) {
-        return new PermissionDecidedEvent("coder", "read_file", PermissionMode.NORMAL, outcome, "理由", "core", "s1");
+        return new PermissionDecidedEvent("coder", "read_file", outcome, "理由", "core", "s1");
     }
 
     /**

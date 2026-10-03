@@ -1,13 +1,11 @@
 package zcd.jellyfish.infra.session;
 
-import zcd.jellyfish.api.extension.PermissionMode;
-
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * 本进程内「新建会话时使用的默认值」：agent / provider / model / 权限模式。
+ * 本进程内「新建会话时使用的默认值」：agent / provider / model。
  * <p>
  * <b>它解决的是「首页上设置的那几项该落到哪」</b>：用户在还没有会话时敲
  * {@code /model openai/gpt-4o}，意图明确是「我接下来这次对话要用它」，而不是
@@ -34,7 +32,7 @@ public final class SessionDefaults {
 
     /** 当前的一组默认值，整体替换。 */
     private final AtomicReference<Values> current =
-            new AtomicReference<Values>(new Values(null, null, null, null));
+            new AtomicReference<Values>(new Values(null, null, null));
 
     /**
      * 构造空的默认值集合。
@@ -60,8 +58,7 @@ public final class SessionDefaults {
      * @param agentId agent 标识，可为 {@code null}（表示恢复为「跟随内置默认 agent」）
      */
     public void setAgentId(String agentId) {
-        current.updateAndGet(values -> new Values(agentId, values.provider, values.model,
-                values.permissionMode));
+        current.updateAndGet(values -> new Values(agentId, values.provider, values.model));
     }
 
     /**
@@ -71,23 +68,13 @@ public final class SessionDefaults {
      * @param model    模型名，可为 {@code null}
      */
     public void setModel(String provider, String model) {
-        current.updateAndGet(values -> new Values(values.agentId, provider, model, values.permissionMode));
-    }
-
-    /**
-     * 设置下次建会话的权限模式。
-     *
-     * @param permissionMode 权限模式，可为 {@code null}（表示跟随会话自身的缺省，即 NORMAL）
-     */
-    public void setPermissionMode(PermissionMode permissionMode) {
-        current.updateAndGet(values -> new Values(values.agentId, values.provider, values.model,
-                permissionMode));
+        current.updateAndGet(values -> new Values(values.agentId, provider, model));
     }
 
     /**
      * 一组不可变的默认值；字段为 {@code null} 表示「这一项跟随更下层的默认」。
      * <p>
-     * <b>为什么要一个值对象而不是四个字段</b>：{@code SessionManager.create} 需要一次性读齐四项，
+     * <b>为什么要一个值对象而不是三个字段</b>：{@code SessionManager.create} 需要一次性读齐三项，
      * 分开读可能在两次读之间被另一个线程改掉中间项，从而建出一个「agent 是新的、模型是旧的」会话。
      *
      * @author zcd
@@ -103,22 +90,17 @@ public final class SessionDefaults {
         /** 默认模型名，可为 {@code null}。 */
         private final String model;
 
-        /** 默认权限模式，可为 {@code null}。 */
-        private final PermissionMode permissionMode;
-
         /**
          * 构造一组默认值。
          *
-         * @param agentId        默认 agent 标识，可为 {@code null}
-         * @param provider       默认 provider，可为 {@code null}
-         * @param model          默认模型名，可为 {@code null}
-         * @param permissionMode 默认权限模式，可为 {@code null}
+         * @param agentId  默认 agent 标识，可为 {@code null}
+         * @param provider 默认 provider，可为 {@code null}
+         * @param model    默认模型名，可为 {@code null}
          */
-        private Values(String agentId, String provider, String model, PermissionMode permissionMode) {
+        private Values(String agentId, String provider, String model) {
             this.agentId = agentId;
             this.provider = provider;
             this.model = model;
-            this.permissionMode = permissionMode;
         }
 
         /**
@@ -149,21 +131,12 @@ public final class SessionDefaults {
         }
 
         /**
-         * 获取默认权限模式。
-         *
-         * @return 权限模式，未设置时为 {@code null}
-         */
-        public PermissionMode getPermissionMode() {
-            return permissionMode;
-        }
-
-        /**
-         * 判断四项是否都没设置。
+         * 判断三项是否都没设置。
          *
          * @return 全部为 {@code null} 返回 {@code true}
          */
         public boolean isEmpty() {
-            return agentId == null && provider == null && model == null && permissionMode == null;
+            return agentId == null && provider == null && model == null;
         }
     }
 }

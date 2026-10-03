@@ -1,6 +1,5 @@
 package zcd.jellyfish.infra.session;
 
-import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.api.extension.SessionExtensionEntry;
 import zcd.jellyfish.api.extension.SessionKind;
 import zcd.jellyfish.api.extension.SessionMessageSnapshot;
@@ -20,8 +19,7 @@ import java.util.Map;
  * <ol>
  *     <li><b>标识与生命周期</b>：{@code sessionId}（创建后不可变）、{@code createdAt}、
  *     {@code updatedAt}、{@code title}；</li>
- *     <li><b>会话级选择</b>：当前 {@code agentId}、当前 {@code provider} / {@code model}、
- *     当前 {@link PermissionMode}；</li>
+ *     <li><b>会话级选择</b>：当前 {@code agentId}、当前 {@code provider} / {@code model}；</li>
  *     <li><b>内容与计量</b>：消息列表、token 累计、压缩摘要（{@code /compact} 的边界与摘要）。</li>
  * </ol>
  * <b>变更方法一律包级可见</b>：外部只能经 {@link SessionManager} 修改会话，事件广播与将来的持久化
@@ -97,9 +95,6 @@ public final class Session {
     /** 当前 model 名，{@code null} 表示跟随配置默认值。 */
     private String model;
 
-    /** 当前权限模式，保证非 {@code null}。 */
-    private PermissionMode permissionMode;
-
     /** token 累计快照，追加时整体替换为新实例。 */
     private SessionUsage usage = SessionUsage.EMPTY;
 
@@ -130,13 +125,10 @@ public final class Session {
      * @param agentId        初始 agentId，可为 {@code null}
      * @param provider       初始 provider，可为 {@code null}
      * @param model          初始 model，可为 {@code null}
-     * @param permissionMode 初始权限模式，{@code null} 按 {@link PermissionMode#NORMAL} 处理
      * @param createdAt      创建时间戳（epoch millis）
      */
-    Session(String sessionId, String agentId, String provider, String model,
-            PermissionMode permissionMode, long createdAt) {
-        this(sessionId, agentId, provider, model, permissionMode, createdAt,
-                SessionKind.NORMAL, null, null);
+    Session(String sessionId, String agentId, String provider, String model, long createdAt) {
+        this(sessionId, agentId, provider, model, createdAt, SessionKind.NORMAL, null, null);
     }
 
     /**
@@ -146,20 +138,17 @@ public final class Session {
      * @param agentId         初始 agentId，可为 {@code null}
      * @param provider        初始 provider，可为 {@code null}
      * @param model           初始 model，可为 {@code null}
-     * @param permissionMode  初始权限模式，{@code null} 按 {@link PermissionMode#NORMAL} 处理
      * @param createdAt       创建时间戳（epoch millis）
      * @param kind            会话种类，{@code null} 按 {@link SessionKind#NORMAL} 处理
      * @param parentSessionId 派生该会话的父会话标识，可为 {@code null}
      * @param forkPointMessageId 分支点消息标识，可为 {@code null}
      */
-    Session(String sessionId, String agentId, String provider, String model,
-            PermissionMode permissionMode, long createdAt, SessionKind kind, String parentSessionId,
-            String forkPointMessageId) {
+    Session(String sessionId, String agentId, String provider, String model, long createdAt,
+            SessionKind kind, String parentSessionId, String forkPointMessageId) {
         this.sessionId = sessionId;
         this.agentId = agentId;
         this.provider = provider;
         this.model = model;
-        this.permissionMode = permissionMode == null ? PermissionMode.NORMAL : permissionMode;
         this.createdAt = createdAt;
         this.updatedAt = createdAt;
         this.kind = kind == null ? SessionKind.NORMAL : kind;
@@ -179,7 +168,7 @@ public final class Session {
      */
     static Session restore(SessionSnapshot snapshot) {
         Session session = new Session(snapshot.getSessionId(), snapshot.getAgentId(), snapshot.getProvider(),
-                snapshot.getModel(), snapshot.getPermissionMode(), snapshot.getCreatedAt(),
+                snapshot.getModel(), snapshot.getCreatedAt(),
                 snapshot.getKind(), snapshot.getParentSessionId(), snapshot.getForkPointMessageId());
         session.title = snapshot.getTitle();
         session.updatedAt = snapshot.getUpdatedAt();
@@ -296,15 +285,6 @@ public final class Session {
      */
     public synchronized String getModel() {
         return model;
-    }
-
-    /**
-     * 获取当前权限模式。
-     *
-     * @return 权限模式，保证非 {@code null}
-     */
-    public synchronized PermissionMode getPermissionMode() {
-        return permissionMode;
     }
 
     /**
@@ -521,15 +501,5 @@ public final class Session {
      */
     synchronized void copyMessagesWithoutUsage(List<SessionMessage> copied) {
         messages.addAll(copied);
-    }
-
-    /**
-     * 设置当前权限模式。
-     *
-     * @param permissionMode 权限模式，{@code null} 按 {@link PermissionMode#NORMAL} 处理
-     */
-    synchronized void setPermissionMode(PermissionMode permissionMode) {
-        this.permissionMode = permissionMode == null ? PermissionMode.NORMAL : permissionMode;
-        this.updatedAt = System.currentTimeMillis();
     }
 }

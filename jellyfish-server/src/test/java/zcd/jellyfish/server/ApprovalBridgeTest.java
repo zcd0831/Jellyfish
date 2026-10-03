@@ -2,7 +2,6 @@ package zcd.jellyfish.server;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.infra.permission.ApprovalChannel;
 import zcd.jellyfish.server.dto.ApprovalDto;
 import zcd.jellyfish.server.http.ApiException;
@@ -48,7 +47,7 @@ class ApprovalBridgeTest {
      */
     private String occupyHead(String sessionId, String toolName) throws InterruptedException {
         ApprovalChannel.Pending pending = new ApprovalChannel.Pending(sessionId, "coder", toolName,
-                java.util.Collections.<String, Object>singletonMap("path", "/a"), PermissionMode.NORMAL, "需要确认");
+                java.util.Collections.<String, Object>singletonMap("path", "/a"), "需要确认");
         Thread requester = new Thread(() -> channel.request(pending, Duration.ofSeconds(5)), "approval-requester");
         requester.setDaemon(true);
         requester.start();

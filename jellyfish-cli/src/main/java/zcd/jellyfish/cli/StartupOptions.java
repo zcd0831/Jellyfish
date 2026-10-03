@@ -1,7 +1,5 @@
 package zcd.jellyfish.cli;
 
-import zcd.jellyfish.api.extension.PermissionMode;
-
 /**
  * 启动参数：不可变值对象，通过 {@link #builder(Mode)} 构建。
  * <p>
@@ -79,9 +77,6 @@ public final class StartupOptions {
     /** 新建会话时指定的模型；{@code null} 表示跟随默认。 */
     private final String model;
 
-    /** 新建会话的权限模式；{@code null} 表示按 {@link PermissionMode#NORMAL}。 */
-    private final PermissionMode permissionMode;
-
     /** 服务器模式端口。 */
     private final int port;
 
@@ -123,7 +118,6 @@ public final class StartupOptions {
         this.agentId = builder.agentId;
         this.provider = builder.provider;
         this.model = builder.model;
-        this.permissionMode = builder.permissionMode;
         this.port = builder.port;
         this.host = builder.host;
         this.apiKey = builder.apiKey;
@@ -196,15 +190,6 @@ public final class StartupOptions {
      */
     public String getModel() {
         return model;
-    }
-
-    /**
-     * 获取新建会话的权限模式。
-     *
-     * @return 权限模式，未指定时为 {@code null}
-     */
-    public PermissionMode getPermissionMode() {
-        return permissionMode;
     }
 
     /**
@@ -306,9 +291,6 @@ public final class StartupOptions {
         /** 新建会话要指定的模型。 */
         private String model;
 
-        /** 新建会话的权限模式。 */
-        private PermissionMode permissionMode;
-
         /** 服务器模式端口。 */
         private int port = DEFAULT_PORT;
 
@@ -385,17 +367,6 @@ public final class StartupOptions {
         public Builder model(String provider, String model) {
             this.provider = provider;
             this.model = model;
-            return this;
-        }
-
-        /**
-         * 设置新建会话的权限模式。
-         *
-         * @param permissionMode 权限模式，可为 {@code null}
-         * @return 本构建器
-         */
-        public Builder permissionMode(PermissionMode permissionMode) {
-            this.permissionMode = permissionMode;
             return this;
         }
 

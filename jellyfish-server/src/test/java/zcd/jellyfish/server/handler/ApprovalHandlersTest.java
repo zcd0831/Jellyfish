@@ -5,7 +5,6 @@ import io.undertow.util.HeaderMap;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
-import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.server.ApprovalBridge;
 import zcd.jellyfish.server.ServerConfig;
 import zcd.jellyfish.server.dto.ApprovalDto;
@@ -92,7 +91,7 @@ class ApprovalHandlersTest {
     @Test
     void get_should_return_pending_when_present() {
         ApprovalDto dto = new ApprovalDto("r1", "s1", "coder", "write_file",
-                Collections.singletonMap("path", "/a"), PermissionMode.NORMAL, "需要确认", 1L);
+                Collections.singletonMap("path", "/a"), "需要确认", 1L);
         when(bridge.head()).thenReturn(Optional.of(dto));
         Fixture fixture = fixture("");
 

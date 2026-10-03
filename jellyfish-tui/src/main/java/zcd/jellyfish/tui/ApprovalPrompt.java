@@ -169,7 +169,7 @@ public final class ApprovalPrompt {
     }
 
     /**
-     * 拼出「会话 + 模式」上下文文本。
+     * 拼出「会话」上下文文本。
      *
      * @param pending 待审批请求
      * @return 展示文本，保证非 {@code null}
@@ -177,8 +177,7 @@ public final class ApprovalPrompt {
     private static String contextOf(ApprovalChannel.Pending pending) {
         String sessionId = text(pending.getSessionId());
         String session = sessionId == null || sessionId.isEmpty() ? NONE : shorten(sessionId);
-        String mode = pending.getMode() == null ? NONE : pending.getMode().name().toLowerCase();
-        return session + " \u00b7 模式 " + mode;
+        return "会话 " + session;
     }
 
     /**

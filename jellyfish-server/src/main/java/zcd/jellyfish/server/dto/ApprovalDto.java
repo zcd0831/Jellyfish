@@ -1,6 +1,6 @@
 package zcd.jellyfish.server.dto;
 
-import zcd.jellyfish.api.extension.PermissionMode;
+import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.infra.permission.ApprovalChannel;
 
 import java.util.Collections;
@@ -38,9 +38,6 @@ public final class ApprovalDto {
     /** 工具参数，保证非 {@code null}。 */
     private final Map<String, Object> arguments;
 
-    /** 当时的权限模式，可为 {@code null}。 */
-    private final PermissionMode mode;
-
     /** 策略给出的审批理由，可为 {@code null}。 */
     private final String reason;
 
@@ -55,12 +52,11 @@ public final class ApprovalDto {
      * @param agentId   agentId，可为 {@code null}
      * @param toolName  工具名
      * @param arguments 工具参数，可为 {@code null}
-     * @param mode      权限模式，可为 {@code null}
      * @param reason    审批理由，可为 {@code null}
      * @param timestamp 请求发生时刻
      */
     public ApprovalDto(String requestId, String sessionId, String agentId, String toolName,
-                       Map<String, Object> arguments, PermissionMode mode, String reason, long timestamp) {
+                       Map<String, Object> arguments, String reason, long timestamp) {
         this.requestId = requestId;
         this.sessionId = sessionId;
         this.agentId = agentId;
@@ -68,7 +64,6 @@ public final class ApprovalDto {
         this.arguments = arguments == null
                 ? Collections.<String, Object>emptyMap()
                 : Collections.unmodifiableMap(new LinkedHashMap<String, Object>(arguments));
-        this.mode = mode;
         this.reason = reason;
         this.timestamp = timestamp;
     }
@@ -81,7 +76,7 @@ public final class ApprovalDto {
      */
     public static ApprovalDto of(ApprovalChannel.Pending pending) {
         return new ApprovalDto(pending.getId(), pending.getSessionId(), pending.getAgentId(),
-                pending.getToolName(), pending.getArguments(), pending.getMode(), pending.getReason(),
+                pending.getToolName(), pending.getArguments(), pending.getReason(),
                 pending.getTimestamp());
     }
 
@@ -128,15 +123,6 @@ public final class ApprovalDto {
      */
     public Map<String, Object> getArguments() {
         return arguments;
-    }
-
-    /**
-     * 获取权限模式。
-     *
-     * @return 权限模式，可能为 {@code null}
-     */
-    public PermissionMode getMode() {
-        return mode;
     }
 
     /**

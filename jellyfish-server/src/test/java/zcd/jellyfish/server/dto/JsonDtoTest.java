@@ -1,7 +1,6 @@
 package zcd.jellyfish.server.dto;
 
 import org.junit.jupiter.api.Test;
-import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.api.extension.SessionUsageSnapshot;
 import zcd.jellyfish.infra.permission.ApprovalChannel;
 import zcd.jellyfish.infra.support.ObjectMapperWrapper;
@@ -49,13 +48,12 @@ class JsonDtoTest {
     @Test
     void createSessionRequest_should_bind_all_fields_when_json_given() {
         CreateSessionRequest request = ObjectMapperWrapper.readValue(
-                "{\"agentId\":\"coder\",\"provider\":\"openai\",\"model\":\"gpt-4o\",\"permissionMode\":\"PLAN\"}",
+                "{\"agentId\":\"coder\",\"provider\":\"openai\",\"model\":\"gpt-4o\"}",
                 CreateSessionRequest.class);
 
         assertEquals("coder", request.getAgentId());
         assertEquals("openai", request.getProvider());
         assertEquals("gpt-4o", request.getModel());
-        assertEquals("PLAN", request.getPermissionMode());
     }
 
     @Test
@@ -65,7 +63,6 @@ class JsonDtoTest {
         assertNull(request.getAgentId());
         assertNull(request.getProvider());
         assertNull(request.getModel());
-        assertNull(request.getPermissionMode());
     }
 
     @Test
@@ -98,13 +95,12 @@ class JsonDtoTest {
     @Test
     void sessionSummary_should_serialize_expected_field_names_when_serialized() {
         SessionSummary summary = new SessionSummary("s1", "标题", "coder", "openai", "gpt-4o",
-                PermissionMode.NORMAL, 1000L, 2000L, 3, new SessionUsageSnapshot(1L, 2L, 3L, 4L, 5L, 6L));
+                1000L, 2000L, 3, new SessionUsageSnapshot(1L, 2L, 3L, 4L, 5L, 6L));
 
         String json = ObjectMapperWrapper.writeValueAsString(summary);
 
         assertTrue(json.contains("\"sessionId\":\"s1\""), json);
         assertTrue(json.contains("\"messageCount\":3"), json);
-        assertTrue(json.contains("\"permissionMode\":\"NORMAL\""), json);
         assertTrue(json.contains("\"totalTokens\":3"), json);
     }
 
@@ -125,7 +121,7 @@ class JsonDtoTest {
         Map<String, Object> arguments = new LinkedHashMap<String, Object>();
         arguments.put("path", "/tmp/x");
         ApprovalChannel.Pending pending = new ApprovalChannel.Pending("s1", "coder", "write_file",
-                arguments, PermissionMode.NORMAL, "写文件需要确认");
+                arguments, "写文件需要确认");
 
         ApprovalDto dto = ApprovalDto.of(pending);
 
@@ -139,7 +135,7 @@ class JsonDtoTest {
     @Test
     void approvalDto_should_serialize_arguments_as_object_when_serialized() {
         ApprovalChannel.Pending pending = new ApprovalChannel.Pending("s1", null, "read_file",
-                Collections.singletonMap("path", "/a"), PermissionMode.PLAN, null);
+                Collections.singletonMap("path", "/a"), null);
 
         String json = ObjectMapperWrapper.writeValueAsString(ApprovalDto.of(pending));
 

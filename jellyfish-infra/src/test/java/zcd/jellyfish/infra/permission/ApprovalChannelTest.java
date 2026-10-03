@@ -4,7 +4,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import zcd.jellyfish.api.extension.PermissionDecision;
-import zcd.jellyfish.api.extension.PermissionMode;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -264,7 +263,7 @@ class ApprovalChannelTest {
         Map<String, Object> arguments = new LinkedHashMap<String, Object>();
         arguments.put("path", "a.txt");
         ApprovalChannel.Pending request = new ApprovalChannel.Pending("session-1", "agent-a", "write_file",
-                arguments, PermissionMode.PLAN, "策略要求审批");
+                arguments, "策略要求审批");
 
         // When
         arguments.put("path", "b.txt");
@@ -274,7 +273,6 @@ class ApprovalChannelTest {
         assertEquals("write_file", request.getToolName());
         assertEquals("agent-a", request.getAgentId());
         assertEquals("session-1", request.getSessionId());
-        assertEquals(PermissionMode.PLAN, request.getMode());
         assertEquals("策略要求审批", request.getReason());
         assertNotNull(request.getId());
         assertThrows(UnsupportedOperationException.class, () -> request.getArguments().put("x", "y"));
@@ -376,7 +374,7 @@ class ApprovalChannelTest {
         Map<String, Object> arguments = new LinkedHashMap<String, Object>();
         arguments.put("path", "a.txt");
         return new ApprovalChannel.Pending(sessionId, "agent-a", "write_file", arguments,
-                PermissionMode.NORMAL, "agent 策略要求人工审批该工具");
+                "agent 策略要求人工审批该工具");
     }
 
     /**
@@ -423,7 +421,7 @@ class ApprovalChannelTest {
         Map<String, Object> arguments = new LinkedHashMap<String, Object>();
         arguments.put("path", "a.txt");
         return new ApprovalChannel.Pending("session-1", "agent-a", "write_file", arguments,
-                PermissionMode.NORMAL, "agent 策略要求人工审批该工具");
+                "agent 策略要求人工审批该工具");
     }
 
     /**

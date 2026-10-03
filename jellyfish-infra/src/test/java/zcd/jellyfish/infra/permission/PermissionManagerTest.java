@@ -7,27 +7,19 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import zcd.jellyfish.api.event.EventPublisher;
-import zcd.jellyfish.api.event.JellyfishEvent;
 import zcd.jellyfish.api.event.RegisterOptions;
-import zcd.jellyfish.api.event.notification.ConfigWarningEvent;
 import zcd.jellyfish.api.event.notification.PermissionDecidedEvent;
 import zcd.jellyfish.api.extension.ExtensionHandler;
 import zcd.jellyfish.api.extension.PermissionCheckRequest;
 import zcd.jellyfish.api.extension.PermissionDecision;
-import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.api.extension.PermissionVerdict;
 import zcd.jellyfish.infra.config.PermissionApprovalSettings;
 import zcd.jellyfish.infra.config.RuntimeConfig;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
-import zcd.jellyfish.infra.plugin.PluginRuntimeConfig;
 import zcd.jellyfish.infra.registry.TypeRegistry;
 
-import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -38,7 +30,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -50,6 +41,9 @@ import static org.mockito.Mockito.when;
  * 扩展层用<b>真实实例</b>（真实注册表 + 真实派发），因此短路、顺序、异常处置这些编排语义
  * 都是端到端验证的；只有策略来源与事件发布这两个接口被 mock：
  * 前者将来由 {@code AgentManager} 实现，后者是外部协作方。
+ * <p>
+ * 按模式收窄的授权（例如「只跑只读工具」）不在这里测：那是插件用同一个类型级扩展点表达的一条普通拦截，
+ * 内核侧只保证「插件能收紧、不能放宽」——它由下面这些用例覆盖，策略本身归对应插件自己的测试。
  *
  * @author zcd
  */
@@ -81,7 +75,7 @@ class PermissionManagerTest {
     void setUp() {
         extensions = new ExtensionRegistry(new TypeRegistry());
         channel = new ApprovalChannel();
-        useReadOnlyTools();
+        manager = new PermissionManager(policies, extensions, events, channel, runtimeConfig);
     }
 
     @Test
@@ -171,7 +165,7 @@ class PermissionManagerTest {
         answerApproval(true);
 
         // When
-        manager.decide(new PermissionCheckRequest("agent-a", "deploy", null, PermissionMode.NORMAL, "session-1"));
+        manager.decide(new PermissionCheckRequest("agent-a", "deploy", null, "session-1"));
 
         // Then：审计要能一眼分出「策略直接放行」与「有人在审批框上点了批准」
         PermissionDecidedEvent event = captureEvent();
@@ -191,79 +185,6 @@ class PermissionManagerTest {
         // Then
         assertTrue(decision.isDenied());
         assertEquals("工具不在 agent 允许范围内", decision.getReason());
-    }
-
-    @Test
-    void decide_should_allow_read_only_tool_in_plan_mode() {
-        // Given
-        useReadOnlyTools("read_file");
-        when(policies.policyOf("agent-a")).thenReturn(PermissionPolicy.unrestricted());
-
-        // When
-        PermissionDecision decision = manager.decide(new PermissionCheckRequest("agent-a", "read_file", null,
-                PermissionMode.PLAN, null));
-
-        // Then
-        assertTrue(decision.isAllowed());
-    }
-
-    @Test
-    void decide_should_deny_non_read_only_tool_in_plan_mode() {
-        // Given
-        useReadOnlyTools("read_file");
-        when(policies.policyOf("agent-a")).thenReturn(PermissionPolicy.unrestricted());
-
-        // When
-        PermissionDecision decision = manager.decide(new PermissionCheckRequest("agent-a", "write_file", null,
-                PermissionMode.PLAN, null));
-
-        // Then：文案必须点明去哪儿声明，否则用户只能看到「仅允许只读工具」而不知道该改哪里
-        assertTrue(decision.isDenied());
-        assertTrue(decision.getReason().contains("readOnlyTools"), decision.getReason());
-    }
-
-    @Test
-    void decide_should_warnOnce_when_plan_denies_with_empty_whitelist() {
-        // Given：白名单为空（不是「取不到判据」，而是「一个都没声明」）
-        when(policies.policyOf("agent-a")).thenReturn(PermissionPolicy.unrestricted());
-
-        // When：连续两次被 PLAN 拒
-        manager.decide(new PermissionCheckRequest("agent-a", "write_file", null, PermissionMode.PLAN, null));
-        manager.decide(new PermissionCheckRequest("agent-a", "read_file", null, PermissionMode.PLAN, null));
-
-        // Then：同一份配置只喊一次——每次判定都喊会把这个提示变成刷屏噪音
-        List<ConfigWarningEvent> warnings = configWarnings();
-        assertEquals(1, warnings.size(), warnings.toString());
-        assertEquals(PermissionSettings.READ_ONLY_TOOLS, warnings.get(0).getSource());
-        assertTrue(warnings.get(0).getMessage().contains("readOnlyTools"), warnings.get(0).getMessage());
-    }
-
-    @Test
-    void decide_should_not_warn_when_denied_tool_is_simply_not_in_whitelist() {
-        // Given：白名单非空，只是这个名字不在里面——这不是配置问题，不该有配置告警
-        useReadOnlyTools("read_file");
-        when(policies.policyOf("agent-a")).thenReturn(PermissionPolicy.unrestricted());
-
-        // When
-        PermissionDecision decision = manager.decide(new PermissionCheckRequest("agent-a", "write_file", null,
-                PermissionMode.PLAN, null));
-
-        // Then
-        assertTrue(decision.isDenied());
-        verify(events, never()).publish(any(ConfigWarningEvent.class));
-    }
-
-    @Test
-    void decide_should_deny_every_tool_in_plan_mode_when_read_only_set_is_empty() {
-        // Given：没有任何插件声明只读工具，属「策略已生效但集合为空」，不是「取不到策略」
-        when(policies.policyOf("agent-a")).thenReturn(PermissionPolicy.unrestricted());
-
-        // When
-        PermissionDecision decision = manager.decide(new PermissionCheckRequest("agent-a", "read_file", null,
-                PermissionMode.PLAN, null));
-
-        // Then
-        assertTrue(decision.isDenied());
     }
 
     @Test
@@ -434,18 +355,16 @@ class PermissionManagerTest {
     @Test
     void decide_should_publish_audit_event_even_when_allowed() {
         // Given
-        useReadOnlyTools("read_file");
         when(policies.policyOf("agent-a")).thenReturn(PermissionPolicy.unrestricted());
 
         // When
-        manager.decide(new PermissionCheckRequest("agent-a", "read_file", null, PermissionMode.PLAN, "session-1"));
+        manager.decide(new PermissionCheckRequest("agent-a", "read_file", null, "session-1"));
 
         // Then
         PermissionDecidedEvent event = captureEvent();
         assertEquals(PermissionDecision.Outcome.ALLOW, event.getOutcome());
         assertEquals("agent-a", event.getAgentId());
         assertEquals("read_file", event.getToolName());
-        assertEquals(PermissionMode.PLAN, event.getMode());
         assertEquals("session-1", event.getSessionId());
         assertEquals(PermissionManager.CORE_SOURCE, event.getSource());
     }
@@ -472,26 +391,23 @@ class PermissionManagerTest {
     @Test
     void constructor_should_reject_null_collaborators() {
         // When / Then
-        ReadOnlyTools readOnlyTools = readOnlyToolsOf();
         assertThrows(NullPointerException.class,
-                () -> new PermissionManager(null, readOnlyTools, extensions, events, channel, runtimeConfig));
+                () -> new PermissionManager(null, extensions, events, channel, runtimeConfig));
         assertThrows(NullPointerException.class,
-                () -> new PermissionManager(policies, null, extensions, events, channel, runtimeConfig));
+                () -> new PermissionManager(policies, null, events, channel, runtimeConfig));
         assertThrows(NullPointerException.class,
-                () -> new PermissionManager(policies, readOnlyTools, null, events, channel, runtimeConfig));
+                () -> new PermissionManager(policies, extensions, null, channel, runtimeConfig));
         assertThrows(NullPointerException.class,
-                () -> new PermissionManager(policies, readOnlyTools, extensions, null, channel, runtimeConfig));
+                () -> new PermissionManager(policies, extensions, events, null, runtimeConfig));
         assertThrows(NullPointerException.class,
-                () -> new PermissionManager(policies, readOnlyTools, extensions, events, null, runtimeConfig));
-        assertThrows(NullPointerException.class,
-                () -> new PermissionManager(policies, readOnlyTools, extensions, events, channel, null));
+                () -> new PermissionManager(policies, extensions, events, channel, null));
     }
 
     @Test
     void usableTools_should_narrow_to_allow_list() {
         // Given
         when(policies.policyOf("agent-a")).thenReturn(PermissionPolicy.of(null, null, toolSet("read_file")));
-        Predicate<String> usable = manager.usableTools("agent-a", PermissionMode.NORMAL);
+        Predicate<String> usable = manager.usableTools("agent-a");
 
         // When / Then：与执行期同一个判据——清单里出现、执行时却被拒会让模型白跑一轮
         assertTrue(usable.test("read_file"));
@@ -502,7 +418,7 @@ class PermissionManagerTest {
     void usableTools_should_drop_denied_tool() {
         // Given
         when(policies.policyOf("agent-a")).thenReturn(PermissionPolicy.of(toolSet("bash"), null, null));
-        Predicate<String> usable = manager.usableTools("agent-a", PermissionMode.NORMAL);
+        Predicate<String> usable = manager.usableTools("agent-a");
 
         // When / Then
         assertFalse(usable.test("bash"));
@@ -514,29 +430,17 @@ class PermissionManagerTest {
         // Given：ASK 说明工具是可用的，只是要人点一下批准；从清单里拿掉会让
         // 「只读免打扰、写类要审批」这套配置直接失效
         when(policies.policyOf("agent-a")).thenReturn(PermissionPolicy.of(null, toolSet("bash"), null));
-        Predicate<String> usable = manager.usableTools("agent-a", PermissionMode.NORMAL);
+        Predicate<String> usable = manager.usableTools("agent-a");
 
         // When / Then
         assertTrue(usable.test("bash"));
     }
 
     @Test
-    void usableTools_should_narrow_to_read_only_in_plan_mode() {
-        // Given
-        useReadOnlyTools("read_file");
-        when(policies.policyOf("agent-a")).thenReturn(PermissionPolicy.unrestricted());
-        Predicate<String> usable = manager.usableTools("agent-a", PermissionMode.PLAN);
-
-        // When / Then
-        assertTrue(usable.test("read_file"));
-        assertFalse(usable.test("write_file"));
-    }
-
-    @Test
     void usableTools_should_be_pure_without_audit_or_approval() {
         // Given：一个要求审批的工具
         when(policies.policyOf("agent-a")).thenReturn(PermissionPolicy.of(null, toolSet("bash"), null));
-        Predicate<String> usable = manager.usableTools("agent-a", PermissionMode.NORMAL);
+        Predicate<String> usable = manager.usableTools("agent-a");
 
         // When：清单过滤是每轮组装都会跑的路径，绝不能弹审批框或刷审计事件
         usable.test("bash");
@@ -552,37 +456,7 @@ class PermissionManagerTest {
         when(policies.policyOf(null)).thenReturn(PermissionPolicy.unrestricted());
 
         // When / Then
-        assertTrue(manager.usableTools(null, PermissionMode.NORMAL).test("anything"));
-    }
-
-    /**
-     * 用指定的只读工具集合重建被测对象。
-     *
-     * @param toolNames 声明为只读的工具名，可为空
-     */
-    private void useReadOnlyTools(String... toolNames) {
-        manager = new PermissionManager(policies, readOnlyToolsOf(toolNames), extensions, events, channel,
-                runtimeConfig);
-    }
-
-    /**
-     * 收集本次判定过程中发出的全部配置告警。
-     * <p>
-     * 审计事件与配置告警走同一个发布入口，因此不能直接 {@code verify(events).publish(...)} 计数——
-     * 那是把两种事件混在一起数。
-     *
-     * @return 其中的配置告警，按发布顺序
-     */
-    private List<ConfigWarningEvent> configWarnings() {
-        ArgumentCaptor<JellyfishEvent> captor = ArgumentCaptor.forClass(JellyfishEvent.class);
-        verify(events, atLeastOnce()).publish(captor.capture());
-        List<ConfigWarningEvent> warnings = new ArrayList<>();
-        for (JellyfishEvent event : captor.getAllValues()) {
-            if (event instanceof ConfigWarningEvent) {
-                warnings.add((ConfigWarningEvent) event);
-            }
-        }
-        return warnings;
+        assertTrue(manager.usableTools(null).test("anything"));
     }
 
     /**
@@ -625,22 +499,6 @@ class PermissionManagerTest {
         }, "approval-answer");
         answer.setDaemon(true);
         answer.start();
-    }
-
-    /**
-     * 构造只读工具集合：模拟用户在白名单里写下的工具名。
-     *
-     * @param toolNames 声明为只读的工具名，可为空
-     * @return 只读工具集合
-     */
-    private ReadOnlyTools readOnlyToolsOf(String... toolNames) {
-        Map<String, Object> pluginConfig = new LinkedHashMap<>();
-        pluginConfig.put(PermissionSettings.READ_ONLY_TOOLS, Arrays.asList(toolNames));
-        Map<String, Map<String, Object>> configurations = new LinkedHashMap<>();
-        configurations.put("readonly-plugin", pluginConfig);
-        // 告警在本测试里不是关注点，用空实现避免噪音
-        return new ReadOnlyTools(new PluginRuntimeConfig(null, null, null, configurations), event -> {
-        });
     }
 
     /**

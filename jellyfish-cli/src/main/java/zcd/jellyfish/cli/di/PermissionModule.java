@@ -6,7 +6,7 @@ import dagger.Module;
  * 权限模块的 Dagger2 模块。
  * <p>
  * <b>本模块没有 {@code @Provides}</b>：判定所需的协作者（{@code PermissionManager}、
- * {@code ReadOnlyTools}）都带 {@code @Inject} 构造器，由 Dagger 自行装配。
+ * {@code ApprovalChannel}）都带 {@code @Inject} 构造器，由 Dagger 自行装配。
  * <p>
  * 接口 {@code PermissionPolicyProvider} 的绑定<b>不在这里</b>：它由 {@link AgentModule} 绑到
  * {@code AgentManager}（依赖方向是 agent → permission，与既有约定一致）。这里曾经放过一个

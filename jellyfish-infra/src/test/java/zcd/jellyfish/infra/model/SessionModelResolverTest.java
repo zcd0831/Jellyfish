@@ -62,7 +62,7 @@ class SessionModelResolverTest {
         // Given：用户在会话里显式选过模型，它就是唯一答案
         ResolvedModel expected = resolvedModel();
         when(modelManager.resolve("openai", "gpt-4o")).thenReturn(expected);
-        Session session = sessions.create("scout", "openai", "gpt-4o", null);
+        Session session = sessions.create("scout", "openai", "gpt-4o");
 
         // When / Then
         assertSame(expected, resolver.resolve(session));
@@ -74,7 +74,7 @@ class SessionModelResolverTest {
         ResolvedModel expected = resolvedModel();
         when(agentManager.find("scout")).thenReturn(definitionWithModel("openai/gpt-4o-mini"));
         when(modelManager.resolveReference("openai/gpt-4o-mini")).thenReturn(expected);
-        Session session = sessions.create("scout", null, null, null);
+        Session session = sessions.create("scout", null, null);
 
         // When / Then
         assertSame(expected, resolver.resolve(session));
@@ -86,7 +86,7 @@ class SessionModelResolverTest {
         ResolvedModel expected = resolvedModel();
         when(agentManager.find("scout")).thenReturn(definitionWithModel(null));
         when(modelManager.resolveDefault()).thenReturn(expected);
-        Session session = sessions.create("scout", null, null, null);
+        Session session = sessions.create("scout", null, null);
 
         // When / Then
         assertSame(expected, resolver.resolve(session));
@@ -98,7 +98,7 @@ class SessionModelResolverTest {
         ResolvedModel expected = resolvedModel();
         when(agentManager.find(null)).thenReturn(null);
         when(modelManager.resolveDefault()).thenReturn(expected);
-        Session session = sessions.create(null, null, null, null);
+        Session session = sessions.create(null, null, null);
 
         // When / Then
         assertSame(expected, resolver.resolve(session));
@@ -110,7 +110,7 @@ class SessionModelResolverTest {
         when(agentManager.find("scout")).thenReturn(definitionWithModel("openai/ghost"));
         when(modelManager.resolveReference("openai/ghost"))
                 .thenThrow(new JellyfishException("model not found: openai/ghost"));
-        Session session = sessions.create("scout", null, null, null);
+        Session session = sessions.create("scout", null, null);
 
         // When / Then
         assertThrows(JellyfishException.class, () -> resolver.resolve(session));

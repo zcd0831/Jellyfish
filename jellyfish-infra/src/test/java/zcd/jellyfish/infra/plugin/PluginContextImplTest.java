@@ -484,7 +484,7 @@ class PluginContextImplTest {
         // Then
         assertEquals(ShellContributionStatus.DROPPED_NO_SESSION, status);
         assertTrue(ingress.drain().isEmpty());
-        verify(sessions, never()).create(any(), any(), any(), any());
+        verify(sessions, never()).create(any(), any(), any());
         verify(sessions, never()).createDefault();
         verify(sessions, never()).require("ghost");
     }

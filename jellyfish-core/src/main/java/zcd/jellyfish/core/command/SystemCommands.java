@@ -16,7 +16,7 @@ import zcd.jellyfish.api.extension.CommandOptions;
 import zcd.jellyfish.api.extension.CommandRequest;
 import zcd.jellyfish.api.extension.CommandResult;
 import zcd.jellyfish.api.extension.ExtensionHandler;
-import zcd.jellyfish.api.extension.PermissionMode;
+import zcd.jellyfish.api.extension.LifecycleVerdict;
 import zcd.jellyfish.core.ReActLooper;
 import zcd.jellyfish.api.extension.CompactionTrigger;
 import zcd.jellyfish.core.compact.CompactionPlan;
@@ -79,12 +79,6 @@ public class SystemCommands {
 
     /** 内核系统命令的 owner 标识，与插件 {@code pluginId} 区分开。 */
     public static final String OWNER = "core";
-
-    /** 权限模式取值：计划模式。 */
-    private static final String MODE_PLAN = "plan";
-
-    /** 权限模式取值：常规模式。 */
-    private static final String MODE_NORMAL = "normal";
 
     /** {@code /compact} 用法文本。 */
     private static final String COMPACT_USAGE = "用法：/compact [preview]";
@@ -193,8 +187,6 @@ public class SystemCommands {
                 this::model));
         subscriptions.add(register("agent", new CommandDescriptor("查看或切换 agent", "[agentId]", aliases("a"), false),
                 this::agent));
-        subscriptions.add(register("mode", new CommandDescriptor("查看或切换权限模式", "[plan|normal]", null, false),
-                this::mode));
         subscriptions.add(register("status", new CommandDescriptor("显示当前会话概要", null, null, true), this::status));
         subscriptions.add(register("usage", new CommandDescriptor("显示当前会话 token 用量", null,
                 aliases("cost"), true), this::usage));
@@ -208,7 +200,6 @@ public class SystemCommands {
         subscriptions.add(registerOptions("resume", this::resumeOptions));
         subscriptions.add(registerOptions("model", this::modelOptions));
         subscriptions.add(registerOptions("agent", this::agentOptions));
-        subscriptions.add(registerOptions("mode", this::modeOptions));
         subscriptions.add(registerOptions("delete", this::deleteOptions));
     }
 
@@ -286,17 +277,6 @@ public class SystemCommands {
      */
     private CommandOptions agentOptions(CommandOptionRequest request) {
         return CommandOptions.of(agentChoices());
-    }
-
-    /**
-     * {@code /mode} 的只读候选：两种权限模式。
-     *
-     * @param request 候选查询请求
-     * @return 候选结果；没有当前会话时为空
-     */
-    private CommandOptions modeOptions(CommandOptionRequest request) {
-        // 首页也给出候选，并标出待生效的默认值：否则 /mode 在首页敲下去会得到一片空白
-        return CommandOptions.of(modeChoices(effectivePermissionMode(sessionManager.current())));
     }
 
     /**
@@ -537,71 +517,6 @@ public class SystemCommands {
     }
 
     /**
-     * {@code /mode [plan|normal]}：查看或切换权限模式。
-     *
-     * @param request 命令请求
-     * @return 结果
-     */
-    private CommandResult mode(CommandRequest request) {
-        String sessionId = sessionIdOf(request);
-        if (request.getArguments().size() > 1) {
-            return CommandResult.error("用法：/mode [plan|normal]");
-        }
-        if (request.getArguments().isEmpty()) {
-            if (sessionId == null) {
-                // 首页：显示待生效的默认权限模式（尚未设过时就是将来会用的 NORMAL）
-                PermissionMode pending = effectivePermissionMode(null);
-                return CommandResult.choices("下次会话的默认权限模式：" + pending.name().toLowerCase(),
-                        modeChoices(pending));
-            }
-            Session session = sessionManager.require(sessionId);
-            return CommandResult.choices("当前权限模式：" + session.getPermissionMode().name().toLowerCase(),
-                    modeChoices(session.getPermissionMode()));
-        }
-        String mode = request.getArguments().getTokens().get(0).toLowerCase();
-        PermissionMode requested = parsePermissionMode(mode);
-        if (requested == null) {
-            return CommandResult.error("用法：/mode [plan|normal]");
-        }
-        if (sessionId == null) {
-            // 首页：改的是「下次建会话时用什么权限模式」，不建会话、留在首页
-            sessionDefaults.setPermissionMode(requested);
-            return CommandResult.ok("已把下次会话的默认权限模式设为：" + mode + "。");
-        }
-        sessionManager.setPermissionMode(sessionId, requested);
-        return CommandResult.ok(requested == PermissionMode.PLAN
-                ? "已切换到计划模式（仅只读工具可用）。"
-                : "已切换到常规模式。");
-    }
-
-    /**
-     * 解析权限模式取值。
-     *
-     * @param mode 取值（已转小写）
-     * @return 解析出的权限模式；取值非法时返回 {@code null}
-     */
-    private static PermissionMode parsePermissionMode(String mode) {
-        if (MODE_PLAN.equals(mode)) {
-            return PermissionMode.PLAN;
-        }
-        return MODE_NORMAL.equals(mode) ? PermissionMode.NORMAL : null;
-    }
-
-    /**
-     * 取会话当前生效的权限模式。
-     *
-     * @param session 会话运行态，可为 {@code null}（首页）
-     * @return 权限模式：有会话时是会话自己的；无会话时是待生效默认值，两者都没有则按 NORMAL
-     */
-    private PermissionMode effectivePermissionMode(Session session) {
-        if (session != null) {
-            return session.getPermissionMode();
-        }
-        PermissionMode pending = sessionDefaults.snapshot().getPermissionMode();
-        return pending == null ? PermissionMode.NORMAL : pending;
-    }
-
-    /**
      * {@code /compact}：把更早的对话压成摘要。
      * <p>
      * <b>只有两个形态</b>：无参按默认档位压一次；{@code preview} 只回报将要发生什么。
@@ -724,7 +639,6 @@ public class SystemCommands {
         return CommandResult.ok("会话：" + session.getSessionId()
                 + "\n  model：" + modelLabel(session)
                 + "\n  agent：" + nullToDash(session.getAgentId())
-                + "\n  权限模式：" + session.getPermissionMode().name().toLowerCase()
                 + "\n  消息数：" + session.size()
                 + "\n  压缩：" + compactionLabel(session)
                 + "\n  token：" + session.getUsage().getTotalTokens()
@@ -963,19 +877,6 @@ public class SystemCommands {
             description.append("默认");
         }
         return description.length() == 0 ? null : description.toString();
-    }
-
-    /**
-     * 构造权限模式候选：选中后追加为 {@code /mode <plan|normal>} 的参数。
-     *
-     * @param mode 当前权限模式
-     * @return 候选清单
-     */
-    private static List<CommandChoice> modeChoices(PermissionMode mode) {
-        List<CommandChoice> choices = new ArrayList<CommandChoice>(2);
-        choices.add(new CommandChoice(MODE_PLAN, MODE_PLAN, "仅只读工具可用", mode == PermissionMode.PLAN));
-        choices.add(new CommandChoice(MODE_NORMAL, MODE_NORMAL, "常规模式（可写）", mode == PermissionMode.NORMAL));
-        return choices;
     }
 
     /**

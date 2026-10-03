@@ -16,7 +16,7 @@ package zcd.jellyfish.api.extension;
  * 并接受一次前缀断裂的代价。
  * <p>
  * <b>路由键为 {@code null}，用 {@code contribute}</b>：一个工具该不该出现可以由多个插件各自表态
- * （有的按服务是否连通、有的按当前模式），因此它是类型级贡献。合并规则：
+ * （有的按服务是否连通、有的按项目约定），因此它是类型级贡献。合并规则：
  * <b>第一个非 {@link ToolActivation#abstain()} 的判定胜出</b>（{@code order} 升序），
  * 与 {@link CompactionStrategyRequest}、{@link RequestTuningRequest} 的「调用点 for 循环 + 取第一个表态者」
  * 同一口径——注册表不参与编排。
@@ -53,25 +53,19 @@ public final class ToolActivationRequest extends ExtensionRequest<ToolActivation
     /** 工具描述符，插件无需再去注册表回查。 */
     private final ToolDescriptor descriptor;
 
-    /** 当前会话的权限模式。 */
-    private final PermissionMode permissionMode;
-
     /**
      * 构造请求。
      *
-     * @param sessionId      会话标识，可为 {@code null}
-     * @param agentId        agent 标识，可为 {@code null}
-     * @param descriptor     工具描述符，不可为 {@code null}
-     * @param permissionMode 权限模式，可为 {@code null}
+     * @param sessionId  会话标识，可为 {@code null}
+     * @param agentId    agent 标识，可为 {@code null}
+     * @param descriptor 工具描述符，不可为 {@code null}
      */
-    public ToolActivationRequest(String sessionId, String agentId, ToolDescriptor descriptor,
-                                 PermissionMode permissionMode) {
+    public ToolActivationRequest(String sessionId, String agentId, ToolDescriptor descriptor) {
         super(ToolActivation.class, sessionId);
         this.sessionId = sessionId;
         this.agentId = agentId;
         this.descriptor = descriptor;
         this.toolName = descriptor == null ? null : descriptor.getName();
-        this.permissionMode = permissionMode;
     }
 
     @Override
@@ -108,14 +102,5 @@ public final class ToolActivationRequest extends ExtensionRequest<ToolActivation
      */
     public ToolDescriptor getDescriptor() {
         return descriptor;
-    }
-
-    /**
-     * 获取权限模式。
-     *
-     * @return 权限模式，可能为 {@code null}
-     */
-    public PermissionMode getPermissionMode() {
-        return permissionMode;
     }
 }

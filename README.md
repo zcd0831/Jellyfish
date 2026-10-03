@@ -5,7 +5,7 @@
 
 - **三种形态，一个内核**：`-cli` 一次问答、`-tui` 终端界面、`-server` REST + SSE 服务。
 - **工具即能力**：模型可以读写文件、跑命令、搜索代码（工具由插件提供），每次调用都过权限判定。
-- **权限可控**：`plan` 模式只放行你列在 `readOnlyTools` 里的工具；`askTools` 里的工具逐次人工审批（TUI 弹框、Server 走 HTTP）。
+- **权限可控**：按模式收窄的授权由插件提供——官方 plan 插件只放行你列在 `readOnlyTools` 里的工具；`askTools` 里的工具逐次人工审批（TUI 弹框、Server 走 HTTP）。
 - **上下文自己管**：长会话可压缩成摘要（`/compact`），工具输出过长自动落盘、回灌信封。
 - **可委派**：把一段子任务丢给只读的子代理去做，只拿回结论，噪音留在那边。
 - **插件式扩展**：工具、命令、提示词、权限拦截、会话持久化、UI 贡献、模型厂商都是扩展点，插件与内核无编译期依赖。
@@ -117,7 +117,6 @@ java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -tui
 | `--session <会话>` | 切换到已有会话（需安装 `jellyfish-session-file` 等持久化插件；会话不存在时按用法错误退出 `2`） |
 | `--agent <agentId>` | 新建会话时绑定 agent |
 | `--model <provider/模型>` | 新建会话时指定模型，必须含 `/` |
-| `--mode <plan\|normal>` | 新建会话的权限模式（`plan` 仅允许**用户列在 `readOnlyTools` 里**的工具） |
 | `--port <端口>` | 服务器端口（等价于 `-server` 的位置参数，缺省 `9096`） |
 | `--host <地址>` | 服务器绑定地址（缺省 `127.0.0.1`） |
 | `--show-thinking` | 展示模型的思考过程：`-cli` 打到 stderr，`-tui` 置为启动时展开 |
@@ -173,7 +172,7 @@ java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -tui
 ╭ 输入 ──────────────────────────────╮
 │ …                                  │   ← 多行输入（1～6 行自适应）
 ╰────────────────────────────────────╯
- agent · provider/模型 · 权限模式 · token 用量（会话被压缩过时追加 `已压缩 N 条（丢弃 M 条）`）
+ agent · provider/模型 · token 用量（会话被压缩过时追加 `已压缩 N 条（丢弃 M 条）`）
 ```
 
 | 按键 | 行为 |
@@ -304,7 +303,6 @@ java -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=5005 \
 | `/resume <sessionId>` | | 切换到已有会话 |
 | `/model [provider/model]` | | 查看或切换模型 |
 | `/agent [agentId]` | `/a` | 查看或切换 agent |
-| `/mode [plan\|normal]` | | 查看或切换权限模式 |
 | `/status` | | 显示当前会话概要 |
 | `/usage` | `/cost` | 显示当前会话 token 用量与缓存命中率 |
 | `/delete <sessionId>` | `/rm` | 删除会话（含持久化文件） |
@@ -407,7 +405,8 @@ mkdir -p ~/.jellyfish/plugins
 
 插件能做什么由内核的扩展点与权限模型决定：工具、命令、提示词贡献、权限拦截、会话持久化 / 恢复、压缩策略、UI 贡献、
 输入指令走同步扩展点；轮次与会话等通知走异步事件通道。**插件拿不到会话与工作目录**，也**不能自称某个写操作是只读的**
-（`ToolDescriptor` 里已没有该字段；PLAN 白名单的唯一来源是用户配置的 `readOnlyTools`）。
+（`ToolDescriptor` 里已没有该字段；按模式收窄的名单归插件自己的配置段，例如官方 plan 插件的
+`plugins.configurations.jellyfish-plan.readOnlyTools`）。
 
 ## Server 模式
 
@@ -438,7 +437,7 @@ curl -sN -X POST localhost:9096/sessions/$SID/chat \
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| `POST` | `/sessions` | 建会话（body 可选 `agentId`/`provider`/`model`/`permissionMode`） |
+| `POST` | `/sessions` | 建会话（body 可选 `agentId`/`provider`/`model`） |
 | `GET` | `/sessions` | 会话摘要列表（不含消息正文） |
 | `GET` | `/sessions/{id}` | 完整会话快照（含消息与用量） |
 | `DELETE` | `/sessions/{id}` | 删除会话 |

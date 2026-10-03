@@ -6,7 +6,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import zcd.jellyfish.api.JellyfishException;
-import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.model.ModelManager;
 import zcd.jellyfish.infra.session.Session;
@@ -75,7 +74,6 @@ class SessionHandlersTest {
         when(session.getSessionId()).thenReturn(id);
         when(session.getCreatedAt()).thenReturn(1L);
         when(session.getUpdatedAt()).thenReturn(updatedAt);
-        when(session.getPermissionMode()).thenReturn(PermissionMode.NORMAL);
         when(session.getMessages()).thenReturn(Collections.emptyList());
         when(session.size()).thenReturn(0);
         when(session.getUsage()).thenReturn(SessionUsage.EMPTY);
@@ -115,23 +113,13 @@ class SessionHandlersTest {
     @Test
     void create_should_return_201_when_body_empty() {
         Session created = session("s1", 1L);
-        when(sessions.create(eq(null), eq(null), eq(null), eq(null))).thenReturn(created);
+        when(sessions.create(eq(null), eq(null), eq(null))).thenReturn(created);
         Fixture fixture = fixture("");
 
         handlers.create(fixture.exchange, PathParams.empty());
 
         verify(fixture.exchange).setStatusCode(201);
         assertTrue(fixture.body().contains("\"sessionId\":\"s1\""), fixture.body());
-    }
-
-    @Test
-    void create_should_return_400_when_permission_mode_invalid() {
-        Fixture fixture = fixture("{\"permissionMode\":\"weird\"}");
-
-        ApiException error = assertThrows(ApiException.class,
-                () -> handlers.create(fixture.exchange, PathParams.empty()));
-
-        assertEquals(Responses.BAD_REQUEST, error.getStatus());
     }
 
     @Test
@@ -207,15 +195,15 @@ class SessionHandlersTest {
     @Test
     void create_should_pass_body_values_through_without_server_defaults() {
         Session created = session("s1", 1L);
-        when(sessions.create(eq("coder"), eq("openai"), eq("gpt-4o"), eq(PermissionMode.PLAN)))
+        when(sessions.create(eq("coder"), eq("openai"), eq("gpt-4o")))
                 .thenReturn(created);
         Fixture fixture = fixture("{\"agentId\":\"coder\",\"provider\":\"openai\","
-                + "\"model\":\"gpt-4o\",\"permissionMode\":\"PLAN\"}");
+                + "\"model\":\"gpt-4o\"}");
 
         handlers.create(fixture.exchange, PathParams.empty());
 
         // 服务端不再另有「启动参数默认值」这一层，请求体的取值原样交给内核
-        verify(sessions).create(eq("coder"), eq("openai"), eq("gpt-4o"), eq(PermissionMode.PLAN));
+        verify(sessions).create(eq("coder"), eq("openai"), eq("gpt-4o"));
         verify(fixture.exchange).setStatusCode(201);
     }
 

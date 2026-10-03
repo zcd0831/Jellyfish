@@ -2,7 +2,6 @@ package zcd.jellyfish.core.prompt;
 
 import org.junit.jupiter.api.Test;
 import zcd.jellyfish.api.extension.ExtensionHandler;
-import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.api.extension.ToolActivation;
 import zcd.jellyfish.api.extension.ToolActivationRequest;
 import zcd.jellyfish.api.extension.ToolCallRequest;
@@ -292,16 +291,15 @@ class ToolCatalogTest {
         register(extensions, "a_read", new ToolDescriptor("a_read", "读文件"));
         Session session = session("s-1");
         when(session.getAgentId()).thenReturn("subagent");
-        when(session.getPermissionMode()).thenReturn(PermissionMode.PLAN);
         List<String> seen = new java.util.ArrayList<String>();
         extensions.contribute("plugin-a", ToolActivationRequest.class, null, request -> {
-            seen.add(request.getAgentId() + "/" + request.getPermissionMode() + "/" + request.getSessionId());
+            seen.add(request.getAgentId() + "/" + request.getSessionId());
             return ToolActivation.abstain();
         }, RegisterOptions.DEFAULT);
 
         new ToolCatalog(extensions).tools(session, ToolFilter.none());
 
-        assertEquals(Collections.singletonList("subagent/PLAN/s-1"), seen);
+        assertEquals(Collections.singletonList("subagent/s-1"), seen);
     }
 
     @Test

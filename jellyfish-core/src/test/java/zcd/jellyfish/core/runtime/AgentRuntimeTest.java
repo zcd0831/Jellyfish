@@ -8,6 +8,10 @@ import zcd.jellyfish.infra.config.SubAgentSettings;
 import zcd.jellyfish.infra.session.SessionUsage;
 import zcd.jellyfish.infra.support.CancellationTokenSource;
 
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -199,6 +203,23 @@ class AgentRuntimeTest {
     }
 
     @Test
+    void spawn_should_publish_started_and_finished_events() {
+        // Given：先订阅总线
+        Fixture fixture = fixture();
+        fixture.contexts.open(2, 8);
+        List<AgentRunEvent.Kind> kinds = new ArrayList<AgentRunEvent.Kind>();
+        fixture.events.subscribe(event -> kinds.add(event.getKind()));
+
+        // When
+        AgentRunHandle handle = fixture.runtime.spawn(request("s-child"), null,
+                h -> AgentRunResult.of(AgentRunStatus.DONE, "ok", 1, null, null));
+        fixture.runtime.await(handle);
+
+        // Then：恰好 STARTED 后 FINISHED，且都指向同一个 run
+        assertEquals(Arrays.asList(AgentRunEvent.Kind.STARTED, AgentRunEvent.Kind.FINISHED), kinds);
+    }
+
+    @Test
     void remove_should_drop_entry_after_result_taken() {
         // Given
         Fixture fixture = fixture();
@@ -251,8 +272,9 @@ class AgentRuntimeTest {
                 maxConcurrentRuns, runTimeoutMillis, runTokenBudget, treeTokenBudget));
         RunContextHolder contexts = new RunContextHolder();
         RunRegistry registry = new RunRegistry();
-        RunScheduler scheduler = new RunScheduler(contexts, registry, config);
-        return new Fixture(new AgentRuntime(registry, contexts, scheduler), contexts);
+        RunEventBus events = new RunEventBus();
+        RunScheduler scheduler = new RunScheduler(contexts, registry, events, config);
+        return new Fixture(new AgentRuntime(registry, contexts, scheduler), contexts, events);
     }
 
     /**
@@ -266,7 +288,7 @@ class AgentRuntimeTest {
     }
 
     /**
-     * 测试夹具：被测门面与它依赖的上下文持有者。
+     * 测试夹具：被测门面、它依赖的上下文持有者与事件总线。
      */
     private static final class Fixture {
 
@@ -276,15 +298,20 @@ class AgentRuntimeTest {
         /** 上下文持有者。 */
         private final RunContextHolder contexts;
 
+        /** run 事件总线。 */
+        private final RunEventBus events;
+
         /**
          * 构造夹具。
          *
          * @param runtime  被测门面
          * @param contexts 上下文持有者
+         * @param events   run 事件总线
          */
-        private Fixture(AgentRuntime runtime, RunContextHolder contexts) {
+        private Fixture(AgentRuntime runtime, RunContextHolder contexts, RunEventBus events) {
             this.runtime = runtime;
             this.contexts = contexts;
+            this.events = events;
         }
     }
 }

@@ -8,6 +8,7 @@ import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.core.conversation.ConversationService;
 import zcd.jellyfish.core.conversation.ShellStreams;
 import zcd.jellyfish.core.conversation.TurnRegistry;
+import zcd.jellyfish.core.runtime.RunEventBus;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.command.CommandManager;
 import zcd.jellyfish.infra.metrics.HealthCheck;
@@ -79,6 +80,9 @@ public final class JellyfishServer {
     /** 可靠 lane：交给 chat 处理器做订阅。 */
     private final ShellStreams streams;
 
+    /** run 事件总线：交给 chat 处理器做订阅。 */
+    private final RunEventBus runEvents;
+
     /** 停止信号。 */
     private final CountDownLatch shutdown = new CountDownLatch(1);
 
@@ -104,11 +108,12 @@ public final class JellyfishServer {
      * @param healthCheck 健康检查汇总，不可为 {@code null}
      * @param turns       在途回合表（内核拥有），不可为 {@code null}
      * @param streams     可靠 lane，不可为 {@code null}
+     * @param runEvents   run 事件总线，不可为 {@code null}
      */
     public JellyfishServer(ServerConfig config, ConversationService conversations, SessionManager sessions,
                            CommandManager commands, AgentManager agents, ModelManager models,
                            ApprovalChannel approvals, HealthCheck healthCheck, TurnRegistry turns,
-                           ShellStreams streams) {
+                           ShellStreams streams, RunEventBus runEvents) {
         this.config = config;
         this.conversations = conversations;
         this.sessions = sessions;
@@ -119,6 +124,7 @@ public final class JellyfishServer {
         this.healthCheck = healthCheck;
         this.turns = turns;
         this.streams = streams;
+        this.runEvents = runEvents;
     }
 
     /**
@@ -228,7 +234,8 @@ public final class JellyfishServer {
      */
     private HttpHandler buildRouter() {
         SessionHandlers sessionHandlers = new SessionHandlers(config, sessions, agents, models, turns);
-        ChatHandler chatHandler = new ChatHandler(conversations, streams, turns, sessions, config, approvals);
+        ChatHandler chatHandler = new ChatHandler(conversations, streams, turns, runEvents, sessions, config,
+                approvals);
         CommandHandlers commandHandlers = new CommandHandlers(commands, config);
         ApprovalHandlers approvalHandlers = new ApprovalHandlers(approvals, config);
         HealthHandler healthHandler = new HealthHandler(healthCheck);

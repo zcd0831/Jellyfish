@@ -16,6 +16,7 @@ import zcd.jellyfish.core.conversation.Submission;
 import zcd.jellyfish.core.conversation.SubmissionPolicy;
 import zcd.jellyfish.core.conversation.TurnInProgressException;
 import zcd.jellyfish.core.conversation.TurnRegistry;
+import zcd.jellyfish.core.runtime.RunEventBus;
 import zcd.jellyfish.infra.permission.ApprovalChannel;
 import zcd.jellyfish.infra.session.SessionManager;
 import zcd.jellyfish.infra.metrics.MetricsRegistry;
@@ -86,7 +87,7 @@ class ChatHandlerTest {
         sessions = Mockito.mock(SessionManager.class);
         config = ServerConfig.builder("127.0.0.1", 9096).build();
         approvals = new ApprovalBridge(new ApprovalChannel());
-        handler = new ChatHandler(conversations, streams, turns, sessions, config, approvals);
+        handler = new ChatHandler(conversations, streams, turns, new RunEventBus(), sessions, config, approvals);
     }
 
     /**
@@ -178,7 +179,7 @@ class ChatHandlerTest {
     @Test
     void handle_should_release_stream_permit_when_turn_completes() {
         // 并发流许可是外壳自己的资源（内核管的是会话槽位）。最大 1 条：第一条跑完必须能跑第二条
-        ChatHandler limited = new ChatHandler(conversations, streams, turns, sessions,
+        ChatHandler limited = new ChatHandler(conversations, streams, turns, new RunEventBus(), sessions,
                 ServerConfig.builder("127.0.0.1", 9096).maxStreams(1).build(), approvals);
         stubTurn("s1", "hi", lane -> lane.publish(ShellTurnEvent.completed("s1", "t1", "x", 1, false)));
 
@@ -235,7 +236,7 @@ class ChatHandlerTest {
 
     @Test
     void handle_should_return_503_when_stream_limit_reached() {
-        ChatHandler limited = new ChatHandler(conversations, streams, turns, sessions,
+        ChatHandler limited = new ChatHandler(conversations, streams, turns, new RunEventBus(), sessions,
                 ServerConfig.builder("127.0.0.1", 9096).maxStreams(0).build(), approvals);
 
         ApiException error = assertThrows(ApiException.class,

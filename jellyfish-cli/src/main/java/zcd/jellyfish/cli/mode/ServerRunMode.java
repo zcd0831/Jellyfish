@@ -10,6 +10,7 @@ import zcd.jellyfish.cli.console.ConsoleIO;
 import zcd.jellyfish.core.conversation.ConversationService;
 import zcd.jellyfish.core.conversation.ShellStreams;
 import zcd.jellyfish.core.conversation.TurnRegistry;
+import zcd.jellyfish.core.runtime.RunEventBus;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.command.CommandManager;
 import zcd.jellyfish.infra.metrics.HealthCheck;
@@ -73,6 +74,9 @@ public final class ServerRunMode implements RunMode {
     /** 可靠 lane：交给服务外壳构造 chat 处理器。 */
     private final ShellStreams streams;
 
+    /** run 事件总线：交给服务外壳构造 chat 处理器。 */
+    private final RunEventBus runEvents;
+
     /** 输出面板。 */
     private final ConsoleIO console;
 
@@ -88,11 +92,13 @@ public final class ServerRunMode implements RunMode {
      * @param healthCheck 健康检查汇总，不可为 {@code null}
      * @param turns       在途回合表（内核拥有），不可为 {@code null}
      * @param streams     可靠 lane，不可为 {@code null}
+     * @param runEvents   run 事件总线，不可为 {@code null}
      * @param console     输出面板，不可为 {@code null}
      */
     public ServerRunMode(ConversationService conversations, CommandManager commands, SessionManager sessions,
                          ModelManager models, AgentManager agents, ApprovalChannel approvals,
-                         HealthCheck healthCheck, TurnRegistry turns, ShellStreams streams, ConsoleIO console) {
+                         HealthCheck healthCheck, TurnRegistry turns, ShellStreams streams,
+                         RunEventBus runEvents, ConsoleIO console) {
         this.conversations = Objects.requireNonNull(conversations, "conversations must not be null");
         this.commands = Objects.requireNonNull(commands, "commands must not be null");
         this.sessions = Objects.requireNonNull(sessions, "sessions must not be null");
@@ -102,6 +108,7 @@ public final class ServerRunMode implements RunMode {
         this.healthCheck = Objects.requireNonNull(healthCheck, "healthCheck must not be null");
         this.turns = Objects.requireNonNull(turns, "turns must not be null");
         this.streams = Objects.requireNonNull(streams, "streams must not be null");
+        this.runEvents = Objects.requireNonNull(runEvents, "runEvents must not be null");
         this.console = Objects.requireNonNull(console, "console must not be null");
     }
 
@@ -117,7 +124,7 @@ public final class ServerRunMode implements RunMode {
                 .apiKey(resolveApiKey(options, System.getenv()))
                 .build();
         JellyfishServer server = new JellyfishServer(config, conversations, sessions, commands, agents, models,
-                approvals, healthCheck, turns, streams);
+                approvals, healthCheck, turns, streams, runEvents);
         try {
             server.start();
         } catch (JellyfishException e) {

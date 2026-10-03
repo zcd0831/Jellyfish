@@ -7,6 +7,7 @@ import zcd.jellyfish.cli.console.RecordingConsoleIO;
 import zcd.jellyfish.core.conversation.ConversationService;
 import zcd.jellyfish.core.conversation.ShellStreams;
 import zcd.jellyfish.core.conversation.TurnRegistry;
+import zcd.jellyfish.core.runtime.RunEventBus;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.command.CommandManager;
 import zcd.jellyfish.infra.metrics.HealthCheck;
@@ -56,6 +57,9 @@ class ServerRunModeTest {
     /** 可靠 lane。 */
     private final ShellStreams streams = new ShellStreams(new ShellIngress(new MetricsRegistry()));
 
+    /** run 事件总线。 */
+    private final RunEventBus runEvents = new RunEventBus();
+
     /** 审批通道。 */
     private final ApprovalChannel approvals = new ApprovalChannel();
 
@@ -70,22 +74,26 @@ class ServerRunModeTest {
      */
     private ServerRunMode mode(RecordingConsoleIO console) {
         return new ServerRunMode(conversations, commands, sessions, models, agents, approvals, healthCheck, turns,
-                streams, console);
+                streams, runEvents, console);
     }
 
     @Test
     void constructor_should_reject_null_collaborators() {
         RecordingConsoleIO console = new RecordingConsoleIO(null);
         assertThrows(NullPointerException.class, () -> new ServerRunMode(
-                null, commands, sessions, models, agents, approvals, healthCheck, turns, streams, console));
+                null, commands, sessions, models, agents, approvals, healthCheck, turns, streams, runEvents, console));
         assertThrows(NullPointerException.class, () -> new ServerRunMode(
-                conversations, null, sessions, models, agents, approvals, healthCheck, turns, streams, console));
+                conversations, null, sessions, models, agents, approvals, healthCheck, turns, streams, runEvents, console));
         assertThrows(NullPointerException.class, () -> new ServerRunMode(
-                conversations, commands, null, models, agents, approvals, healthCheck, turns, streams, console));
+                conversations, commands, null, models, agents, approvals, healthCheck, turns, streams, runEvents, console));
         assertThrows(NullPointerException.class, () -> new ServerRunMode(
-                conversations, commands, sessions, models, agents, approvals, null, turns, streams, console));
+                conversations, commands, sessions, models, agents, approvals, null, turns, streams, runEvents, console));
         assertThrows(NullPointerException.class, () -> new ServerRunMode(
-                conversations, commands, sessions, models, agents, approvals, healthCheck, null, streams, console));
+                conversations, commands, sessions, models, agents, approvals, healthCheck, null, streams, runEvents, console));
+        assertThrows(NullPointerException.class, () -> new ServerRunMode(
+                conversations, commands, sessions, models, agents, approvals, healthCheck, turns, null, runEvents, console));
+        assertThrows(NullPointerException.class, () -> new ServerRunMode(
+                conversations, commands, sessions, models, agents, approvals, healthCheck, turns, streams, null, console));
     }
 
     @Test

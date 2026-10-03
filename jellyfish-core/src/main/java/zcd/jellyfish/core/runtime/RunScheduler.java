@@ -67,6 +67,9 @@ public final class RunScheduler {
     /** run 登记表：落终态与用量。 */
     private final RunRegistry registry;
 
+    /** run 事件总线：对外广播生命周期事件。 */
+    private final RunEventBus events;
+
     /** 单个 run 的墙钟上限（毫秒）；{@code <= 0} 表示不看门狗。 */
     private final long runTimeoutMillis;
 
@@ -79,12 +82,15 @@ public final class RunScheduler {
      *
      * @param contexts      上下文持有者，不可为 {@code null}
      * @param registry      run 登记表，不可为 {@code null}
+     * @param events        run 事件总线，不可为 {@code null}
      * @param runtimeConfig 运行时配置门面，不可为 {@code null}
      */
     @Inject
-    public RunScheduler(RunContextHolder contexts, RunRegistry registry, RuntimeConfig runtimeConfig) {
+    public RunScheduler(RunContextHolder contexts, RunRegistry registry, RunEventBus events,
+                        RuntimeConfig runtimeConfig) {
         this.contexts = contexts;
         this.registry = registry;
+        this.events = events;
         SubAgentSettings settings = runtimeConfig.getSubAgentSettings();
         int concurrent = Math.max(1, settings.getMaxConcurrentRuns());
         int poolMax = concurrent * (Math.max(0, settings.getMaxDepth()) + 1);
@@ -120,6 +126,9 @@ public final class RunScheduler {
             AgentRunResult result = AgentRunResult.failed(
                     "agent-run 线程池已满，无法派生更多子代理（可稍后重试或调小 subAgent.maxConcurrentRuns）");
             registry.finish(runId, result.getStatus(), result.getRounds(), result.getUsage());
+            // 先广播终态再开闸：订阅者应当在等待方恢复之前就看到 FINISHED，
+            // 否则「await 返回后事件还没到」会变成一条难复现的竞态
+            publishFinished(runId);
             handle.complete(result);
         }
     }
@@ -169,6 +178,8 @@ public final class RunScheduler {
         permits.acquireUninterruptibly();
         RunPermit permit = new RunPermit(permits);
         contexts.set(new RunContext(tree, parentDepth, runId, rootRunId, permit));
+        registry.markRunning(runId);
+        publishStarted(runId);
         AgentRunResult result;
         try {
             result = body.run(handle);
@@ -190,7 +201,27 @@ public final class RunScheduler {
                     + " ms）：如需继续请调大 subAgent.runTimeoutMillis。");
         }
         registry.finish(runId, terminal.getStatus(), terminal.getRounds(), terminal.getUsage());
+        // 先广播终态再开闸，理由同 submit 的被拒路径
+        publishFinished(runId);
         handle.complete(terminal);
+    }
+
+    /**
+     * 广播「run 开始执行」（状态已置为运行中）。
+     *
+     * @param runId run 标识
+     */
+    private void publishStarted(String runId) {
+        registry.snapshot(runId).ifPresent(snapshot -> events.publish(AgentRunEvent.started(snapshot)));
+    }
+
+    /**
+     * 广播「run 到达终态」。
+     *
+     * @param runId run 标识
+     */
+    private void publishFinished(String runId) {
+        registry.snapshot(runId).ifPresent(snapshot -> events.publish(AgentRunEvent.finished(snapshot)));
     }
 
     /**

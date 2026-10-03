@@ -7,6 +7,7 @@ import zcd.jellyfish.core.conversation.ShellStreams;
 import zcd.jellyfish.core.conversation.TurnRegistry;
 import zcd.jellyfish.core.compact.ConversationCompactor;
 import zcd.jellyfish.core.input.InputDirectives;
+import zcd.jellyfish.core.runtime.RunEventBus;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.command.CommandManager;
 import zcd.jellyfish.infra.config.RuntimeConfig;
@@ -203,6 +204,17 @@ public interface JellyfishComponent {
      * @return ShellStreams
      */
     ShellStreams shellStreams();
+
+    /**
+     * 获取 agent run 事件总线（运行时拥有）。
+     * <p>
+     * 调用点是 Server 外壳：{@code /chat} 在提交回合之前订阅，把本会话派生的子代理 run
+     * 以 {@code run_started} / {@code run_finished} 推给 SSE 客户端。它是进程级总线，
+     * 订阅者自行按父会话过滤。
+     *
+     * @return RunEventBus
+     */
+    RunEventBus runEventBus();
 
     /**
      * 获取健康检查汇总。

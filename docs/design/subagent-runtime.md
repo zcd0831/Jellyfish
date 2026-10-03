@@ -1,6 +1,6 @@
 # 设计：子代理运行时（agent run）（P0–P3 总纲）
 
-> **状态：设计已定（决策见第 5 节）；P0 / P1 / P2 / P3 均未开工。**
+> **状态：设计已定（决策见第 5 节）；P0 / P1 已落地，P2 / P3 未开工。**
 > 本文是子代理从「父回合里的一个阻塞工具调用」升级为「一等公民 agent run」的设计与落地计划。
 > 对外口径见 [architecture.md](../architecture.md) 与 [constraints/react-compact.md](../constraints/react-compact.md)；
 > 施工按第 11 节的阶段顺序推进，每阶段独立可合并、可回滚。
@@ -8,13 +8,15 @@
 | 阶段 | 内容 | 状态 |
 | --- | --- | --- |
 | P0 | agent run 原语 + 并行调度 + governor | **已落地**（S1–S5：`RunRegistry` / `RunScheduler` / `AgentRuntime` / `RunContext`+`RunTree` / 墙钟与 token 预算 / `tryAcquireSpawn` / `cancelTree` 与孤儿清理） |
-| P1 | 观测（run 事件 + 面板）与归档 | **未开工** |
+| P1 | 观测（run 事件 + 面板）与归档 | **已落地**（`RunEventBus` + `AgentRunEvent` + `SubAgentPanel` + `SubAgentArchive`；`-server` SSE 发 `run_started`/`run_finished`） |
 | P2 | 声明式编排 spec（插件） | **未开工** |
 | P3 | 共享任务列表（agent 团队远景） | **未开工** |
 
 > **P0 分册**：[`subagent-runtime-p0.md`](subagent-runtime-p0.md)（原语签名、`RunRegistry` / `RunScheduler` 边界、
 > `RunScope` 去 `ThreadLocal` 的迁移路径、governor 落地与测试计划）。本文只保留机制与阶段；
 > P0 的施工细则以分册为准。
+>
+> **P1 分册**：[`subagent-runtime-p1.md`](subagent-runtime-p1.md)（运行面板、归档、以及「run 事件是否要做」的落地取舍）。
 
 ---
 
@@ -82,7 +84,7 @@ ReActLooper.loop（父回合，占一条 react 线程）
 
 ```
 外壳（CLI / TUI / Server）
-  │  可靠 lane（订阅）+ 面板（插件形态的 PanelContribution）
+  │  可靠 lane（回合事件）+ run 事件总线（订阅）+ 面板（插件形态的 PanelContribution）
   ▼
 jellyfish-core
   AgentRuntime        # run 原语：spawn / await / cancel / result / events（不解释 spec）
@@ -112,7 +114,7 @@ jellyfish-infra
 | `SessionKind.EPHEMERAL` | **保留为判定来源**（`parentSessionId` 仍只做追溯）。落盘策略改为「归档」而非「会话」；新增独立的归档命名空间 |
 | `TurnRegistry` | 不变（管顶层回合的互斥与取消）。run 的注册表是**另一个**表，不与它合并 |
 | `ActionQueue` | 不变（仍只投顶层回合）。本设计**不给子 run 开动作窗口**（维持既有决策） |
-| `ShellStreams` 可靠 lane | **复用**，run 事件打 `runId` / `parentSessionId` / `parentRunId` 标签；不新开 lane |
+| `ShellStreams` 可靠 lane | **不复用**：run 事件走运行时自持的 `RunEventBus`（`core.runtime`）。原计划「复用它打标签」会与 `core.conversation → core → core.runtime` 的依赖方向相撞；见 P1 分册 D-P1-5 |
 | `ReActLooper.runNested` | 由「内联执行」改为「由 `RunScheduler` 调度执行」；`runTurn` / `loop` 语义不变 |
 | `RunScope` / `RunScopes` | 由 `ThreadLocal` 改为 run 上下文（随 run 传递），否则并行时跨线程不可见 |
 | `ToolOutputStore` | **复用**，但为子代理归档开**独立命名空间与独立配额**（第 9 节） |
@@ -175,7 +177,7 @@ public final class AgentRuntime {
 | **D7** | 编排表达 | **声明式 spec：做**；**命令式脚本：明确不做** |
 | **D8** | 引擎位置 | **放插件**；内核只出原语，不解释 spec |
 | **D9** | 观测 | **可观测、不可 resume** |
-| **D10** | 传输 | 复用**可靠 lane**，run 事件打标签；**不新开 lane** |
+| **D10** | 传输 | run 事件走**运行时自持的可靠总线** `RunEventBus`（`core.runtime`）；**不挂 `ShellTurnEvent`、不改三外壳的回合契约**（细化见 P1 分册 D-P1-5） |
 | **D11** | 呈现 | **独立面板**，以**插件形态**（`PanelContribution`，`owner=core`）提供 |
 | **D12** | 归档 | **复用 `ToolOutputStore`**，但使用**独立命名空间与独立配额** |
 | **D13** | spec 工具 | 插件**后续开发**；模型届时走插件的提示词贡献获知 schema |
@@ -243,19 +245,26 @@ public final class AgentRuntime {
 
 ## 8. 观测与归档
 
-### 8.1 事件（复用可靠 lane）
+### 8.1 事件（运行时自持总线，落地按 P1 分册）
 
-- run 事件走**既有可靠 lane**（`ShellStreams`），不新开 lane；事件携带 `runId`、`parentRunId`、`rootRunId`、`parentSessionId`。
-- 事件集（示意）：`RUN_STARTED` / `RUN_STEP`（工具调用或轮次推进）/ `RUN_OUTPUT`（增量，尽力）/
-  `RUN_FINISHED`（终态 + 用量 + 触达的预算）。
+- run 事件走**运行时自持的可靠总线** `RunEventBus`（`core.runtime`），不挂在 `ShellTurnEvent` 上，
+  也不挤进 `ShellStreams`：那是外壳回合的契约，而 agent 运行时的观测面还要继续长（P3 的任务列表、代理间消息）。
+  事件类型是独立的 `AgentRunEvent`，携带 run 身份与状态快照。
+- 事件集（示意）：`STARTED` / `STEP`（工具调用或轮次推进）/ `FINISHED`（终态 + 轮数 + 用量）。
+  **当前只发布 `STARTED` / `FINISHED`**；`STEP` 与输出流待内核 `loop` 进度钩子与可丢通道（P1d）。
 - **顺序与不丢**：与可靠 lane 同一口径（同步扇出、单来源有序、订阅者抛错被隔离）。
+- **插件不走这条总线**：它们拿不到内核类型；插件若要观测 run 走 `EventChannel` 通知（后续）。
 - **审批仍是拉取式**，不进事件 lane（与既有决策一致）。
 
 ### 8.2 面板（插件形态）
 
 - 由 `core`（`owner=core`）注册一个 `PanelContribution`，与 `SystemCommands` / `SubAgentTools` 同一形态，
   **不新开内核 UI 通路**。
-- 面板内容：活跃 run 列表（子代理类型、状态、轮数、已耗 token、已耗时），可选中查看某个 run 的步骤与输出末尾若干行。
+- 面板内容（**已落地**）：活跃 run 列表——子代理类型、状态、已耗时。
+  轮数与 token 的实时值需要内核 `loop` 的进度钩子，列为可选增强（P1 分册 D-P1-3）；
+  「选中某个 run 看步骤与输出」也留给后续（那需要 `STEP` / 输出流，见 D-P1-5）。
+- **刷新不是每帧**：外壳只在缓存失效时收集，因此 TUI 在**回合进行中每秒补一次失效**——
+  run 只可能存在于回合内，没有这条来源面板会在 run 结束后才首次出现（那时它已经空了）。
 - 与父回合「运行中的工具」的区域分工：那里仍是父回合的实时区；面板承载**所有并发 run**，因此并行时不会互相覆盖。
 
 ### 8.3 归档（复用 store + 独立配额）
@@ -296,8 +305,9 @@ public final class AgentRuntime {
 | 阶段 | 内容 | 依赖 | 可回滚性 |
 | --- | --- | --- | --- |
 | **P0** | `AgentRuntime` 原语 + `RunRegistry` + `RunScheduler` + governor；`runNested` 由内联改调度；`RunScope` 去 `ThreadLocal` | 无 | 中（核心机制变更，但 `task` 的对外语义不变） |
-| **P1** | run 事件（可靠 lane 打标）+ 面板（`core` 的 `PanelContribution`）+ 归档（独立命名空间与配额） | P0 | 高（面板与归档可整体摘除） |
+| **P1** | run 事件（运行时总线）+ 面板（`core` 的 `PanelContribution`）+ 归档（独立命名空间与配额） | P0 | 高（面板与归档可整体摘除） |
 | **P2** | 声明式 spec 插件（引擎 + spec 工具 + 提示词贡献） | P0 / P1 | 高（插件卸载即回退到 `task` 薄工具） |
+| **P3** | 共享任务列表（agent 团队远景） | P2 | 高 |
 | **P3** | 共享任务列表（agent 团队远景：run 间消息 + 任务容器） | P2 | 高（纯新增面） |
 
 每阶段独立可合并、可回滚；合并前必须同步第 12 节的文档清单。
@@ -336,7 +346,7 @@ public final class AgentRuntime {
 | `docs/constraints/react-compact.md` | **子代理（嵌套回合）** 整节按本设计重写：删「内联绝不进池」的禁令，改为「独立执行资源 + 等待不占槽」与 governor；补 run 身份与并行语义 |
 | `docs/architecture.md` | 「子代理」条目与「已知边界与后续项」：删「并行/链式/工作流编排明确不做」，改为「声明式 spec 支持、命令式脚本不做」；补 agent run 分层图 |
 | `docs/constraints/session-config.md` | `SessionKind.EPHEMERAL` 的落盘语义从「不落盘」改为「归档到独立命名空间、不可 resume」；补 governor 配置字段 |
-| `docs/constraints/extensions.md` | 明确内核原语是句柄式异步、不在关键路径同步回调插件；run 事件走可靠 lane 的标签口径 |
+| `docs/constraints/extensions.md` | 明确内核原语是句柄式异步、不在关键路径同步回调插件；run 事件的呈现口径（运行时总线 + 外壳订阅） |
 | `docs/constraints/shells.md` | 面板以 `PanelContribution` 提供；run 事件对三外壳的呈现口径 |
 | `docs/configuration.md` | 新增 `subAgent` 的 governor 字段与缺省值表 |
 | `README.md` | 如子代理的用户可见行为（并行、面板、配置）变化，同步 FAQ 与命令速查 |

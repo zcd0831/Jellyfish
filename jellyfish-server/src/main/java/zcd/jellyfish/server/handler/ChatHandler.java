@@ -12,11 +12,13 @@ import zcd.jellyfish.core.conversation.Submission;
 import zcd.jellyfish.core.conversation.SubmissionPolicy;
 import zcd.jellyfish.core.conversation.TurnInProgressException;
 import zcd.jellyfish.core.conversation.TurnRegistry;
+import zcd.jellyfish.core.runtime.RunEventBus;
 import zcd.jellyfish.infra.session.SessionManager;
 import zcd.jellyfish.server.ApprovalBridge;
 import zcd.jellyfish.server.ServerConfig;
 import zcd.jellyfish.server.SseContributionListener;
 import zcd.jellyfish.server.SseEvent;
+import zcd.jellyfish.server.SseRunListener;
 import zcd.jellyfish.server.SseTurnListener;
 import zcd.jellyfish.server.dto.ApprovalDto;
 import zcd.jellyfish.server.dto.ApprovalResolvedEvent;
@@ -77,6 +79,9 @@ public final class ChatHandler {
     /** 在途回合表：断连时取消本会话的回合。 */
     private final TurnRegistry turns;
 
+    /** run 事件总线：订阅本会话派生的子代理 run。 */
+    private final RunEventBus runEvents;
+
     /** 会话域服务，仅用于「会话不存在」的 404。 */
     private final SessionManager sessions;
 
@@ -95,15 +100,18 @@ public final class ChatHandler {
      * @param conversations 会话提交服务，不可为 {@code null}
      * @param streams  可靠 lane，不可为 {@code null}
      * @param turns    在途回合表（内核拥有），不可为 {@code null}
+     * @param runEvents run 事件总线，不可为 {@code null}
      * @param sessions 会话域服务，不可为 {@code null}
      * @param config   运行参数，不可为 {@code null}
      * @param approvals 审批桥，不可为 {@code null}
      */
     public ChatHandler(ConversationService conversations, ShellStreams streams, TurnRegistry turns,
-                       SessionManager sessions, ServerConfig config, ApprovalBridge approvals) {
+                       RunEventBus runEvents, SessionManager sessions, ServerConfig config,
+                       ApprovalBridge approvals) {
         this.conversations = Objects.requireNonNull(conversations, "conversations must not be null");
         this.streams = Objects.requireNonNull(streams, "streams must not be null");
         this.turns = Objects.requireNonNull(turns, "turns must not be null");
+        this.runEvents = Objects.requireNonNull(runEvents, "runEvents must not be null");
         this.sessions = sessions;
         this.config = config;
         this.approvals = approvals;
@@ -132,6 +140,10 @@ public final class ChatHandler {
         // 尽力 lane 没有时序要求：它的信箱会替插件把贡献存住，直到本流的写循环来取
         SseContributionListener contributions = new SseContributionListener(sessionId);
         Subscription contributionSubscription = streams.subscribeShell(contributions);
+        // run 事件来自运行时总线，不是 lane：一个回合可以派生多个子代理，
+        // 客户端该看到它们「在跑」，而不是只在工具结果里看到终点
+        SseRunListener runs = new SseRunListener(sessionId);
+        Subscription runSubscription = runEvents.subscribe(runs);
         Submission submission;
         try {
             submission = conversations.submit(sessionId, message, InputTransformRequest.Source.SERVER,
@@ -140,11 +152,13 @@ public final class ChatHandler {
             // 同一会话已有在途回合：这是并发冲突，不是服务故障，也不是客户端写错了请求
             contributionSubscription.close();
             subscription.close();
+            runSubscription.close();
             streamPermit.release();
             throw new ApiException(Responses.CONFLICT, "TURN_IN_PROGRESS", e.getMessage());
         } catch (RuntimeException e) {
             contributionSubscription.close();
             subscription.close();
+            runSubscription.close();
             streamPermit.release();
             throw e;
         }
@@ -152,6 +166,7 @@ public final class ChatHandler {
             // 输入被插件接过去了：没有回合，也没 append 用户消息（submit 保证），不占并发流
             contributionSubscription.close();
             subscription.close();
+            runSubscription.close();
             streamPermit.release();
             writeHandled(exchange, sessionId, noticeOf(submission.getNotice()));
             return;
@@ -160,6 +175,7 @@ public final class ChatHandler {
             // 两个都不可能到达：BLANK_INPUT 已被 readMessage 拦下，NO_SESSION 已被 requireSession 拦下
             contributionSubscription.close();
             subscription.close();
+            runSubscription.close();
             streamPermit.release();
             throw new ApiException(Responses.BAD_REQUEST, Responses.CODE_BAD_REQUEST,
                     "/chat 只接受对话消息，命令请用 POST /sessions/{id}/commands");
@@ -167,7 +183,7 @@ public final class ChatHandler {
         String emittedApprovalId = null;
         try {
             SseWriter writer = SseWriter.prepare(exchange);
-            emittedApprovalId = streamUntilTerminal(writer, listener, contributions, sessionId,
+            emittedApprovalId = streamUntilTerminal(writer, listener, contributions, runs, sessionId,
                     emittedApprovalId);
         } catch (IOException e) {
             // 客户端断开：这是最正常的取消来源，不记为错误
@@ -180,6 +196,7 @@ public final class ChatHandler {
         } finally {
             contributionSubscription.close();
             subscription.close();
+            runSubscription.close();
             streamPermit.release();
             exchange.endExchange();
         }
@@ -223,6 +240,7 @@ public final class ChatHandler {
      * @param writer             SSE 写出器
      * @param listener           可靠 lane 的订阅者（它自带队列）
      * @param contributions      尽力 lane 的订阅者（插件贡献，自带队列）
+     * @param runs               run 事件总线订阅者（自带队列）
      * @param sessionId          会话标识
      * @param emittedApprovalId  已推送给客户端的审批请求 id，可为 {@code null}
      * @return 循环结束时仍待审批的请求 id，可为 {@code null}
@@ -230,8 +248,9 @@ public final class ChatHandler {
      * @throws InterruptedException 等待被中断时抛出
      */
     private String streamUntilTerminal(SseWriter writer, SseTurnListener listener,
-                                       SseContributionListener contributions, String sessionId,
-                                       String emittedApprovalId) throws IOException, InterruptedException {
+                                       SseContributionListener contributions, SseRunListener runs,
+                                       String sessionId, String emittedApprovalId)
+            throws IOException, InterruptedException {
         String pending = emittedApprovalId;
         int idleSeconds = 0;
         while (true) {
@@ -250,6 +269,7 @@ public final class ChatHandler {
             }
             pending = syncApproval(writer, sessionId, pending);
             flushContributions(writer, contributions);
+            flushRuns(writer, runs);
         }
     }
 
@@ -271,6 +291,23 @@ public final class ChatHandler {
         streams.drainShell();
         SseEvent event;
         while ((event = contributions.pollNow()) != null) {
+            writer.event(event.getName(), event.getPayload());
+        }
+    }
+
+    /**
+     * 交付本流收到的 run 事件。
+     * <p>
+     * 与 {@link #flushContributions} 一样「取与写分开」，但取的动作不同：run 事件由
+     * {@code RunEventBus} 同步扇出，订阅者自己在 {@code accept} 里入队，因此这里只需把队列排空。
+     *
+     * @param writer SSE 写出器
+     * @param runs   本流的 run 事件订阅者
+     * @throws IOException 写出失败时抛出
+     */
+    private void flushRuns(SseWriter writer, SseRunListener runs) throws IOException {
+        SseEvent event;
+        while ((event = runs.pollNow()) != null) {
             writer.event(event.getName(), event.getPayload());
         }
     }

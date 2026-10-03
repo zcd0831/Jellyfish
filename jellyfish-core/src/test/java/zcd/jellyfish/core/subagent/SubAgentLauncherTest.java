@@ -15,6 +15,7 @@ import zcd.jellyfish.core.ReActResult;
 import zcd.jellyfish.core.runtime.RunContext;
 import zcd.jellyfish.core.runtime.RunContextHolder;
 import zcd.jellyfish.core.runtime.AgentRuntime;
+import zcd.jellyfish.core.runtime.RunEventBus;
 import zcd.jellyfish.core.runtime.RunRegistry;
 import zcd.jellyfish.core.runtime.RunScheduler;
 import zcd.jellyfish.core.prompt.ToolFilter;
@@ -109,7 +110,7 @@ class SubAgentLauncherTest {
         // 调度器在构造时就要读设置，因此先打桩再建它
         lenient().when(runtimeConfig.getSubAgentSettings()).thenReturn(new SubAgentSettings());
         RunRegistry registry = new RunRegistry();
-        RunScheduler scheduler = new RunScheduler(runContexts, registry, runtimeConfig);
+        RunScheduler scheduler = new RunScheduler(runContexts, registry, new RunEventBus(), runtimeConfig);
         runtime = new AgentRuntime(registry, runContexts, scheduler);
         launcher = new SubAgentLauncher(sessionManager, agentManager, sessionModelResolver, runtimeConfig,
                 reActLooper, runContexts, permissionManager, runtime);

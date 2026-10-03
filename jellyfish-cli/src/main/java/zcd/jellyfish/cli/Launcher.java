@@ -141,7 +141,7 @@ public final class Launcher {
                 return new ServerRunMode(component.conversationService(), component.commandManager(),
                         component.sessionManager(), component.modelManager(), component.agentManager(),
                         component.approvalChannel(), component.healthCheck(), component.turnRegistry(),
-                        component.shellStreams(), console);
+                        component.shellStreams(), component.runEventBus(), console);
             case CLI:
             default:
                 return new CliRunMode(component.conversationService(), component.shellStreams(),

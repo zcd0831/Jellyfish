@@ -20,6 +20,7 @@ import zcd.jellyfish.core.AgentHarness;
 import zcd.jellyfish.core.conversation.ConversationService;
 import zcd.jellyfish.core.conversation.ShellStreams;
 import zcd.jellyfish.core.conversation.TurnRegistry;
+import zcd.jellyfish.core.runtime.RunEventBus;
 import zcd.jellyfish.core.conversation.Submission;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.command.CommandManager;
@@ -113,6 +114,9 @@ class LauncherTest {
 
     /** 可靠 lane：三个模式装配都需要。 */
     private final ShellStreams shellStreams = new ShellStreams(new ShellIngress(new MetricsRegistry()));
+
+    /** run 事件总线。 */
+    private final RunEventBus runEventBus = new RunEventBus();
 
     /** 真实健康检查汇总，仅为满足 Server 装配。 */
     private final zcd.jellyfish.infra.metrics.HealthCheck healthCheck =
@@ -385,6 +389,7 @@ conversationCompactor = new ConversationCompactor(sessions, models, runtimeConfi
         when(component.approvalChannel()).thenReturn(approvalChannel);
         when(component.healthCheck()).thenReturn(healthCheck);
         when(component.turnRegistry()).thenReturn(turnRegistry);
+        when(component.runEventBus()).thenReturn(runEventBus);
     }
 
     /**

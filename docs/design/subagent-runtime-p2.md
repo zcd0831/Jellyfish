@@ -1,6 +1,6 @@
 # 设计：子代理运行时 P2 —— 声明式编排（workflow 插件）
 
-> **状态：设计已确认（D-P2-1…D-P2-7 已拍板，见第 8 节）；P2a 起进入施工。**
+> **状态：设计已确认（D-P2-1…D-P2-7 已拍板，见第 8 节）；P2a–P2d 已落地，P2e（面板贡献 + 端到端）待定。**
 > 上游总纲：[`subagent-runtime.md`](subagent-runtime.md)；P0/P1 已落地。
 > 本文覆盖总纲第 9 节（编排层）的落地细节，并把第 9.1 节的能力上限翻成具体 schema。
 
@@ -225,6 +225,15 @@ api 侧新增 `DelegationResult`：`runId` / `status`（枚举）/ `text` / `rou
 agent 不存在或不可委派、`summarize` 缺 agent、超出步数上限——一律在 `spawn` 之前拒绝，
 理由是「一份写错的 spec 不该在烧掉几个子代理之后才被拒绝」。
 
+**落地时补的三条**（P2c/P2d）：
+
+1. **步数上限 12**（`WorkflowSpecParser.MAX_STEPS`）：它是「一次编排最多烧掉多少个子代理」的上限，
+   与内核 governor 管的「全局同时在跑多少」正交。
+2. **`on_failure` 必须声明 `needs`**：没有前置步骤就没有失败可等，这种步骤永远不执行，
+   模型只会看到「什么都没发生」而查不出原因——解析期直接拒绝并把话说清楚。
+3. **「成功」= `COMPLETED` 或 `TRUNCATED`**：达到轮数上限的子代理确实跑完了（只是没收敛），
+   它的正文对后续步骤仍然有用；把不完整当成失败会让整条下游一起被跳过。
+
 **回灌文本**：一行概要（`[workflow X 完成 · N 步 · M 轮 · T tok]`，失败时带
 `⚠ <第一步失败的原因>`）+ 按步骤顺序的分节正文（`## <id> (<agent>)`），
 `ToolMetadata.KEY_TERMINAL` 与 `task` 同口径填。
@@ -233,14 +242,26 @@ agent 不存在或不可委派、`summarize` 缺 agent、超出步数上限—�
 
 ## 5. 插件侧工作（`Jellyfish-Plugins`）
 
-新增 `jellyfish-plugin-workflow`：
+新增 `jellyfish-plugin-workflow`（**P2c/P2d 已落地**）：
 
-| 组成 | 内容 |
+| 类 | 内容 |
 | --- | --- |
-| `workflow` 工具 | 描述符 + JSON Schema（spec 的结构）；处理器 = 校验 → 引擎 |
-| 引擎 | 按 `needs` 做层序调度：同一层的步骤并发 `spawn`，再逐个 `await`；`when` 在执行前判定 |
-| 提示词贡献 | `PromptContributionRequest`：把 spec 结构与「什么时候用 workflow 而不是 task」告诉模型 |
-| 观测（可选，S4） | `PanelContributionRequest`：当前 workflow 的步骤状态 |
+| `WorkflowPlugin` | 只占两个扩展点：`workflow` 工具 + 提示词贡献。引擎用 `context.delegations()` 装配 |
+| `WorkflowTool` | 工具名片（JSON Schema）+ 校验 → 引擎 → 组装回灌文本与元数据 |
+| `WorkflowSpecParser` / `WorkflowSpec` / `WorkflowStep` / `StepCondition` / `AggregateMode` / `SpecValues` | 解析与校验：类型、必填、唯一、引用存在、无环、能力上限 |
+| `WorkflowEngine` | 层序调度、并发扇出、`when` 判定、`collect` / `summarize`、进度写进 `ToolOutputSink` |
+| `WorkflowRun` / `StepOutcome` | 结局模型（跑过 / 未跑 + 原因 / 取消），累计轮数与 token（含汇总那一次） |
+| `WorkflowGuidance` | 提示词贡献 |
+
+**提示词贡献的落位做了收敛**（D13 的细化）：schema 已经写在工具名片里、每轮都在模型眼前，
+再复述一遍只会多花 token，并在两边改动不同步时给出两份互相矛盾的说明。因此贡献<b>只给一个可照抄的
+例子与选型规则</b>（什么时候该用 `workflow`、什么时候 `task` 就够），落位取 `STATIC`（编译期就固定，进可缓存前缀）。
+
+**并发不靠插件**：引擎只做「同层先全部 `spawn`、再逐个 `await`」，并发度完全交给内核 governor。
+插件若自建线程池，两套上限互相不知道对方，就会出现「插件以为在并发、实际全在排队」这种查不出的现象。
+
+**失败不中断整条编排**：一个步骤失败只影响它自己的下游（由各步 `when` 决定），无依赖关系的步骤照常执行——
+让整批在第一步失败时全停，模型就得重新推演剩下的部分。
 
 引擎**不自己起线程池**：并发度由内核的 governor（`maxConcurrentRuns`）决定，插件只负责依次
 `spawn`；超出的 run 在内核侧排队——这正是 governor 存在的意义，插件不该有第二套并发控制。
@@ -249,13 +270,13 @@ agent 不存在或不可委派、`summarize` 缺 agent、超出步数上限—�
 
 ## 6. 阶段
 
-| 步 | 内容 | 仓库 | 依赖 | 可回滚 |
-| --- | --- | --- | --- | --- |
+| 步 | 内容 | 仓库 | 依赖 | 可回滚 | 状态 |
+| --- | --- | --- | --- | --- | --- |
 | **P2a** | `SubAgentLauncher` 拆 `spawn` / `await`（纯重构，`task` 语义不变，测试为证） | Jellyfish | P0/P1 | 高 | **已完成** |
 | **P2b** | api 端口（`SubAgentPort` / `DelegationRequest` / `DelegationResult` / `DelegationHandle` / `DelegationStatus`）+ core 适配器 + infra 持有 + 装配 | Jellyfish | P2a | 高（端口无人用即回退） | **已完成** |
-| **P2c** | 插件骨架：模块、工具描述符、spec 校验（含全部拒绝路径的单测） | Plugins | P2b | 高 |
-| **P2d** | 引擎：层序调度、并发扇出、`when`、聚合（`collect` / `summarize`） | Plugins | P2c | 高 |
-| **P2e** | 提示词贡献 + 面板贡献 + 端到端（真内核跑一份 spec） | Plugins | P2d | 高 |
+| **P2c** | 插件骨架：模块、工具描述符、spec 校验（含全部拒绝路径的单测） | Plugins | P2b | 高 | **已完成** |
+| **P2d** | 引擎：层序调度、并发扇出、`when`、聚合（`collect` / `summarize`） | Plugins | P2c | 高 | **已完成** |
+| **P2e** | 面板贡献 + 端到端（真内核跑一份 spec）。提示词贡献已在 P2c 落地 | Plugins | P2d | 高 | 待定 |
 
 **每一阶段都必须让「插件卸载 = 回退到 `task` 薄工具」成立**：插件缺席时不注册 `workflow`，
 内核侧端口零调用。

@@ -84,6 +84,28 @@ public final class PluginContextFactory {
      * @param actions     动作队列，不可为 {@code null}
      * @param sessions    会话域服务，不可为 {@code null}
      * @param shellIngress 外壳贡献信箱，不可为 {@code null}
+     */
+    public PluginContextFactory(ExtensionRegistry extensions, EventChannel events, TypeRegistry registry,
+                               RuntimeInfoHolder runtimeInfo, ActionQueue actions, SessionManager sessions,
+                               ShellIngress shellIngress) {
+        this(extensions, events, registry, runtimeInfo, actions, sessions, shellIngress,
+                SubAgentPort.unavailable());
+    }
+
+    /**
+     * 构造工厂，并把子代理委派端口一并下传给每个插件上下文。
+     * <p>
+     * <b>不带端口的那条重载不是「测试专用」</b>：它表达的是一个真实状态——当前装配没有提供委派能力
+     * （内核未升级到带端口的版本、或某个外壳只装配了子集）。插件因此不需要为「能力缺失」写分支，
+     * 见 {@link SubAgentPort#unavailable()}。
+     *
+     * @param extensions   同步扩展点策略，不可为 {@code null}
+     * @param events       事件通道，不可为 {@code null}
+     * @param registry     共用注册表，不可为 {@code null}
+     * @param runtimeInfo  运行时信息持有者，不可为 {@code null}
+     * @param actions      动作队列，不可为 {@code null}
+     * @param sessions     会话域服务，不可为 {@code null}
+     * @param shellIngress 外壳贡献信箱，不可为 {@code null}
      * @param delegations  子代理委派端口，不可为 {@code null}
      */
     @Inject

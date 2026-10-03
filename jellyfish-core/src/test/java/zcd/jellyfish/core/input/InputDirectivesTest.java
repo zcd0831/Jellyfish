@@ -21,6 +21,7 @@ import zcd.jellyfish.api.extension.PermissionDecision;
 import zcd.jellyfish.api.extension.ToolCallRequest;
 import zcd.jellyfish.api.extension.ToolCallResult;
 import zcd.jellyfish.core.ReActListener;
+import zcd.jellyfish.core.runtime.RunContextHolder;
 import zcd.jellyfish.core.tool.ToolExecutor;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.config.ReactSettings;
@@ -99,7 +100,7 @@ class InputDirectivesTest {
         ToolOutputLimiter outputLimiter = new ToolOutputLimiter(runtimeConfig, new ToolOutputStore(runtimeConfig));
         lenient().when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
         directives = new InputDirectives(extensions, new ToolExecutor(permissionManager, extensions, events,
-                outputLimiter), sessionManager, executor);
+                outputLimiter, new RunContextHolder()), sessionManager, executor);
     }
 
     @AfterEach

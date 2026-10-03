@@ -23,6 +23,8 @@ import zcd.jellyfish.api.extension.ToolOutputSink;
 import zcd.jellyfish.api.extension.ToolResultAdjustment;
 import zcd.jellyfish.api.extension.ToolResultPostRequest;
 import zcd.jellyfish.core.ReActListener;
+import zcd.jellyfish.core.runtime.RunContext;
+import zcd.jellyfish.core.runtime.RunContextHolder;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.permission.PermissionManager;
 import zcd.jellyfish.infra.session.Session;
@@ -80,6 +82,9 @@ public class ToolExecutor {
     /** 工具输出中间件：回灌前的唯一硬截断点。 */
     private final ToolOutputLimiter outputLimiter;
 
+    /** 委派上下文持有者：本次调用属于哪个 run 只有它知道。 */
+    private final RunContextHolder runContexts;
+
     /**
      * 构造工具执行器。
      *
@@ -87,14 +92,17 @@ public class ToolExecutor {
      * @param extensions        同步扩展点策略，不可为 {@code null}
      * @param events            通知发布入口，不可为 {@code null}
      * @param outputLimiter     工具输出中间件，不可为 {@code null}
+     * @param runContexts       委派上下文持有者，用来读出本次调用的 run 身份，不可为 {@code null}
      */
     @Inject
     public ToolExecutor(PermissionManager permissionManager, ExtensionRegistry extensions,
-                        EventPublisher events, ToolOutputLimiter outputLimiter) {
+                        EventPublisher events, ToolOutputLimiter outputLimiter,
+                        RunContextHolder runContexts) {
         this.permissionManager = Objects.requireNonNull(permissionManager, "permissionManager must not be null");
         this.extensions = Objects.requireNonNull(extensions, "extensions must not be null");
         this.events = Objects.requireNonNull(events, "events must not be null");
         this.outputLimiter = Objects.requireNonNull(outputLimiter, "outputLimiter must not be null");
+        this.runContexts = Objects.requireNonNull(runContexts, "runContexts must not be null");
     }
 
     /**
@@ -398,8 +406,35 @@ public class ToolExecutor {
             }
             return new ToolCallResult(toolName, "工具注册冲突：" + toolName);
         }
-        return extensions.invoke(handler,
-                new ToolCallRequest(toolName, arguments, session.getSessionId(), cancellation, sink));
+        // 调用者身份随请求交给工具：会话的派生来源来自会话本身，run 身份来自当前执行路径的上下文。
+        // 读两次 current() 而不是先存局部变量，是为了让「不在 run 上」这件事在两次读取里保持同一个答案——
+        // 它本来就是线程作用域的，同一条线程上不会中途变。
+        return extensions.invoke(handler, new ToolCallRequest(toolName, arguments, session.getSessionId(),
+                cancellation, sink, session.getParentSessionId(),
+                runIdOf(runContexts.current()), rootRunIdOf(runContexts.current())));
+    }
+
+    /**
+     * 取当前执行路径所属的 run 标识。
+     * <p>
+     * 不在任何 run 上（顶层回合、进程级调用、外壳线程）时返回 {@code null}——
+     * 「没有身份」与「身份是空串」是两件事，前者正是调用方需要的信号。
+     *
+     * @param context 当前线程的上下文，可为 {@code null}
+     * @return run 标识，可能为 {@code null}
+     */
+    private static String runIdOf(RunContext context) {
+        return context == null ? null : context.getRunId();
+    }
+
+    /**
+     * 取当前执行路径所属 run 树的根标识。
+     *
+     * @param context 当前线程的上下文，可为 {@code null}
+     * @return 根 run 标识，可能为 {@code null}
+     */
+    private static String rootRunIdOf(RunContext context) {
+        return context == null ? null : context.getRootRunId();
     }
 
     /**

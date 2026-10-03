@@ -1031,7 +1031,7 @@ class ReActLooperTest {
      */
     private ReActLooper newLooper() {
         return new ReActLooper(sessionManager, modelManager,
-                new ToolExecutor(permissionManager, extensions, events, outputLimiter),
+                new ToolExecutor(permissionManager, extensions, events, outputLimiter, runContexts),
                 events, promptAssembler, runtimeConfig, conversationCompactor, runContexts,
                 new SessionModelResolver(modelManager, agentManager), extensions, actionDispatcher, executor);
     }

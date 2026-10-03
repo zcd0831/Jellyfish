@@ -9,11 +9,12 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * {@link ToolCallRequest} 的单元测试：只覆盖「调用期设施」这一新增语义。
+ * {@link ToolCallRequest} 的单元测试：只覆盖「调用期设施」（取消令牌、输出捕获、调用者身份）。
  * <p>
  * 路由键、会话标识与参数只读性由 {@code ExtensionRequestTest} 覆盖，这里不重复。
  *
@@ -44,6 +45,43 @@ class ToolCallRequestTest {
         // Then
         assertSame(token, request.getCancellationToken());
         assertTrue(request.getCancellationToken().isCancelled());
+    }
+
+    @Test
+    @DisplayName("身份三字段缺省为 null：既有构造器与调用点行为不变")
+    void identity_should_defaultToNull() {
+        // When
+        ToolCallRequest bare = new ToolCallRequest("shell", null);
+        ToolCallRequest withSession = new ToolCallRequest("shell", null, "s-1");
+        ToolCallRequest withFacilities = new ToolCallRequest("shell", null, "s-1", null, null);
+
+        // Then：三种既有构造器都不带身份，「不在任何 run 上」因此是一个正常的取值而不是错误
+        for (ToolCallRequest request : java.util.Arrays.asList(bare, withSession, withFacilities)) {
+            assertNull(request.getParentSessionId(), "缺省不该有父会话");
+            assertNull(request.getRunId(), "缺省不该有 run 身份");
+            assertNull(request.getRootRunId(), "缺省不该有树根身份");
+        }
+        assertNull(bare.getSessionId());
+        assertEquals("s-1", withSession.getSessionId());
+    }
+
+    @Test
+    @DisplayName("身份三字段按提供值返回，且与其他设施互不影响")
+    void identity_should_return_providedValues() {
+        // Given
+        CancellationToken token = CancellationToken.NONE;
+
+        // When
+        ToolCallRequest request = new ToolCallRequest("todo_claim", null, "child-1", token, null,
+                "parent-1", "run-1", "root-1");
+
+        // Then
+        assertEquals("child-1", request.getSessionId());
+        assertEquals("parent-1", request.getParentSessionId());
+        assertEquals("run-1", request.getRunId());
+        assertEquals("root-1", request.getRootRunId());
+        assertSame(token, request.getCancellationToken());
+        assertSame(ToolOutputSink.NOOP, request.getOutputSink());
     }
 
     @Test

@@ -21,6 +21,7 @@ import zcd.jellyfish.api.extension.ToolMetadata;
 import zcd.jellyfish.api.extension.ToolResultAdjustment;
 import zcd.jellyfish.api.extension.ToolResultPostRequest;
 import zcd.jellyfish.core.ReActListener;
+import zcd.jellyfish.core.runtime.RunContextHolder;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.config.ReactSettings;
 import zcd.jellyfish.infra.config.RuntimeConfig;
@@ -100,7 +101,8 @@ class ToolExecutorTest {
         sessionManager = new SessionManager(agentManager, events, extensions, new SessionDefaults());
         session = sessionManager.createDefault();
         ToolOutputLimiter outputLimiter = new ToolOutputLimiter(runtimeConfig, store);
-        executor = new ToolExecutor(permissionManager, extensions, events, outputLimiter);
+        executor = new ToolExecutor(permissionManager, extensions, events, outputLimiter,
+                new RunContextHolder());
         lenient().when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
         lenient().when(store.store(anyString(), anyString(), anyString(), anyString(), anyBoolean()))
                 .thenReturn("/tmp/jellyfish-spill.txt");

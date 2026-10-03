@@ -1,12 +1,17 @@
 package zcd.jellyfish.cli.di;
 
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import zcd.jellyfish.api.event.Subscription;
 import zcd.jellyfish.api.event.notification.ConfigWarningEvent;
 import zcd.jellyfish.api.plugin.PluginContext;
 import zcd.jellyfish.api.plugin.PluginDeclaration;
+import zcd.jellyfish.api.subagent.DelegationHandle;
+import zcd.jellyfish.api.subagent.DelegationResult;
 import zcd.jellyfish.api.subagent.SubAgentPort;
+import zcd.jellyfish.core.subagent.SubAgentDelegationAdapter;
+import zcd.jellyfish.core.subagent.SubAgentLauncher;
 import zcd.jellyfish.infra.action.ActionQueue;
 import zcd.jellyfish.infra.config.AgentPromptLoader;
 import zcd.jellyfish.infra.config.AppConfig;
@@ -38,6 +43,8 @@ import java.util.Collections;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -124,6 +131,41 @@ class PluginModuleTest {
         assertTrue(registry.snapshot().render().contains("<- plugin-a"));
         subscription.close();
         assertEquals(0, factory.release("plugin-a"));
+    }
+
+    @Test
+    @DisplayName("委派端口绑定的是 core 里的真实现，而不是能力缺失的占位")
+    void provideSubAgentPort_should_bindTheRealAdapter() {
+        // Given：一个真的适配器（它的委派器用 mock——本用例只验装配，不验委派本身）
+        SubAgentDelegationAdapter adapter = new SubAgentDelegationAdapter(
+                org.mockito.Mockito.mock(SubAgentLauncher.class));
+
+        // When
+        SubAgentPort port = PluginModule.provideSubAgentPort(adapter);
+
+        // Then：绑的是它，不是 SubAgentPort.unavailable()
+        assertSame(adapter, port);
+        assertNotSame(SubAgentPort.unavailable(), port);
+    }
+
+    @Test
+    @DisplayName("装配出来的插件上下文拿到的就是绑定的那个端口")
+    void providePluginContextFactory_shouldHandThePortToPlugins() {
+        // Given：一个可辨认的端口实现
+        SubAgentPort port = request -> DelegationHandle.settled(
+                DelegationResult.completed("run-1", "x", 1, 1L));
+        PluginContextFactory factory = PluginModule.providePluginContextFactory(
+                new ExtensionRegistry(new TypeRegistry()),
+                new EventChannel(EventChannelOptions.defaults(), new TypeRegistry()),
+                new TypeRegistry(), new RuntimeInfoHolder(), new ActionQueue(),
+                org.mockito.Mockito.mock(zcd.jellyfish.infra.session.SessionManager.class),
+                new ShellIngress(new MetricsRegistry()), port);
+
+        // When
+        PluginContext context = factory.create(PluginDeclaration.of("plugin-a"));
+
+        // Then：插件看到的必须是它——否则插件拿到的会是「永远拒绝」的占位
+        assertSame(port, context.delegations());
     }
 
     @Test

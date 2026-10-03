@@ -1,6 +1,6 @@
 # 设计：子代理运行时 P2 —— 声明式编排（workflow 插件）
 
-> **状态：设计已确认（D-P2-1…D-P2-7 已拍板，见第 8 节）；P2a–P2d 已落地，P2e（面板贡献 + 端到端）待定。**
+> **状态：设计已确认（D-P2-1…D-P2-7 已拍板，见第 8 节）；P2a–P2d 与端到端已落地，P2e（面板贡献）待定。**
 > 上游总纲：[`subagent-runtime.md`](subagent-runtime.md)；P0/P1 已落地。
 > 本文覆盖总纲第 9 节（编排层）的落地细节，并把第 9.1 节的能力上限翻成具体 schema。
 
@@ -276,7 +276,23 @@ agent 不存在或不可委派、`summarize` 缺 agent、超出步数上限—�
 | **P2b** | api 端口（`SubAgentPort` / `DelegationRequest` / `DelegationResult` / `DelegationHandle` / `DelegationStatus`）+ core 适配器 + infra 持有 + 装配 | Jellyfish | P2a | 高（端口无人用即回退） | **已完成** |
 | **P2c** | 插件骨架：模块、工具描述符、spec 校验（含全部拒绝路径的单测） | Plugins | P2b | 高 | **已完成** |
 | **P2d** | 引擎：层序调度、并发扇出、`when`、聚合（`collect` / `summarize`） | Plugins | P2c | 高 | **已完成** |
-| **P2e** | 面板贡献 + 端到端（真内核跑一份 spec）。提示词贡献已在 P2c 落地 | Plugins | P2d | 高 | 待定 |
+| **端到端（已落地）**
+
+分两半各自证明，合起来才是一条完整的链——因为插件仓库与内核之间只有 `jellyfish-api` 的编译期契约，
+内核里的委派端口实现在插件侧根本看不到：
+
+| 覆盖范围 | 用例 | 证明了什么 |
+| --- | --- | --- |
+| 插件侧 | `WorkflowEndToEndTest`（Plugins） | 真 PF4J 加载 + 真扩展点注册表 + 从注册表取处理器调用（内核 `ToolExecutor` 的同一条路）：三步 spec 跑完、步骤按依赖分批派生、汇总材料里带上前几步结论、成环的 spec 被拒且**一个 run 都没派生** |
+| 内核侧 | `SubAgentDelegationEndToEndTest`（Jellyfish） | 真会话域 / 登记表 / 调度器 / 运行时 / 归档器 + **真端口**，只把 `ReActLooper`（模型那一层）换成脚本：两个并行委派的结果被翻译、用量归到父会话、每个 run 写了归档、登记表清空、子会话关闭且不进会话列表；无回合时拒绝理由是**内核准入的那句**（而不是端口缺失那句）——据此排除「装配接错实现」 |
+| 装配 | `PluginModuleTest`（Jellyfish） | `SubAgentPort` 绑的是 `core` 里的真适配器（不是 `unavailable()` 占位），且装配出来的 `PluginContext.delegations()` 交给插件的就是它。绑定「存不存在」由 Dagger 代码生成在编译期保证（少一个绑定直接编译不过） |
+
+**没有覆盖的**：真模型参与的全链路（`workflow` → 子代理真的调模型）。它需要的是一条
+可脚本化的 LLM 装配路径，而内核当前的模型层绑在 Dagger 图里、没有测试替身的入口。
+这一层的正确性目前由「`task` 与端口共用 `SubAgentLauncher`」这条构造性事实承担——
+两者的差异只有适配器里那几行翻译，而那几行已被 `SubAgentDelegationAdapterTest` 逐字段锁住。
+
+**P2e** | 面板贡献（显示当前 workflow 的步骤状态） | Plugins | P2d | 高 | 待定 |
 
 **每一阶段都必须让「插件卸载 = 回退到 `task` 薄工具」成立**：插件缺席时不注册 `workflow`，
 内核侧端口零调用。

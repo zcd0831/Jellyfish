@@ -1,6 +1,6 @@
 # 设计：子代理运行时（agent run）（P0–P3 总纲）
 
-> **状态：设计已定（决策见第 5 节）；P0 / P1 已落地，P2 / P3 未开工。**
+> **状态：设计已定（决策见第 5 节）；P0 / P1 / P2 已落地，P3 见分册 [`subagent-runtime-p3.md`](subagent-runtime-p3.md)。**
 > 本文是子代理从「父回合里的一个阻塞工具调用」升级为「一等公民 agent run」的设计与落地计划。
 > 对外口径见 [architecture.md](../architecture.md) 与 [constraints/react-compact.md](../constraints/react-compact.md)；
 > 施工按第 11 节的阶段顺序推进，每阶段独立可合并、可回滚。
@@ -9,8 +9,8 @@
 | --- | --- | --- |
 | P0 | agent run 原语 + 并行调度 + governor | **已落地**（S1–S5：`RunRegistry` / `RunScheduler` / `AgentRuntime` / `RunContext`+`RunTree` / 墙钟与 token 预算 / `tryAcquireSpawn` / `cancelTree` 与孤儿清理） |
 | P1 | 观测（run 事件 + 面板）与归档 | **已落地**（`RunEventBus` + `AgentRunEvent` + `SubAgentPanel` + `SubAgentArchive`；`-server` SSE 发 `run_started`/`run_finished`） |
-| P2 | 声明式编排 spec（插件） | **已落地**（分册：[`subagent-runtime-p2.md`](subagent-runtime-p2.md)：api 委派端口 + core 适配器 + 插件 `jellyfish-plugin-workflow`；面板贡献与端到端待定） |
-| P3 | 共享任务列表（agent 团队远景） | **未开工** |
+| P2 | 声明式编排 spec（插件） | **已落地**（分册：[`subagent-runtime-p2.md`](subagent-runtime-p2.md)：api 委派端口 + core 适配器 + 插件 `jellyfish-plugin-workflow` + 编排面板 + 端到端） |
+| P3 | 共享任务列表（agent 团队远景） | **待设计**（分册：[`subagent-runtime-p3.md`](subagent-runtime-p3.md)） |
 
 > **P0 分册**：[`subagent-runtime-p0.md`](subagent-runtime-p0.md)（原语签名、`RunRegistry` / `RunScheduler` 边界、
 > `RunScope` 去 `ThreadLocal` 的迁移路径、governor 落地与测试计划）。本文只保留机制与阶段；
@@ -19,7 +19,10 @@
 > **P1 分册**：[`subagent-runtime-p1.md`](subagent-runtime-p1.md)（运行面板、归档、以及「run 事件是否要做」的落地取舍）。
 >
 > **P2 分册**：[`subagent-runtime-p2.md`](subagent-runtime-p2.md)（声明式 spec 的能力上限与 schema、
-> 面向插件的委派端口、workflow 插件形态）。**设计待确认。**
+> 面向插件的委派端口、workflow 插件形态、落地记录）。**已落地。**
+>
+> **P3 分册**：[`subagent-runtime-p3.md`](subagent-runtime-p3.md)（共享任务列表与 run 间消息：
+> 归属、并发语义、派生权限收窄、阶段划分）。**待确认。**
 
 ---
 
@@ -310,8 +313,7 @@ public final class AgentRuntime {
 | **P0** | `AgentRuntime` 原语 + `RunRegistry` + `RunScheduler` + governor；`runNested` 由内联改调度；`RunScope` 去 `ThreadLocal` | 无 | 中（核心机制变更，但 `task` 的对外语义不变） |
 | **P1** | run 事件（运行时总线）+ 面板（`core` 的 `PanelContribution`）+ 归档（独立命名空间与配额） | P0 | 高（面板与归档可整体摘除） |
 | **P2** | 声明式 spec 插件（引擎 + spec 工具 + 提示词贡献） | P0 / P1 | 高（插件卸载即回退到 `task` 薄工具） |
-| **P3** | 共享任务列表（agent 团队远景） | P2 | 高 |
-| **P3** | 共享任务列表（agent 团队远景：run 间消息 + 任务容器） | P2 | 高（纯新增面） |
+| **P3** | 共享任务列表（agent 团队远景：任务容器 + run 间消息） | P2 | 高（纯新增面） |
 
 每阶段独立可合并、可回滚；合并前必须同步第 12 节的文档清单。
 

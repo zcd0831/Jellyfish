@@ -213,7 +213,7 @@ todo 面板再通过**内核的中立 run 通知**（D-P3-8）把 `ownerRunId` �
 「有哪些步骤、依赖怎么排」这类 **spec 结构**仍归 workflow 自己的面板（P2e 已做），**不进** todo 列表——
 那才是需要脏读别家私有数据的东西。要让步骤也出现在一个统一视图里，走第二条通道（模型整合），而不是让插件互相认识。
 
-### D-P3-8 插件观测面：把 run 生命周期**桥接**成 api 通知事件
+### D-P3-8 插件观测面：把 run 生命周期**桥接**成 api 通知事件（**P3b 已落地**）
 
 现状（P1 的遗留项）：`AgentRunEvent` 是 core 的普通类，**不是** `JellyfishEvent`，
 插件 `observe(...)` 看不到它；api 的通知目录里 18 个事件没有一个与 run 有关。
@@ -297,8 +297,8 @@ P3 的形态因此固定为：
 
 | 步 | 内容 | 仓库 | 依赖 | 可回滚 | 状态 |
 | --- | --- | --- | --- | --- | --- |
-| **P3a** | `ToolCallRequest` 三个身份字段 + `ToolExecutor` 填充 + 缺省 `null` 的装配回归 | Jellyfish | P0 | 高（纯新增字段） | 待开工 |
-| **P3b** | 中立 run 通知：api 事件类型 + `RunObservationBridge` 桥接 `RunEventBus` → `EventChannel` + 过滤/可丢语义的用例 | Jellyfish | P1 | 高（零订阅者即无副作用） | 待开工 |
+| **P3a** | `ToolCallRequest` 三个身份字段 + `ToolExecutor` 填充 + 缺省 `null` 的装配回归 | Jellyfish | P0 | 高（纯新增字段） | **已完成** |
+| **P3b** | 中立 run 通知：api 事件类型 + `RunObservationBridge` 桥接 `RunEventBus` → `EventChannel` + 过滤/可丢语义的用例 | Jellyfish | P1 | 高（零订阅者即无副作用） | **已完成** |
 | **P3c** | todo 插件：认领 / 完成 / （可选）进展，父子共享父会话那一份，认领归属校验，**并发认领**单测 | Plugins | P3a | 高 | 待开工 |
 | **P3d** | todo 面板显示负责人与其运行状态（消费 P3b 的中立通知，**workflow 零改动**）+ 回合上下文措辞 | Plugins | P3b、P3c | 高 | 待开工 |
 | **P3e** | 文档：`extensions.md`（调用期设施三字段 + 新通知事件）、插件 README、总纲 P3 收口 | Jellyfish + Plugins | 全部 | 高 | 待开工 |
@@ -322,8 +322,11 @@ P3b 没有订阅者时等于不存在；P3c 之后插件才有团队形态；P3d
   收到，且字段与内核侧快照逐字段一致（`runId` / `parentSessionId` / 状态 / 轮数 / token）。
 - **`STEP` 不外泄**：内核侧发 100 次推进，插件侧一个事件都收不到（只有两端进通知面）。
 - 按会话过滤可行：不同 `parentSessionId` 的 run 能被订阅方的谓词分开。
-- 无订阅者时零副作用：不订阅就发，`RunEventBus` 与调度路径的耗时/行为不变。
-- 通道未启动（`EventChannel` 未 `start()`）时的事件进启动期缓冲、不丢、不抛。
+- 无订阅者时零副作用：桥未 `start()` 时总线发布不产生任何投递（且 `RunEventBus` 在没有订阅者时直接返回）。
+- **不补发历史**：订阅者只看得到订阅之后发生的事——消费方因此必须靠终态自愈，而不是指望补发。
+- `start()` 幂等（同一条事件不会被投递两遍）、`close()` 可退订且可再次 `start()`。
+- 通道未启动（`EventChannel` 未 `start()`）时的事件进启动期缓冲、不丢、不抛：这是 `EventChannel` 的既有契约，
+  由 `jellyfish-infra` 自己的用例覆盖，本阶段不重复测它。
 
 **P3c**
 

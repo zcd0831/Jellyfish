@@ -4,6 +4,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import zcd.jellyfish.core.command.SystemCommands;
+import zcd.jellyfish.core.runtime.RunObservationBridge;
 import zcd.jellyfish.core.compact.ConversationCompactor;
 import zcd.jellyfish.core.prompt.CacheKeepAlive;
 import zcd.jellyfish.core.input.InputDirectives;
@@ -103,6 +104,9 @@ public class AgentHarness {
     /** 指标订阅者：可观测性这条边上的唯一写入方。 */
     private final MetricsSubscriber metricsSubscriber;
 
+    /** run 观测桥：把 run 的开始与结束翻成插件看得懂的通知事件。 */
+    private final RunObservationBridge runObservation;
+
     /** 指标注册表：关闭时打一份汇总日志。 */
     private final MetricsRegistry metricsRegistry;
 
@@ -137,7 +141,7 @@ public class AgentHarness {
                         ConversationCompactor conversationCompactor, InputDirectives inputDirectives,
                         CacheKeepAlive cacheKeepAlive,
                         MetricsSubscriber metricsSubscriber, MetricsRegistry metricsRegistry,
-                        HealthCheck healthCheck) {
+                        RunObservationBridge runObservation, HealthCheck healthCheck) {
         this.runtimeConfig = runtimeConfig;
         this.eventChannel = eventChannel;
         this.modelManager = modelManager;
@@ -152,6 +156,7 @@ public class AgentHarness {
         this.inputDirectives = inputDirectives;
         this.cacheKeepAlive = cacheKeepAlive;
         this.metricsSubscriber = metricsSubscriber;
+        this.runObservation = runObservation;
         this.metricsRegistry = metricsRegistry;
         this.healthCheck = healthCheck;
     }
@@ -170,6 +175,8 @@ public class AgentHarness {
         eventChannel.start();
         // 必须在 runtimeConfig.refresh() 之前：配置加载期发出的告警要能被计数
         metricsSubscriber.start();
+        // 与指标同理：订阅要先于任何 run 建立，否则最早的几次委派在插件侧是隐形的
+        runObservation.start();
         systemCommands.register();
         // 与系统命令同理：内核先注册，插件要覆盖 {@code task} 必须显式声明 override
         subAgentTools.register();
@@ -259,6 +266,7 @@ public class AgentHarness {
         try {
             // 指标是累计值，放在关闭之后不影响可读性；先退订再读快照，避免读到一半又变
             metricsSubscriber.close();
+            runObservation.close();
         } finally {
             LOG.info("运行期指标: {}", metricsSnapshotText());
         }

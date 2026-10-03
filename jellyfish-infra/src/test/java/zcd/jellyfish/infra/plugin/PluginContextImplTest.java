@@ -20,7 +20,13 @@ import zcd.jellyfish.api.extension.ShellContributionStatus;
 import zcd.jellyfish.api.extension.ToolDescriptor;
 import zcd.jellyfish.api.extension.ToolCallRequest;
 import zcd.jellyfish.api.extension.ToolCallResult;
+import zcd.jellyfish.api.plugin.PluginContext;
 import zcd.jellyfish.api.plugin.PluginDeclaration;
+import zcd.jellyfish.api.subagent.DelegationHandle;
+import zcd.jellyfish.api.subagent.DelegationRequest;
+import zcd.jellyfish.api.subagent.DelegationResult;
+import zcd.jellyfish.api.subagent.DelegationStatus;
+import zcd.jellyfish.api.subagent.SubAgentPort;
 import zcd.jellyfish.api.ui.UiLine;
 import zcd.jellyfish.infra.action.ActionQueue;
 import zcd.jellyfish.infra.event.EventChannel;
@@ -78,6 +84,35 @@ class PluginContextImplTest {
     void pluginId_should_come_from_declaration() {
         // Then
         assertEquals("plugin-a", context.pluginId());
+    }
+
+    @Test
+    void delegations_should_expose_the_injected_port() {
+        // Given：装配方注入了一个具体端口
+        SubAgentPort port = request -> DelegationHandle.settled(
+                DelegationResult.completed("run-1", "结论", 1, 1L));
+
+        // When / Then：插件拿到的就是它
+        assertSame(port, contextWithDelegations(port).delegations());
+    }
+
+    @Test
+    void delegations_should_defaultToUnavailable() {
+        // 默认构造（不完整装配、单测）不给 null 也不抛异常：
+        // 插件照旧 spawn → await，只会在结果里看到 REJECTED
+        assertEquals(DelegationStatus.REJECTED,
+                context.delegations().spawn(DelegationRequest.of("s-1", "scout", "查一下")).await().getStatus());
+    }
+
+    @Test
+    void subContext_should_share_the_same_port() {
+        // 端口是进程级能力，子单元与父单元看到的必须是同一个——
+        // 否则「插件把自己注册成两个 owner」会得到两套委派行为
+        SubAgentPort port = SubAgentPort.unavailable();
+        PluginContext parent = contextWithDelegations(port);
+
+        assertSame(port, parent.delegations());
+        assertSame(port, parent.subContext("jira").delegations());
     }
 
     @Test
@@ -534,6 +569,18 @@ class PluginContextImplTest {
         // When / Then
         assertThrows(JellyfishException.class,
                 () -> closable.present(notice(ShellContribution.Scope.SHELL, null)));
+    }
+
+    /**
+     * 造一个注入了给定委派端口的上下文。
+     *
+     * @param port 委派端口
+     * @return 上下文
+     */
+    private PluginContextImpl contextWithDelegations(SubAgentPort port) {
+        return new PluginContextImpl(PluginDeclaration.of("plugin-a"), extensions, events,
+                new ContextLifecycle(), new RuntimeInfoHolder(), new ActionQueue(), sessions,
+                new ShellIngress(new MetricsRegistry()), port);
     }
 
     /**

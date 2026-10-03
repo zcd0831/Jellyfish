@@ -5,6 +5,7 @@ import org.slf4j.LoggerFactory;
 import zcd.jellyfish.api.plugin.PluginContext;
 import zcd.jellyfish.api.plugin.PluginDeclaration;
 import zcd.jellyfish.api.plugin.PluginOwnerNamespace;
+import zcd.jellyfish.api.subagent.SubAgentPort;
 import zcd.jellyfish.infra.action.ActionQueue;
 import zcd.jellyfish.infra.event.EventChannel;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
@@ -67,6 +68,9 @@ public final class PluginContextFactory {
     /** 外壳贡献信箱：与注册同时刻按 owner 回收。 */
     private final ShellIngress shellIngress;
 
+    /** 子代理委派端口（api 类型，实现在 core）：与上下文一起交给插件。 */
+    private final SubAgentPort delegations;
+
     /** 根 {@code pluginId} → 存活标记；停止时据此让该插件的全部上下文失效。 */
     private final Map<String, ContextLifecycle> lifecycles = new ConcurrentHashMap<String, ContextLifecycle>();
 
@@ -80,11 +84,12 @@ public final class PluginContextFactory {
      * @param actions     动作队列，不可为 {@code null}
      * @param sessions    会话域服务，不可为 {@code null}
      * @param shellIngress 外壳贡献信箱，不可为 {@code null}
+     * @param delegations  子代理委派端口，不可为 {@code null}
      */
     @Inject
     public PluginContextFactory(ExtensionRegistry extensions, EventChannel events, TypeRegistry registry,
                                RuntimeInfoHolder runtimeInfo, ActionQueue actions, SessionManager sessions,
-                               ShellIngress shellIngress) {
+                               ShellIngress shellIngress, SubAgentPort delegations) {
         this.extensions = Objects.requireNonNull(extensions, "extensions must not be null");
         this.events = Objects.requireNonNull(events, "events must not be null");
         this.registry = Objects.requireNonNull(registry, "registry must not be null");
@@ -92,6 +97,7 @@ public final class PluginContextFactory {
         this.actions = Objects.requireNonNull(actions, "actions must not be null");
         this.sessions = Objects.requireNonNull(sessions, "sessions must not be null");
         this.shellIngress = Objects.requireNonNull(shellIngress, "shellIngress must not be null");
+        this.delegations = Objects.requireNonNull(delegations, "delegations must not be null");
     }
 
     /**
@@ -111,7 +117,7 @@ public final class PluginContextFactory {
             previous.close();
         }
         return new PluginContextImpl(declaration, extensions, events, lifecycle, runtimeInfo, actions, sessions,
-                shellIngress);
+                shellIngress, delegations);
     }
 
     /**

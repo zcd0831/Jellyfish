@@ -9,10 +9,12 @@
 - **两个能力面**：`ExtensionRegistry`（同步：调用点内联、按 order 升序、取返回值、**不可丢**）与
   `EventChannel`（异步：有界队列、无返回值、**可丢**），共用 `infra/registry` 的同一份 `TypeRegistry`。
   **禁止引入第三方事件总线**（如 Guava EventBus）。
-- **另外还有两条插件发出的边：`ActionQueue`（入站动作）与 `ShellIngress`（出站贡献）**。
-  两者都是**内核自有的、有界的、单向的**队列，都不是事件总线（没有订阅、没有广播、没有 handler 注册）：
-  - 方向：`handle` / `contribute` / `observe` 是「内核回头找插件」，`emit` / `submit` / `present`
-    是「插件往外发」（通知队列 / 动作队列 / 外壳贡献信箱），五条边都不是同步回调；
+- **另外还有三条插件发出的边：`ActionQueue`（入站动作）、`ShellIngress`（出站贡献）与
+  `SubAgentPort`（出站委派）**。
+  前两者都是**内核自有的、有界的、单向的**队列，都不是事件总线（没有订阅、没有广播、没有 handler 注册）：
+  - 方向：`handle` / `contribute` / `observe` 是「内核回头找插件」，
+    `emit` / `submit` / `present` / `delegations` 是「插件往外发」——前者不是同步回调，后者也不是：
+    `emit` / `present` 只写队列，`submit` 只写队列并给轮询句柄；
   - **`ActionQueue` 只接受 `PluginAction` 上列出的那几种动作**，「能投什么」是一份有界清单，
     插件不能把它扩成开放式接口（`PluginAction` 的构造器是包级私有的，只能经静态工厂构造）；
     队列的存活期恰好是一个顶层回合：`ReActLooper.chat` 在提交任务之前开窗，任务的 `finally` 关窗。
@@ -31,6 +33,19 @@
   - **`submit` 与 `present` 与注册共用 `ContextLifecycle` 这条存活边界**：`stop()` 之后当场抛
     `JellyfishException`，停止时在途内容按 owner 命名空间整批丢弃（`ActionQueue.dropByOwner` /
     `ShellIngress.reset`，同一时刻；贡献先清，因为随后可能有一条插件状态变更触发的失效重拉）。
+  - **`SubAgentPort` 是三边里唯一的例外：它不是队列，而且是插件的出向边里唯一会阻塞的**。
+    它的形态是「句柄式异步 + 调用方阻塞等待」：{@code spawn} 立即返回句柄（并发扇出靠它），
+    {@code handle.await()} 阻塞在**插件自己的线程**上。这条阻塞是允许的，因为方向是「插件等内核」——
+    而内核绝不在关键路径上同步回调插件（那会把执行资源的生死交给插件）：
+    - **为什么不能做成 `ExtensionRequest` 扩展点**：`handle` / `contribute` 的调用方向是内核→插件，
+      插件没有 invoke 内核处理器的入口（`PluginContext` 刻意不给）。做成扩展点，插件仍然调不动它；
+    - **为什么不允许纯异步**：工具结果必须在返回时给出，而异步结果只能经 `submit` 注入，
+      而 `ActionQueue` 只投正在跑的顶层回合——纯异步等于后台子代理，那是不做的形态；
+    - **它不带来新权限**：准入、深度、单回合扇出、全局并发、墙钟与 token 预算、取消传播、
+      用量归集与归档全部走 `task` 工具的同一条代码路径，行为逐字段一致；
+    - **拿不到端口时不抛异常**：`unavailable()` 给出的句柄直接带 `REJECTED` 结果，
+      与 `ToolOutputSink.NOOP` / `CancellationToken.NONE` 同一口径；
+    - **它不随 `ContextLifecycle` 失效**：它不是注册，而是「发起一次委派」，能不能跑由内核按会话与回合判定。
 - **为什么贡献不复用 `emit`**：`emit` 发布给未知数量的订阅者，没有「送没送到」这回事；
   贡献的消费者是具体的那个外壳进程，插件需要知道「我这条进度是不是把队列冲爆了」。
   而且外壳**刻意不订阅** `EventChannel`（它的队列是进程内的、可丢的，而外壳要的是可寻址的一条流），
@@ -140,7 +155,7 @@
 ## 插件生命周期
 
 - **Java 插件与跨语言桥接插件在 `PF4JPluginManager` 眼里同构**，都只经 `PluginContext`
-  （handle / contribute / observe / emit / submit）与内核交互。
+  （handle / contribute / observe / emit / submit / present / delegations）与内核交互。
 - **注册窗口是插件的整个存活期，不是 `start()` 之内**：`start()` 返回到 `stop()` 之前，插件可在任意时刻注册、
   订阅、发布——运行期才发现自己能提供哪些能力的插件（MCP 客户端在握手后才知道工具集）必须如此。回收仍只按
   owner 一次收干净，因此运行期注册不会留下没人收的登记；`handle` / `contribute` / `observe` 返回的

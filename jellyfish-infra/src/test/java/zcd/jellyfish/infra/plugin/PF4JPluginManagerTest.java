@@ -14,6 +14,7 @@ import zcd.jellyfish.api.event.notification.ConfigWarningEvent;
 import zcd.jellyfish.api.event.notification.PluginStateChangedEvent;
 import zcd.jellyfish.api.plugin.JellyfishPlugin;
 import zcd.jellyfish.api.plugin.PluginContext;
+import zcd.jellyfish.api.subagent.SubAgentPort;
 import zcd.jellyfish.infra.action.ActionQueue;
 import zcd.jellyfish.infra.event.EventChannel;
 import zcd.jellyfish.infra.event.EventChannelOptions;
@@ -93,7 +94,7 @@ class PF4JPluginManagerTest {
         eventChannel.start();
         eventChannel.subscribe("test", PluginStateChangedEvent.class,
                 event -> stateChanges.add(event.getPluginId() + "=" + event.getState()));
-        contexts = new PluginContextFactory(extensions, eventChannel, registry, new RuntimeInfoHolder(), new ActionQueue(), sessions, new ShellIngress(new MetricsRegistry()));
+        contexts = new PluginContextFactory(extensions, eventChannel, registry, new RuntimeInfoHolder(), new ActionQueue(), sessions, new ShellIngress(new MetricsRegistry()), SubAgentPort.unavailable());
     }
 
     @AfterEach

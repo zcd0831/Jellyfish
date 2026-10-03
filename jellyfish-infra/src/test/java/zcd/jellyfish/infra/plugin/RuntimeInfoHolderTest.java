@@ -6,6 +6,7 @@ import org.mockito.Mockito;
 import zcd.jellyfish.api.RuntimeInfo;
 import zcd.jellyfish.api.plugin.PluginContext;
 import zcd.jellyfish.api.plugin.PluginDeclaration;
+import zcd.jellyfish.api.subagent.SubAgentPort;
 import zcd.jellyfish.infra.action.ActionQueue;
 import zcd.jellyfish.infra.event.EventChannel;
 import zcd.jellyfish.infra.event.EventChannelOptions;
@@ -71,7 +72,7 @@ class RuntimeInfoHolderTest {
         // Given：装配根在 bootstrap 之前写入，插件在 start() 里就会读
         RuntimeInfoHolder holder = new RuntimeInfoHolder();
         holder.set(RuntimeInfo.server(false));
-        PluginContext context = new PluginContextFactory(extensions, events, new TypeRegistry(), holder, new ActionQueue(), sessions, new ShellIngress(new MetricsRegistry()))
+        PluginContext context = new PluginContextFactory(extensions, events, new TypeRegistry(), holder, new ActionQueue(), sessions, new ShellIngress(new MetricsRegistry()), SubAgentPort.unavailable())
                 .create(PluginDeclaration.of("plugin-a"));
 
         // When
@@ -96,7 +97,7 @@ class RuntimeInfoHolderTest {
         // Given：外壳是进程级事实，子单元与父单元看到的必须一致
         RuntimeInfoHolder holder = new RuntimeInfoHolder();
         holder.set(RuntimeInfo.tui(true));
-        PluginContext parent = new PluginContextFactory(extensions, events, new TypeRegistry(), holder, new ActionQueue(), sessions, new ShellIngress(new MetricsRegistry()))
+        PluginContext parent = new PluginContextFactory(extensions, events, new TypeRegistry(), holder, new ActionQueue(), sessions, new ShellIngress(new MetricsRegistry()), SubAgentPort.unavailable())
                 .create(PluginDeclaration.of("plugin-a"));
 
         // When：持有者在派生子上下文之后被改写

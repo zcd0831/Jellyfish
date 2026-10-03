@@ -11,6 +11,8 @@ import zcd.jellyfish.api.extension.ExtensionHandler;
 import zcd.jellyfish.api.extension.ExtensionRequest;
 import zcd.jellyfish.api.extension.ShellContribution;
 import zcd.jellyfish.api.extension.ShellContributionStatus;
+import zcd.jellyfish.api.subagent.DelegationStatus;
+import zcd.jellyfish.api.subagent.SubAgentPort;
 
 import java.util.List;
 import java.util.Map;
@@ -389,4 +391,27 @@ public interface PluginContext {
      * @throws JellyfishException 贡献为 {@code null}，或插件上下文已失效（已停止）时抛出
      */
     ShellContributionStatus present(ShellContribution contribution);
+
+    /**
+     * 获取子代理委派端口。
+     * <p>
+     * <b>它是出向边</b>：{@link #handle} / {@link #contribute} 是「内核回头找插件」，
+     * {@link #emit} / {@link #submit} / {@link #present} 与本法是「插件往外发」。
+     * 编排（一个工具里派出一批子代理、按依赖并发、收集结果）需要插件能主动驱动内核，
+     * 而这是唯一对得上方向的形态。
+     * <p>
+     * <b>拿到的东西受全部既有约束</b>：开关、深度、单回合扇出、全局并发、墙钟与 token 预算、
+     * 取消传播与 {@code task} 工具完全一致——两者走同一条代码路径。插件不应另建并发控制：
+     * 并发度由内核的 governor 决定，超出的 run 在内核侧排队。
+     * <p>
+     * <b>它可能什么也不做</b>：内核没有装配这个能力时（旧内核、不完整装配）返回的是
+     * {@link SubAgentPort#unavailable()}——{@code spawn} 给出的句柄直接带着
+     * {@link DelegationStatus#REJECTED} 的结果。因此插件不必为「内核版本旧」写分支，
+     * 也不会在正常路径上撞到异常。
+     *
+     * @return 委派端口，保证非 {@code null}
+     */
+    default SubAgentPort delegations() {
+        return SubAgentPort.unavailable();
+    }
 }

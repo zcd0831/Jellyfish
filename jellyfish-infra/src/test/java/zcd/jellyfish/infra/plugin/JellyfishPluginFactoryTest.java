@@ -13,6 +13,7 @@ import zcd.jellyfish.api.plugin.JellyfishPlugin;
 import zcd.jellyfish.api.plugin.PluginContext;
 import zcd.jellyfish.api.extension.ToolCallRequest;
 import zcd.jellyfish.api.extension.ToolCallResult;
+import zcd.jellyfish.api.subagent.SubAgentPort;
 import zcd.jellyfish.infra.action.ActionQueue;
 import zcd.jellyfish.infra.event.EventChannel;
 import zcd.jellyfish.infra.event.EventChannelOptions;
@@ -62,7 +63,7 @@ class JellyfishPluginFactoryTest {
             new TypeRegistry(),
             new RuntimeInfoHolder(),
             new ActionQueue(),
-            sessions, new ShellIngress(new MetricsRegistry()));
+            sessions, new ShellIngress(new MetricsRegistry()), SubAgentPort.unavailable());
 
     /** 记录插件生命周期回调。 */
     private static final List<String> RECORDED = new ArrayList<>();

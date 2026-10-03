@@ -41,7 +41,7 @@ api 侧 grep `delegat` / `SubAgent` / `AgentRun` 只命中一个无关的 `Sessi
 
 ## 3. 内核侧决策
 
-### D-P2-1 端口是「出向边」，挂在 `PluginContext` 上
+### D-P2-1 端口是「出向边」，挂在 `PluginContext` 上（**P2b 已落地**）
 
 新增一个 api 接口（示意名 `SubAgentPort`），由 `PluginContext` 暴露：
 
@@ -55,11 +55,17 @@ public interface PluginContext {
 public interface SubAgentPort {
     /** 派生一个 run：立即返回句柄，不阻塞。 */
     DelegationHandle spawn(DelegationRequest request);
-
-    /** 取消单个 run（幂等）。 */
-    void cancel(String runId);
 }
 ```
+
+**落地时的三点修正**（均已在代码中）：
+
+1. **去掉了 `cancel(String runId)`**：内核只有子树语义的 `cancelTree`，而插件拿不到 runId
+   （它只有自己手上的句柄）——留一个「按 id 取消」的方法会让语义含糊。取消走 `DelegationHandle.cancel()`。
+2. **`delegations()` 是 `default` 方法**，缺省返回 `SubAgentPort.unavailable()`（一个 `spawn` 必给
+   `REJECTED` 结果的空对象）。这样「内核没装配这个能力」不会以异常形式出现在插件的正常路径上，
+   也不打断任何既有 `PluginContext` 实现。
+3. **包名是 `zcd.jellyfish.api.subagent`**（端口与它的值类型同住一个包），不另开 `delegation` 包。
 
 **为什么不新增一个 `ExtensionRequest` 扩展点**：`handle` / `contribute` 的调用方向是
 **内核 → 插件**，插件**没有** invoke 内核处理器的入口（`PluginContext` 刻意不给）。
@@ -104,12 +110,13 @@ public interface DelegationHandle {
 - **可观测性不因此损失**：阻塞期间插件用 `ToolCallOutput`（工具输出旁路）逐步骤刷进度，
   与 `task` 今天打 `· 工具名` 是同一个机制。
 
-### D-P2-3 依赖倒置：api 接口 + core 实现 + infra 持有 api 类型
+### D-P2-3 依赖倒置：api 接口 + core 实现 + infra 持有 api 类型（**P2b 已落地**）
 
 ```
-api    SubAgentPort / DelegationRequest / DelegationResult / DelegationHandle
-core   SubAgentDelegationAdapter implements SubAgentPort   （@Binds 到 PluginContextImpl）
-infra  PluginContextImpl 持有 SubAgentPort（api 类型）——infra 不依赖 core
+api    SubAgentPort / DelegationRequest / DelegationResult / DelegationHandle / DelegationStatus
+core   SubAgentDelegationAdapter implements SubAgentPort
+infra  PluginContextImpl / PluginContextFactory 持有 SubAgentPort（api 类型）——infra 不依赖 core
+cli    PluginModule.provideSubAgentPort(SubAgentDelegationAdapter)：接口→实现的唯一连接点
 ```
 
 `PluginContextImpl` 在 `jellyfish-infra`，而委派实现需要 `core.subagent`；`core → infra` 是既有方向，
@@ -245,7 +252,7 @@ agent 不存在或不可委派、`summarize` 缺 agent、超出步数上限—�
 | 步 | 内容 | 仓库 | 依赖 | 可回滚 |
 | --- | --- | --- | --- | --- |
 | **P2a** | `SubAgentLauncher` 拆 `spawn` / `await`（纯重构，`task` 语义不变，测试为证） | Jellyfish | P0/P1 | 高 | **已完成** |
-| **P2b** | api 端口（`SubAgentPort` / `DelegationRequest` / `DelegationResult` / `DelegationHandle`）+ core 适配器 + infra 持有 + 装配 | Jellyfish | P2a | 高（端口无人用即回退） |
+| **P2b** | api 端口（`SubAgentPort` / `DelegationRequest` / `DelegationResult` / `DelegationHandle` / `DelegationStatus`）+ core 适配器 + infra 持有 + 装配 | Jellyfish | P2a | 高（端口无人用即回退） | **已完成** |
 | **P2c** | 插件骨架：模块、工具描述符、spec 校验（含全部拒绝路径的单测） | Plugins | P2b | 高 |
 | **P2d** | 引擎：层序调度、并发扇出、`when`、聚合（`collect` / `summarize`） | Plugins | P2c | 高 |
 | **P2e** | 提示词贡献 + 面板贡献 + 端到端（真内核跑一份 spec） | Plugins | P2d | 高 |

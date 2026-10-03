@@ -77,6 +77,7 @@ jellyfish-api/src/main/java/zcd/jellyfish/api/
 ├── extension/                  # 同步扩展点：请求/结果类型、ToolDescriptor、会话快照
 ├── event/                      # 事件基类与 notification/ 下的具体通知
 ├── ui/                         # 插件界面内容的渲染无关模型
+├── subagent/                   # 子代理委派端口：SubAgentPort / Delegation{Request,Result,Handle,Status}
 └── plugin/                     # 插件 SPI：JellyfishPlugin / PluginContext / PluginDeclaration
 
 jellyfish-infra/src/main/java/zcd/jellyfish/infra/
@@ -109,7 +110,8 @@ jellyfish-core/src/main/java/zcd/jellyfish/core/
 │                               #   + ShellStreams / ShellTurnEvent / ShellContributionListener
 ├── input/                      # InputDirectives / InputDirectiveRun / InputDirectiveCall / InputReferenceCompletion
 ├── subagent/                   # 子代理：SubAgentLauncher / TaskTool / SubAgentTools（owner=core）
-│                               #   + SubAgentPanel（运行面板）/ SubAgentArchive（run 归档）
+│                               #   + SubAgentRunHandle（派生/等待的句柄）/ SubAgentPanel（运行面板）
+│                               #   + SubAgentArchive（run 归档）/ SubAgentDelegationAdapter（插件委派端口实现）
 ├── runtime/                    # agent run 运行时：AgentRuntime / RunRegistry / RunScheduler / RunContext
 │                               #   + RunTree / RunPermit / RunEventBus（可靠 run 事件）/ AgentRunEvent
 └── command/                    # SystemCommands（owner=core）
@@ -169,8 +171,11 @@ jellyfish-tui/src/main/java/zcd/jellyfish/tui/
   嵌套回合**调度到独立的 `agent-run` 池上执行，绝不进 `react` 池**；并发由 `subAgent.maxConcurrentRuns`
   许可门控，等待中的 run 会让出许可，另有墙钟 / token / 深度 / 扇出预算。run 起止走运行时的
   `RunEventBus`（不是外壳回合 lane），在跑的子代理由 `SubAgentPanel` 展示，终结后由 `SubAgentArchive`
-  写进独立命名空间。设计见 [docs/design/subagent-runtime.md](docs/design/subagent-runtime.md)、
-  [docs/design/subagent-runtime-p1.md](docs/design/subagent-runtime-p1.md)。
+  写进独立命名空间。**插件要驱动子代理走 `PluginContext.delegations()`**（`SubAgentPort`）：它是
+  `spawn`（非阻塞）+ `handle.await()`（阻塞在插件线程）的句柄式形态，与 `task` 走同一条代码路径，
+  因此 governor / 深度 / 取消 / 归档行为一致。设计见 [docs/design/subagent-runtime.md](docs/design/subagent-runtime.md)、
+  [docs/design/subagent-runtime-p1.md](docs/design/subagent-runtime-p1.md)、
+  [docs/design/subagent-runtime-p2.md](docs/design/subagent-runtime-p2.md)。
 - **跨边界载荷必须是 `api` 侧快照值类型**，且快照类型恰好只有一个可见构造器；**`-parameters` 不许去掉**。
 - **`-tui` / `-server` 的启动期都不建会话**；`--agent` / `--model` / `--mode` / `-p` / `--show-thinking` 只归 CLI，
   其余模式带上它们一律判用法错误退 2（**拒绝而不是静默忽略**）。

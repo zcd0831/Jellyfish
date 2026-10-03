@@ -2,6 +2,8 @@ package zcd.jellyfish.cli.di;
 
 import dagger.Module;
 import dagger.Provides;
+import zcd.jellyfish.api.subagent.SubAgentPort;
+import zcd.jellyfish.core.subagent.SubAgentDelegationAdapter;
 import zcd.jellyfish.infra.action.ActionQueue;
 import zcd.jellyfish.infra.config.RuntimeConfig;
 import zcd.jellyfish.infra.event.EventChannel;
@@ -69,6 +71,7 @@ public final class PluginModule {
      * @param actions     动作队列
      * @param sessions    会话域服务
      * @param shellIngress 外壳贡献信箱
+     * @param delegations  子代理委派端口（实现在 core）
      * @return 插件上下文工厂
      */
     @Provides
@@ -77,8 +80,28 @@ public final class PluginModule {
                                                             TypeRegistry registry,
                                                             RuntimeInfoHolder runtimeInfo,
                                                             ActionQueue actions, SessionManager sessions,
-                                                            ShellIngress shellIngress) {
-        return new PluginContextFactory(extensions, events, registry, runtimeInfo, actions, sessions, shellIngress);
+                                                            ShellIngress shellIngress, SubAgentPort delegations) {
+        return new PluginContextFactory(extensions, events, registry, runtimeInfo, actions, sessions, shellIngress,
+                delegations);
+    }
+
+    /**
+     * 提供面向插件的子代理委派端口。
+     * <p>
+     * <b>为什么绑定在这里</b>：它是插件能力面的一部分（经 {@code PluginContext.delegations()} 交给插件），
+     * 与插件上下文工厂同一批装配。接口在 api、实现在 core，本模块是这个方向唯一需要的连接点。
+     * <p>
+     * <b>单一实现不是巧合</b>：它把「准入 / 并发 / 深度 / 预算 / 取消 / 归档」全部委托给
+     * {@code SubAgentLauncher}，也就是 {@code task} 工具走的那条路径——这样插件驱动的 run 与
+     * {@code task} 触发的 run 在行为上逐字段一致，而不是靠两处实现互相对齐。
+     *
+     * @param adapter 委派端口实现
+     * @return 端口
+     */
+    @Provides
+    @Singleton
+    static SubAgentPort provideSubAgentPort(SubAgentDelegationAdapter adapter) {
+        return adapter;
     }
 
     /**

@@ -17,6 +17,7 @@ import zcd.jellyfish.api.extension.ExtensionException;
 import zcd.jellyfish.api.extension.ToolCallRequest;
 import zcd.jellyfish.api.plugin.PluginContext;
 import zcd.jellyfish.api.plugin.PluginDeclaration;
+import zcd.jellyfish.api.subagent.SubAgentPort;
 import zcd.jellyfish.infra.action.ActionQueue;
 import zcd.jellyfish.infra.event.EventChannel;
 import zcd.jellyfish.infra.event.EventChannelOptions;
@@ -55,7 +56,7 @@ class PluginContextFactoryTest {
     private final SessionManager sessions = Mockito.mock(SessionManager.class);
 
     /** 被测工厂。 */
-    private final PluginContextFactory factory = new PluginContextFactory(extensions, events, registry, new RuntimeInfoHolder(), actions, sessions, new ShellIngress(new MetricsRegistry()));
+    private final PluginContextFactory factory = new PluginContextFactory(extensions, events, registry, new RuntimeInfoHolder(), actions, sessions, new ShellIngress(new MetricsRegistry()), SubAgentPort.unavailable());
 
     @Test
     void create_should_bind_plugin_id_as_owner() {
@@ -186,13 +187,13 @@ class PluginContextFactoryTest {
     void factory_should_reject_null_dependencies() {
         // When / Then
         assertThrows(NullPointerException.class,
-                () -> new PluginContextFactory(null, events, registry, new RuntimeInfoHolder(), new ActionQueue(), sessions, new ShellIngress(new MetricsRegistry())));
+                () -> new PluginContextFactory(null, events, registry, new RuntimeInfoHolder(), new ActionQueue(), sessions, new ShellIngress(new MetricsRegistry()), SubAgentPort.unavailable()));
         assertThrows(NullPointerException.class,
-                () -> new PluginContextFactory(extensions, null, registry, new RuntimeInfoHolder(), new ActionQueue(), sessions, new ShellIngress(new MetricsRegistry())));
+                () -> new PluginContextFactory(extensions, null, registry, new RuntimeInfoHolder(), new ActionQueue(), sessions, new ShellIngress(new MetricsRegistry()), SubAgentPort.unavailable()));
         assertThrows(NullPointerException.class,
-                () -> new PluginContextFactory(extensions, events, null, new RuntimeInfoHolder(), new ActionQueue(), sessions, new ShellIngress(new MetricsRegistry())));
+                () -> new PluginContextFactory(extensions, events, null, new RuntimeInfoHolder(), new ActionQueue(), sessions, new ShellIngress(new MetricsRegistry()), SubAgentPort.unavailable()));
         assertThrows(NullPointerException.class,
-                () -> new PluginContextFactory(extensions, events, registry, null, new ActionQueue(), sessions, new ShellIngress(new MetricsRegistry())));
+                () -> new PluginContextFactory(extensions, events, registry, null, new ActionQueue(), sessions, new ShellIngress(new MetricsRegistry()), SubAgentPort.unavailable()));
     }
 
     @Test

@@ -6,6 +6,7 @@ import zcd.jellyfish.api.event.Subscription;
 import zcd.jellyfish.api.event.notification.ConfigWarningEvent;
 import zcd.jellyfish.api.plugin.PluginContext;
 import zcd.jellyfish.api.plugin.PluginDeclaration;
+import zcd.jellyfish.api.subagent.SubAgentPort;
 import zcd.jellyfish.infra.action.ActionQueue;
 import zcd.jellyfish.infra.config.AgentPromptLoader;
 import zcd.jellyfish.infra.config.AppConfig;
@@ -113,7 +114,7 @@ class PluginModuleTest {
         // When
         PluginContextFactory factory = PluginModule.providePluginContextFactory(extensions, events, registry,
                 new RuntimeInfoHolder(), new ActionQueue(),
-                org.mockito.Mockito.mock(zcd.jellyfish.infra.session.SessionManager.class), new ShellIngress(new MetricsRegistry()));
+                org.mockito.Mockito.mock(zcd.jellyfish.infra.session.SessionManager.class), new ShellIngress(new MetricsRegistry()), SubAgentPort.unavailable());
         PluginContext context = factory.create(PluginDeclaration.of("plugin-a"));
         Subscription subscription = context.observe(ConfigWarningEvent.class, event -> {
                     // 仅用于产生一条订阅
@@ -135,7 +136,7 @@ class PluginModuleTest {
                 events,
                 registry,
                 new RuntimeInfoHolder(), new ActionQueue(),
-                org.mockito.Mockito.mock(zcd.jellyfish.infra.session.SessionManager.class), new ShellIngress(new MetricsRegistry()));
+                org.mockito.Mockito.mock(zcd.jellyfish.infra.session.SessionManager.class), new ShellIngress(new MetricsRegistry()), SubAgentPort.unavailable());
 
         // When
         PF4JPluginManager manager = PluginModule.providePluginManager(factory,

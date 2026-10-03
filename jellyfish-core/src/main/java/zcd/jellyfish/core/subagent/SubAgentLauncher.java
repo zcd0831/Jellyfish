@@ -6,9 +6,14 @@ import org.slf4j.LoggerFactory;
 import zcd.jellyfish.core.ReActListener;
 import zcd.jellyfish.core.ReActLooper;
 import zcd.jellyfish.core.ReActResult;
-import zcd.jellyfish.core.RunScope;
-import zcd.jellyfish.core.RunScopes;
 import zcd.jellyfish.core.prompt.ToolFilter;
+import zcd.jellyfish.core.runtime.AgentRunHandle;
+import zcd.jellyfish.core.runtime.AgentRunRequest;
+import zcd.jellyfish.core.runtime.AgentRunResult;
+import zcd.jellyfish.core.runtime.AgentRunStatus;
+import zcd.jellyfish.core.runtime.AgentRuntime;
+import zcd.jellyfish.core.runtime.RunContext;
+import zcd.jellyfish.core.runtime.RunContextHolder;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.config.AgentDefinition;
 import zcd.jellyfish.infra.config.RuntimeConfig;
@@ -73,10 +78,13 @@ public class SubAgentLauncher {
     private final ReActLooper reActLooper;
 
     /** 委派作用域持有者：层数与预算的账本。 */
-    private final RunScopes runScopes;
+    private final RunContextHolder runContexts;
 
     /** 权限管理器：用它给出子代理这一轮能看到哪些工具。 */
     private final PermissionManager permissionManager;
+
+    /** agent run 门面：登记与终结本次委派的 run（身份与生命周期，不含执行调度）。 */
+    private final AgentRuntime runtime;
 
     /**
      * 构造子代理委派器。
@@ -86,22 +94,25 @@ public class SubAgentLauncher {
      * @param sessionModelResolver 会话模型解析器，不可为 {@code null}
      * @param runtimeConfig       运行时配置门面，不可为 {@code null}
      * @param reActLooper         ReAct 循环器，不可为 {@code null}
-     * @param runScopes           委派作用域持有者，不可为 {@code null}
+     * @param runContexts           委派作用域持有者，不可为 {@code null}
      * @param permissionManager   权限管理器，不可为 {@code null}
+     * @param runtime             agent run 门面，不可为 {@code null}
      */
     @Inject
     public SubAgentLauncher(SessionManager sessionManager, AgentManager agentManager,
                             SessionModelResolver sessionModelResolver, RuntimeConfig runtimeConfig,
-                            ReActLooper reActLooper, RunScopes runScopes, PermissionManager permissionManager) {
+                            ReActLooper reActLooper, RunContextHolder runContexts, PermissionManager permissionManager,
+                            AgentRuntime runtime) {
         this.sessionManager = Objects.requireNonNull(sessionManager, "sessionManager must not be null");
         this.agentManager = Objects.requireNonNull(agentManager, "agentManager must not be null");
         this.sessionModelResolver = Objects.requireNonNull(sessionModelResolver,
                 "sessionModelResolver must not be null");
         this.runtimeConfig = Objects.requireNonNull(runtimeConfig, "runtimeConfig must not be null");
         this.reActLooper = Objects.requireNonNull(reActLooper, "reActLooper must not be null");
-        this.runScopes = Objects.requireNonNull(runScopes, "runScopes must not be null");
+        this.runContexts = Objects.requireNonNull(runContexts, "runContexts must not be null");
         this.permissionManager = Objects.requireNonNull(permissionManager,
                 "permissionManager must not be null");
+        this.runtime = Objects.requireNonNull(runtime, "runtime must not be null");
     }
 
     /**
@@ -122,7 +133,7 @@ public class SubAgentLauncher {
         if (call.hasBlankPrompt()) {
             return SubAgentOutcome.rejected("任务描述不能为空：子代理看不到本次对话，它只有这段描述");
         }
-        RunScope scope = runScopes.current();
+        RunContext scope = runContexts.current();
         if (scope == null) {
             return SubAgentOutcome.rejected("当前没有进行中的回合，无法委派子代理");
         }
@@ -144,7 +155,11 @@ public class SubAgentLauncher {
             }
             // 模型先行：配置写错时连子会话都不该建，更不该发出一轮注定失败的模型调用
             sessionModelResolver.resolveByAgentOrDefault(call.getAgentId());
-            scope.recordSpawn();
+            // 原子地「判定并占用」派生名额：上面那次 canDelegate 只是尽早拒绝，
+            // 真正占名额必须一次 CAS 完成，否则并行派生时会集体超发
+            if (!scope.tryAcquireSpawn()) {
+                return SubAgentOutcome.rejected(limitReason(scope));
+            }
             return delegate(call, listener, parent, settings);
         } catch (RuntimeException e) {
             LOG.warn("子代理委派失败: parent={} agent={}", call.getParentSessionId(), call.getAgentId(), e);
@@ -164,21 +179,59 @@ public class SubAgentLauncher {
     private SubAgentOutcome delegate(SubAgentCall call, ReActListener listener, Session parent,
                                      SubAgentSettings settings) {
         Session child = null;
+        String runId = null;
         try {
             // 权限模式继承父会话：子代理不该比派它的那个会话更宽松。
             // 模型与 provider 留空——它们由子代理自己的 agent 定义决定，不继承父会话。
             child = sessionManager.createEphemeral(parent.getSessionId(), call.getAgentId(),
                     null, null, parent.getPermissionMode());
-            ReActResult result = reActLooper.runNested(child, call.getPrompt(), listener,
-                    call.getCancellationToken(), settings.getMaxRounds(), toolFilterOf(call, parent));
-            return toOutcome(result, child);
+            // 执行体是「在 agent-run 线程上跑一次嵌套回合」：句柄同时是取消令牌，取消与超时都能掐断它的 LLM 流
+            final Session childSession = child;
+            AgentRunRequest request = new AgentRunRequest(parent.getSessionId(), call.getAgentId(),
+                    childSession.getSessionId(), null);
+            AgentRunHandle handle = runtime.spawn(request, call.getCancellationToken(), runHandle -> {
+                ReActResult result = reActLooper.runNested(childSession, call.getPrompt(), listener, runHandle,
+                        settings.getMaxRounds(), toolFilterOf(call, parent));
+                return AgentRunResult.of(runStatusOf(result), result.getContent(), result.getRounds(),
+                        childSession.getUsage(), null);
+            });
+            runId = handle.getRunId();
+            return toOutcome(runtime.await(handle), childSession);
         } catch (RuntimeException e) {
             LOG.warn("子代理回合失败: parent={} agent={}", call.getParentSessionId(), call.getAgentId(), e);
             return SubAgentOutcome.failed(messageOf(e));
         } finally {
             forwardUsage(call.getParentSessionId(), child);
             closeQuietly(child);
+            // 终态条目不留着：当前没有消费方，留着会随会话运行时间线性增长。
+            // 观测面板与归档（P1）落地时再决定保留策略。
+            if (runId != null) {
+                runtime.remove(runId);
+            }
         }
+    }
+
+    /**
+     * 把 ReAct 回合终态翻译成 run 状态。
+     * <p>
+     * <b>为什么 {@code BLOCKED} 与工具结果口径不同</b>：被回合开始前钩子拦下时，今天的
+     * {@link #toOutcome(ReActResult, Session)} 仍按「已完成」渲染（既有行为，本步不改）。
+     * run 状态如实记 {@code BLOCKED} 供观测，两者的对齐留到结果类型统一那一步。
+     *
+     * @param result 回合结果
+     * @return run 状态，保证为终态
+     */
+    private static AgentRunStatus runStatusOf(ReActResult result) {
+        if (result.isCancelled()) {
+            return AgentRunStatus.CANCELLED;
+        }
+        if (result.isTruncated()) {
+            return AgentRunStatus.TRUNCATED;
+        }
+        if (result.isBlocked()) {
+            return AgentRunStatus.BLOCKED;
+        }
+        return AgentRunStatus.DONE;
     }
 
     /**
@@ -203,14 +256,19 @@ public class SubAgentLauncher {
      * @param child  子会话运行态
      * @return 委派结果，保证非 {@code null}
      */
-    private static SubAgentOutcome toOutcome(ReActResult result, Session child) {
-        if (result.isCancelled()) {
-            return SubAgentOutcome.cancelled(result.getRounds(), child.getUsage());
+    private static SubAgentOutcome toOutcome(AgentRunResult result, Session child) {
+        switch (result.getStatus()) {
+            case CANCELLED:
+                return SubAgentOutcome.cancelled(result.getRounds(), child.getUsage());
+            case TRUNCATED:
+                return SubAgentOutcome.truncated(truncatedText(result.getText(), child), result.getRounds(),
+                        child.getUsage());
+            case FAILED:
+                return SubAgentOutcome.failed(result.getError());
+            default:
+                // DONE 与 BLOCKED 同走这条：被钩子拦下时仍按「已完成」渲染，是既有行为
+                return SubAgentOutcome.completed(result.getText(), result.getRounds(), child.getUsage());
         }
-        if (result.isTruncated()) {
-            return SubAgentOutcome.truncated(truncatedText(result, child), result.getRounds(), child.getUsage());
-        }
-        return SubAgentOutcome.completed(result.getContent(), result.getRounds(), child.getUsage());
     }
 
     /**
@@ -226,12 +284,12 @@ public class SubAgentLauncher {
      * <p>
      * <b>为什么明说只附了一段</b>：不说的话，主会话会把这段过程文本当成子代理的全部交代。
      *
-     * @param result 子代理回合结果
-     * @param child  子会话运行态
+     * @param content 子代理回合的最终文本（截断时为内核提示），可为 {@code null}
+     * @param child   子会话运行态
      * @return 回灌文本，保证非 {@code null}
      */
-    private static String truncatedText(ReActResult result, Session child) {
-        String hint = result.getContent() == null ? "" : result.getContent().trim();
+    private static String truncatedText(String content, Session child) {
+        String hint = content == null ? "" : content.trim();
         String text = lastAssistantText(child);
         if (StringUtils.isBlank(text)) {
             // 一句正文都没写：只留内核提示，不为「空内容」另编一句说明
@@ -317,7 +375,7 @@ public class SubAgentLauncher {
      * @param scope 当前作用域
      * @return 理由文本
      */
-    private static String limitReason(RunScope scope) {
+    private static String limitReason(RunContext scope) {
         if (scope.getDepth() >= scope.getMaxDepth()) {
             return "已达委派层数上限（" + scope.getMaxDepth() + " 层），请自己完成这件事";
         }

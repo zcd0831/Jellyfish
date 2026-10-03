@@ -8,11 +8,12 @@
 
 - **`AgentHarness.chat(sessionId, input, listener)` 是外壳唯一智能入口**，委托 `ReActLooper` 在 `react` 线程池
   异步推进；**工具失败一律转成 tool 结果回灌，只有模型调用本身失败才上抛**。
-- **react 池线程数上限 8**（即并发回合上限），队列 128，空闲回收 60 秒。
-- **嵌套回合内联在调用线程上跑，绝不进 `react` 池**：调用它的工具调用此刻正占着一条 `react` 线程，
-  把嵌套任务再排回同一个池里，8 条线程就能被并发父回合占满并互相等死。
-  **这条是本设计最不能碰的一条**——改回提交线程池会让测试**挂死**（不是断言失败），
-  因此嵌套用例带 `@Timeout` 兜底。
+- **`react` 池线程数上限 8**（即并发顶层回合数），队列 128，空闲回收 60 秒。
+- **子代理 run 不进 `react` 池，跑在自己的 `agent-run` 池上**：父回合在等子代理时会阻塞在自己的线程上，
+  把 run 排回 `react` 池就会让 8 条线程被并发父回合占满并互相等死。`agent-run` 池与 `react` 池不共享队列，
+  并发由 `subAgent.maxConcurrentRuns` 的许可门控；**等待中的 run 会让出许可**（`AgentRuntime.await`），
+  否则深度大于 1 时“正在等孩子的父”会把许可占满而自锁死。
+  调度与治理的完整设计见 [`subagent-runtime.md`](../design/subagent-runtime.md) 与 [`subagent-runtime-p0.md`](../design/subagent-runtime-p0.md)。
 - **回合开始前可被拦下（`TurnBeforeRequest` → `TurnDirective`）**：调用点必须在
   **追加用户消息之前**——一旦消息进了会话，拦下就只剩「再删掉」这条路，而历史是 append-only 的。
   顶层与嵌套共用同一个入口（`runNested` 不会绕过它）。拦下后：
@@ -156,11 +157,13 @@
 - **准入全部排在副作用之前**：开关、任务非空、回合作用域、层数、预算、类型存在且 `delegatable`、非委派给自己、
   模型可解析——**一个被拒绝的委派不建会话、不发事件**。
 - **`REJECTED`（换个参数就能修）与 `FAILED`（已经跑起来但出错）分开**，否则模型会对「类型写错了」也去重试。
-- **递归两道上限 + 一道授权**：`subAgent.maxDepth` 挡「一条链多深」，`subAgent.maxSpawnsPerTurn` 挡
-  「一层扇出多少」（两者正交，只有其中一个都不够）；「子代理能不能再委派」由它自己的 `allowedTools` 是否含
-  `task`（未声明 = 不限制）叠加在深度上。
-- **作用域是一回合一账，不是一次委派一账**：`RunScope`（深度 + 已派生数）由 `ReActLooper.execute` 在顶层回合
-  开闭、`runNested` 进出；react 池线程会被复用，因此**必须**在 `finally` 里清掉。
+- **三道上限 + 一道授权 + 一套预算**：`subAgent.maxDepth` 挡「一条链多深」，`subAgent.maxSpawnsPerTurn` 挡
+  「一层扇出多少」，`subAgent.maxConcurrentRuns` 挡「全局同时在跑多少」——三者正交；
+  再叠加单 run 墙钟 / 单 run token / 树 token 三个预算（`runTimeoutMillis` / `runTokenBudget` / `treeTokenBudget`）。
+  「子代理能不能再委派」由它自己的 `allowedTools` 是否含 `task`（未声明 = 不限制）叠加在深度上。
+- **上下文是一回合一账，不是一次委派一账**：`RunContext`（当前路径深度 + 指向 `RunTree` 的引用）由
+  `ReActLooper.execute` 在顶层回合开闭；`RunTree`（已派生数 + 树 token）是整棵 run 树跨线程按引用共享的账本。
+  `react` / `agent-run` 线程会被复用，因此**必须**在 `finally` 里清掉上下文。
   **它放在 `core` 而不是 `core/subagent`**：依赖方向必须是 `core.subagent → core`。
 - **子代理的工具清单按它自己的 agent 配置收窄**（`ToolFilter`），否则它会看到 `write_file`、调用、被拒，
   白跑一轮。**过滤只随嵌套回合传递，主会话路径传 `ToolFilter.none()`**。

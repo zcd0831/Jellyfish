@@ -1,4 +1,4 @@
-package zcd.jellyfish.core;
+package zcd.jellyfish.core.runtime;
 
 import org.junit.jupiter.api.Test;
 
@@ -8,30 +8,30 @@ import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
 /**
- * {@link RunScopes} 的单元测试：验证开闭、覆盖与线程封闭。
+ * {@link RunContextHolder} 的单元测试：验证开闭、覆盖与线程封闭。
  * <p>
  * 线程封闭是最要紧的一条：作用域刻意不是全局状态，否则并发的两个回合会互相吃掉对方的预算。
  *
  * @author zcd
  */
-class RunScopesTest {
+class RunContextHolderTest {
 
     @Test
     void current_should_return_null_before_open() {
         // When / Then
-        assertNull(new RunScopes().current());
+        assertNull(new RunContextHolder().current());
     }
 
     @Test
     void open_should_expose_scope_with_given_limits() {
         // Given
-        RunScopes scopes = new RunScopes();
+        RunContextHolder scopes = new RunContextHolder();
 
         // When
         scopes.open(2, 32);
 
         // Then
-        RunScope scope = scopes.current();
+        RunContext scope = scopes.current();
         assertNotNull(scope);
         assertEquals(2, scope.getMaxDepth());
         assertEquals(32, scope.getMaxSpawnsPerTurn());
@@ -40,7 +40,7 @@ class RunScopesTest {
     @Test
     void close_should_clear_scope() {
         // Given
-        RunScopes scopes = new RunScopes();
+        RunContextHolder scopes = new RunContextHolder();
         scopes.open(2, 32);
 
         // When
@@ -53,16 +53,16 @@ class RunScopesTest {
     @Test
     void open_should_replace_previous_scope() {
         // Given
-        RunScopes scopes = new RunScopes();
+        RunContextHolder scopes = new RunContextHolder();
         scopes.open(2, 32);
-        RunScope first = scopes.current();
-        first.recordSpawn();
+        RunContext first = scopes.current();
+        first.tryAcquireSpawn();
 
         // When
         scopes.open(2, 32);
 
         // Then：旧作用域被整体换掉，计数不跨回合累积
-        RunScope second = scopes.current();
+        RunContext second = scopes.current();
         assertNotSame(first, second);
         assertEquals(0, second.getSpawnCount());
     }
@@ -70,9 +70,9 @@ class RunScopesTest {
     @Test
     void scope_should_be_isolated_per_thread() throws InterruptedException {
         // Given：主线程开了一个作用域
-        RunScopes scopes = new RunScopes();
+        RunContextHolder scopes = new RunContextHolder();
         scopes.open(2, 32);
-        RunScope[] otherThreadScope = new RunScope[1];
+        RunContext[] otherThreadScope = new RunContext[1];
 
         // When
         Thread thread = new Thread(() -> otherThreadScope[0] = scopes.current(), "scope-probe");

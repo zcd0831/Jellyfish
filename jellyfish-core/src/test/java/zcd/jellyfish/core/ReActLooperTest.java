@@ -39,6 +39,8 @@ import zcd.jellyfish.core.prompt.PromptAssembler;
 import zcd.jellyfish.core.prompt.ToolCatalog;
 import zcd.jellyfish.core.prompt.ToolFilter;
 import zcd.jellyfish.core.prompt.ToolResultAger;
+import zcd.jellyfish.core.runtime.RunContext;
+import zcd.jellyfish.core.runtime.RunContextHolder;
 import zcd.jellyfish.core.tool.ToolExecutor;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.config.Model;
@@ -150,7 +152,7 @@ class ReActLooperTest {
     private ToolOutputLimiter outputLimiter;
 
     /** 委派作用域持有者：用真实实现，嵌套回合依赖它。 */
-    private RunScopes runScopes;
+    private RunContextHolder runContexts;
 
     /** 动作队列：用真实实现，用例直接往里投递插件动作。 */
     private ActionQueue actionQueue;
@@ -170,7 +172,7 @@ class ReActLooperTest {
         promptAssembler = new PromptAssembler(agentManager, toolCatalog, runtimeConfig, extensions,
                 new ToolResultAger(runtimeConfig, extensions), new CacheBreakWatcher(events));
         outputLimiter = new ToolOutputLimiter(runtimeConfig, new ToolOutputStore(runtimeConfig));
-        runScopes = new RunScopes();
+        runContexts = new RunContextHolder();
         actionQueue = new ActionQueue();
         actionDispatcher = new ActionDispatcher(actionQueue, sessionManager, conversationCompactor, toolCatalog);
         // 这两个桩是共享前置条件：个别用例（会话不存在 / 提前取消）走不到这两步，用 lenient 避免误报
@@ -728,9 +730,9 @@ class ReActLooperTest {
         when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
         when(permissionManager.decide(any(PermissionCheckRequest.class)))
                 .thenReturn(PermissionDecision.allow(null));
-        List<RunScope> scopes = new ArrayList<>();
+        List<RunContext> scopes = new ArrayList<>();
         registerTool("read", request -> {
-            scopes.add(runScopes.current());
+            scopes.add(runContexts.current());
             return new ToolCallResult("read", "ok");
         });
         stubResponses(toolCallResponse("call_1", "read"), LlmResponse.text("好"));
@@ -777,8 +779,10 @@ class ReActLooperTest {
         // When
         ReActResult result = looper.chat(parent.getSessionId(), "委派一下", new RecordingListener()).await();
 
-        // Then：嵌套回合在父回合同一条线程上跑完。
-        // 若它改成提交 react 池，工具会堵着唯一那条线程等一个永远排不上的任务，本用例的 @Timeout 就是那个哨兵。
+        // Then：`runNested` 是一个同步执行体——在哪个线程调用它，就在哪个线程跑完。
+        // 本用例直接把它当工具体调用，因此与父回合同线程；生产路径由调度器在 agent-run 线程上调用它
+        // （见 AgentRuntimeTest#spawn_should_execute_body_on_agent_run_thread）。
+        // 若它自己改成提交 react 池，工具会堵着唯一那条线程等一个永远排不上的任务，本用例的 @Timeout 就是那个哨兵。
         assertEquals("父回合结束", result.getContent());
         assertEquals(1, nestedThreads.size());
         assertEquals(2, parentThreads.size());
@@ -805,13 +809,13 @@ class ReActLooperTest {
         ReActListener nestedListener = new ReActListener() {
             @Override
             public void onComplete(ReActResult result) {
-                depthInside.add(runScopes.current().getDepth());
+                depthInside.add(runContexts.current().getDepth());
             }
         };
         registerTool("delegate", request -> {
             looper.runNested(child, "子任务", nestedListener, request.getCancellationToken(), 4,
                     ToolFilter.none());
-            depthAfter.add(runScopes.current().getDepth());
+            depthAfter.add(runContexts.current().getDepth());
             return new ToolCallResult("delegate", "done");
         });
         stubResponses(toolCallResponse("call_1", "delegate"), LlmResponse.text("子代理答复"),
@@ -1028,7 +1032,7 @@ class ReActLooperTest {
     private ReActLooper newLooper() {
         return new ReActLooper(sessionManager, modelManager,
                 new ToolExecutor(permissionManager, extensions, events, outputLimiter),
-                events, promptAssembler, runtimeConfig, conversationCompactor, runScopes,
+                events, promptAssembler, runtimeConfig, conversationCompactor, runContexts,
                 new SessionModelResolver(modelManager, agentManager), extensions, actionDispatcher, executor);
     }
 

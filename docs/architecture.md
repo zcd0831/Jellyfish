@@ -207,8 +207,9 @@ fork 不复制 token 用量，压缩摘要按「边界是否落在复制范围�
 - **子代理不继承主会话的模型**：模型来自它自己的 `model` 字段，没配就落到 `models.json` 的全局默认。
 - **它跑在自己的会话里，但那个会话不留痕**：不落盘、不进 `/session` 列表，进程退出也不会「恢复」出一堆子代理会话；
   但它花掉的 token **计入父会话**，生命周期事件带 `parentSessionId` 供可观测性区分。
-- **递归有两道上限**：`subAgent.maxDepth`（一条链多深）与 `subAgent.maxSpawnsPerTurn`（一层扇出多少）——两者正交，
-  只有其中一个都不够。子代理自己能不能再往下委派，取决于它的 `allowedTools` 里有没有 `task`。
+- **递归有三道上限 + 一套预算**：`subAgent.maxDepth`（一条链多深）、`subAgent.maxSpawnsPerTurn`（一层扇出多少）
+  与 `subAgent.maxConcurrentRuns`（全局同时在跑多少）——三者正交，只有其中一个都不够；再叠加
+  单 run 墙钟 / 单 run token / 树 token 三个预算。子代理自己能不能再往下委派，取决于它的 `allowedTools` 里有没有 `task`。
 - **子代理的报告正文不进屏幕**：它是一整篇长文，会作为工具结果回灌给模型；轨迹行上那句摘要就是「刚才那一行到底是什么事」的答案
   （`⎿ task · 子代理 scout · 3 轮 · 123456 tok`）。命令行模式同口径（走 stderr）：
   `← task 完成（26 字符） · 子代理 scout · 3 轮 · 123456 tok`。出问题时末尾再加一个警示标记，
@@ -378,8 +379,8 @@ flowchart TB
     ReAct -->|"解析本次模型（SessionModelResolver）"| ModelMgr
     ReAct -->|"调用 LLM"| LLMClient
     ReAct -->|"同步权限检查"| PermMgr
-    ReAct ==>|"task 工具 → 委派（内联嵌套回合）"| SubAgentMgr
-    SubAgentMgr ==>|"runNested：同线程跑完整个回合"| ReAct
+    ReAct ==>|"task 工具 → 委派（派生 run）"| SubAgentMgr
+    SubAgentMgr ==>|"AgentRuntime.spawn → 调度到 agent-run 池跑完这个 run"| ReAct
     SubAgentMgr ==>|"owner=core 注册 task 工具 + 类型清单"| ExtReg
     SubAgentMgr -->|"瞬时会话 / 用量归集到父会话"| SessionMgr
     SubAgentMgr -->|"工具清单过滤判据（与执行期同一份）"| PermMgr
@@ -506,8 +507,11 @@ flowchart TB
 - **工具结果元数据已结构化**（`exitCode` / `terminal` / `summary` 三个约定键 + 工具自定键）：TUI 轨迹、
   CLI 结束行、SSE `tool_done`、会话快照四处都拿到了。**仍需注意**：`metadata` 只在会话快照里
   （进不了 `LlmMessage`），因此它也不参与上下文裁剪——这正是想要的（模型不需要它，界面需要）。
-- **子代理**：**已落地**（内核原生，`core/subagent`）——`task` 工具、瞬时会话、内联嵌套回合、深度与预算上限、
-  工具清单过滤、用量归集、事件带 `parentSessionId`。**明确不做**：
+- **子代理**：**已落地**（内核原生，`core/subagent` + `core/runtime`）——`task` 工具、瞬时会话、
+  **调度到独立 `agent-run` 池执行的嵌套回合**、三道上限 + 一套预算（governor）、
+  工具清单过滤、用量归集、事件带 `parentSessionId`；`RunRegistry` 给每个 run 一个稳定标识与父子树，
+  但**尚未**接线到观测面板/归档（P1）。设计与分期见
+  [design/subagent-runtime.md](design/subagent-runtime.md)。**明确不做**：
   - **上下文 fork（永久不做，不是推后）**——「挑战我刚说的方案」这类对话条件型委派只能靠调用方把背景写进
     `task.prompt`；
   - **后台子代理**（会像 pi 那样需要 spawn 自身进程，而本项目 shade 成单 jar、连自己的入口都找不到）；
@@ -516,4 +520,5 @@ flowchart TB
   - **子代理类型的运行时注册**（只能来自 `agents.json`）；
   - **并行 / 链式 / 工作流编排**（内核不因此长出一个 workflow 引擎）。
   - **已知边界**：嵌套审批仍走全局单槽位（与 Server 同）；子代理看不到主会话的模型（刻意）；
-    递归靠 `maxDepth` + `maxSpawnsPerTurn` 两道，没有全局并发上限。
+    递归靠 `maxDepth` + `maxSpawnsPerTurn` + `maxConcurrentRuns` 三道，再叠加单 run 墙钟 / 单 run token / 树 token
+    三个预算；等待中的 run 会让出并发许可（否则深度大于 1 会自锁死）。

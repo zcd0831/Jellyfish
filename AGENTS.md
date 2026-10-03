@@ -109,6 +109,7 @@ jellyfish-core/src/main/java/zcd/jellyfish/core/
 │                               #   + ShellStreams / ShellTurnEvent / ShellContributionListener
 ├── input/                      # InputDirectives / InputDirectiveRun / InputDirectiveCall / InputReferenceCompletion
 ├── subagent/                   # 子代理：SubAgentLauncher / TaskTool / SubAgentTools（owner=core）
+├── runtime/                    # agent run 运行时：AgentRuntime / RunRegistry / RunScheduler / RunContext
 │                               #   + SubAgentCall / SubAgentOutcome / SubAgentStatus
 └── command/                    # SystemCommands（owner=core）
 
@@ -163,8 +164,10 @@ jellyfish-tui/src/main/java/zcd/jellyfish/tui/
 - **`CommandManager` 无状态、对外壳中立**；「需不需要会话」由命令自己声明（`sessionRequired` 缺省 `true`）。
 - **提示词组装**：`PromptAssembler`；裁剪只裁本次请求（`ContextWindow` 成组丢弃），历史一条不动。
 - **压缩是插件能力、内核只提供机制**；没有策略插件即整体不可用，不回退内置。
-- **子代理**：`SubAgentLauncher` + `TaskTool`（owner=core），嵌套回合**内联在调用线程上跑，绝不进 `react` 池**
-  ——这一条是本设计最不能碰的一条。
+- **子代理**：`SubAgentLauncher` + `TaskTool`（owner=core）→ `AgentRuntime.spawn`（`core/runtime`），
+  嵌套回合**调度到独立的 `agent-run` 池上执行，绝不进 `react` 池**；并发由 `subAgent.maxConcurrentRuns`
+  许可门控，等待中的 run 会让出许可，另有墙钟 / token / 深度 / 扇出预算。设计见
+  [docs/design/subagent-runtime.md](docs/design/subagent-runtime.md)。
 - **跨边界载荷必须是 `api` 侧快照值类型**，且快照类型恰好只有一个可见构造器；**`-parameters` 不许去掉**。
 - **`-tui` / `-server` 的启动期都不建会话**；`--agent` / `--model` / `--mode` / `-p` / `--show-thinking` 只归 CLI，
   其余模式带上它们一律判用法错误退 2（**拒绝而不是静默忽略**）。

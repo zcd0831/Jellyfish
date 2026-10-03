@@ -120,7 +120,7 @@ class JellyfishSettingsTest {
     @Test
     void getSubAgent_should_return_same_instance_when_given() {
         // Given
-        SubAgentSettings subAgent = new SubAgentSettings(true, 1, null, null);
+        SubAgentSettings subAgent = new SubAgentSettings(false, null, null, null, null, null, null, null);
 
         // When
         JellyfishSettings settings = new JellyfishSettings(null, null, null, subAgent);

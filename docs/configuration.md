@@ -213,9 +213,13 @@
   },
   "subAgent": {
     "enabled": true,
-    "maxDepth": 2,
-    "maxSpawnsPerTurn": 32,
-    "maxRounds": 8
+    "maxDepth": 1,
+    "maxSpawnsPerTurn": 3,
+    "maxRounds": 8,
+    "maxConcurrentRuns": 3,
+    "runTimeoutMillis": 300000,
+    "runTokenBudget": 500000,
+    "treeTokenBudget": 1500000
   }
 }
 ```
@@ -294,11 +298,17 @@
 | 字段 | 缺省 | 含义 |
 | --- | --- | --- |
 | `enabled` | `true` | 全局开关。**关掉后 `task` 工具直接不再注册**，模型看不到它；敲 `/reload` 即可生效、不用重启 |
-| `maxDepth` | `2` | 允许的最大委派层数（即「主会话 → 子代理 → 孙代理」），写 `0` 表示禁止委派 |
-| `maxSpawnsPerTurn` | `32` | 单个顶层回合内允许派生的子代理总数 |
+| `maxDepth` | `1` | 允许的最大委派层数（即「主会话 → 子代理 → 孙代理」），写 `0` 表示禁止委派。缺省保守为 1（只允许一层）。 |
+| `maxSpawnsPerTurn` | `3` | 单个顶层回合内允许派生的子代理总数 |
 | `maxRounds` | `8` | 子代理自己那个回合的最大轮数，**不跟随** `react.maxRounds`（子代理被设计来干一件窄活） |
+| `maxConcurrentRuns` | `3` | **全局同时运行的子代理 run 数上限**（不含父回合）。超过的 run 排队；run 各自跑在独立的 `agent-run` 线程池上，父回合等待子 run 时会让出并发许可 |
+| `runTimeoutMillis` | `300000` | 单个 run 的墙钟上限（毫秒）。到点取消该 run 并把它记为「截断」 |
+| `runTokenBudget` | `500000` | 单个 run 的累计 token 上限；写 `0` 表示不限制 |
+| `treeTokenBudget` | `1500000` | 一棵 run 树的累计 token 上限；写 `0` 表示不限制 |
 
-`maxDepth` 挡的是「一条链多深」，`maxSpawnsPerTurn` 挡的是「一层扇出多少」，两者正交。除 `enabled` 外非法值一律回退缺省值。
+`maxDepth` 挡的是「一条链多深」，`maxSpawnsPerTurn` 挡的是「一层扇出多少」，
+`maxConcurrentRuns` 挡的是「全局同时在跑多少」，三者正交；三个 token / 时间上限挡的是「跑飞了也停得下来」。
+除 `enabled` 外非法值一律回退缺省值。
 
 ## 双源合并与插值
 

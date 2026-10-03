@@ -33,7 +33,7 @@ class SubAgentSettingsTest {
     @Test
     void constructor_should_keep_explicit_zero_max_depth() {
         // When：0 是「禁止委派」的合法取值，不能被当成未配置
-        SubAgentSettings settings = new SubAgentSettings(null, 0, null, null);
+        SubAgentSettings settings = new SubAgentSettings(null, 0, null, null, null, null, null, null);
 
         // Then
         assertEquals(0, settings.getMaxDepth());
@@ -43,7 +43,7 @@ class SubAgentSettingsTest {
     @Test
     void constructor_should_fall_back_when_max_depth_negative() {
         // When
-        SubAgentSettings settings = new SubAgentSettings(null, -1, null, null);
+        SubAgentSettings settings = new SubAgentSettings(null, -1, null, null, null, null, null, null);
 
         // Then
         assertEquals(SubAgentSettings.DEFAULT_MAX_DEPTH, settings.getMaxDepth());
@@ -52,7 +52,7 @@ class SubAgentSettingsTest {
     @Test
     void constructor_should_keep_explicit_disabled() {
         // When
-        SubAgentSettings settings = new SubAgentSettings(false, null, null, null);
+        SubAgentSettings settings = new SubAgentSettings(false, null, null, null, null, null, null, null);
 
         // Then
         assertFalse(settings.isEnabled());
@@ -62,8 +62,8 @@ class SubAgentSettingsTest {
     @Test
     void constructor_should_fall_back_when_max_spawns_not_positive() {
         // When
-        SubAgentSettings zero = new SubAgentSettings(null, null, 0, null);
-        SubAgentSettings negative = new SubAgentSettings(null, null, -3, null);
+        SubAgentSettings zero = new SubAgentSettings(null, null, 0, null, null, null, null, null);
+        SubAgentSettings negative = new SubAgentSettings(null, null, -3, null, null, null, null, null);
 
         // Then
         assertEquals(SubAgentSettings.DEFAULT_MAX_SPAWNS_PER_TURN, zero.getMaxSpawnsPerTurn());
@@ -73,7 +73,7 @@ class SubAgentSettingsTest {
     @Test
     void constructor_should_fall_back_when_max_rounds_not_positive() {
         // When
-        SubAgentSettings settings = new SubAgentSettings(null, null, null, 0);
+        SubAgentSettings settings = new SubAgentSettings(null, null, null, 0, null, null, null, null);
 
         // Then
         assertEquals(SubAgentSettings.DEFAULT_MAX_ROUNDS, settings.getMaxRounds());

@@ -12,8 +12,11 @@ import zcd.jellyfish.api.extension.PermissionMode;
 import zcd.jellyfish.core.ReActListener;
 import zcd.jellyfish.core.ReActLooper;
 import zcd.jellyfish.core.ReActResult;
-import zcd.jellyfish.core.RunScope;
-import zcd.jellyfish.core.RunScopes;
+import zcd.jellyfish.core.runtime.RunContext;
+import zcd.jellyfish.core.runtime.RunContextHolder;
+import zcd.jellyfish.core.runtime.AgentRuntime;
+import zcd.jellyfish.core.runtime.RunRegistry;
+import zcd.jellyfish.core.runtime.RunScheduler;
 import zcd.jellyfish.core.prompt.ToolFilter;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.config.AgentDefinition;
@@ -51,7 +54,7 @@ import static org.mockito.Mockito.when;
  * {@link SubAgentLauncher} 的单元测试：验证准入判定「不产生任何副作用」、派生与收尾的配对、
  * 用量归集，以及终态到 {@link SubAgentStatus} 的映射。
  * <p>
- * 用真实 {@link SessionManager} 与 {@link RunScopes}，只 mock 外部协作者与嵌套回合的执行体
+ * 用真实 {@link SessionManager} 与 {@link RunContextHolder}，只 mock 外部协作者与嵌套回合的执行体
  * （后者是 {@link ReActLooper#runNested}，本类的职责只是把它串起来）。
  *
  * @author zcd
@@ -90,7 +93,10 @@ class SubAgentLauncherTest {
     private SessionManager sessionManager;
 
     /** 真实委派作用域持有者。 */
-    private RunScopes runScopes;
+    private RunContextHolder runContexts;
+
+    /** 真实 agent run 门面（登记 + 终结本次委派）。 */
+    private AgentRuntime runtime;
 
     /** 被测对象。 */
     private SubAgentLauncher launcher;
@@ -99,9 +105,14 @@ class SubAgentLauncherTest {
     void setUp() {
         sessionManager = new SessionManager(agentManager, events, new ExtensionRegistry(new TypeRegistry()),
                 new SessionDefaults());
-        runScopes = new RunScopes();
+        runContexts = new RunContextHolder();
+        // 调度器在构造时就要读设置，因此先打桩再建它
+        lenient().when(runtimeConfig.getSubAgentSettings()).thenReturn(new SubAgentSettings());
+        RunRegistry registry = new RunRegistry();
+        RunScheduler scheduler = new RunScheduler(runContexts, registry, runtimeConfig);
+        runtime = new AgentRuntime(registry, runContexts, scheduler);
         launcher = new SubAgentLauncher(sessionManager, agentManager, sessionModelResolver, runtimeConfig,
-                reActLooper, runScopes, permissionManager);
+                reActLooper, runContexts, permissionManager, runtime);
         // 默认设置对所有用例都一样，个别用例自己覆盖
         lenient().when(runtimeConfig.getSubAgentSettings()).thenReturn(new SubAgentSettings());
         // 默认不过滤工具（无策略即全放行），个别用例自己覆盖
@@ -111,7 +122,7 @@ class SubAgentLauncherTest {
     @Test
     void run_should_reject_when_disabled() {
         // Given
-        when(runtimeConfig.getSubAgentSettings()).thenReturn(new SubAgentSettings(false, null, null, null));
+        when(runtimeConfig.getSubAgentSettings()).thenReturn(new SubAgentSettings(false, null, null, null, null, null, null, null));
         Session parent = parent(PermissionMode.NORMAL, null);
 
         // When
@@ -140,7 +151,7 @@ class SubAgentLauncherTest {
     @Test
     void run_should_reject_when_depth_limit_exhausted() {
         // Given：maxDepth = 0 表示禁止委派
-        runScopes.open(0, 8);
+        runContexts.open(0, 8);
         Session parent = parent(PermissionMode.NORMAL, null);
 
         // When
@@ -154,8 +165,8 @@ class SubAgentLauncherTest {
     @Test
     void run_should_reject_when_spawn_budget_exhausted() {
         // Given：预算只有 1，已经被用掉
-        runScopes.open(8, 1);
-        runScopes.current().recordSpawn();
+        runContexts.open(8, 1);
+        runContexts.current().tryAcquireSpawn();
         Session parent = parent(PermissionMode.NORMAL, null);
 
         // When
@@ -170,7 +181,7 @@ class SubAgentLauncherTest {
     void run_should_reject_when_agent_unknown_and_list_available() {
         // Given：模型瞎猜了一个类型
         when(agentManager.all()).thenReturn(Arrays.asList(definition(true), definitionOf("writer", false)));
-        runScopes.open(8, 8);
+        runContexts.open(8, 8);
         Session parent = parent(PermissionMode.NORMAL, null);
 
         // When
@@ -187,7 +198,7 @@ class SubAgentLauncherTest {
     void run_should_reject_when_agent_not_delegatable() {
         // Given
         when(agentManager.find(SCOUT)).thenReturn(definitionOf(SCOUT, false));
-        runScopes.open(8, 8);
+        runContexts.open(8, 8);
         Session parent = parent(PermissionMode.NORMAL, null);
 
         // When
@@ -202,7 +213,7 @@ class SubAgentLauncherTest {
     void run_should_reject_when_delegating_to_itself() {
         // Given：父会话绑的就是 scout
         when(agentManager.find(SCOUT)).thenReturn(definition(true));
-        runScopes.open(8, 8);
+        runContexts.open(8, 8);
         Session parent = parent(PermissionMode.NORMAL, SCOUT);
 
         // When
@@ -232,7 +243,7 @@ class SubAgentLauncherTest {
         when(agentManager.find(SCOUT)).thenReturn(definition(true));
         when(sessionModelResolver.resolveByAgentOrDefault(SCOUT))
                 .thenThrow(new JellyfishException("model not found: openai/ghost"));
-        runScopes.open(8, 8);
+        runContexts.open(8, 8);
         Session parent = parent(PermissionMode.NORMAL, null);
 
         // When
@@ -250,7 +261,7 @@ class SubAgentLauncherTest {
         // Given
         when(agentManager.find(SCOUT)).thenReturn(definition(true));
         when(sessionModelResolver.resolveByAgentOrDefault(SCOUT)).thenReturn(resolvedModel());
-        runScopes.open(8, 8);
+        runContexts.open(8, 8);
         Session parent = parent(PermissionMode.NORMAL, null);
         stubNestedTurn("子代理答复", 2);
         ArgumentCaptor<Session> childCaptor = ArgumentCaptor.forClass(Session.class);
@@ -277,7 +288,7 @@ class SubAgentLauncherTest {
         // Given：父会话是 PLAN（只读）
         when(agentManager.find(SCOUT)).thenReturn(definition(true));
         when(sessionModelResolver.resolveByAgentOrDefault(SCOUT)).thenReturn(resolvedModel());
-        runScopes.open(8, 8);
+        runContexts.open(8, 8);
         Session parent = parent(PermissionMode.PLAN, null);
         stubNestedTurn("答复", 1);
         ArgumentCaptor<Session> childCaptor = ArgumentCaptor.forClass(Session.class);
@@ -297,10 +308,10 @@ class SubAgentLauncherTest {
     @Test
     void run_should_use_sub_agent_max_rounds() {
         // Given：子代理的轮数上限与主会话不同
-        when(runtimeConfig.getSubAgentSettings()).thenReturn(new SubAgentSettings(null, null, null, 3));
+        when(runtimeConfig.getSubAgentSettings()).thenReturn(new SubAgentSettings(null, null, null, 3, null, null, null, null));
         when(agentManager.find(SCOUT)).thenReturn(definition(true));
         when(sessionModelResolver.resolveByAgentOrDefault(SCOUT)).thenReturn(resolvedModel());
-        runScopes.open(8, 8);
+        runContexts.open(8, 8);
         Session parent = parent(PermissionMode.NORMAL, null);
         stubNestedTurn("答复", 1);
 
@@ -316,7 +327,7 @@ class SubAgentLauncherTest {
         // Given：子代理回合花掉了真实 token
         when(agentManager.find(SCOUT)).thenReturn(definition(true));
         when(sessionModelResolver.resolveByAgentOrDefault(SCOUT)).thenReturn(resolvedModel());
-        runScopes.open(8, 8);
+        runContexts.open(8, 8);
         Session parent = parent(PermissionMode.NORMAL, null);
         stubNestedTurn("答复", 2);
 
@@ -336,7 +347,7 @@ class SubAgentLauncherTest {
         // Given：子代理达到自己的轮数上限
         when(agentManager.find(SCOUT)).thenReturn(definition(true));
         when(sessionModelResolver.resolveByAgentOrDefault(SCOUT)).thenReturn(resolvedModel());
-        runScopes.open(8, 8);
+        runContexts.open(8, 8);
         Session parent = parent(PermissionMode.NORMAL, null);
         when(reActLooper.runNested(any(Session.class), any(), any(), any(), anyInt(), any()))
                 .thenReturn(ReActResult.truncated("s-1", "已达上限", 8));
@@ -355,7 +366,7 @@ class SubAgentLauncherTest {
         // Given：子代理跑到轮数上限，且最后一轮停在工具调用上（那条助手消息没有正文）
         when(agentManager.find(SCOUT)).thenReturn(definition(true));
         when(sessionModelResolver.resolveByAgentOrDefault(SCOUT)).thenReturn(resolvedModel());
-        runScopes.open(8, 8);
+        runContexts.open(8, 8);
         Session parent = parent(PermissionMode.NORMAL, null);
         when(reActLooper.runNested(any(Session.class), any(), any(), any(), anyInt(), any()))
                 .thenAnswer(invocation -> {
@@ -386,7 +397,7 @@ class SubAgentLauncherTest {
         // Given：子代理光顾着调工具，一句正文都没写过
         when(agentManager.find(SCOUT)).thenReturn(definition(true));
         when(sessionModelResolver.resolveByAgentOrDefault(SCOUT)).thenReturn(resolvedModel());
-        runScopes.open(8, 8);
+        runContexts.open(8, 8);
         Session parent = parent(PermissionMode.NORMAL, null);
         when(reActLooper.runNested(any(Session.class), any(), any(), any(), anyInt(), any()))
                 .thenAnswer(invocation -> {
@@ -408,7 +419,7 @@ class SubAgentLauncherTest {
         // Given
         when(agentManager.find(SCOUT)).thenReturn(definition(true));
         when(sessionModelResolver.resolveByAgentOrDefault(SCOUT)).thenReturn(resolvedModel());
-        runScopes.open(8, 8);
+        runContexts.open(8, 8);
         Session parent = parent(PermissionMode.NORMAL, null);
         when(reActLooper.runNested(any(Session.class), any(), any(), any(), anyInt(), any()))
                 .thenReturn(ReActResult.cancelled("s-1", 1));
@@ -427,7 +438,7 @@ class SubAgentLauncherTest {
         // Given
         when(agentManager.find(SCOUT)).thenReturn(definition(true));
         when(sessionModelResolver.resolveByAgentOrDefault(SCOUT)).thenReturn(resolvedModel());
-        runScopes.open(8, 8);
+        runContexts.open(8, 8);
         Session parent = parent(PermissionMode.NORMAL, null);
         when(reActLooper.runNested(any(Session.class), any(), any(), any(), anyInt(), any()))
                 .thenThrow(new JellyfishException("网络断了"));
@@ -448,7 +459,7 @@ class SubAgentLauncherTest {
         // Given
         when(agentManager.find(SCOUT)).thenReturn(definition(true));
         when(sessionModelResolver.resolveByAgentOrDefault(SCOUT)).thenReturn(resolvedModel());
-        runScopes.open(8, 8);
+        runContexts.open(8, 8);
         Session parent = parent(PermissionMode.NORMAL, null);
         stubNestedTurn("答复", 1);
 
@@ -456,8 +467,8 @@ class SubAgentLauncherTest {
         launcher.run(call(parent, SCOUT, "查一下"), null);
 
         // Then
-        assertEquals(1, runScopes.current().getSpawnCount());
-        assertEquals(0, runScopes.current().getDepth());
+        assertEquals(1, runContexts.current().getSpawnCount());
+        assertEquals(0, runContexts.current().getDepth());
     }
 
     @Test
@@ -466,7 +477,7 @@ class SubAgentLauncherTest {
         when(agentManager.find(SCOUT)).thenReturn(definition(true));
         when(sessionModelResolver.resolveByAgentOrDefault(SCOUT)).thenReturn(resolvedModel());
         when(permissionManager.usableTools(eq(SCOUT), any())).thenReturn("read_file"::equals);
-        runScopes.open(8, 8);
+        runContexts.open(8, 8);
         Session parent = parent(PermissionMode.NORMAL, null);
         stubNestedTurn("答复", 1);
         ArgumentCaptor<ToolFilter> filterCaptor = ArgumentCaptor.forClass(ToolFilter.class);
@@ -486,7 +497,7 @@ class SubAgentLauncherTest {
         // Given：父会话处于 PLAN 模式（权限模式继承给子代理）
         when(agentManager.find(SCOUT)).thenReturn(definition(true));
         when(sessionModelResolver.resolveByAgentOrDefault(SCOUT)).thenReturn(resolvedModel());
-        runScopes.open(8, 8);
+        runContexts.open(8, 8);
         Session parent = parent(PermissionMode.PLAN, null);
         stubNestedTurn("答复", 1);
 

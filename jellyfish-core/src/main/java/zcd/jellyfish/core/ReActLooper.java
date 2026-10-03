@@ -17,6 +17,8 @@ import zcd.jellyfish.core.compact.ConversationCompactor;
 import zcd.jellyfish.core.prompt.PromptAssembler;
 import zcd.jellyfish.core.prompt.PromptAssembly;
 import zcd.jellyfish.core.prompt.ToolFilter;
+import zcd.jellyfish.core.runtime.RunContext;
+import zcd.jellyfish.core.runtime.RunContextHolder;
 import zcd.jellyfish.core.tool.ToolExecutor;
 import zcd.jellyfish.infra.config.ReactSettings;
 import zcd.jellyfish.infra.config.RuntimeConfig;
@@ -101,8 +103,14 @@ public class ReActLooper implements AutoCloseable {
     /** 终止原因取值：回合被取消时为未执行的工具调用补的结果标这个值（约定见 {@code ToolMetadata}）。 */
     private static final String TERMINAL_CANCELLED = "CANCELLED";
 
+    /** 终止原因取值：回合因触达预算而截断时为未执行的工具调用补的结果标这个值。 */
+    private static final String TERMINAL_TRUNCATED = "TRUNCATED";
+
     /** 回合被取消时，为未执行的工具调用补的合成结果正文。 */
     private static final String NOT_RUN_MESSAGE = "已取消：该工具调用未执行";
+
+    /** 回合触达预算被截断时，为未执行的工具调用补的合成结果正文。 */
+    private static final String TRUNCATED_NOT_RUN_MESSAGE = "已跳过：子代理触达预算，本次未执行";
 
     /** 会话域服务：读取会话状态、追加消息。 */
     private final SessionManager sessionManager;
@@ -129,7 +137,7 @@ public class ReActLooper implements AutoCloseable {
     private final RuntimeConfig runtimeConfig;
 
     /** 委派作用域持有者：顶层回合开闭，嵌套回合进出。 */
-    private final RunScopes runScopes;
+    private final RunContextHolder runContexts;
 
     /** 同步扩展点策略：回合开始前的拦截从同一份注册表取。 */
     private final ExtensionRegistry extensions;
@@ -150,7 +158,7 @@ public class ReActLooper implements AutoCloseable {
      * @param promptAssembler   提示词组装器
      * @param runtimeConfig     运行时配置门面
      * @param conversationCompactor 会话压缩器
-     * @param runScopes         委派作用域持有者
+     * @param runContexts         委派作用域持有者
      * @param sessionModelResolver 会话模型解析器
      * @param extensions        同步扩展点策略
      * @param actionDispatcher  动作执行体
@@ -158,11 +166,11 @@ public class ReActLooper implements AutoCloseable {
     @Inject
     public ReActLooper(SessionManager sessionManager, ModelManager modelManager, ToolExecutor toolExecutor,
                        EventPublisher events, PromptAssembler promptAssembler, RuntimeConfig runtimeConfig,
-                       ConversationCompactor conversationCompactor, RunScopes runScopes,
+                       ConversationCompactor conversationCompactor, RunContextHolder runContexts,
                        SessionModelResolver sessionModelResolver, ExtensionRegistry extensions,
                        ActionDispatcher actionDispatcher) {
         this(sessionManager, modelManager, toolExecutor, events, promptAssembler,
-                runtimeConfig, conversationCompactor, runScopes, sessionModelResolver, extensions,
+                runtimeConfig, conversationCompactor, runContexts, sessionModelResolver, extensions,
                 actionDispatcher, createExecutor());
     }
 
@@ -176,7 +184,7 @@ public class ReActLooper implements AutoCloseable {
      * @param promptAssembler   提示词组装器
      * @param runtimeConfig     运行时配置门面
      * @param conversationCompactor 会话压缩器
-     * @param runScopes         委派作用域持有者
+     * @param runContexts         委派作用域持有者
      * @param sessionModelResolver 会话模型解析器
      * @param extensions        同步扩展点策略
      * @param actionDispatcher  动作执行体
@@ -185,7 +193,7 @@ public class ReActLooper implements AutoCloseable {
     ReActLooper(SessionManager sessionManager, ModelManager modelManager, ToolExecutor toolExecutor,
                 EventPublisher events, PromptAssembler promptAssembler,
                 RuntimeConfig runtimeConfig, ConversationCompactor conversationCompactor,
-                RunScopes runScopes, SessionModelResolver sessionModelResolver, ExtensionRegistry extensions,
+                RunContextHolder runContexts, SessionModelResolver sessionModelResolver, ExtensionRegistry extensions,
                 ActionDispatcher actionDispatcher, ExecutorService executor) {
         this.sessionManager = Objects.requireNonNull(sessionManager, "sessionManager must not be null");
         this.modelManager = Objects.requireNonNull(modelManager, "modelManager must not be null");
@@ -195,7 +203,7 @@ public class ReActLooper implements AutoCloseable {
         this.runtimeConfig = Objects.requireNonNull(runtimeConfig, "runtimeConfig must not be null");
         this.conversationCompactor = Objects.requireNonNull(conversationCompactor,
                 "conversationCompactor must not be null");
-        this.runScopes = Objects.requireNonNull(runScopes, "runScopes must not be null");
+        this.runContexts = Objects.requireNonNull(runContexts, "runContexts must not be null");
         this.sessionModelResolver = Objects.requireNonNull(sessionModelResolver,
                 "sessionModelResolver must not be null");
         this.extensions = Objects.requireNonNull(extensions, "extensions must not be null");
@@ -263,7 +271,8 @@ public class ReActLooper implements AutoCloseable {
      */
     private ReActResult execute(ReActTurnImpl turn, String sessionId, String userInput, ReActListener listener) {
         SubAgentSettings subAgent = runtimeConfig.getSubAgentSettings();
-        runScopes.open(subAgent.getMaxDepth(), subAgent.getMaxSpawnsPerTurn());
+        runContexts.open(subAgent.getMaxDepth(), subAgent.getMaxSpawnsPerTurn(),
+                subAgent.getRunTokenBudget(), subAgent.getTreeTokenBudget());
         try {
             Session session;
             try {
@@ -277,7 +286,7 @@ public class ReActLooper implements AutoCloseable {
                     runtimeConfig.getReactSettings().getMaxRounds(), ToolFilter.none(), false);
         } finally {
             // react 池线程会被复用：不关的话下一个回合会继承本回合的深度与计数
-            runScopes.close();
+            runContexts.close();
             // 注销必须是回合的最后一步：排空点都在这之前，之后的投递已经没有窗口可进——
             // 它们会在队列里被标成「本回合内没能排空」
             actionDispatcher.endTurn(sessionId);
@@ -309,7 +318,7 @@ public class ReActLooper implements AutoCloseable {
                                  CancellationToken cancellationToken, int maxRounds, ToolFilter toolFilter) {
         Objects.requireNonNull(session, "session must not be null");
         Objects.requireNonNull(toolFilter, "toolFilter must not be null");
-        RunScope scope = runScopes.current();
+        RunContext scope = runContexts.current();
         if (scope == null) {
             throw new JellyfishException("nested turn requires an active run scope");
         }
@@ -402,6 +411,16 @@ public class ReActLooper implements AutoCloseable {
             List<LlmToolCall> toolCalls = normalizeToolCalls(response.getToolCalls());
             sessionManager.appendMessage(sessionId, assistantMessage(response, toolCalls), response.getUsage(),
                     response.getThinking());
+            String budgetExceeded = budgetExceededReason(session, response);
+            if (budgetExceeded != null) {
+                // 工具调用已随上面的 assistant 消息落库，必须补齐结果：悬空的 assistant(toolCalls)
+                // 会让厂商以 400 拒掉之后的每一次请求（见 ToolPairing），而失败会一直重复
+                LOG.warn("子代理触达预算，回合提前收敛: sessionId={} reason={}", sessionId, budgetExceeded);
+                appendNotRunResults(sessionId, toolCalls, 0, TERMINAL_TRUNCATED);
+                ReActResult limited = ReActResult.truncated(sessionId, budgetExceeded, round);
+                listener.onComplete(limited);
+                return limited;
+            }
             if (toolCalls.isEmpty()) {
                 // 收敛之前先把回合边界上的动作排掉（压缩 / 切换模型 / 插入点为「工具批次之后」的消息），
                 // 再看有没有人要求「接着干」——那会插一条消息，让本回合多跑一轮，而不是开一个新回合
@@ -582,13 +601,59 @@ public class ReActLooper implements AutoCloseable {
      * @param fromIndex 从这个下标起（含）的工具调用没有执行过
      */
     private void appendNotRunResults(String sessionId, List<LlmToolCall> toolCalls, int fromIndex) {
-        Map<String, Object> metadata = Collections.singletonMap(ToolMetadata.KEY_TERMINAL, TERMINAL_CANCELLED);
+        appendNotRunResults(sessionId, toolCalls, fromIndex, TERMINAL_CANCELLED);
+    }
+
+    /**
+     * 给「本轮未执行」的工具调用补发合成结果，并指定终止原因。
+     *
+     * @param sessionId 会话标识
+     * @param toolCalls 本批工具调用
+     * @param fromIndex 从哪个下标开始补
+     * @param terminal  终止原因取值
+     */
+    private void appendNotRunResults(String sessionId, List<LlmToolCall> toolCalls, int fromIndex,
+                                     String terminal) {
+        Map<String, Object> metadata = Collections.singletonMap(ToolMetadata.KEY_TERMINAL, terminal);
+        String text = TERMINAL_TRUNCATED.equals(terminal) ? TRUNCATED_NOT_RUN_MESSAGE : NOT_RUN_MESSAGE;
         for (int index = fromIndex; index < toolCalls.size(); index++) {
             LlmToolCall toolCall = toolCalls.get(index);
             sessionManager.appendMessage(sessionId,
-                    LlmMessage.tool(toolCall.getId(), toolCall.getName(), NOT_RUN_MESSAGE),
+                    LlmMessage.tool(toolCall.getId(), toolCall.getName(), text),
                     null, null, metadata);
         }
+    }
+
+    /**
+     * 判断当前 run 是否触达了预算，返回触达原因或 {@code null}。
+     * <p>
+     * <b>只约束子代理 run，不约束顶层回合</b>：顶层回合的额度是用户自己的对话，不由 governor 管；
+     * 判据是当前上下文有没有 runId（顶层回合的根上下文为 {@code null}）。
+     * <p>
+     * <b>先累加树账再比对</b>：树账是所有 run 的增量之和，并行时多个 run 会并发累加，
+     * 因此累加发生在共享的 {@code RunTree} 上（原子）。单 run 的账直接取会话累计用量。
+     *
+     * @param session  当前会话
+     * @param response 本轮模型响应
+     * @return 触达原因；未触达或不是子代理 run 时返回 {@code null}
+     */
+    private String budgetExceededReason(Session session, LlmResponse response) {
+        RunContext context = runContexts.current();
+        if (context == null || context.getRunId() == null) {
+            return null;
+        }
+        long roundTokens = response.getUsage() == null ? 0L : response.getUsage().getTotalTokens();
+        long treeTokens = context.recordTreeTokens(roundTokens);
+        long runTokens = session.getUsage().getTotalTokens();
+        if (context.getRunTokenBudget() > 0L && runTokens > context.getRunTokenBudget()) {
+            return "已达到单个子代理的 token 预算（" + context.getRunTokenBudget()
+                    + "）：如需继续请调大 subAgent.runTokenBudget，或换更聚焦的任务。";
+        }
+        if (context.getTreeTokenBudget() > 0L && treeTokens > context.getTreeTokenBudget()) {
+            return "这棵委派树的 token 预算已用尽（" + context.getTreeTokenBudget()
+                    + "）：如需继续请调大 subAgent.treeTokenBudget。";
+        }
+        return null;
     }
 
     /**
@@ -664,7 +729,7 @@ public class ReActLooper implements AutoCloseable {
         if (handlers.isEmpty()) {
             return TurnDirective.proceed();
         }
-        RunScope scope = runScopes.current();
+        RunContext scope = runContexts.current();
         int depth = scope == null ? 0 : scope.getDepth();
         String sessionId = session.getSessionId();
         String agentId = session.getAgentId();

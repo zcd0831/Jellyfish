@@ -183,7 +183,7 @@ class SubAgentToolsTest {
     @Test
     void register_should_not_expose_task_when_disabled() {
         // Given：开关关掉
-        when(runtimeConfig.getSubAgentSettings()).thenReturn(new SubAgentSettings(false, null, null, null));
+        when(runtimeConfig.getSubAgentSettings()).thenReturn(new SubAgentSettings(false, null, null, null, null, null, null, null));
 
         // When
         tools.register();
@@ -196,7 +196,7 @@ class SubAgentToolsTest {
     @Test
     void reconcile_should_expose_task_when_enabled_flips_on() {
         // Given：启动时关着
-        when(runtimeConfig.getSubAgentSettings()).thenReturn(new SubAgentSettings(false, null, null, null));
+        when(runtimeConfig.getSubAgentSettings()).thenReturn(new SubAgentSettings(false, null, null, null, null, null, null, null));
         tools.register();
 
         // When：/reload 把开关打开（配置已刷新，随后事件到达）
@@ -213,7 +213,7 @@ class SubAgentToolsTest {
         tools.register();
 
         // When
-        when(runtimeConfig.getSubAgentSettings()).thenReturn(new SubAgentSettings(false, null, null, null));
+        when(runtimeConfig.getSubAgentSettings()).thenReturn(new SubAgentSettings(false, null, null, null, null, null, null, null));
         publishReloaded();
 
         // Then
@@ -282,7 +282,7 @@ class SubAgentToolsTest {
     void catalog_should_beEmpty_when_disabled_after_registration() {
         // Given：注册时还开着，随后配置被改关——而重算事件还在队列里没到
         tools.register();
-        when(runtimeConfig.getSubAgentSettings()).thenReturn(new SubAgentSettings(false, null, null, null));
+        when(runtimeConfig.getSubAgentSettings()).thenReturn(new SubAgentSettings(false, null, null, null, null, null, null, null));
 
         // When
         PromptContribution contribution = contribution();

@@ -38,11 +38,14 @@ import zcd.jellyfish.infra.session.SessionDefaults;
 import zcd.jellyfish.infra.session.SessionManager;
 
 import java.util.Arrays;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -50,7 +53,9 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -312,6 +317,105 @@ class SubAgentLauncherTest {
         assertEquals(SCOUT, run.getAgentId());
         assertEquals(parent.getSessionId(), run.getParentSessionId());
         assertEquals(childCaptor.getValue().getSessionId(), run.getSessionId());
+    }
+
+    @Test
+    void spawn_should_not_wait_for_the_run_to_finish() throws InterruptedException {
+        // Given：子代理的回合卡住，直到测试放行
+        when(agentManager.find(SCOUT)).thenReturn(definition(true));
+        when(sessionModelResolver.resolveByAgentOrDefault(SCOUT)).thenReturn(resolvedModel());
+        runContexts.open(8, 8);
+        Session parent = parent(PermissionMode.NORMAL, null);
+        CountDownLatch running = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        when(reActLooper.runNested(any(Session.class), any(), any(), any(), anyInt(), any()))
+                .thenAnswer(invocation -> {
+                    Session child = invocation.getArgument(0);
+                    running.countDown();
+                    // 上限刻意定得比断言的宽很多：只有在 spawn 真的阻塞时才会等到它
+                    release.await(5, TimeUnit.SECONDS);
+                    return ReActResult.completed(child.getSessionId(), "答复", 1);
+                });
+
+        // When
+        long before = System.nanoTime();
+        SubAgentRunHandle handle = launcher.spawn(call(parent, SCOUT, "查一下"), null);
+        long spawnMillis = (System.nanoTime() - before) / 1_000_000L;
+
+        // Then：run 确实起来了……
+        assertTrue(running.await(10, TimeUnit.SECONDS));
+        // ……而派生没有等它跑完（若 spawn 阻塞，它会一直等到上面那 5 秒的上限）
+        assertTrue(spawnMillis < 2000L, "spawn 不应等待 run 完成，实际耗时 " + spawnMillis + "ms");
+        assertFalse(handle.isSettled());
+        assertNotNull(handle.getRunId());
+
+        // When：放行后等待
+        release.countDown();
+        assertEquals(SubAgentStatus.COMPLETED, launcher.await(handle).getStatus());
+    }
+
+    @Test
+    void spawn_should_let_two_runs_fan_out_concurrently() throws InterruptedException {
+        // Given：两个 run 必须同时进入执行体才算扇出成功
+        when(agentManager.find(SCOUT)).thenReturn(definition(true));
+        when(sessionModelResolver.resolveByAgentOrDefault(SCOUT)).thenReturn(resolvedModel());
+        runContexts.open(8, 8);
+        Session parent = parent(PermissionMode.NORMAL, null);
+        CountDownLatch bothRunning = new CountDownLatch(2);
+        when(reActLooper.runNested(any(Session.class), any(), any(), any(), anyInt(), any()))
+                .thenAnswer(invocation -> {
+                    Session child = invocation.getArgument(0);
+                    bothRunning.countDown();
+                    // 两个都进来了才放行：如果派生是串行的，第二个永远进不来，这里会超时
+                    bothRunning.await(10, TimeUnit.SECONDS);
+                    return ReActResult.completed(child.getSessionId(), "答复", 1);
+                });
+
+        // When：连发两个派生，再逐个等
+        SubAgentRunHandle first = launcher.spawn(call(parent, SCOUT, "a"), null);
+        SubAgentRunHandle second = launcher.spawn(call(parent, SCOUT, "b"), null);
+
+        // Then：并发度由内核 governor 保证（插件/调用方不造线程池）
+        assertTrue(bothRunning.await(10, TimeUnit.SECONDS));
+        assertEquals(SubAgentStatus.COMPLETED, launcher.await(first).getStatus());
+        assertEquals(SubAgentStatus.COMPLETED, launcher.await(second).getStatus());
+    }
+
+    @Test
+    void await_should_settle_the_handle_only_once() {
+        // Given
+        when(agentManager.find(SCOUT)).thenReturn(definition(true));
+        when(sessionModelResolver.resolveByAgentOrDefault(SCOUT)).thenReturn(resolvedModel());
+        runContexts.open(8, 8);
+        Session parent = parent(PermissionMode.NORMAL, null);
+        stubNestedTurn("子代理答复", 2);
+        SubAgentRunHandle handle = launcher.spawn(call(parent, SCOUT, "查一下"), null);
+
+        // When：等两次
+        SubAgentOutcome first = launcher.await(handle);
+        SubAgentOutcome second = launcher.await(handle);
+
+        // Then：收尾（归档、摘登记）只能发生一次，否则重复等待会再归档一次
+        assertSame(first, second);
+        verify(archive, times(1)).archive(any(), any());
+    }
+
+    @Test
+    void spawn_should_return_settled_handle_without_side_effects_when_rejected() {
+        // Given：开关关掉
+        when(runtimeConfig.getSubAgentSettings()).thenReturn(
+                new SubAgentSettings(false, null, null, null, null, null, null, null));
+
+        // When
+        SubAgentRunHandle handle = launcher.spawn(
+                call(parent(PermissionMode.NORMAL, null), SCOUT, "查一下"), null);
+
+        // Then：没有 run、没有子会话、没有归档；调用方仍然只走 spawn → await
+        assertTrue(handle.isSettled());
+        assertNull(handle.getRunId());
+        assertEquals(SubAgentStatus.REJECTED, launcher.await(handle).getStatus());
+        verifyNoInteractions(archive);
+        assertEquals(1, sessionManager.all().size());
     }
 
     @Test

@@ -9,7 +9,7 @@
 | --- | --- | --- |
 | P0 | agent run 原语 + 并行调度 + governor | **已落地**（S1–S5：`RunRegistry` / `RunScheduler` / `AgentRuntime` / `RunContext`+`RunTree` / 墙钟与 token 预算 / `tryAcquireSpawn` / `cancelTree` 与孤儿清理） |
 | P1 | 观测（run 事件 + 面板）与归档 | **已落地**（`RunEventBus` + `AgentRunEvent` + `SubAgentPanel` + `SubAgentArchive`；`-server` SSE 发 `run_started`/`run_finished`） |
-| P2 | 声明式编排 spec（插件） | **未开工** |
+| P2 | 声明式编排 spec（插件） | **设计待确认**（分册：[`subagent-runtime-p2.md`](subagent-runtime-p2.md)；关键发现：内核尚未把委派原语跨过 api 边界，P2 第一步是内核工作） |
 | P3 | 共享任务列表（agent 团队远景） | **未开工** |
 
 > **P0 分册**：[`subagent-runtime-p0.md`](subagent-runtime-p0.md)（原语签名、`RunRegistry` / `RunScheduler` 边界、
@@ -17,6 +17,9 @@
 > P0 的施工细则以分册为准。
 >
 > **P1 分册**：[`subagent-runtime-p1.md`](subagent-runtime-p1.md)（运行面板、归档、以及「run 事件是否要做」的落地取舍）。
+>
+> **P2 分册**：[`subagent-runtime-p2.md`](subagent-runtime-p2.md)（声明式 spec 的能力上限与 schema、
+> 面向插件的委派端口、workflow 插件形态）。**设计待确认。**
 
 ---
 

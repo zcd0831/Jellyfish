@@ -44,6 +44,10 @@ import java.util.Objects;
  *     （调用方本来就要等结果才能回灌给模型），但等待已经不占用父回合的执行线程；</li>
  *     <li><b>收尾</b>：把子代理花掉的用量归集到父会话，归档这次 run 的完整过程，然后关掉子会话。</li>
  * </ol>
+ * <b>派生与等待是两个可分开使用的入口</b>：{@link #spawn(SubAgentCall, ReActListener)} 立即返回句柄，
+ * {@link #await(SubAgentRunHandle)} 在调用方线程上等终态并收尾；{@link #run(SubAgentCall, ReActListener)}
+ * 是两者的简写（{@code task} 工具用的就是它）。拆开是为并发扇出：先连发 N 个 {@code spawn}，
+ * 再逐个 {@code await}，而两者共用同一套准入与收尾。
  * <b>准入在前是刻意的</b>：一个被拒绝的委派不该留下任何痕迹——不建会话、不发事件、不占预算以外的东西。
  * 唯一的例外是「已通过准入但随后失败」，那时会留下一次已记账的预算与一条已发出的事件；
  * 那正是「它确实尝试过」的如实反映。
@@ -123,67 +127,138 @@ public class SubAgentLauncher {
     }
 
     /**
-     * 执行一次委派：同步跑完子代理的整个回合并返回结果。
+     * 执行一次委派：等待并返回子代理的最终结论。
      * <p>
-     * <b>同步且内联</b>：调用方是工具执行线程，它本来就要等这次委派结束才能把结果回灌给模型。
+     * <b>阻塞在调用方线程上</b>：调用方是工具执行线程，它本来就要等这次委派结束才能把结果回灌给模型。
+     * 等待期间父回合并不占 run 槽位（见 {@code RunScheduler}）。
+     * <p>
+     * 这是 {@code await(spawn(...))} 的简写：两个入口共用同一套准入与收尾。
      *
      * @param call     委派请求，不可为 {@code null}
      * @param listener 子代理回合的流式回调（用于把进度转给外壳），可为 {@code null}
      * @return 委派结果，保证非 {@code null}
      */
     public SubAgentOutcome run(SubAgentCall call, ReActListener listener) {
+        return await(spawn(call, listener));
+    }
+
+    /**
+     * 派生一次委派：准入 → 建子会话 → 交给调度器。立即返回，不阻塞。
+     * <p>
+     * <b>准入全部在产生副作用之前完成</b>，被拒的委派不建会话、不发事件、不占预算之外的东西。
+     * 无论被拒还是派生途中失败，返回的句柄都直接带着终态结果（{@link SubAgentRunHandle#isSettled()}），
+     * 因此调用方只需要 {@code spawn → await} 两步，不必为「早失败」另写一条分支。
+     * <p>
+     * <b>为什么要它能不阻塞地返回</b>：并发扇出靠它——先连发 N 个 {@code spawn}，再逐个等待。
+     * 若派生自己阻塞，扇出会退化成串行，而串行正是编排最不该有的性质。
+     *
+     * @param call     委派请求，不可为 {@code null}
+     * @param listener 子代理回合的流式回调，可为 {@code null}
+     * @return 句柄，保证非 {@code null}
+     */
+    public SubAgentRunHandle spawn(SubAgentCall call, ReActListener listener) {
         Objects.requireNonNull(call, "call must not be null");
         SubAgentSettings settings = runtimeConfig.getSubAgentSettings();
         if (!settings.isEnabled()) {
-            return SubAgentOutcome.rejected("子代理委派已被禁用（jellyfish.json 的 subAgent.enabled）");
+            return SubAgentRunHandle.settled(
+                    SubAgentOutcome.rejected("子代理委派已被禁用（jellyfish.json 的 subAgent.enabled）"));
         }
         if (call.hasBlankPrompt()) {
-            return SubAgentOutcome.rejected("任务描述不能为空：子代理看不到本次对话，它只有这段描述");
+            return SubAgentRunHandle.settled(
+                    SubAgentOutcome.rejected("任务描述不能为空：子代理看不到本次对话，它只有这段描述"));
         }
         RunContext scope = runContexts.current();
         if (scope == null) {
-            return SubAgentOutcome.rejected("当前没有进行中的回合，无法委派子代理");
+            return SubAgentRunHandle.settled(
+                    SubAgentOutcome.rejected("当前没有进行中的回合，无法委派子代理"));
         }
         if (!scope.canDelegate()) {
-            return SubAgentOutcome.rejected(limitReason(scope));
+            return SubAgentRunHandle.settled(SubAgentOutcome.rejected(limitReason(scope)));
         }
         AgentDefinition definition = agentManager.find(call.getAgentId());
         if (definition == null) {
-            return SubAgentOutcome.rejected("未知的子代理类型：" + call.getAgentId() + delegatableHint());
+            return SubAgentRunHandle.settled(SubAgentOutcome.rejected(
+                    "未知的子代理类型：" + call.getAgentId() + delegatableHint()));
         }
         if (!definition.isDelegatable()) {
-            return SubAgentOutcome.rejected("agent [" + call.getAgentId()
-                    + "] 未声明 delegatable，不能作为委派目标");
+            return SubAgentRunHandle.settled(SubAgentOutcome.rejected(
+                    "agent [" + call.getAgentId() + "] 未声明 delegatable，不能作为委派目标"));
         }
         try {
             Session parent = sessionManager.require(call.getParentSessionId());
             if (call.getAgentId().equals(parent.getAgentId())) {
-                return SubAgentOutcome.rejected("不能把任务委派给当前 agent 自己：" + call.getAgentId());
+                return SubAgentRunHandle.settled(
+                        SubAgentOutcome.rejected("不能把任务委派给当前 agent 自己：" + call.getAgentId()));
             }
             // 模型先行：配置写错时连子会话都不该建，更不该发出一轮注定失败的模型调用
             sessionModelResolver.resolveByAgentOrDefault(call.getAgentId());
             // 原子地「判定并占用」派生名额：上面那次 canDelegate 只是尽早拒绝，
             // 真正占名额必须一次 CAS 完成，否则并行派生时会集体超发
             if (!scope.tryAcquireSpawn()) {
-                return SubAgentOutcome.rejected(limitReason(scope));
+                return SubAgentRunHandle.settled(SubAgentOutcome.rejected(limitReason(scope)));
             }
-            return delegate(call, listener, parent, settings);
+            return derive(call, listener, parent, settings);
         } catch (RuntimeException e) {
             LOG.warn("子代理委派失败: parent={} agent={}", call.getParentSessionId(), call.getAgentId(), e);
-            return SubAgentOutcome.failed(messageOf(e));
+            return SubAgentRunHandle.settled(SubAgentOutcome.failed(messageOf(e)));
         }
     }
 
     /**
-     * 派生并执行子代理回合，返回前保证子会话已关闭。
+     * 等终态并收尾：归集用量 → 归档 → 关子会话 → 摘登记表。
+     * <p>
+     * <b>阻塞在调用方线程上</b>，这是本方法存在的意义之一：等待既不占 {@code react} 池，
+     * 也不需要内核为插件维护一套完成回调（内核绝不在关键路径上同步回调插件）。
+     * <p>
+     * <b>幂等</b>：收尾只发生一次，结果缓存在句柄上，重复等待返回同一个结果。
+     * <b>早失败也走这里</b>：句柄可能已经建了子会话甚至登记了 run，因此收尾必须与正常路径同一个出口，
+     * 否则「派生失败」会漏掉子会话与登记表的清理。
+     *
+     * @param handle 句柄，不可为 {@code null}
+     * @return 委派结果，保证非 {@code null}
+     */
+    public SubAgentOutcome await(SubAgentRunHandle handle) {
+        Objects.requireNonNull(handle, "handle must not be null");
+        SubAgentOutcome cached = handle.getOutcome();
+        if (cached != null) {
+            return cached;
+        }
+        Session child = handle.getChild();
+        SubAgentOutcome outcome;
+        try {
+            outcome = handle.getSettled() != null
+                    ? handle.getSettled()
+                    : toOutcome(runtime.await(handle.getRunHandle()), child);
+        } catch (RuntimeException e) {
+            LOG.warn("子代理回合失败: parent={} runId={}", handle.getParentSessionId(), handle.getRunId(), e);
+            outcome = SubAgentOutcome.failed(messageOf(e));
+        } finally {
+            forwardUsage(handle.getParentSessionId(), child);
+            archiveQuietly(handle.getRunId(), child);
+            closeQuietly(child);
+            // 终态条目不留着：run 的身份与终态已经写进归档，留在内存里只会随会话运行时间线性增长。
+            // 顺序不能反——归档要读快照，移除之后就再也拿不到了
+            if (handle.getRunId() != null) {
+                runtime.remove(handle.getRunId());
+            }
+        }
+        handle.settle(outcome);
+        return outcome;
+    }
+
+    /**
+     * 建子会话并派生 run：把 {@link SubAgentCall} 变成运行时里的一次 run。
+     * <p>
+     * 只做派生，不做等待——等待与收尾统一在 {@link #await(SubAgentRunHandle)}，
+     * 两条调用路径（{@code task} 与面向插件的委派端口）因此共用同一个出口。
      *
      * @param call     委派请求
      * @param listener 流式回调，可为 {@code null}
      * @param parent   父会话运行态
      * @param settings 本次生效的子代理设置
-     * @return 委派结果，保证非 {@code null}
+     * @return 句柄，保证非 {@code null}
      */
-    private SubAgentOutcome delegate(SubAgentCall call, ReActListener listener, Session parent,
+    private SubAgentRunHandle derive(SubAgentCall call, ReActListener listener, Session parent,
                                      SubAgentSettings settings) {
         Session child = null;
         String runId = null;
@@ -203,19 +278,12 @@ public class SubAgentLauncher {
                         childSession.getUsage(), null);
             });
             runId = handle.getRunId();
-            return toOutcome(runtime.await(handle), childSession);
+            return SubAgentRunHandle.of(call.getParentSessionId(), childSession, handle);
         } catch (RuntimeException e) {
             LOG.warn("子代理回合失败: parent={} agent={}", call.getParentSessionId(), call.getAgentId(), e);
-            return SubAgentOutcome.failed(messageOf(e));
-        } finally {
-            forwardUsage(call.getParentSessionId(), child);
-            archiveQuietly(runId, child);
-            closeQuietly(child);
-            // 终态条目不留着：run 的身份与终态已经写进归档，留在内存里只会随会话运行时间线性增长。
-            // 顺序不能反——归档要读快照，移除之后就再也拿不到了
-            if (runId != null) {
-                runtime.remove(runId);
-            }
+            // 子会话可能已建、run 可能已登记：带着它们返回，交给 await 统一收尾
+            return SubAgentRunHandle.failed(call.getParentSessionId(), child, runId,
+                    SubAgentOutcome.failed(messageOf(e)));
         }
     }
 

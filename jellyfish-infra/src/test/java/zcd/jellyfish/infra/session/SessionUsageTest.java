@@ -54,6 +54,32 @@ class SessionUsageTest {
     }
 
     @Test
+    void plusTokens_should_sum_counters_and_keep_call_count() {
+        // Given
+        SessionUsage usage = new SessionUsage(10L, 20L, 30L, 1L, 2L, 3L);
+
+        // When：一条非 assistant 消息带来的用量，不该额外算一次调用
+        SessionUsage accumulated = usage.plusTokens(new LlmUsage(5, 7, 12, 4, 6));
+
+        // Then
+        assertEquals(15L, accumulated.getPromptTokens());
+        assertEquals(27L, accumulated.getCompletionTokens());
+        assertEquals(42L, accumulated.getTotalTokens());
+        assertEquals(1L, accumulated.getLlmCalls());
+        assertEquals(6L, accumulated.getCacheReadTokens());
+        assertEquals(9L, accumulated.getCacheWriteTokens());
+    }
+
+    @Test
+    void plusTokens_should_return_same_instance_when_usage_null() {
+        // Given：没有用量可加，也没有调用可计
+        SessionUsage usage = new SessionUsage(10L, 20L, 30L, 1L);
+
+        // When / Then
+        assertSame(usage, usage.plusTokens(null));
+    }
+
+    @Test
     void plus_should_merge_all_counters_including_call_count() {
         // Given：子代理的一个回合可能调了很多次模型
         SessionUsage parent = new SessionUsage(10L, 20L, 30L, 1L);

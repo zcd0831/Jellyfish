@@ -4,6 +4,7 @@ import zcd.jellyfish.api.extension.SessionExtensionEntry;
 import zcd.jellyfish.api.extension.SessionKind;
 import zcd.jellyfish.api.extension.SessionMessageSnapshot;
 import zcd.jellyfish.api.extension.SessionSnapshot;
+import zcd.jellyfish.infra.llm.LlmMessage;
 import zcd.jellyfish.infra.llm.LlmUsage;
 
 import java.util.ArrayList;
@@ -361,13 +362,24 @@ public final class Session {
      * 追加一条消息并累加 token 用量。
      * <p>
      * 包级可见：只有 {@link SessionManager} 能改会话，事件广播与将来的落盘派发都在那里统一发生。
+     * <p>
+     * <b>调用次数只认 assistant 消息</b>：{@code llmCalls} 记的是「调过几次模型」，而只有 assistant
+     * 消息是模型响应。user 输入与 tool 结果都是本地产物，它们的用量恒为 {@code null}，若也走
+     * {@link SessionUsage#plus(LlmUsage)}，那里的「未返回用量也算一次调用」会把它们各计一次，
+     * 于是调用次数涨成消息条数——这个账还会被子代理归集带进父会话
+     * （见 {@code SubAgentLauncher#forwardUsage}），使「主会话调了几次模型」同样失真。
+     * <p>
+     * 因此 assistant 走 {@link SessionUsage#plus(LlmUsage)}（用量缺失时仍计一次真实调用），
+     * 其余角色走 {@link SessionUsage#plusTokens(LlmUsage)}（只认用量、不认调用）。
      *
      * @param message 会话消息
      * @return 追加后的消息条数
      */
     synchronized int append(SessionMessage message) {
         messages.add(message);
-        usage = usage.plus(message.getUsage());
+        usage = LlmMessage.ROLE_ASSISTANT.equals(message.getRole())
+                ? usage.plus(message.getUsage())
+                : usage.plusTokens(message.getUsage());
         updatedAt = System.currentTimeMillis();
         return messages.size();
     }

@@ -112,6 +112,37 @@ class SessionTest {
     }
 
     @Test
+    void append_should_not_count_non_assistant_messages_as_llm_call() {
+        // Given：user 输入与 tool 结果都是本地产物，不是模型响应
+        Session session = new Session("session-1", null, null, null, CREATED_AT);
+
+        // When：一次真实调用周围夹着一条用户输入与两条工具结果
+        session.append(SessionMessage.of(LlmMessage.user("查一下")));
+        session.append(SessionMessage.of(LlmMessage.assistant("好的"), new LlmUsage(10, 2, 12)));
+        session.append(SessionMessage.ofTool(LlmMessage.tool("call-1", "read_file", "内容"), null));
+        session.append(SessionMessage.ofTool(LlmMessage.tool("call-2", "grep_files", "内容"), null));
+
+        // Then：调用次数只认 assistant，消息本身照常计入条数、token 照常累加
+        assertEquals(4, session.size());
+        assertEquals(12L, session.getUsage().getTotalTokens());
+        assertEquals(1L, session.getUsage().getLlmCalls());
+    }
+
+    @Test
+    void append_should_accumulate_tokens_without_counting_call_when_nonAssistant_carries_usage() {
+        // Given：非 assistant 消息原则上不带用量，万一带了也只该算 token，不该算一次调用
+        Session session = new Session("session-1", null, null, null, CREATED_AT);
+
+        // When
+        session.append(SessionMessage.of(LlmMessage.tool("call-1", "read_file", "内容"),
+                new LlmUsage(3, 4, 7)));
+
+        // Then
+        assertEquals(7L, session.getUsage().getTotalTokens());
+        assertEquals(0L, session.getUsage().getLlmCalls());
+    }
+
+    @Test
     void append_should_advance_updated_at() {
         // Given
         Session session = new Session("session-1", null, null, null, CREATED_AT);

@@ -47,8 +47,8 @@ class SessionSnapshotsTest {
         assertEquals("gpt-4o", snapshot.getModel());
         assertEquals(4, snapshot.getMessages().size());
         assertNotNull(snapshot.getUsage());
-        // 每条消息都算一次调用计数，未返回用量的消息也计入
-        assertEquals(4L, snapshot.getUsage().getLlmCalls());
+        // 调用次数只认 assistant 消息：user 输入与 tool 结果不计，未返回用量的 assistant 仍计一次
+        assertEquals(2L, snapshot.getUsage().getLlmCalls());
     }
 
     @Test
@@ -83,7 +83,8 @@ class SessionSnapshotsTest {
         assertEquals(7L, restored.getUsage().getPromptTokens());
         assertEquals(8L, restored.getUsage().getCompletionTokens());
         assertEquals(15L, restored.getUsage().getTotalTokens());
-        assertEquals(4L, restored.getUsage().getLlmCalls());
+        // 调用次数同样要往返：user / tool 消息不计，两条 assistant 各计一次
+        assertEquals(2L, restored.getUsage().getLlmCalls());
         LlmUsage messageUsage = restored.getMessages().get(1).getUsage();
         assertNotNull(messageUsage);
         assertEquals(7, messageUsage.getPromptTokens());

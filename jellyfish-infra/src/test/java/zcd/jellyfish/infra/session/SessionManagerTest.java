@@ -827,10 +827,10 @@ class SessionManagerTest {
         Session first = manager.create(CODER, null, null);
         Session second = manager.create(CODER, null, null);
 
-        // When：交替追加
-        manager.appendMessage(first.getSessionId(), LlmMessage.user("a1"), new LlmUsage(1, 1, 2));
-        manager.appendMessage(second.getSessionId(), LlmMessage.user("b1"), null);
-        manager.appendMessage(first.getSessionId(), LlmMessage.user("a2"), null);
+        // When：交替追加（用 assistant 承载用量——调用次数只认模型响应）
+        manager.appendMessage(first.getSessionId(), LlmMessage.assistant("a1"), new LlmUsage(1, 1, 2));
+        manager.appendMessage(second.getSessionId(), LlmMessage.assistant("b1"), null);
+        manager.appendMessage(first.getSessionId(), LlmMessage.assistant("a2"), null);
 
         // Then
         assertEquals(2, first.size());

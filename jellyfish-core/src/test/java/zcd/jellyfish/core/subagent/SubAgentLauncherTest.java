@@ -466,11 +466,11 @@ class SubAgentLauncherTest {
         // When
         SubAgentOutcome outcome = launcher.run(call(parent, SCOUT, "查一下"), null);
 
-        // Then：账要算在父会话头上。注意每次 appendMessage 本身就会推进调用计数（既有语义），
-        // 因此子会话两条消息 = 2 次；关键是它没有被压成「1 次」
-        assertEquals(12L, outcome.getUsage().getTotalTokens());
+        // Then：账要算在父会话头上。子会话有两次真实调用（user 消息不计），
+        // 关键是它们没有被压成「1 次」
+        assertEquals(15L, outcome.getUsage().getTotalTokens());
         assertEquals(2L, outcome.getUsage().getLlmCalls());
-        assertEquals(12L, parent.getUsage().getTotalTokens());
+        assertEquals(15L, parent.getUsage().getTotalTokens());
         assertEquals(2L, parent.getUsage().getLlmCalls());
     }
 
@@ -678,6 +678,8 @@ class SubAgentLauncherTest {
                     Session child = invocation.getArgument(0);
                     String childId = child.getSessionId();
                     sessionManager.appendMessage(childId, LlmMessage.user("任务"), null);
+                    sessionManager.appendMessage(childId, LlmMessage.assistant("先看看"),
+                            new LlmUsage(1, 2, 3));
                     sessionManager.appendMessage(childId, LlmMessage.assistant(text), new LlmUsage(5, 7, 12));
                     return ReActResult.completed(childId, text, rounds);
                 });

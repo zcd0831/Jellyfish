@@ -103,6 +103,9 @@
 
 - **`recordUsage` 有两个重载，别用错**：`LlmUsage` 那个是「一次调用」，恒定只加 1 次；子代理回合的累计用量走
   `SessionUsage` 那个，**把调用次数一并带过来**。
+- **调用次数只认 assistant 消息**：`Session.append` 里 user 输入与 tool 结果走 `SessionUsage.plusTokens`
+  （只累加 token），只有 assistant 走 `plus`。判据是「这条消息是不是模型响应」——否则 `plus(null)` 的
+  「未返回用量也算一次调用」会让调用次数涨成消息条数，并随子代理归集污染父会话的账。
 - 子代理的用量归集到父会话（那些 token 是真花掉的），**归集失败只记 WARN**。
 
 ## 跨边界载荷

@@ -96,6 +96,31 @@ public final class SessionUsage {
     }
 
     /**
+     * 只累加 token，<b>不计</b>调用次数。
+     * <p>
+     * 给「这条消息不是模型响应」的路径用：{@code llmCalls} 记的是「调过几次模型」，
+     * 而 user 输入与 tool 结果是本地产物——它们只是被追加进会话，并没有换来一次模型调用。
+     * 若把它们也走 {@link #plus(LlmUsage)}，该路径的 {@code null} 会按「未返回用量的调用」计一次，
+     * 于是调用次数涨成消息条数。
+     * <p>
+     * {@code usage} 为 {@code null} 时返回本实例：没有用量可加，也没有调用可计。
+     * 非 {@code null} 时累加 token 字段但保持调用次数不变——那份额度确实花掉了，只是不来自新增的调用。
+     *
+     * @param usage 一条消息承载的 token 用量，可为 {@code null}
+     * @return 累加后的新快照
+     */
+    public SessionUsage plusTokens(LlmUsage usage) {
+        if (usage == null) {
+            return this;
+        }
+        return new SessionUsage(promptTokens + usage.getPromptTokens(),
+                completionTokens + usage.getCompletionTokens(),
+                totalTokens + usage.getTotalTokens(), llmCalls,
+                cacheReadTokens + usage.getCacheReadTokens(),
+                cacheWriteTokens + usage.getCacheWriteTokens());
+    }
+
+    /**
      * 累加另一份累计快照（含调用次数）。
      * <p>
      * <b>为什么需要它而不是把总量包成一个 {@link LlmUsage} 再调 {@link #plus(LlmUsage)}</b>：

@@ -622,8 +622,8 @@ class ReActLooperTest {
 
         // Then
         assertEquals(5L, session.getUsage().getTotalTokens());
-        // 追加用户消息（无用量）与 assistant 消息各计一次调用
-        assertEquals(2L, session.getUsage().getLlmCalls());
+        // 只算 assistant 那一条真实调用：随之落库的用户输入不是模型调用
+        assertEquals(1L, session.getUsage().getLlmCalls());
     }
 
     @Test

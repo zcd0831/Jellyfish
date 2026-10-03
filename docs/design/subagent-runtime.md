@@ -1,6 +1,6 @@
 # 设计：子代理运行时（agent run）（P0–P3 总纲）
 
-> **状态：设计已定（决策见第 5 节）；P0 / P1 / P2 / P3 全部落地（P3 分册：[`subagent-runtime-p3.md`](subagent-runtime-p3.md)）。**
+> **状态：设计已定（决策见第 5 节）；P0 / P1 / P2 / P3 全部落地，P4 见分册 [`subagent-runtime-p4.md`](subagent-runtime-p4.md)。**
 > 本文是子代理从「父回合里的一个阻塞工具调用」升级为「一等公民 agent run」的设计与落地计划。
 > 对外口径见 [architecture.md](../architecture.md) 与 [constraints/react-compact.md](../constraints/react-compact.md)；
 > 施工按第 11 节的阶段顺序推进，每阶段独立可合并、可回滚。
@@ -11,6 +11,7 @@
 | P1 | 观测（run 事件 + 面板）与归档 | **已落地**（`RunEventBus` + `AgentRunEvent` + `SubAgentPanel` + `SubAgentArchive`；`-server` SSE 发 `run_started`/`run_finished`） |
 | P2 | 声明式编排 spec（插件） | **已落地**（分册：[`subagent-runtime-p2.md`](subagent-runtime-p2.md)：api 委派端口 + core 适配器 + 插件 `jellyfish-plugin-workflow` + 编排面板 + 端到端） |
 | P3 | 共享任务列表（agent 团队远景） | **已落地**（分册：[`subagent-runtime-p3.md`](subagent-runtime-p3.md)：工具携带调用者身份 + run 通知桥 + todo 插件的认领/完成与「谁在做」） |
+| P4 | 批间编排（团队形态：卡住 / 放回 / 批间引导） | **待设计**（分册：[`subagent-runtime-p4.md`](subagent-runtime-p4.md)；P4a/P4b 详设，P4c/P4d 待定） |
 
 > **P0 分册**：[`subagent-runtime-p0.md`](subagent-runtime-p0.md)（原语签名、`RunRegistry` / `RunScheduler` 边界、
 > `RunScope` 去 `ThreadLocal` 的迁移路径、governor 落地与测试计划）。本文只保留机制与阶段；
@@ -23,6 +24,9 @@
 >
 > **P3 分册**：[`subagent-runtime-p3.md`](subagent-runtime-p3.md)（共享任务列表与 run 间消息：
 > 归属、并发语义、派生权限与解耦纪律、落地记录）。**已落地。**
+>
+> **P4 分册**：[`subagent-runtime-p4.md`](subagent-runtime-p4.md)（批间编排：团队的形状与代价、
+> 卡住与放回、批间引导、额度回报的口径）。**待确认**（P4a/P4b 详设，P4c/P4d 待定）。
 
 ---
 

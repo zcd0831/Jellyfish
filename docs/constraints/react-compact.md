@@ -208,3 +208,10 @@
 - **用量归集到父会话且在 `finally` 里只记日志**：子会话马上被关掉，那些 token 是真花掉的；但 `finally` 里的异常
   会顶掉已经跑出来的结果，账目不准是小事。`SessionUsage.plus(SessionUsage)` 一并带上调用次数——压成一次会让
   「这一轮花了多少来回」失真。
+- **归档与工具输出不共用配额**：run 归档写到 `<toolOutput.dir>/subagent-runs/`（独立命名空间 + 独立上限），
+  否则一次长任务的归档就能把「可回查的工具结果」挤干净。归档在 `finally` 里、**先于 `runtime.remove`** 发生
+  ——run 身份与终态只存在快照里，移除后就拿不到了；写失败只记 WARN，不把一次委派升级成失败。
+- **run 事件不挂 `ShellTurnEvent`**：那是外壳回合的契约，已经跨 CLI / TUI / Server 三份文本；
+  run 事件走运行时自持的 `RunEventBus`（`core.runtime`），外壳订阅。加一个新的 agent 概念不应逼三外壳各改一遍。
+- **广播终态必须早于 `handle.complete`**：反过来会让「`await` 返回后事件还没到」成为一条难复现的竞态；
+  同理，run 起跑时要先把状态置为运行中，否则面板与 SSE 会把已起跑的 run 一直显示成「排队中」。

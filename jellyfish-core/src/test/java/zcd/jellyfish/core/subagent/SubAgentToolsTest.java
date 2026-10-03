@@ -10,11 +10,14 @@ import zcd.jellyfish.api.event.Subscription;
 import zcd.jellyfish.api.event.notification.ConfigReloadedEvent;
 import zcd.jellyfish.api.extension.ExtensionException;
 import zcd.jellyfish.api.extension.ExtensionHandler;
+import zcd.jellyfish.api.extension.PanelContribution;
+import zcd.jellyfish.api.extension.PanelContributionRequest;
 import zcd.jellyfish.api.extension.PromptContribution;
 import zcd.jellyfish.api.extension.PromptContributionRequest;
 import zcd.jellyfish.api.extension.ToolCallRequest;
 import zcd.jellyfish.api.extension.ToolCallResult;
 import zcd.jellyfish.api.extension.ToolDescriptor;
+import zcd.jellyfish.core.runtime.AgentRuntime;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.config.AgentDefinition;
 import zcd.jellyfish.infra.config.RuntimeConfig;
@@ -63,6 +66,10 @@ class SubAgentToolsTest {
     @Mock
     private EventChannel events;
 
+    /** agent 运行时门面：面板的筛选依据，本类只验证注册与注销。 */
+    @Mock
+    private AgentRuntime runtime;
+
     /** 真实同步扩展点策略。 */
     private ExtensionRegistry extensions;
 
@@ -78,7 +85,8 @@ class SubAgentToolsTest {
     @BeforeEach
     void setUp() {
         extensions = new ExtensionRegistry(new TypeRegistry());
-        tools = new SubAgentTools(extensions, events, agentManager, runtimeConfig, new TaskTool(launcher));
+        tools = new SubAgentTools(extensions, events, agentManager, runtimeConfig, new TaskTool(launcher),
+                new SubAgentPanel(runtime));
         lenient().when(runtimeConfig.getSubAgentSettings()).thenReturn(new SubAgentSettings());
         // 真派发要等线程池，而这里要验证的是「收到重载后重算」这件事本身，
         // 因此把监听拿在手里直接触发——与 MetricsSubscriberTest 不同，这里没有并发语义要守
@@ -124,9 +132,36 @@ class SubAgentToolsTest {
         // Then
         assertTrue(extensions.descriptorBindings(ToolCallRequest.class, ToolDescriptor.class).isEmpty());
         assertTrue(extensions.bindings(PromptContributionRequest.class, null).isEmpty());
+        assertTrue(extensions.bindings(PanelContributionRequest.class, null).isEmpty());
         // 幂等：再关一次不抛错
         tools.close();
     }
+
+    @Test
+    void register_should_expose_run_panel_as_core_owner() {
+        // When
+        tools.register();
+
+        // Then：面板与 task 工具同一 owner；没有面板就拿不到「现在有几个子代理在跑」这个事实
+        List<HandlerBinding<PanelContributionRequest, PanelContribution>> bindings =
+                extensions.bindings(PanelContributionRequest.class, null);
+        assertEquals(1, bindings.size());
+        assertEquals(SubAgentTools.OWNER, bindings.get(0).getOwner());
+    }
+
+    @Test
+    void disabled_should_leave_no_panel_registered() {
+        // 面板与工具同生共死：开关关着时注册一块永远为空的面板只会白占区域
+        when(runtimeConfig.getSubAgentSettings()).thenReturn(new SubAgentSettings(false, null, null, null, null, null,
+                null, null));
+
+        // When
+        tools.register();
+
+        // Then
+        assertTrue(extensions.bindings(PanelContributionRequest.class, null).isEmpty());
+    }
+
 
     @Test
     void register_should_let_plugin_override_with_explicit_option() {

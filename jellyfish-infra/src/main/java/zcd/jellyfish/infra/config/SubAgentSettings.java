@@ -56,6 +56,23 @@ public class SubAgentSettings {
     /** 一棵 run 树的累计 token 上限。 */
     public static final long DEFAULT_TREE_TOKEN_BUDGET = 1_500_000L;
 
+    /**
+     * 归档目录下最多保留的 run 归档文件数。
+     * <p>
+     * <b>为什么与工具输出分开算</b>：归档是按 run（而不是按工具调用）产生的，一个 run 会含
+     * 整份子会话 transcript，个体远比一份工具结果大；共用一个预算的话，一次长任务的归档就能把
+     * 「可回查的工具结果」挤干净，而两者本该互不掏空对方的窗口。
+     */
+    public static final int DEFAULT_ARCHIVE_KEEP_FILES = 200;
+
+    /**
+     * 归档目录最多占用的字节数（100 MiB）。
+     * <p>
+     * 刻意比工具输出（50 MiB）宽：归档含完整 transcript，而它存在的意义就是「事后能回看」，
+     * 窗口太短会让这个意义落空。它仍然是有上限的——归档是观测窗口，不是合规归档。
+     */
+    public static final long DEFAULT_ARCHIVE_MAX_BYTES = 100L * 1024L * 1024L;
+
     /** 是否启用子代理委派。 */
     private final boolean enabled;
 
@@ -80,11 +97,39 @@ public class SubAgentSettings {
     /** 一棵 run 树的累计 token 上限；{@code 0} 表示不限制。 */
     private final long treeTokenBudget;
 
+    /** 归档目录最多保留的文件数；{@code 0} 表示不清理。 */
+    private final int archiveKeepFiles;
+
+    /** 归档目录最多占用的字节数；{@code 0} 表示不清理。 */
+    private final long archiveMaxBytes;
+
     /**
      * 构造缺省子代理设置。
      */
     public SubAgentSettings() {
-        this(null, null, null, null, null, null, null, null);
+        this(null, null, null, null, null, null, null, null, null, null);
+    }
+
+    /**
+     * 构造子代理设置（归档配额取缺省）。
+     * <p>
+     * 保留这个重载是为了让「只关心并发 / 预算那几个旋钮」的调用点不必多写两个 {@code null}——
+     * 反序列化走的是下面那个全参构造器。
+     *
+     * @param enabled           是否启用，{@code null} 按 {@link #DEFAULT_ENABLED} 处理
+     * @param maxDepth          最大委派层数，{@code null} 或负数按缺省值处理，{@code 0} 合法（禁止委派）
+     * @param maxSpawnsPerTurn  单回合子代理总数上限，非正数或 {@code null} 按缺省值处理
+     * @param maxRounds         子代理回合最大轮数，非正数或 {@code null} 按缺省值处理
+     * @param maxConcurrentRuns 全局同时运行的子代理 run 数上限，非正数或 {@code null} 按缺省值处理
+     * @param runTimeoutMillis  单 run 墙钟上限（毫秒），非正数或 {@code null} 按缺省值处理
+     * @param runTokenBudget    单 run 累计 token 上限，{@code null} 按缺省值处理，{@code 0} 表示不限制
+     * @param treeTokenBudget   一棵 run 树累计 token 上限，{@code null} 按缺省值处理，{@code 0} 表示不限制
+     */
+    public SubAgentSettings(Boolean enabled, Integer maxDepth, Integer maxSpawnsPerTurn, Integer maxRounds,
+                            Integer maxConcurrentRuns, Long runTimeoutMillis, Long runTokenBudget,
+                            Long treeTokenBudget) {
+        this(enabled, maxDepth, maxSpawnsPerTurn, maxRounds, maxConcurrentRuns, runTimeoutMillis, runTokenBudget,
+                treeTokenBudget, null, null);
     }
 
     /**
@@ -98,6 +143,10 @@ public class SubAgentSettings {
      * @param runTimeoutMillis  单 run 墙钟上限（毫秒），非正数或 {@code null} 按缺省值处理
      * @param runTokenBudget    单 run 累计 token 上限，{@code null} 按缺省值处理，{@code 0} 表示不限制
      * @param treeTokenBudget   一棵 run 树累计 token 上限，{@code null} 按缺省值处理，{@code 0} 表示不限制
+     * @param archiveKeepFiles  归档目录最多保留的文件数，负数或 {@code null} 按缺省值处理；
+     *                          {@code 0} 合法（表示不清理）
+     * @param archiveMaxBytes   归档目录最多占用的字节数，负数或 {@code null} 按缺省值处理；
+     *                          {@code 0} 合法（表示不清理）
      */
     @JsonCreator
     public SubAgentSettings(@JsonProperty("enabled") Boolean enabled,
@@ -107,7 +156,9 @@ public class SubAgentSettings {
                             @JsonProperty("maxConcurrentRuns") Integer maxConcurrentRuns,
                             @JsonProperty("runTimeoutMillis") Long runTimeoutMillis,
                             @JsonProperty("runTokenBudget") Long runTokenBudget,
-                            @JsonProperty("treeTokenBudget") Long treeTokenBudget) {
+                            @JsonProperty("treeTokenBudget") Long treeTokenBudget,
+                            @JsonProperty("archiveKeepFiles") Integer archiveKeepFiles,
+                            @JsonProperty("archiveMaxBytes") Long archiveMaxBytes) {
         this.enabled = enabled == null ? DEFAULT_ENABLED : enabled;
         this.maxDepth = maxDepth != null && maxDepth >= 0 ? maxDepth : DEFAULT_MAX_DEPTH;
         this.maxSpawnsPerTurn = maxSpawnsPerTurn != null && maxSpawnsPerTurn > 0
@@ -121,6 +172,10 @@ public class SubAgentSettings {
                 : Math.max(0L, runTokenBudget);
         this.treeTokenBudget = treeTokenBudget == null ? DEFAULT_TREE_TOKEN_BUDGET
                 : Math.max(0L, treeTokenBudget);
+        this.archiveKeepFiles = archiveKeepFiles != null && archiveKeepFiles >= 0
+                ? archiveKeepFiles : DEFAULT_ARCHIVE_KEEP_FILES;
+        this.archiveMaxBytes = archiveMaxBytes != null && archiveMaxBytes >= 0
+                ? archiveMaxBytes : DEFAULT_ARCHIVE_MAX_BYTES;
     }
 
     /**
@@ -196,6 +251,24 @@ public class SubAgentSettings {
     }
 
     /**
+     * 获取归档目录最多保留的文件数。
+     *
+     * @return 文件数上限，保证非负；{@code 0} 表示不清理
+     */
+    public int getArchiveKeepFiles() {
+        return archiveKeepFiles;
+    }
+
+    /**
+     * 获取归档目录最多占用的字节数。
+     *
+     * @return 字节上限，保证非负；{@code 0} 表示不清理
+     */
+    public long getArchiveMaxBytes() {
+        return archiveMaxBytes;
+    }
+
+    /**
      * 判断是否与缺省值完全一致。
      * <p>
      * 供 {@link JellyfishSettings#isEmpty()} 判断「整份运行期设置是否什么都没配」，
@@ -211,7 +284,9 @@ public class SubAgentSettings {
                 && maxConcurrentRuns == DEFAULT_MAX_CONCURRENT_RUNS
                 && runTimeoutMillis == DEFAULT_RUN_TIMEOUT_MILLIS
                 && runTokenBudget == DEFAULT_RUN_TOKEN_BUDGET
-                && treeTokenBudget == DEFAULT_TREE_TOKEN_BUDGET;
+                && treeTokenBudget == DEFAULT_TREE_TOKEN_BUDGET
+                && archiveKeepFiles == DEFAULT_ARCHIVE_KEEP_FILES
+                && archiveMaxBytes == DEFAULT_ARCHIVE_MAX_BYTES;
     }
 
     @Override

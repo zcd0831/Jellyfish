@@ -219,7 +219,9 @@
     "maxConcurrentRuns": 3,
     "runTimeoutMillis": 300000,
     "runTokenBudget": 500000,
-    "treeTokenBudget": 1500000
+    "treeTokenBudget": 1500000,
+    "archiveKeepFiles": 200,
+    "archiveMaxBytes": 104857600
   }
 }
 ```
@@ -305,6 +307,12 @@
 | `runTimeoutMillis` | `300000` | 单个 run 的墙钟上限（毫秒）。到点取消该 run 并把它记为「截断」 |
 | `runTokenBudget` | `500000` | 单个 run 的累计 token 上限；写 `0` 表示不限制 |
 | `treeTokenBudget` | `1500000` | 一棵 run 树的累计 token 上限；写 `0` 表示不限制 |
+| `archiveKeepFiles` | `200` | run 归档目录（`<toolOutput.dir>/subagent-runs`）最多保留的文件数；写 `0` 表示不清理 |
+| `archiveMaxBytes` | `104857600` | run 归档目录最多占用的字节数（100 MiB）；写 `0` 表示不清理 |
+
+**归档配额与工具输出分开算**：归档按 run 产生、含整份子会话 transcript，个体远大于一份工具结果。
+共用一份预算时，一次长任务的归档就能把「可回查的工具结果」挤干净。两者分居不同目录、各有各的上限，
+清理互不掏空对方的窗口。归档只是**可观测窗口**（最旧的会被清理），不是合规归档。
 
 `maxDepth` 挡的是「一条链多深」，`maxSpawnsPerTurn` 挡的是「一层扇出多少」，
 `maxConcurrentRuns` 挡的是「全局同时在跑多少」，三者正交；三个 token / 时间上限挡的是「跑飞了也停得下来」。

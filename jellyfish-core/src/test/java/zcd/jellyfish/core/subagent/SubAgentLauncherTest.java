@@ -14,6 +14,7 @@ import zcd.jellyfish.core.ReActLooper;
 import zcd.jellyfish.core.ReActResult;
 import zcd.jellyfish.core.runtime.RunContext;
 import zcd.jellyfish.core.runtime.RunContextHolder;
+import zcd.jellyfish.core.runtime.AgentRunSnapshot;
 import zcd.jellyfish.core.runtime.AgentRuntime;
 import zcd.jellyfish.core.runtime.RunEventBus;
 import zcd.jellyfish.core.runtime.RunRegistry;
@@ -40,6 +41,7 @@ import java.util.Arrays;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -90,6 +92,10 @@ class SubAgentLauncherTest {
     @Mock
     private PermissionManager permissionManager;
 
+    /** run 归档器：本类只验证「归档发生在移除之前」。 */
+    @Mock
+    private SubAgentArchive archive;
+
     /** 真实会话域服务。 */
     private SessionManager sessionManager;
 
@@ -113,7 +119,7 @@ class SubAgentLauncherTest {
         RunScheduler scheduler = new RunScheduler(runContexts, registry, new RunEventBus(), runtimeConfig);
         runtime = new AgentRuntime(registry, runContexts, scheduler);
         launcher = new SubAgentLauncher(sessionManager, agentManager, sessionModelResolver, runtimeConfig,
-                reActLooper, runContexts, permissionManager, runtime);
+                reActLooper, runContexts, permissionManager, runtime, archive);
         // 默认设置对所有用例都一样，个别用例自己覆盖
         lenient().when(runtimeConfig.getSubAgentSettings()).thenReturn(new SubAgentSettings());
         // 默认不过滤工具（无策略即全放行），个别用例自己覆盖
@@ -282,6 +288,30 @@ class SubAgentLauncherTest {
         assertEquals(parent.getSessionId(), child.getParentSessionId());
         assertThrows(JellyfishException.class, () -> sessionManager.require(child.getSessionId()));
         assertEquals(1, sessionManager.all().size());
+    }
+
+    @Test
+    void run_should_archive_child_transcript_before_removing_the_run() {
+        // Given
+        when(agentManager.find(SCOUT)).thenReturn(definition(true));
+        when(sessionModelResolver.resolveByAgentOrDefault(SCOUT)).thenReturn(resolvedModel());
+        runContexts.open(8, 8);
+        Session parent = parent(PermissionMode.NORMAL, null);
+        stubNestedTurn("子代理答复", 2);
+        ArgumentCaptor<Session> childCaptor = ArgumentCaptor.forClass(Session.class);
+        ArgumentCaptor<AgentRunSnapshot> runCaptor = ArgumentCaptor.forClass(AgentRunSnapshot.class);
+
+        // When
+        launcher.run(call(parent, SCOUT, "查一下"), null);
+
+        // Then：归档拿得到快照——说明它发生在 runtime.remove 之前，
+        // 否则 run 的身份与终态就永久丢了（子会话是瞬时的，磁盘上没有第二份）
+        verify(archive).archive(runCaptor.capture(), childCaptor.capture());
+        AgentRunSnapshot run = runCaptor.getValue();
+        assertNotNull(run, "归档必须在登记表移除之前发生");
+        assertEquals(SCOUT, run.getAgentId());
+        assertEquals(parent.getSessionId(), run.getParentSessionId());
+        assertEquals(childCaptor.getValue().getSessionId(), run.getSessionId());
     }
 
     @Test

@@ -99,9 +99,9 @@ jellyfish-infra/src/main/java/zcd/jellyfish/infra/
 
 jellyfish-core/src/main/java/zcd/jellyfish/core/
 ├── AgentHarness.java           # 组装门面（chat 是唯一智能入口）
-├── ReActLooper.java            # 思考 → 行动 → 观察（顶层异步 + runNested 内联）
+├── ReActLooper.java            # 思考 → 行动 → 观察（顶层异步 + runNested 交给 RunScheduler 调度）
 ├── ReActTurn / ReActListener / ReActResult
-├── RunScope / RunScopes        # 一次顶层回合的委派作用域：层数与派生预算（ThreadLocal）
+├── RunContext / RunContextHolder  # 一次 run 的作用域：树账本、深度、路径与并发许可（不再靠 ThreadLocal）
 ├── prompt/                     # PromptAssembler / ContextWindow / ToolCatalog / ToolFilter / TokenEstimator / ToolResultAger / CacheBreakWatcher / ToolPairing
 ├── compact/                    # ConversationCompactor / CompactionPlan / CompactionHealthIndicator
 ├── tool/                       # ToolExecutor（权限→路由→截断的唯一执行点）/ CancellationTokenSource
@@ -109,8 +109,9 @@ jellyfish-core/src/main/java/zcd/jellyfish/core/
 │                               #   + ShellStreams / ShellTurnEvent / ShellContributionListener
 ├── input/                      # InputDirectives / InputDirectiveRun / InputDirectiveCall / InputReferenceCompletion
 ├── subagent/                   # 子代理：SubAgentLauncher / TaskTool / SubAgentTools（owner=core）
+│                               #   + SubAgentPanel（运行面板）/ SubAgentArchive（run 归档）
 ├── runtime/                    # agent run 运行时：AgentRuntime / RunRegistry / RunScheduler / RunContext
-│                               #   + SubAgentCall / SubAgentOutcome / SubAgentStatus
+│                               #   + RunTree / RunPermit / RunEventBus（可靠 run 事件）/ AgentRunEvent
 └── command/                    # SystemCommands（owner=core）
 
 jellyfish-cli/src/main/java/zcd/jellyfish/cli/
@@ -166,8 +167,10 @@ jellyfish-tui/src/main/java/zcd/jellyfish/tui/
 - **压缩是插件能力、内核只提供机制**；没有策略插件即整体不可用，不回退内置。
 - **子代理**：`SubAgentLauncher` + `TaskTool`（owner=core）→ `AgentRuntime.spawn`（`core/runtime`），
   嵌套回合**调度到独立的 `agent-run` 池上执行，绝不进 `react` 池**；并发由 `subAgent.maxConcurrentRuns`
-  许可门控，等待中的 run 会让出许可，另有墙钟 / token / 深度 / 扇出预算。设计见
-  [docs/design/subagent-runtime.md](docs/design/subagent-runtime.md)。
+  许可门控，等待中的 run 会让出许可，另有墙钟 / token / 深度 / 扇出预算。run 起止走运行时的
+  `RunEventBus`（不是外壳回合 lane），在跑的子代理由 `SubAgentPanel` 展示，终结后由 `SubAgentArchive`
+  写进独立命名空间。设计见 [docs/design/subagent-runtime.md](docs/design/subagent-runtime.md)、
+  [docs/design/subagent-runtime-p1.md](docs/design/subagent-runtime-p1.md)。
 - **跨边界载荷必须是 `api` 侧快照值类型**，且快照类型恰好只有一个可见构造器；**`-parameters` 不许去掉**。
 - **`-tui` / `-server` 的启动期都不建会话**；`--agent` / `--model` / `--mode` / `-p` / `--show-thinking` 只归 CLI，
   其余模式带上它们一律判用法错误退 2（**拒绝而不是静默忽略**）。

@@ -39,8 +39,10 @@ import java.util.Objects;
  *     <li><b>准入</b>：开关是否启用、有没有回合作用域、层数与预算还剩多少、类型是否存在且可委派、
  *     是不是在委派给自己、模型能不能解析、任务是不是空的——<b>这些全部在产生任何副作用之前完成</b>；</li>
  *     <li><b>派生</b>：开一个瞬时会话（不落盘、不进会话列表，但生命周期事件照发）；</li>
- *     <li><b>执行</b>：{@link ReActLooper#runNested} 在<b>调用线程上内联</b>跑完一整个 ReAct 回合；</li>
- *     <li><b>收尾</b>：把子代理花掉的用量归集到父会话，然后关掉子会话。</li>
+ *     <li><b>执行</b>：把 {@link ReActLooper#runNested} 交给 {@link AgentRuntime#spawn} 在
+ *     {@code agent-run} 线程上跑，然后 {@link AgentRuntime#await} 等它——委派本身仍是同步的
+ *     （调用方本来就要等结果才能回灌给模型），但等待已经不占用父回合的执行线程；</li>
+ *     <li><b>收尾</b>：把子代理花掉的用量归集到父会话，归档这次 run 的完整过程，然后关掉子会话。</li>
  * </ol>
  * <b>准入在前是刻意的</b>：一个被拒绝的委派不该留下任何痕迹——不建会话、不发事件、不占预算以外的东西。
  * 唯一的例外是「已通过准入但随后失败」，那时会留下一次已记账的预算与一条已发出的事件；
@@ -86,6 +88,9 @@ public class SubAgentLauncher {
     /** agent run 门面：登记与终结本次委派的 run（身份与生命周期，不含执行调度）。 */
     private final AgentRuntime runtime;
 
+    /** run 归档器：把子会话的完整过程留在磁盘上。 */
+    private final SubAgentArchive archive;
+
     /**
      * 构造子代理委派器。
      *
@@ -97,12 +102,13 @@ public class SubAgentLauncher {
      * @param runContexts           委派作用域持有者，不可为 {@code null}
      * @param permissionManager   权限管理器，不可为 {@code null}
      * @param runtime             agent run 门面，不可为 {@code null}
+     * @param archive             run 归档器，不可为 {@code null}
      */
     @Inject
     public SubAgentLauncher(SessionManager sessionManager, AgentManager agentManager,
                             SessionModelResolver sessionModelResolver, RuntimeConfig runtimeConfig,
                             ReActLooper reActLooper, RunContextHolder runContexts, PermissionManager permissionManager,
-                            AgentRuntime runtime) {
+                            AgentRuntime runtime, SubAgentArchive archive) {
         this.sessionManager = Objects.requireNonNull(sessionManager, "sessionManager must not be null");
         this.agentManager = Objects.requireNonNull(agentManager, "agentManager must not be null");
         this.sessionModelResolver = Objects.requireNonNull(sessionModelResolver,
@@ -113,6 +119,7 @@ public class SubAgentLauncher {
         this.permissionManager = Objects.requireNonNull(permissionManager,
                 "permissionManager must not be null");
         this.runtime = Objects.requireNonNull(runtime, "runtime must not be null");
+        this.archive = Objects.requireNonNull(archive, "archive must not be null");
     }
 
     /**
@@ -202,12 +209,34 @@ public class SubAgentLauncher {
             return SubAgentOutcome.failed(messageOf(e));
         } finally {
             forwardUsage(call.getParentSessionId(), child);
+            archiveQuietly(runId, child);
             closeQuietly(child);
-            // 终态条目不留着：当前没有消费方，留着会随会话运行时间线性增长。
-            // 观测面板与归档（P1）落地时再决定保留策略。
+            // 终态条目不留着：run 的身份与终态已经写进归档，留在内存里只会随会话运行时间线性增长。
+            // 顺序不能反——归档要读快照，移除之后就再也拿不到了
             if (runId != null) {
                 runtime.remove(runId);
             }
+        }
+    }
+
+    /**
+     * 归档一次 run，失败只记 WARN。
+     * <p>
+     * <b>为什么在收尾里做而不是在主流程里</b>：归档是每一个终局（成功 / 失败 / 取消 / 超时）
+     * 都该留下的痕迹，而 {@code finally} 是唯一覆盖全部这四个出口的位置。
+     *
+     * @param runId run 标识，可为 {@code null}（未派生成功）
+     * @param child 子会话，可为 {@code null}
+     */
+    private void archiveQuietly(String runId, Session child) {
+        if (runId == null) {
+            return;
+        }
+        try {
+            archive.archive(runtime.snapshot(runId).orElse(null), child);
+        } catch (RuntimeException e) {
+            // 归档失败不该把一次委派升级成失败，但也不该静默：这是“过程没有留下痕迹”的唯一线索
+            LOG.warn("run 归档异常: runId={} reason={}", runId, e.toString());
         }
     }
 

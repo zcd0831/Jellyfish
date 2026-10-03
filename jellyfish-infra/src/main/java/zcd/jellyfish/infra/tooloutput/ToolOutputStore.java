@@ -100,6 +100,45 @@ public class ToolOutputStore {
     }
 
     /**
+     * 把一份内容落到指定命名空间（根目录下的一个子目录）。
+     * <p>
+     * <b>为什么需要命名空间而不是复用会话目录</b>：有些产物根本不是「某会话的一次工具调用」——
+     * 例如子代理的 run 归档，它的键是 {@code runId}，而一个 run 可能没有工具调用。
+     * 命名空间让它们共用同一套落盘规则（原子改名、清洗、清理）却<b>互不干扰</b>：
+     * 各自的目录、各自的配额，一侧的清理不会把另一侧的窗口掏空。
+     * <p>
+     * <b>配额为什么是调用参数而不是配置</b>：不同产物的合理上限差很多（一份工具结果几十 KB，
+     * 一份 run 归档含整份 transcript），把「谁的上限是多少」放在调用点旁边比挤进一个
+     * 共享的配置段更好读——配置只是把调用点传的值搬过来（见 {@code SubAgentSettings}）。
+     *
+     * @param namespace  命名空间（根目录下的子目录名），不可为空白
+     * @param key        文件键（不含扩展名）
+     * @param content    完整内容，不可为 {@code null}
+     * @param structured 是否为结构化结果（决定扩展名为 {@code .json} 还是 {@code .txt}）
+     * @param keepFiles  该命名空间最多保留的文件数，{@code 0} 表示不清理
+     * @param maxBytes   该命名空间最多占用的字节数，{@code 0} 表示不清理
+     * @return 落盘文件的绝对路径；失败时返回 {@code null}
+     */
+    public String storeIn(String namespace, String key, String content, boolean structured,
+                          int keepFiles, long maxBytes) {
+        if (content == null) {
+            return null;
+        }
+        ToolOutputSettings settings = runtimeConfig.getReactSettings().getToolOutput();
+        try {
+            Path directory = namespaceDirectory(settings, namespace);
+            Files.createDirectories(directory);
+            Path target = directory.resolve(sanitize(key) + (structured ? JSON_SUFFIX : TEXT_SUFFIX));
+            writeAtomically(directory, target, content);
+            cleanup(directory, target, keepFiles, maxBytes);
+            return target.toAbsolutePath().toString();
+        } catch (IOException | RuntimeException e) {
+            LOG.warn("落盘失败: namespace={} key={} reason={}", namespace, key, e.toString());
+            return null;
+        }
+    }
+
+    /**
      * 开一个增量写入器：内容边产生边落盘，适用于「捕获期就溢出」的无界输出。
      * <p>
      * <b>与 {@link #store} 的分工</b>：{@code store} 用于事后截断（内容已经完整地在内存里），
@@ -312,6 +351,21 @@ public class ToolOutputStore {
     }
 
     /**
+     * 计算某命名空间的目录，不存在时创建。
+     *
+     * @param settings  工具结果设置（只为拿根目录）
+     * @param namespace 命名空间，可为 {@code null}（归到 {@code shared}）
+     * @return 目录路径
+     * @throws IOException 创建目录失败时抛出
+     */
+    private static Path namespaceDirectory(ToolOutputSettings settings, String namespace) throws IOException {
+        Path root = Paths.get(HomePaths.expand(settings.getDir()));
+        Path directory = root.resolve(sanitize(namespace == null ? "shared" : namespace));
+        Files.createDirectories(directory);
+        return directory;
+    }
+
+    /**
      * 原子写入文件：先写同目录临时文件，再改名到目标。
      *
      * @param directory 目标目录（临时文件与目标同目录，保证改名不跨文件系统）
@@ -360,12 +414,24 @@ public class ToolOutputStore {
     /**
      * 按文件数与总字节两个上限从最旧开始清理。
      *
-     * @param directory     会话目录
-     * @param justWritten   刚写入的文件，永不删除
-     * @param settings      工具结果设置
+     * @param directory   会话目录
+     * @param justWritten 刚写入的文件，永不删除
+     * @param settings    工具结果设置
      */
     private static void cleanup(Path directory, Path justWritten, ToolOutputSettings settings) {
-        if (settings.getKeepFiles() <= 0 && settings.getMaxBytes() <= 0) {
+        cleanup(directory, justWritten, settings.getKeepFiles(), settings.getMaxBytes());
+    }
+
+    /**
+     * 按文件数与总字节两个上限从最旧开始清理。
+     *
+     * @param directory   目标目录
+     * @param justWritten 刚写入的文件，永不删除
+     * @param keepFiles   最多保留的文件数，{@code 0} 表示不按文件数清理
+     * @param maxBytes    最多占用的字节数，{@code 0} 表示不按字节清理
+     */
+    private static void cleanup(Path directory, Path justWritten, int keepFiles, long maxBytes) {
+        if (keepFiles <= 0 && maxBytes <= 0) {
             return;
         }
         List<Path> files = listFiles(directory);
@@ -382,8 +448,8 @@ public class ToolOutputStore {
             if (remaining <= 1) {
                 break;
             }
-            boolean tooMany = settings.getKeepFiles() > 0 && remaining > settings.getKeepFiles();
-            boolean tooLarge = settings.getMaxBytes() > 0 && totalBytes > settings.getMaxBytes();
+            boolean tooMany = keepFiles > 0 && remaining > keepFiles;
+            boolean tooLarge = maxBytes > 0 && totalBytes > maxBytes;
             if (!tooMany && !tooLarge) {
                 break;
             }

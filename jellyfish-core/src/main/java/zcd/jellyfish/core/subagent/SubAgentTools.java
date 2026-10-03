@@ -4,6 +4,8 @@ import org.apache.commons.lang3.StringUtils;
 import zcd.jellyfish.api.event.RegisterOptions;
 import zcd.jellyfish.api.event.Subscription;
 import zcd.jellyfish.api.event.notification.ConfigReloadedEvent;
+import zcd.jellyfish.api.extension.PanelContribution;
+import zcd.jellyfish.api.extension.PanelContributionRequest;
 import zcd.jellyfish.api.extension.PromptContribution;
 import zcd.jellyfish.api.extension.PromptContributionRequest;
 import zcd.jellyfish.api.extension.ToolCallRequest;
@@ -46,6 +48,9 @@ import java.util.Objects;
  * 工具仍按旧状态在清单里」——委派本身仍会被 {@code SubAgentLauncher} 拒掉，因此这是外观
  * 陈旧而不是放行，不值得为它去把事件通道改成不可丢。
  *
+ * <b>面板也挂在这里</b>：{@link SubAgentPanel} 是「子代理现在在跑什么」的观测面，与工具同一开关、
+ * 同一个 owner。它不额外占订阅槽：注销时跟着 {@code task} 一起被摘掉。
+ *
  * @author zcd
  */
 @Singleton
@@ -69,6 +74,9 @@ public class SubAgentTools {
     /** {@code task} 工具本体。 */
     private final TaskTool taskTool;
 
+    /** 运行面板：把本会话在跑的子代理贴到界面上。 */
+    private final SubAgentPanel panel;
+
     /** 已注册的句柄，重算与 {@link #close()} 时回收。 */
     private final List<Subscription> subscriptions = new ArrayList<Subscription>();
 
@@ -83,15 +91,17 @@ public class SubAgentTools {
      * @param agentManager  agent 门面，不可为 {@code null}
      * @param runtimeConfig 运行时配置门面，不可为 {@code null}
      * @param taskTool      {@code task} 工具本体，不可为 {@code null}
+     * @param panel         运行面板，不可为 {@code null}
      */
     @Inject
     public SubAgentTools(ExtensionRegistry extensions, EventChannel events, AgentManager agentManager,
-                         RuntimeConfig runtimeConfig, TaskTool taskTool) {
+                         RuntimeConfig runtimeConfig, TaskTool taskTool, SubAgentPanel panel) {
         this.extensions = Objects.requireNonNull(extensions, "extensions must not be null");
         this.events = Objects.requireNonNull(events, "events must not be null");
         this.agentManager = Objects.requireNonNull(agentManager, "agentManager must not be null");
         this.runtimeConfig = Objects.requireNonNull(runtimeConfig, "runtimeConfig must not be null");
         this.taskTool = Objects.requireNonNull(taskTool, "taskTool must not be null");
+        this.panel = Objects.requireNonNull(panel, "panel must not be null");
     }
 
     /**
@@ -140,6 +150,9 @@ public class SubAgentTools {
                 taskTool, RegisterOptions.DEFAULT));
         subscriptions.add(extensions.contribute(OWNER, PromptContributionRequest.class, null,
                 this::catalog, RegisterOptions.DEFAULT));
+        // 面板与工具同生共死：没有 task 工具就没有子代理，注册一块永远为空的面板只会白占区域
+        subscriptions.add(extensions.contribute(OWNER, PanelContributionRequest.class, null,
+                panel, RegisterOptions.DEFAULT));
     }
 
     /**

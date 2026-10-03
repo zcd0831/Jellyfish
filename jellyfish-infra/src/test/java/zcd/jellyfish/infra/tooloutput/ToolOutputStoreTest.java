@@ -126,6 +126,39 @@ class ToolOutputStoreTest {
     }
 
     @Test
+    @DisplayName("命名空间落盘应写到根目录下的独立子目录")
+    void storeIn_should_writeIntoItsOwnNamespaceDirectory() {
+        // Given
+        settings(0, 0);
+
+        // When
+        String path = store.storeIn("subagent-runs", "run-1", "{}", true, 0, 0);
+
+        // Then：键是 runId，目录是命名空间——它与会话目录不是同一个地方
+        assertNotNull(path);
+        assertTrue(path.endsWith("run-1.json"), path);
+        assertEquals(tempDir.resolve("subagent-runs"), Paths.get(path).getParent());
+    }
+
+    @Test
+    @DisplayName("命名空间的配额独立：只清自己目录，不碰会话目录")
+    void storeIn_should_applyItsOwnQuotaWithoutTouchingSessionFiles() throws IOException {
+        // Given：会话目录配额宽松，归档目录只留一个
+        settings(200, 0);
+        String oldest = store.storeIn("subagent-runs", "run-1", "a", true, 1, 0);
+        setLastModified(oldest, 1000L);
+        String toolOutput = store.store("s", "call", "read_file", "1", false);
+
+        // When：第二个归档触发清理
+        String newest = store.storeIn("subagent-runs", "run-2", "b", true, 1, 0);
+
+        // Then：最旧的归档被清掉，而工具输出完全不受归档配额影响
+        assertTrue(Files.notExists(Paths.get(oldest)));
+        assertTrue(Files.exists(Paths.get(newest)));
+        assertTrue(Files.exists(Paths.get(toolOutput)));
+    }
+
+    @Test
     @DisplayName("清洗规则应替换非法字符并抹掉 ..")
     void sanitize_should_replaceIllegalCharacters() {
         assertEquals("a_b_c", ToolOutputStore.sanitize("a/b\\c"));

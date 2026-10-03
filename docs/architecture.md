@@ -205,8 +205,16 @@ fork 不复制 token 用量，压缩摘要按「边界是否落在复制范围�
 
 - **`allowedTools` 只随委派生效**：它决定子代理能看到哪些工具（执行时照旧受权限判定约束），主会话不受影响。
 - **子代理不继承主会话的模型**：模型来自它自己的 `model` 字段，没配就落到 `models.json` 的全局默认。
-- **它跑在自己的会话里，但那个会话不留痕**：不落盘、不进 `/session` 列表，进程退出也不会「恢复」出一堆子代理会话；
-  但它花掉的 token **计入父会话**，生命周期事件带 `parentSessionId` 供可观测性区分。
+- **它跑在自己的会话里，而那个会话不进会话体系**：不落盘、不进 `/session` 列表、不可 `resume`、不可 fork，
+  进程退出也不会「恢复」出一堆子代理会话；但它花掉的 token **计入父会话**，生命周期事件带 `parentSessionId`
+  供可观测性区分。让它不可 resume 是刻意的——续聊一个「只为了干一件窄活而存在」的会话没有语义。
+- **每个 run 跑在自己的线程上，父回合等它但不占执行线程**：`task` 派生一个 run（`AgentRuntime.spawn`），
+  run 在独立的 `agent-run` 池上跑，父回合 `await` 时让出并发许可；取消父回合会连着取消整棵 run 子树。
+- **在跑的子代理看得见**：TUI 有一块「子代理」面板（`类型 · 状态 · 已运行 Ns`），由内核以 `owner=core`
+  贡献；`-server` 的 SSE 客户端能收到 `run_started` / `run_finished`。两条路同源——都读运行时的 run 事实。
+- **一次委派在磁盘上留下痕迹**：run 终结时把 run 身份、终态、轮数、用量与子会话的完整 transcript 写进
+  `<toolOutput.dir>/subagent-runs/<runId>.json`（独立命名空间 + 独立配额，与工具输出的清理互不干扰）。
+  它是可观测窗口而不是合规归档（最旧的会被清理）。
 - **递归有三道上限 + 一套预算**：`subAgent.maxDepth`（一条链多深）、`subAgent.maxSpawnsPerTurn`（一层扇出多少）
   与 `subAgent.maxConcurrentRuns`（全局同时在跑多少）——三者正交，只有其中一个都不够；再叠加
   单 run 墙钟 / 单 run token / 树 token 三个预算。子代理自己能不能再往下委派，取决于它的 `allowedTools` 里有没有 `task`。
@@ -380,8 +388,9 @@ flowchart TB
     ReAct -->|"调用 LLM"| LLMClient
     ReAct -->|"同步权限检查"| PermMgr
     ReAct ==>|"task 工具 → 委派（派生 run）"| SubAgentMgr
-    SubAgentMgr ==>|"AgentRuntime.spawn → 调度到 agent-run 池跑完这个 run"| ReAct
-    SubAgentMgr ==>|"owner=core 注册 task 工具 + 类型清单"| ExtReg
+    SubAgentMgr ==>|"AgentRuntime.spawn → 调度到 agent-run 池跑完这个 run；run 事件走 RunEventBus"| ReAct
+    SubAgentMgr -->|"run 终结 → 归档（独立命名空间与配额）"| ToolOut["ToolOutputStore<br/>工具结果 / run 归档"]
+    SubAgentMgr ==>|"owner=core 注册 task 工具 + 类型清单 + 运行面板"| ExtReg
     SubAgentMgr -->|"瞬时会话 / 用量归集到父会话"| SessionMgr
     SubAgentMgr -->|"工具清单过滤判据（与执行期同一份）"| PermMgr
     SubAgentMgr -->|"取子代理的偏好模型"| ModelMgr

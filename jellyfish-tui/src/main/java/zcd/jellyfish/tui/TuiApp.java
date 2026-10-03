@@ -248,6 +248,19 @@ public final class TuiApp extends ToolkitApp {
      */
     static final String PLUGIN_PANELS_PROPERTY = "jellyfish.tui.pluginPanels";
 
+    /**
+     * 回合进行中，插件内容的最长刷新间隔（毫秒）。
+     * <p>
+     * <b>为什么需要它</b>：外壳只在「有理由相信内容变了」时重新收集（见 {@code UiCache}），
+     * 而子代理面板要显示「已运行 Ns」这类<b>持续推进</b>的信息——它没有对应的事件：
+     * run 的起止都发生在回合内部，外壳看不到。回合进行中按一秒一下补失效，正好是这个粒度的代价：
+     * 面板与状态栏片段的处理器都是「快、只读」的约定，一秒一次的调用量远低于它们的预算，
+     * 而空闲时（没有回合）一次都不多问。
+     * <p>
+     * 取一秒是因为它同时是面板的显示粒度：再快只是重复问同一个数字。
+     */
+    static final long LIVE_REFRESH_MILLIS = 1000L;
+
     /** 是否启用插件 UI 贡献，构造期读一次（与鼠标捕获同口径：运行期改属性不影响已建的界面）。 */
     private final boolean pluginPanelsEnabled;
 
@@ -293,6 +306,9 @@ public final class TuiApp extends ToolkitApp {
 
     /** 上一帧是否处于「回合进行中」，用于识别回合收敛并补一次插件内容失效。 */
     private boolean renderedTurnRunning;
+
+    /** 上次因「回合进行中」而主动失效的时刻（毫秒），用于把活刷新的频率压到每秒一次。 */
+    private long lastLiveInvalidateMillis;
 
     /** 压缩在界面上的那一层：状态栏标记与「压完了」的一次性提示。 */
     private final CompactionView compactionView = new CompactionView();
@@ -438,6 +454,12 @@ public final class TuiApp extends ToolkitApp {
             uiCache.invalidate();
         }
         renderedTurnRunning = turnRunning;
+        // 回合进行中每秒补一次失效：子代理面板要显示「已运行 Ns」这种持续变化的数字，
+        // 而 run 的起止没有对应事件（见 LIVE_REFRESH_MILLIS 的注释）
+        if (turnRunning && System.currentTimeMillis() - lastLiveInvalidateMillis >= LIVE_REFRESH_MILLIS) {
+            lastLiveInvalidateMillis = System.currentTimeMillis();
+            uiCache.invalidate();
+        }
 
         // 一帧只收集一次，片段与面板共用同一份快照（缓存命中，不会重复问插件）
         UiSnapshot snapshot = pluginPanelsEnabled ? uiCache.snapshot(sessionId) : UiSnapshot.empty();

@@ -233,6 +233,15 @@
   「不额外限定」（全部插件都加载），显式写 `[]` 表示「一个都不启用」；`disabled` 不声明与写 `[]` 等价，都不禁用任何插件。
   同一个 pluginId 同时出现在两份名单里时按**禁用**处理，并发一条配置告警。
 - `plugins.configurations.<pluginId>`：单个插件的配置段，逐插件的键值见插件自己的文档。
+  - **跨语言插件（`jellyfish-plugin-python` / `jellyfish-plugin-node`）多一层 `scripts`**：
+    `plugins.configurations.<桥接插件>.scripts.<脚本 id>` 是该脚本自己的配置段（脚本目录名就是脚本 id），
+    脚本用 `ctx.configuration`（Python 还可用模块级 `configuration()`）读到它。
+    **它只按脚本 id 切片转发**，桥接层不解释里面的键，因此密钥、baseUrl、超时随便写。
+    **字符串值里的 `${ENV}` 照常插值**，所以 `"apiKey": "${BRAVE_API_KEY}"` 与 Java 插件同一条路。
+    写错脚本 id（拼写 / 大小写）会在启动时告警；`scripts` 段写成非对象会当场报错。
+    **注意与 Java 插件的差别**：脚本进程的环境变量是**严格白名单**（只透传解释器运行与依赖解析必需的那几个），
+    因此 API key **不能**靠环境变量直接传给脚本，只能走这一段——这是有意的安全取舍，见
+    [architecture.md](architecture.md#已知边界与后续项)。
 - 模式类授权（例如「只跑只读工具」）由插件提供：官方 `jellyfish-plugin-plan` 的白名单写在
   `plugins.configurations.jellyfish-plan.readOnlyTools`，用户写哪些工具名，它开启时就只有哪些可用
   （工具提供方无法自称只读，描述符里已无该字段；详见

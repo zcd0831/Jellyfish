@@ -158,6 +158,14 @@
   - **合并**（同一个请求对象复用给全部 handler，各自从原始值出发）：**`order` 最小且声明了该字段的那一个胜出**，
     与「第一个非 `ABSTAIN` 胜出」「第一个 `cancel` 短路」同向——都是「更基础的插件先表态」。
     「取最后一个非缺省」会让胜负取决于注册顺序，是刻意排除的。
+- **新增同步扩展点必须在脚本桥接的扩展点能力档里登记**：能力档在插件仓库
+  （`Jellyfish-Plugins/jellyfish-script/src/main/resources/script/extension-points.json`），把每个扩展点分为
+  `in`（已打通）/ `planned`（已决定要做但还没做）/ `excluded`（明确不做，须写理由）。
+  那里的 `ExtensionPointCoverageTest` 会枚举 `jellyfish-api` 里全部 `ExtensionRequest` 子类，
+  **未分类即构建失败**。这条不是形式主义：脚本桥接只覆盖一部分扩展点，而「哪些覆盖了」如果不受守护，
+  就会以「某天有人发现某个能力脚本用不了」的形态暴露。**两类可以不做的点也请写进 `excluded`**：
+  结构上做不到的（返回 Java 对象的，如 `ProviderRegistrationRequest`）与跑在渲染线程 / 启动期的
+  （脚本一次进程往返不可接受，如 `ToolRenderHintRequest` / `ShortcutContributionRequest`）。
 
 ## 覆盖可恢复：同键唯一键上的覆盖是一条链
 
@@ -233,6 +241,8 @@
 3. 新注册的 owner 是否需要命名空间隔离？用了 `::` 就要确认回收按前缀走。
 4. 是否新增了跨边界常量？放 `api` 侧，别在 infra 与插件各写一份。
 5. 若是新增的同步扩展点：0 handler 时的行为、失败语义、`order` 合并规则是否都已写明并有单测？
+   **它在脚本桥接的 `extension-points.json` 里分到哪一档了**（不登记会让插件仓库的
+   `ExtensionPointCoverageTest` 直接红）？
 6. 若改了 `ActionQueue` 的窗口语义（开窗/关窗时机、容量、取用规则、窗口被替换）：是否同时核对了
    `ReActLooper` 的两个排空点、`ActionDispatcher` 的回填，以及**每一条**「动作拿不到窗口」的出路
    （回合结束标失败、窗口被替换时旧窗口收尾、队列满丢弃、插件停止丢弃）？少一条，插件侧的表现都是

@@ -147,7 +147,7 @@ jellyfish-tui/src/main/java/zcd/jellyfish/tui/
 | 会话状态 / 落盘 / 恢复 / 瞬时会话 / 用量记账 | [constraints/session-config.md](docs/constraints/session-config.md) |
 | 配置字段 / 双源合并 / `/reload` 热更新 / 启动装配顺序 | [constraints/session-config.md](docs/constraints/session-config.md)、[configuration.md](docs/configuration.md) |
 | agent 定义 / 提示词 md / 模型解析回落 | [constraints/session-config.md](docs/constraints/session-config.md) |
-| 扩展点 / 事件通道 / 插件生命周期 / owner 命名空间 | [constraints/extensions.md](docs/constraints/extensions.md) |
+| 扩展点 / 事件通道 / 插件生命周期 / owner 命名空间 | [constraints/extensions.md](docs/constraints/extensions.md)（**新增扩展点还要在插件仓库的脚本能力档里分档**，见该文「新增扩展点的公共约定」） |
 | CLI 输出契约 / 退出码 / TUI 视图与线程 / 键位 / 插件面板 | [constraints/shells.md](docs/constraints/shells.md) |
 | Server 路由 / SSE / 鉴权 / 审批桥 | [constraints/shells.md](docs/constraints/shells.md)、[server-api.md](docs/server-api.md) |
 | 指标 / 健康检查 | [constraints/shells.md](docs/constraints/shells.md) |

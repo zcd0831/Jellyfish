@@ -168,7 +168,7 @@
 - **子代理的工具清单按它自己的 agent 配置收窄**（`ToolFilter`），否则它会看到 `write_file`、调用、被拒，
   白跑一轮。**过滤只随嵌套回合传递，主会话路径传 `ToolFilter.none()`**。
 - **清单过滤的判据不重写，而是复用执行期判定**——见 [permissions.md](permissions.md#与工具清单过滤的关系)。
-- **子代理可能拿到的两个「协作类」工具**：装了 `jellyfish-todo` 时，`todo_claim` / `todo_done`
+- **子代理可能拿到的两个「协作类」工具**：装了 `jellyfish-plugin-todo` 时，`todo_claim` / `todo_done`
   只对子代理有意义（认领与完成共享待办里的条目）；`todo_claim` 在**顶层回合会被拒绝**——那里不在任何 run 上，
   没有名字可以记在待办上。它们与父回合读写的是**同一份**清单：键取自内核交给工具的 `parentSessionId`
   （子代理落父会话、根会话落自己），因此父子看得见彼此在做什么。

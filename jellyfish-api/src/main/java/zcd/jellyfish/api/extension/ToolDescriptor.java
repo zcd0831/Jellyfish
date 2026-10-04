@@ -22,7 +22,7 @@ import java.util.Map;
  * 任何基于它构建的名单里，用户没有任何手段拿出来（MCP 那一侧更极端，
  * 「提供方」是不受信的外部进程）。
  * 现在的口径是：<b>只读与否完全由用户配置决定</b>（例如 plan 模式插件的
- * {@code plugins.configurations.jellyfish-plan.readOnlyTools}），描述符只回答
+ * {@code plugins.configurations.jellyfish-plugin-plan.readOnlyTools}），描述符只回答
  * 「这个工具叫什么、怎么用、要什么参数」。
  * <p>
  * 不可变，可安全跨线程传递。

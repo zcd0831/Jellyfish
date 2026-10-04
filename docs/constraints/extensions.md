@@ -229,7 +229,7 @@
   [configuration.md](../configuration.md) 的 `plugins` 一节。
 - **模式类授权的名单不回内核**：内核不持有「模式」概念（没有字段、没有枚举、没有 `/mode`）。
   按模式收窄的授权是插件的一条普通拦截，名单也就归插件自己的配置段（官方 plan 插件即
-  `plugins.configurations.jellyfish-plan.readOnlyTools`）；工具描述符里没有「只读」这个字段，语义见
+  `plugins.configurations.jellyfish-plugin-plan.readOnlyTools`）；工具描述符里没有「只读」这个字段，语义见
   [permissions.md](permissions.md)。
 
 ## 改动检查清单

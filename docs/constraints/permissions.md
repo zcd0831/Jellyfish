@@ -45,7 +45,7 @@
 ## 模式类授权（由插件提供）
 
 **官方形态是 `jellyfish-plugin-plan`**：一个类型级 `PermissionCheckRequest` 贡献 + 一组只读白名单，
-白名单来自 `plugins.configurations.jellyfish-plan.readOnlyTools`。内核侧与它相关的契约只有三条：
+白名单来自 `plugins.configurations.jellyfish-plugin-plan.readOnlyTools`。内核侧与它相关的契约只有三条：
 
 - **工具描述符里没有「只读」字段**（`ToolDescriptor.readOnly` 已移除）。它曾经存在，且与用户配置取并集，
   于是名单成了一个**只增不减**的集合——提供方（插件、脚本作者，MCP 那一侧甚至是不受信的外部进程）都能把
@@ -60,7 +60,7 @@
 ## 插件侧的模式实现要求（以 `jellyfish-plugin-plan` 为准）
 
 - **白名单为空 = 一个都不许**（白名单语义）：集合为空时同样拒绝，属「用户已表态」而非「取不到判据」。
-- **拒绝文案必须点明去哪儿声明**：带上 `plugins.configurations.jellyfish-plan.readOnlyTools`。
+- **拒绝文案必须点明去哪儿声明**：带上 `plugins.configurations.jellyfish-plugin-plan.readOnlyTools`。
   只写「仅允许只读工具」，用户不知道该改哪里——而这条拒绝正是他第一次遇到这个配置项的时刻。
 - **白名单为空时补一条 `ConfigWarningEvent`，每种配置只发一次**：挂在「因白名单为空而拒绝」上，
   不挂在启动上——白名单为空本身是合法配置（就是「一个都不许」），启动时无条件喊一次会对多数用户造成纯噪音。

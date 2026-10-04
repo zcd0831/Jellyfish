@@ -303,7 +303,7 @@ class UiContributionsTest {
     @Test
     @DisplayName("面板内容与建议区域原样透传：外壳可以忽略建议，但不能替插件改写")
     void collect_should_passPanelContent() {
-        registerPanel("jellyfish-todo", 0, UiRegion.LEFT, "待办 2/5");
+        registerPanel("jellyfish-plugin-todo", 0, UiRegion.LEFT, "待办 2/5");
 
         OwnedPanel panel = contributions.collect("s-1").getPanels().get(0);
 
@@ -397,7 +397,7 @@ class UiContributionsTest {
         AtomicInteger notifications = new AtomicInteger();
         contributions.onInvalidated(notifications::incrementAndGet);
 
-        events.publish(new PluginStateChangedEvent("jellyfish-todo", "STARTED"));
+        events.publish(new PluginStateChangedEvent("jellyfish-plugin-todo", "STARTED"));
 
         awaitTrue(notifications, 1);
     }

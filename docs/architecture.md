@@ -73,7 +73,7 @@ jellyfish-tui（TUI 外壳）  jellyfish-server（HTTP 外壳）  →  jellyfish
 
 权限只能收紧不能放宽：插件拦截是三态（`ABSTAIN` / `ASK` / `DENY`），**没有 `ALLOW`**。内核**不持有任何「模式」概念**：
 「只读运行」「先出计划再动手」这类按模式收窄的授权，是插件用同一个类型级扩展点（`PermissionCheckRequest`）表达的
-一条普通拦截——官方 `jellyfish-plugin-plan` 就是这么做的（`plugins.configurations.jellyfish-plan.readOnlyTools`
+一条普通拦截——官方 `jellyfish-plugin-plan` 就是这么做的（`plugins.configurations.jellyfish-plugin-plan.readOnlyTools`
 即「用户说哪些工具在它开启时可用」）。早先这一层由内核自己实现，并允许工具提供方在描述符里自称只读、与用户配置取并集——
 那让名单**只增不减**、判定权还落在提供方手里（MCP 那一侧的提供方甚至是不受信的外部进程），因此该字段与内核那一层都已整个移除。
 代价是**不装那个插件就没有这类模式**，而装了之后也**开箱为空**：没配任何名字时它拒掉全部工具，这是刻意的
@@ -161,7 +161,7 @@ fork 不复制 token 用量，压缩摘要按「边界是否落在复制范围�
 长会话的每一轮都要把整段历史重新发给模型，token 花得越来越多。压缩多花**一次**调用把更早的对话压成一份摘要，
 之后每次请求只带摘要 + 最近若干条原文。
 
-**前提**：压缩由插件提供策略（摘要指令 + 参数）。没有启用 `jellyfish-compact`（或同类插件）时，压缩整体不可用——
+**前提**：压缩由插件提供策略（摘要指令 + 参数）。没有启用 `jellyfish-plugin-compact`（或同类插件）时，压缩整体不可用——
 `/compact` 会直接告诉你，自动压缩也不生效。摘要指令本身是一份资源文件，随**插件**发布（`summary-prompt.md`，在插件 jar
 根目录），不是硬编码在内核的代码里。**插件只回答「这一次该怎么压」**——摘要指令与两个数量参数；读消息、选范围、
 发模型调用、推进边界、记用量全部由内核负责，插件拿不到任何一条消息正文。
@@ -217,7 +217,7 @@ fork 不复制 token 用量，压缩摘要按「边界是否落在复制范围�
 - **一次委派在磁盘上留下痕迹**：run 终结时把 run 身份、终态、轮数、用量与子会话的完整 transcript 写进
   `<toolOutput.dir>/subagent-runs/<runId>.json`（独立命名空间 + 独立配额，与工具输出的清理互不干扰）。
   它是可观测窗口而不是合规归档（最旧的会被清理）。
-- **多个子代理可以共享一份工作列表**：装了 `jellyfish-todo` 时，父回合写计划、子代理用
+- **多个子代理可以共享一份工作列表**：装了 `jellyfish-plugin-todo` 时，父回合写计划、子代理用
   `todo_claim` / `todo_done` 认领与完成，读写的是**同一份**清单（键来自内核交给工具的 `parentSessionId`，
   子代理落在父会话上），面板上还能看到「谁在做」。插件的两个能力在这里正交地拼在一起：
   子代理来自内核，任务列表来自插件，两者互不认识——**跨能力的整合只走内核的中立面或模型**。
@@ -512,7 +512,7 @@ flowchart TB
 - **`-server`**：**已落地**（`jellyfish-server`，Undertow 2.2.39.Final）——REST + SSE 接口面、会话按 id 寻址、
   一会话一在途回合（内核 `TurnRegistry`）、HTTP 化人工审批（按会话多槽位）、`GET /health` 都在。**鉴权已落地**（API key：`--api-key` 或环境变量
   `JELLYFISH_SERVER_API_KEY`，除 `GET /health` 外全部接口校验）。**明确不做**：自带 Web 前端、TLS。
-- **压缩**：只有插件提供策略才可用；不启用 `jellyfish-compact` 时压缩整体不可用且**不回退内置**（刻意如此）。
+- **压缩**：只有插件提供策略才可用；不启用 `jellyfish-plugin-compact` 时压缩整体不可用且**不回退内置**（刻意如此）。
 - **插件主动动作**：**已落地**——`PluginContext.submit(PluginAction)` 这条入站队列，动作清单有界
   （用户消息 + `STEER` / `FOLLOW_UP`、压缩、切换会话模型、分支会话、重建工具清单），结果靠轮询
   `ActionHandle` 取得。**明确不做**：

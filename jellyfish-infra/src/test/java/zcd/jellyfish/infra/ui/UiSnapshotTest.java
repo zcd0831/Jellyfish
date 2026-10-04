@@ -63,7 +63,7 @@ class UiSnapshotTest {
     @Test
     @DisplayName("只有面板时不归空")
     void of_should_notBeEmpty_when_onlyPanels() {
-        UiSnapshot snapshot = UiSnapshot.of(null, Arrays.asList(panelOf("jellyfish-todo")));
+        UiSnapshot snapshot = UiSnapshot.of(null, Arrays.asList(panelOf("jellyfish-plugin-todo")));
         assertTrue(snapshot.getStatusFragments().isEmpty());
         assertEquals(1, snapshot.getPanels().size());
         assertTrue(!snapshot.isEmpty());

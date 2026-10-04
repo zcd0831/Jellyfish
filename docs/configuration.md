@@ -187,8 +187,8 @@
 {
   "plugins": {
     "configurations": {
-      "jellyfish-plan": { "readOnlyTools": ["read_file", "list_dir", "grep_files"] },
-      "jellyfish-todo": { "todoDir": "~/.jellyfish/todos" }
+      "jellyfish-plugin-plan": { "readOnlyTools": ["read_file", "list_dir", "grep_files"] },
+      "jellyfish-plugin-todo": { "todoDir": "~/.jellyfish/todos" }
     }
   },
   "react": {
@@ -243,7 +243,7 @@
     因此 API key **不能**靠环境变量直接传给脚本，只能走这一段——这是有意的安全取舍，见
     [architecture.md](architecture.md#已知边界与后续项)。
 - 模式类授权（例如「只跑只读工具」）由插件提供：官方 `jellyfish-plugin-plan` 的白名单写在
-  `plugins.configurations.jellyfish-plan.readOnlyTools`，用户写哪些工具名，它开启时就只有哪些可用
+  `plugins.configurations.jellyfish-plugin-plan.readOnlyTools`，用户写哪些工具名，它开启时就只有哪些可用
   （工具提供方无法自称只读，描述符里已无该字段；详见
   [architecture.md](architecture.md#扩展层两条通道各管一件事)）。**不写就等于开启时全部不可用**——
   白名单语义下「用户没表态」与「用户不准」是同一件事。
@@ -348,5 +348,5 @@
 1. **让这台机器上的所有项目都能用同一套模型配置**：把同一份文件放到 `~/.jellyfish/` 即可（项目级同名条目会整对象覆盖全局级）。
 2. **只给某个项目换模型**：在项目根建 `.jellyfish/models.json`，只写要覆盖的 `provider`。
 3. **关掉自动压缩**：`react.autoCompactPercent: 0`，改用 `/compact preview` 先看会压多少再手动压。
-4. **临时禁用某个插件**：`plugins.disabled: ["jellyfish-todo"]`，然后 `/reload`。
+4. **临时禁用某个插件**：`plugins.disabled: ["jellyfish-plugin-todo"]`，然后 `/reload`。
 5. **关掉子代理委派**：`subAgent.enabled: false`，`/reload` 后 `task` 工具不再注册。

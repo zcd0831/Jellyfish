@@ -114,7 +114,7 @@ java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -tui
 | --- | --- |
 | `-cli` / `-tui` / `-server` | 模式旗标，三选一且必填；`-server` 可带位置端口 |
 | `-p, --print <输入>` | 单次模式的输入；缺省时从 stdin 读到 EOF（管道可用） |
-| `--session <会话>` | 切换到已有会话（需安装 `jellyfish-session-file` 等持久化插件；会话不存在时按用法错误退出 `2`） |
+| `--session <会话>` | 切换到已有会话（需安装 `jellyfish-plugin-session-file` 等持久化插件；会话不存在时按用法错误退出 `2`） |
 | `--agent <agentId>` | 新建会话时绑定 agent |
 | `--model <provider/模型>` | 新建会话时指定模型，必须含 `/` |
 | `--port <端口>` | 服务器端口（等价于 `-server` 的位置参数，缺省 `9096`） |
@@ -228,8 +228,8 @@ java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -tui
 
 | 输入 | 行为 | 依赖插件 |
 | --- | --- | --- |
-| `!命令` | 手动执行一条 shell 命令。**不进模型**，执行完把「命令回显 + 输出」作为一条用户消息落进会话，因此下一次提问时模型看得到结果 | `jellyfish-shell` |
-| `@路径` | 引用当前工作目录下的文件：敲 `@` 弹补全面板（目录在前、可逐层往下钻），接受后路径写进输入框 | `jellyfish-tools` |
+| `!命令` | 手动执行一条 shell 命令。**不进模型**，执行完把「命令回显 + 输出」作为一条用户消息落进会话，因此下一次提问时模型看得到结果 | `jellyfish-plugin-shell` |
+| `@路径` | 引用当前工作目录下的文件：敲 `@` 弹补全面板（目录在前、可逐层往下钻），接受后路径写进输入框 | `jellyfish-plugin-tools` |
 
 两条口径值得知道：
 
@@ -269,7 +269,7 @@ java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -tui
 ```
 /ui                        列出所有贡献：区域 | 插件 | 标题 | 是否可见 | 还有哪些候选 | 没生效的插件快捷键
 /ui right                  在该区域轮换到下一个候选
-/ui right jellyfish-todo   指定由某个插件占用该区域
+/ui right jellyfish-plugin-todo   指定由某个插件占用该区域
 /ui right off              关掉该区域（/ui right on 恢复）
 ```
 
@@ -331,7 +331,7 @@ java -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=5005 \
 哪里开始」）；**可以反复压**（每次只压上次边界之后新增的那段，边界只向后移）；**一次压完，装不下就丢最旧的**
 （被丢弃的那段既不在摘要里、也不会再发给模型，完成提示会写明条数）。
 
-压缩依赖**插件提供策略**：没有启用 `jellyfish-compact`（或同类插件）时压缩整体不可用，`/compact` 会直接告诉你。
+压缩依赖**插件提供策略**：没有启用 `jellyfish-plugin-compact`（或同类插件）时压缩整体不可用，`/compact` 会直接告诉你。
 
 ### 委派给子代理
 
@@ -406,7 +406,7 @@ mkdir -p ~/.jellyfish/plugins
 插件能做什么由内核的扩展点与权限模型决定：工具、命令、提示词贡献、权限拦截、会话持久化 / 恢复、压缩策略、UI 贡献、
 输入指令走同步扩展点；轮次与会话等通知走异步事件通道。**插件拿不到会话与工作目录**，也**不能自称某个写操作是只读的**
 （`ToolDescriptor` 里已没有该字段；按模式收窄的名单归插件自己的配置段，例如官方 plan 插件的
-`plugins.configurations.jellyfish-plan.readOnlyTools`）。
+`plugins.configurations.jellyfish-plugin-plan.readOnlyTools`）。
 
 ## Server 模式
 

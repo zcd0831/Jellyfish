@@ -306,6 +306,15 @@ public final class TuiApp extends ToolkitApp {
     /** 上一帧是否处于「回合进行中」，用于识别回合收敛并补一次插件内容失效。 */
     private boolean renderedTurnRunning;
 
+    /**
+     * 上一帧是否舍掉了右侧栏。
+     * <p>
+     * 只用来去重那条降级日志：{@code ChatLayout} 是纯函数、每帧都被调用，就地记日志就是每秒几十条
+     * 一样的话（实测刷到过一万六千条）。因此判据留在账本里，记不记由这里按帧间变化决定——
+     * 与 {@link #renderedTurnRunning} 同一套做法（都在渲染线程上读写）。
+     */
+    private boolean renderedRightSidebarDropped;
+
     /** 上次因「回合进行中」而主动失效的时刻（毫秒），用于把活刷新的频率压到每秒一次。 */
     private long lastLiveInvalidateMillis;
 
@@ -479,6 +488,7 @@ public final class TuiApp extends ToolkitApp {
         Map<UiRegion, OwnedPanel> panels = ChatShell.visiblePanels(declared, overlay);
         ChatLayout layout = ChatLayout.compute(size.width(), size.height(), input.panelRows(),
                 ChatShell.overlayRows(overlay), panels);
+        logSidebarDrop(layout, size.width());
 
         ChatState.View view = chatState.view(sessionId, messages, layout.getMessageWidth(),
                 layout.getMessageRows(), TranscriptProjector.DEFAULT_MAX_MESSAGES, uiCache.hints());
@@ -497,6 +507,34 @@ public final class TuiApp extends ToolkitApp {
             status = status + "   " + hint;
         }
         return shell.render(view, title(session), status, overlay, panels, layout);
+    }
+
+    /**
+     * 按帧间变化记录「右栏被舍掉」这条降级。
+     * <p>
+     * <b>为什么必须去重</b>：判据每帧都算一次，不去重就是同一句话以每秒几十条的频率刷进日志
+     * （实测刷到过一万六千条，把别的信息全淹了）。这里只在状态<b>翻转</b>的那一帧记：
+     * 掉下去时 WARN，因为用户需要知道右栏为什么不见了；恢复时 INFO，让日志里这一段有头有尾——
+     * 只有一条 WARN 而没有下文时，读日志的人分不清「后来恢复了」还是「日志就到这里」。
+     * <p>
+     * 判据留在 {@link ChatLayout}（它是纯函数，不适合持有「上次报过没有」这种状态），
+     * 去重放在这里，与 {@link #renderedTurnRunning} 同一套做法：都是渲染线程上的帧间比较。
+     *
+     * @param layout 本帧账本，不可为 {@code null}
+     * @param width  终端总列数
+     */
+    private void logSidebarDrop(ChatLayout layout, int width) {
+        boolean dropped = layout.isRightSidebarDropped();
+        if (dropped == renderedRightSidebarDropped) {
+            return;
+        }
+        renderedRightSidebarDropped = dropped;
+        if (dropped) {
+            LOG.warn("宽度预算放不下两个侧栏下限（终端 {} 列），本次只显示左栏；"
+                    + "终端宽到 {} 列以上时右栏会自己回来", width, ChatLayout.minWidthForBothSidebars());
+        } else {
+            LOG.info("宽度预算已容得下两个侧栏，右栏恢复显示（终端 {} 列）", width);
+        }
     }
 
     /**

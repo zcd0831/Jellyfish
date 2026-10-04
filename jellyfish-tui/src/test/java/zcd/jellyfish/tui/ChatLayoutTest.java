@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -44,6 +45,22 @@ class ChatLayoutTest {
         for (int i = 0; i < lines; i++) {
             content.add(UiLine.of("第 " + i + " 行"));
         }
+        return new OwnedPanel(owner, PanelContribution.of("标题", content, region));
+    }
+
+    /**
+     * 构造一个「内容很宽」的面板。
+     * <p>
+     * 侧栏宽度由内容决定，因此要用它才能把侧栏顶到单侧上限——{@link #panelOf} 的内容只有 7 列，
+     * 一律被夹到下限 20，覆盖不到「左栏很宽」这条真实路径。
+     *
+     * @param owner  贡献方
+     * @param cols   内容显示列数
+     * @param region 建议区域
+     * @return 带归属的面板
+     */
+    private static OwnedPanel widePanelOf(String owner, int cols, UiRegion region) {
+        List<UiLine> content = Collections.singletonList(UiLine.of(repeat('x', cols)));
         return new OwnedPanel(owner, PanelContribution.of("标题", content, region));
     }
 
@@ -170,13 +187,13 @@ class ChatLayoutTest {
     }
 
     @Test
-    @DisplayName("左右侧栏合计超限时保左栏、右栏归零：阅读顺序从左开始")
-    void compute_should_dropRightSidebar_when_totalOverBudget() {
+    @DisplayName("宽度预算放不下两个侧栏下限时保左栏、舍右栏：阅读顺序从左开始")
+    void compute_should_dropRightSidebar_when_budgetCannotHoldBothFloors() {
         Map<UiRegion, OwnedPanel> visible = visibleOf(
                 UiRegion.LEFT, panelOf("l", 1, UiRegion.LEFT),
                 UiRegion.RIGHT, panelOf("r", 1, UiRegion.RIGHT));
 
-        // W=100：单侧上限 25，合计上限 33；两个 20 不超合计，先看 20+20=40 > 33 → 砍右栏
+        // W=100：单侧上限 25，合计上限 33；两个下限 20+20=40 > 33 → 放不下，只能舍右栏
         ChatLayout layout = ChatLayout.compute(100, 30, INPUT_ROWS, 0, visible);
 
         assertEquals(ChatLayout.SIDEBAR_MIN_WIDTH, layout.getLeftWidth());
@@ -184,13 +201,45 @@ class ChatLayoutTest {
     }
 
     @Test
-    @DisplayName("消息区宽度不足时先砍右栏、再砍左栏，最后宁可窄也不给负数")
+    @DisplayName("合计超限但装得下两个下限时两栏共存：待办变宽不该把右栏整块吃掉")
+    void compute_should_keepBothSidebars_when_leftPanelIsWide() {
+        // 202 列是实测终端：单侧上限 50、合计上限 67。左栏被长待办条目顶到上限 50 之后，
+        // 50 + 20 > 67 就会触发超限——旧实现直接 right = 0，右栏那块常驻面板整块消失
+        Map<UiRegion, OwnedPanel> visible = visibleOf(
+                UiRegion.LEFT, widePanelOf("todo", 60, UiRegion.LEFT),
+                UiRegion.RIGHT, panelOf("stock", 1, UiRegion.RIGHT));
+
+        ChatLayout layout = ChatLayout.compute(202, 30, INPUT_ROWS, 0, visible);
+
+        assertEquals(202 / ChatLayout.SIDEBAR_TOTAL_DIVISOR - ChatLayout.SIDEBAR_MIN_WIDTH,
+                layout.getLeftWidth(), "右栏保到下限，余下给左栏");
+        assertEquals(ChatLayout.SIDEBAR_MIN_WIDTH, layout.getRightWidth(), "右栏必须还在");
+        assertEquals(202 - ChatLayout.BORDER * 2 - layout.getLeftWidth() - layout.getRightWidth(),
+                layout.getMessageWidth());
+    }
+
+    @Test
+    @DisplayName("只有一块侧栏时不被压窄：为竞争场景付的代价不能落在单栏上")
+    void compute_should_notNarrowSidebar_when_onlyOnePanel() {
+        Map<UiRegion, OwnedPanel> visible =
+                visibleOf(UiRegion.LEFT, widePanelOf("todo", 60, UiRegion.LEFT));
+
+        ChatLayout layout = ChatLayout.compute(202, 30, INPUT_ROWS, 0, visible);
+
+        assertEquals(202 / ChatLayout.SIDEBAR_MAX_DIVISOR, layout.getLeftWidth(),
+                "右栏空着时左栏应当能用到自己的上限");
+        assertEquals(0, layout.getRightWidth());
+    }
+
+    @Test
+    @DisplayName("窄终端上先舍右栏、再整体隐藏侧栏，且消息区始终不为负")
     void compute_should_shrinkMessageArea_thenDropSidebars() {
         Map<UiRegion, OwnedPanel> visible = visibleOf(
                 UiRegion.LEFT, panelOf("l", 1, UiRegion.LEFT),
                 UiRegion.RIGHT, panelOf("r", 1, UiRegion.RIGHT));
 
-        // W=80 恰好达到侧栏下限门槛：单侧 20、合计 26 → 砍右栏；消息区 = 80-2-20 = 58 ≥ 20
+        // W=80 恰好达到侧栏下限门槛：单侧 20、合计 26 < 40 → 放不下两个下限，舍右栏；
+        // 消息区 = 80-2-20 = 58 ≥ 20
         ChatLayout layout = ChatLayout.compute(80, 30, INPUT_ROWS, 0, visible);
         assertEquals(ChatLayout.SIDEBAR_MIN_WIDTH, layout.getLeftWidth());
         assertEquals(0, layout.getRightWidth());
@@ -220,6 +269,43 @@ class ChatLayoutTest {
 
         assertTrue(layout.getMessageWidth() >= 1);
         assertTrue(layout.getMessageRows() >= 1);
+    }
+
+    @Test
+    @DisplayName("舍没舍右栏要如实报出来：外壳靠它去重那条降级日志")
+    void isRightSidebarDropped_should_reportTheDegradation() {
+        Map<UiRegion, OwnedPanel> both = visibleOf(
+                UiRegion.LEFT, panelOf("l", 1, UiRegion.LEFT),
+                UiRegion.RIGHT, panelOf("r", 1, UiRegion.RIGHT));
+
+        // W=100：两个下限 40 > 合计上限 33，舍右栏 → 要报出来
+        assertTrue(ChatLayout.compute(100, 30, INPUT_ROWS, 0, both).isRightSidebarDropped());
+
+        // W=202：两栏共存 → 不报
+        Map<UiRegion, OwnedPanel> wide = visibleOf(
+                UiRegion.LEFT, widePanelOf("todo", 60, UiRegion.LEFT),
+                UiRegion.RIGHT, panelOf("stock", 1, UiRegion.RIGHT));
+        assertFalse(ChatLayout.compute(202, 30, INPUT_ROWS, 0, wide).isRightSidebarDropped());
+
+        // 只有一块侧栏时右栏本就是空的，不算「被舍掉」
+        Map<UiRegion, OwnedPanel> single =
+                visibleOf(UiRegion.LEFT, panelOf("l", 1, UiRegion.LEFT));
+        assertFalse(ChatLayout.compute(100, 30, INPUT_ROWS, 0, single).isRightSidebarDropped(),
+                "右栏本来就没有面板，不该被报成降级");
+    }
+
+    @Test
+    @DisplayName("两栏共存的最小终端宽度：日志里的建议宽度与实际判据必须一致")
+    void minWidthForBothSidebars_should_matchTheActualThreshold() {
+        int threshold = ChatLayout.minWidthForBothSidebars();
+        Map<UiRegion, OwnedPanel> both = visibleOf(
+                UiRegion.LEFT, panelOf("l", 1, UiRegion.LEFT),
+                UiRegion.RIGHT, panelOf("r", 1, UiRegion.RIGHT));
+
+        assertTrue(ChatLayout.compute(threshold, 30, INPUT_ROWS, 0, both).getRightWidth() > 0,
+                "恰好达到阈值时右栏就应当在");
+        assertTrue(ChatLayout.compute(threshold - 1, 30, INPUT_ROWS, 0, both).isRightSidebarDropped(),
+                "差一列就应当退化——否则日志里那个建议宽度是错的");
     }
 
     /**

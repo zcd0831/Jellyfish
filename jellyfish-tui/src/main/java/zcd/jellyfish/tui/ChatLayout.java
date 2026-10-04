@@ -1,7 +1,5 @@
 package zcd.jellyfish.tui;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import zcd.jellyfish.api.extension.PanelContribution;
 import zcd.jellyfish.api.ui.UiRegion;
 import zcd.jellyfish.infra.ui.OwnedPanel;
@@ -26,16 +24,16 @@ import java.util.Map;
  * <p>
  * <b>每一条收缩规则都是为了消息区</b>：面板是插件想要的，消息区是用户要看的。因此
  * 纵向有 {@link #MIN_MESSAGE_ROWS} 与区域总高上限，横向有 {@link #MIN_MESSAGE_WIDTH}——
- * 预算不够时先砍右栏、再砍左栏，最后宁可窄也不给负数。插件无权把消息区挤没。
+ * 预算不够时先把侧栏按内容夹进单侧与合计上限，再依次舍右栏、左栏，最后宁可窄也不给负数。
+ * 插件无权把消息区挤没。
  * <p>
- * 纯函数，不可变，可单测。
+ * 纯函数，不可变，可单测：<b>它因此不记日志</b>——本类每渲染一帧就被调用一次，而日志是按「状态
+ * 变化」而不是「被调用」才有意义的（否则同一句话每秒刷几十遍）。它把「本帧舍了右栏」如实报出去
+ * （{@link #isRightSidebarDropped()}），由外壳按帧间变化去记。
  *
  * @author zcd
  */
 public final class ChatLayout {
-
-    /** 日志。 */
-    private static final Logger LOG = LoggerFactory.getLogger(ChatLayout.class);
 
     /** 面板边框在每侧占用的列数/行数（与 {@link ChatShell#BORDER_SIZE} 同源）。 */
     static final int BORDER = ChatShell.BORDER_SIZE;
@@ -88,6 +86,9 @@ public final class ChatLayout {
     /** 右侧栏宽度（含边框），0 表示不显示。 */
     private final int rightWidth;
 
+    /** 本帧是否因为宽度预算放不下两个侧栏下限而舍掉了右栏。 */
+    private final boolean rightSidebarDropped;
+
     /** 停靠区域占用行数（含边框）。 */
     private final int dockRows;
 
@@ -102,9 +103,10 @@ public final class ChatLayout {
      * @param leftWidth     左侧栏宽度
      * @param rightWidth    右侧栏宽度
      * @param dockRows      停靠区域占用行数（含边框）
+     * @param rightSidebarDropped 本帧是否舍掉了右栏
      */
     private ChatLayout(int terminalWidth, int bottomRows, int topRows, int messageWidth, int messageRows,
-                       int leftWidth, int rightWidth, int dockRows) {
+                       int leftWidth, int rightWidth, int dockRows, boolean rightSidebarDropped) {
         this.terminalWidth = terminalWidth;
         this.bottomRows = bottomRows;
         this.topRows = topRows;
@@ -113,6 +115,7 @@ public final class ChatLayout {
         this.leftWidth = leftWidth;
         this.rightWidth = rightWidth;
         this.dockRows = dockRows;
+        this.rightSidebarDropped = rightSidebarDropped;
     }
 
     /**
@@ -139,12 +142,8 @@ public final class ChatLayout {
         int messageRows = Math.max(MIN_MESSAGE_ROWS, height - BORDER * 2 - bottomRows - topRows);
 
         Sidebars sidebars = sidebarsOf(width, visible);
-        if (sidebars.overBudget) {
-            // 保左栏：阅读顺序从左开始，右侧面板让位。真机若嫌右栏老被砍掉，调的是这里的策略而不是账本公式
-            LOG.warn("左右侧栏合计超出宽度预算，本次只显示左栏");
-        }
         return new ChatLayout(width, bottomRows, topRows, sidebars.messageWidth, messageRows,
-                sidebars.left, sidebars.right, dockRows);
+                sidebars.left, sidebars.right, dockRows, sidebars.rightDropped);
     }
 
     /**
@@ -167,6 +166,19 @@ public final class ChatLayout {
      * <p>
      * 顺序：先按内容取宽并夹进单侧区间，再检查合计上限，最后检查消息区下限——每一层都可能把
      * 侧栏归零，而消息区宽度只在最后兜一次底（宁可窄也不给负数）。
+     * <p>
+     * <b>合计超限时优先让两栏共存，而不是直接舍掉右栏</b>：单侧上限（{@code W/4}）与合计上限
+     * （{@code W/3}）之间只差 {@code W/12}，因此左栏一旦接近它自己的上限，留给右栏的余量就只剩
+     * {@code W/12}——而右栏最小要 {@link #SIDEBAR_MIN_WIDTH} 列，于是 {@code W < 240} 时右栏
+     * 必然消失，<b>无论终端多宽</b>（202 列照撞）。现场症状是「待办一出现，右栏那块常驻观测面板
+     * 就不见了」：待办条目变长（长文本、卡住时带原因、行尾的认领者）正是把左栏顶到上限的原因。
+     * <p>
+     * 现在的做法：超限时两栏各不低于 {@link #SIDEBAR_MIN_WIDTH}，在此前提下先满足右栏、余下给左栏；
+     * 连两个下限都放不下（{@code W/3 < 2 × 下限}，即 {@code W < 120}）才保留「舍右栏、保左栏」的旧取舍。
+     * <p>
+     * <b>为什么不改成调小单侧上限（例如 {@code W/6}）</b>：那是拿「永远压窄侧栏」换「两栏共存」，
+     * 代价落在<b>只有一块侧栏</b>的场景上——右栏空着、左栏本可以更宽的时候也被限住。
+     * 这里只在真的发生竞争时做分配，单栏场景一行不变。
      *
      * @param width   终端总列数（已保证不小于 1）
      * @param visible 每个区域当前选中的面板，可为 {@code null}
@@ -174,22 +186,45 @@ public final class ChatLayout {
      */
     private static Sidebars sidebarsOf(int width, Map<UiRegion, OwnedPanel> visible) {
         int limit = width / SIDEBAR_MAX_DIVISOR;
+        int budget = width / SIDEBAR_TOTAL_DIVISOR;
         int left = sidebarWidth(panelIn(visible, UiRegion.LEFT), width, limit);
         int right = sidebarWidth(panelIn(visible, UiRegion.RIGHT), width, limit);
-        boolean overBudget = left + right > width / SIDEBAR_TOTAL_DIVISOR;
-        if (overBudget) {
-            right = 0;
+        boolean rightDropped = false;
+        if (left + right > budget) {
+            // 超限只可能发生在两栏都有面板时：单侧上限 W/4 本身就小于合计上限 W/3
+            if (width >= minWidthForBothSidebars()) {
+                right = Math.min(right, budget - SIDEBAR_MIN_WIDTH);
+                left = Math.min(left, budget - right);
+            } else {
+                // 连两个下限都放不下（很窄的终端）：保留旧取舍——保左栏，它更靠近阅读起点
+                right = 0;
+                rightDropped = true;
+            }
         }
         int messageWidth = width - BORDER * 2 - left - right;
         if (messageWidth < MIN_MESSAGE_WIDTH && right > 0) {
             right = 0;
+            rightDropped = true;
             messageWidth = width - BORDER * 2 - left;
         }
         if (messageWidth < MIN_MESSAGE_WIDTH && left > 0) {
             left = 0;
             messageWidth = width - BORDER * 2;
         }
-        return new Sidebars(left, right, Math.max(1, messageWidth), overBudget);
+        return new Sidebars(left, right, Math.max(1, messageWidth), rightDropped);
+    }
+
+    /**
+     * 计算「两个侧栏同时显示」所需的最小终端列数。
+     * <p>
+     * 由 {@code W/3 ≥ 2 × 下限} 反推出来。它有两个用处：{@link #sidebarsOf} 用它判断该走共存还是
+     * 退化成只留左栏，降级日志用它给出可执行的建议——只说「放不下」而说不出「要到多宽才放得下」，
+     * 读日志的人还得自己回来翻常量。
+     *
+     * @return 最小列数
+     */
+    static int minWidthForBothSidebars() {
+        return SIDEBAR_MIN_WIDTH * 2 * SIDEBAR_TOTAL_DIVISOR;
     }
 
     /**
@@ -308,6 +343,20 @@ public final class ChatLayout {
         return rightWidth;
     }
 
+    /**
+     * 判断本帧是否因为宽度预算放不下两个侧栏下限而舍掉了右栏。
+     * <p>
+     * <b>为什么把它报出来而不是就地记一条日志</b>：本类每帧被调用一次，就地记就是每秒几十条
+     * 一样的 WARN（实测刷到过一万六千条）。而本类又是刻意保持纯函数的（可单测、无状态），
+     * 放进「上次报过没有」的可变状态会破坏这个性质，静态标志还会跨会话、跨测试残留。
+     * 因此判断留在本类、去重交给外壳（它有帧间状态）。
+     *
+     * @return 本帧舍掉了右栏返回 {@code true}
+     */
+    public boolean isRightSidebarDropped() {
+        return rightSidebarDropped;
+    }
+
     @Override
     public String toString() {
         return "ChatLayout{message=" + messageWidth + "x" + messageRows
@@ -331,8 +380,8 @@ public final class ChatLayout {
         /** 消息区内容列数。 */
         private final int messageWidth;
 
-        /** 是否因为合计超限而牺牲了右栏（由调用方决定要不要记日志，避免同一帧记两条）。 */
-        private final boolean overBudget;
+        /** 是否因为宽度预算放不下两个侧栏下限而舍掉了右栏（由调用方决定要不要记日志）。 */
+        private final boolean rightDropped;
 
         /**
          * 构造宽度分配结果。
@@ -340,13 +389,13 @@ public final class ChatLayout {
          * @param left        左侧栏宽度
          * @param right       右侧栏宽度
          * @param messageWidth 消息区内容列数
-         * @param overBudget  是否因合计超限牺牲了右栏
+         * @param rightDropped 是否舍掉了右栏
          */
-        private Sidebars(int left, int right, int messageWidth, boolean overBudget) {
+        private Sidebars(int left, int right, int messageWidth, boolean rightDropped) {
             this.left = left;
             this.right = right;
             this.messageWidth = messageWidth;
-            this.overBudget = overBudget;
+            this.rightDropped = rightDropped;
         }
     }
 }

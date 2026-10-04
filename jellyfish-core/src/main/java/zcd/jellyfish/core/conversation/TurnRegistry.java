@@ -1,5 +1,7 @@
 package zcd.jellyfish.core.conversation;
 
+import zcd.jellyfish.api.event.EventPublisher;
+import zcd.jellyfish.api.event.notification.TurnCancelledEvent;
 import zcd.jellyfish.core.ReActListener;
 import zcd.jellyfish.core.ReActResult;
 import zcd.jellyfish.core.ReActTurn;
@@ -9,6 +11,7 @@ import javax.inject.Singleton;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -24,6 +27,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * <b>它管什么、不管什么</b>：
  * <ul>
  *     <li>管：<b>起回合</b>的互斥、取消入口、以及「这个会话现在有没有在途回合」；</li>
+ *     <li>管：把取消<b>报出去</b>（{@link TurnCancelledEvent}）。取消此前只在外壳的可靠 lane 上可见，
+ *     而插件看不到那条通道；放在这里是因为「这次是不是第一次上报该会话的取消」只有本类知道
+ *     （{@link ReActTurn#cancel()} 幂等，但它不会让回合立刻变成已完成）；</li>
  *     <li>不管：<b>插件动作窗口</b>。那个窗口由 {@code ActionQueue.beginTurn/endTurn} 开闭
  *     （见 {@code constraints/extensions.md}），两者必须都存在——一个决定「插件能不能投递」，
  *     另一个决定「第二个提交该不该被拒」。</li>
@@ -58,10 +64,28 @@ public final class TurnRegistry {
             new ConcurrentHashMap<String, ReActTurn>();
 
     /**
+     * 已经上报过取消的会话。
+     * <p>
+     * <b>为什么需要它</b>：{@link ReActTurn#cancel()} 只置标志、掐断当前流，它<b>不会</b>让
+     * {@link ReActTurn#isDone()} 立刻变真——回合是在下一个检查点才收敛的。于是在这段窗口里重复按
+     * 取消键会走到同一条路径上，把同一次打断报成两次。计数型消费方（「用户打断了几次」）拿到这种
+     * 重复值只会得出错误结论，而去重不该是每个消费方各自要写一遍的事。
+     * <p>
+     * 清理与槽位归还同步（见 {@link #release}）：下一个回合的取消必须能重新上报。
+     */
+    private final Set<String> reported = ConcurrentHashMap.newKeySet();
+
+    /** 通知发布入口：取消事件走它。 */
+    private final EventPublisher events;
+
+    /**
      * 构造空的注册表。
+     *
+     * @param events 通知发布入口，不可为 {@code null}
      */
     @Inject
-    public TurnRegistry() {
+    public TurnRegistry(EventPublisher events) {
+        this.events = Objects.requireNonNull(events, "events must not be null");
     }
 
     /**
@@ -112,6 +136,8 @@ public final class TurnRegistry {
             return;
         }
         turns.remove(sessionId);
+        // 与槽位一起清掉「已上报取消」的标记：不清的话，这个会话的下一个回合被取消时就再也报不出来
+        reported.remove(sessionId);
         Semaphore semaphore = slots.get(sessionId);
         if (semaphore != null) {
             semaphore.release();
@@ -138,6 +164,15 @@ public final class TurnRegistry {
      * 取消一个会话的在途回合。
      * <p>
      * 在「已占用槽位、尚未绑定回合」的极小窗口里会返回 {@code false}——此刻还没有可取消的工作。
+     * <p>
+     * <b>取消成功时广播一条 {@link TurnCancelledEvent}</b>：取消此前只在外壳的可靠 lane 上可见
+     * （{@code ShellTurnEvent.CANCELLED}），插件看不到那条通道，于是无法区分「用户打断了」与
+     * 「回合正常结束」。事件带 {@code turnId}，需要的话可以据此把这次取消与那一轮的全部输出关联起来。
+     * <p>
+     * <b>同一次取消只广播一次</b>：重复请求（连按取消键、或在回合收敛过程中又按了一次）照旧返回
+     * {@code true}（确实取消到了一个在途回合），但不再重复广播——否则「打断了几次」这类计数会被算重。
+     * 判据落在<b>本类</b>而不是发起方：{@code ReActTurn.cancel()} 是幂等的，只有这里知道「这次是不是
+     * 第一次为这个会话上报取消」。
      *
      * @param sessionId 会话标识，可为 {@code null}
      * @return 真的取消到了在途回合返回 {@code true}；该会话没有在途回合时返回 {@code false}
@@ -151,6 +186,9 @@ public final class TurnRegistry {
             return false;
         }
         turn.cancel();
+        if (reported.add(sessionId)) {
+            events.publish(new TurnCancelledEvent(sessionId, turn.getTurnId()));
+        }
         return true;
     }
 

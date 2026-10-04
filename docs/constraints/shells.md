@@ -172,7 +172,8 @@
   （回合任务一提交就 append 用户消息，事后判断冲突已经污染历史）；冲突由 `ConversationService.submit` 抛
   `TurnInProgressException`，Server 映射 409、TUI 显示提示。**槽位的归还在内核**：
   `TurnRegistry.releasing` 把「终态回调」与「归还」绑死，调用方不需要（也不应该）自己写 `try/finally`。
-  `POST /sessions/{id}/cancel` 与 TUI 的 `Esc` 都走 `TurnRegistry.cancel(sessionId)`。
+  `POST /sessions/{id}/cancel` 与 TUI 的 `Esc` 都走 `TurnRegistry.cancel(sessionId)`；**取消成功会广播
+  `TurnCancelledEvent`**（插件侧唯一的「被打断」信号，同一次取消只报一遍，见 [extensions.md](extensions.md)）。
 - **API key 鉴权包在路由外面**（`ApiKeyGuard` 是外层 handler）：逐个处理器里加校验等于「漏一个就是一条攻击面」，
   而「新加接口忘了校验」**没有任何测试能可靠拦住**；包在外面则新接口默认就被保护，例外只能是显式声明的——
   **目前只有 `GET /health`**（探活必须能在没有密钥时工作，且它不含会话正文与路径）。

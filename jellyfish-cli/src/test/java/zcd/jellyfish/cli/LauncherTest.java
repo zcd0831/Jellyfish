@@ -110,7 +110,7 @@ class LauncherTest {
     private ConversationService conversations;
 
     /** 在途回合表：TUI / Server 装配需要。 */
-    private final TurnRegistry turnRegistry = new TurnRegistry();
+    private final TurnRegistry turnRegistry = new TurnRegistry(ignored -> { });
 
     /** 可靠 lane：三个模式装配都需要。 */
     private final ShellStreams shellStreams = new ShellStreams(new ShellIngress(new MetricsRegistry()));

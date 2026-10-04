@@ -52,7 +52,7 @@ class ServerRunModeTest {
     private final ConversationService conversations = mock(ConversationService.class);
 
     /** 在途回合表。 */
-    private final TurnRegistry turns = new TurnRegistry();
+    private final TurnRegistry turns = new TurnRegistry(ignored -> { });
 
     /** 可靠 lane。 */
     private final ShellStreams streams = new ShellStreams(new ShellIngress(new MetricsRegistry()));

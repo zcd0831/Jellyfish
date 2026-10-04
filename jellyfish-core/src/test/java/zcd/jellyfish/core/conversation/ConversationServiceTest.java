@@ -79,7 +79,7 @@ class ConversationServiceTest {
 
     @BeforeEach
     void setUp() {
-        turnRegistry = new TurnRegistry();
+        turnRegistry = new TurnRegistry(ignored -> { });
         streams = new ShellStreams(new ShellIngress(new MetricsRegistry()));
         service = new ConversationService(commands, inputTransforms, inputDirectives, sessions, turnRegistry,
                 streams, harness);

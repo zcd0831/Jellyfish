@@ -59,7 +59,7 @@ class SessionHandlersTest {
         agents = Mockito.mock(AgentManager.class);
         models = Mockito.mock(ModelManager.class);
         handlers = new SessionHandlers(ServerConfig.builder("127.0.0.1", 9096).build(), sessions, agents, models,
-                new zcd.jellyfish.core.conversation.TurnRegistry());
+                new zcd.jellyfish.core.conversation.TurnRegistry(ignored -> { }));
     }
 
     /**

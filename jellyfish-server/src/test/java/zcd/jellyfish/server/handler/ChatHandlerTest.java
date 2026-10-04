@@ -83,7 +83,7 @@ class ChatHandlerTest {
     void setUp() {
         conversations = Mockito.mock(ConversationService.class);
         streams = new ShellStreams(new ShellIngress(new MetricsRegistry()));
-        turns = new TurnRegistry();
+        turns = new TurnRegistry(ignored -> { });
         sessions = Mockito.mock(SessionManager.class);
         config = ServerConfig.builder("127.0.0.1", 9096).build();
         approvals = new ApprovalBridge(new ApprovalChannel());

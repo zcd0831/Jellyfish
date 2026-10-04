@@ -224,6 +224,9 @@ fork 不复制 token 用量，压缩摘要按「边界是否落在复制范围�
 - **run 的生命周期对插件可见**：内核把 run 的开始与结束翻成 `AgentRunProgressEvent` 发到通知通道，
   插件据此把「谁在做」画到自己的界面上。这条通道**可丢**（异步通知），因此消费方自愈：
   展示层给条目设过期时限，而不是把丢失的结束事件变成永久的「正在跑」。
+- **「回合被用户打断」同样是可见的**：`TurnRegistry.cancel` 取消到在途回合时广播 `TurnCancelledEvent`
+  （带 `turnId`）。取消此前只在外壳的可靠 lane 上可见，而插件看不到那条通道；事件只报顶层回合的取消、
+  只报一遍（连按取消键不会算重），子代理那侧的取消是父回合级联下来的一环，不单独上报。
 - **递归有三道上限 + 一套预算**：`subAgent.maxDepth`（一条链多深）、`subAgent.maxSpawnsPerTurn`（一层扇出多少）
   与 `subAgent.maxConcurrentRuns`（全局同时在跑多少）——三者正交，只有其中一个都不够；再叠加
   单 run 墙钟 / 单 run token / 树 token 三个预算。子代理自己能不能再往下委派，取决于它的 `allowedTools` 里有没有 `task`。

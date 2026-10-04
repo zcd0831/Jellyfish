@@ -2,18 +2,25 @@ package zcd.jellyfish.core.conversation;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.mockito.Mockito;
+import org.mockito.ArgumentCaptor;
 import zcd.jellyfish.api.JellyfishException;
+import zcd.jellyfish.api.event.EventPublisher;
+import zcd.jellyfish.api.event.notification.TurnCancelledEvent;
 import zcd.jellyfish.core.ReActListener;
 import zcd.jellyfish.core.ReActResult;
 import zcd.jellyfish.core.ReActTurn;
 
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -24,11 +31,15 @@ import static org.mockito.Mockito.when;
  */
 class TurnRegistryTest {
 
+    /** 通知发布入口：取消事件的观察点。 */
+    private EventPublisher events;
+
     private TurnRegistry turns;
 
     @BeforeEach
     void setUp() {
-        turns = new TurnRegistry();
+        events = mock(EventPublisher.class);
+        turns = new TurnRegistry(events);
     }
 
     @Test
@@ -77,12 +88,89 @@ class TurnRegistryTest {
     @Test
     void cancel_should_delegate_to_bound_turn() {
         turns.acquire("s1");
-        ReActTurn turn = Mockito.mock(ReActTurn.class);
+        ReActTurn turn = mock(ReActTurn.class);
         when(turn.isDone()).thenReturn(false);
+        when(turn.getTurnId()).thenReturn("t-1");
         turns.bind("s1", turn);
 
         assertTrue(turns.cancel("s1"));
         verify(turn).cancel();
+    }
+
+    @Test
+    void cancel_should_publish_cancelled_event_with_turn_id() {
+        // Given：一个在途回合
+        turns.acquire("s1");
+        ReActTurn turn = mock(ReActTurn.class);
+        when(turn.isDone()).thenReturn(false);
+        when(turn.getTurnId()).thenReturn("t-1");
+        turns.bind("s1", turn);
+
+        // When
+        assertTrue(turns.cancel("s1"));
+
+        // Then：插件侧看得到「谁被打断了」，且能凭 turnId 关联那一轮的输出
+        ArgumentCaptor<TurnCancelledEvent> captured = ArgumentCaptor.forClass(TurnCancelledEvent.class);
+        verify(events).publish(captured.capture());
+        assertEquals("s1", captured.getValue().getSessionId());
+        assertEquals("t-1", captured.getValue().getTurnId());
+    }
+
+    @Test
+    void cancel_should_not_publish_twice_for_same_turn() {
+        // Given：回合已经取消，但还没跑到终态（ReActTurn.cancel 只置标志，isDone 仍为假）
+        turns.acquire("s1");
+        ReActTurn turn = mock(ReActTurn.class);
+        when(turn.isDone()).thenReturn(false);
+        when(turn.getTurnId()).thenReturn("t-1");
+        turns.bind("s1", turn);
+
+        // When：连按两次取消
+        turns.cancel("s1");
+        turns.cancel("s1");
+
+        // Then：取消动作本身幂等，但事件只报一次——否则「打断了几次」这类计数会被算重
+        verify(events, times(1)).publish(any(TurnCancelledEvent.class));
+    }
+
+    @Test
+    void cancel_should_publish_again_for_next_turn_of_same_session() {
+        // Given：一个回合被取消，并走到终态（槽位归还）
+        TurnRegistry.Slot firstSlot = turns.acquire("s1");
+        ReActTurn first = mock(ReActTurn.class);
+        when(first.isDone()).thenReturn(false);
+        when(first.getTurnId()).thenReturn("t-1");
+        turns.bind("s1", first);
+        turns.cancel("s1");
+        turns.release("s1", firstSlot);
+
+        // When：同一个会话的下一个回合又被取消
+        turns.acquire("s1");
+        ReActTurn second = mock(ReActTurn.class);
+        when(second.isDone()).thenReturn(false);
+        when(second.getTurnId()).thenReturn("t-2");
+        turns.bind("s1", second);
+        turns.cancel("s1");
+
+        // Then：去重标记必须随槽位一起清掉，否则第二个回合的取消再也报不出来
+        ArgumentCaptor<TurnCancelledEvent> captured = ArgumentCaptor.forClass(TurnCancelledEvent.class);
+        verify(events, times(2)).publish(captured.capture());
+        assertEquals("t-1", captured.getAllValues().get(0).getTurnId());
+        assertEquals("t-2", captured.getAllValues().get(1).getTurnId());
+    }
+
+    @Test
+    void cancel_should_not_publish_when_nothing_running() {
+        // When：没有在途回合，或回合已经结束
+        assertFalse(turns.cancel("missing"));
+        turns.acquire("s1");
+        ReActTurn turn = mock(ReActTurn.class);
+        when(turn.isDone()).thenReturn(true);
+        turns.bind("s1", turn);
+        assertFalse(turns.cancel("s1"));
+
+        // Then：没取消到任何东西就没有「被打断」可言
+        verify(events, never()).publish(any(TurnCancelledEvent.class));
     }
 
     @Test
@@ -94,7 +182,7 @@ class TurnRegistryTest {
     @Test
     void cancel_should_return_false_when_turn_already_done() {
         turns.acquire("s1");
-        ReActTurn turn = Mockito.mock(ReActTurn.class);
+        ReActTurn turn = mock(ReActTurn.class);
         when(turn.isDone()).thenReturn(true);
         turns.bind("s1", turn);
 
@@ -106,7 +194,7 @@ class TurnRegistryTest {
         assertFalse(turns.isRunning("s1"));
 
         turns.acquire("s1");
-        ReActTurn turn = Mockito.mock(ReActTurn.class);
+        ReActTurn turn = mock(ReActTurn.class);
         when(turn.isDone()).thenReturn(false);
         turns.bind("s1", turn);
 
@@ -116,7 +204,7 @@ class TurnRegistryTest {
     @Test
     void turnOf_should_expose_bound_turn() {
         turns.acquire("s1");
-        ReActTurn turn = Mockito.mock(ReActTurn.class);
+        ReActTurn turn = mock(ReActTurn.class);
         turns.bind("s1", turn);
 
         assertSame(turn, turns.turnOf("s1").get());
@@ -163,7 +251,7 @@ class TurnRegistryTest {
     @Test
     void releasing_should_forward_non_terminal_events() {
         TurnRegistry.Slot slot = turns.acquire("s1");
-        ReActListener delegate = Mockito.mock(ReActListener.class);
+        ReActListener delegate = mock(ReActListener.class);
         ReActListener wrapped = turns.releasing("s1", slot, delegate);
 
         wrapped.onText("a");

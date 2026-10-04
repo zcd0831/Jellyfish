@@ -23,9 +23,10 @@ import java.util.Map;
  * 所以必须先确定行再确定列。
  * <p>
  * <b>每一条收缩规则都是为了消息区</b>：面板是插件想要的，消息区是用户要看的。因此
- * 纵向有 {@link #MIN_MESSAGE_ROWS} 与区域总高上限，横向有 {@link #MIN_MESSAGE_WIDTH}——
- * 预算不够时先把侧栏按内容夹进单侧与合计上限，再依次舍右栏、左栏，最后宁可窄也不给负数。
- * 插件无权把消息区挤没。
+ * 纵向有 {@link #MIN_MESSAGE_ROWS} 与区域总高上限、横向有 {@link #MIN_MESSAGE_WIDTH}——
+ * 预算不够时先把侧栏按内容夹进单侧与合计上限，再依次舍右栏、左栏；纵向面板则在
+ * 「总高扣除消息区下限与不可让位的底部各段」剩下的预算里按优先级分配，分不够就变矮、
+ * 分不到一块面板就没有它。最后宁可窄也不给负数。插件无权把消息区挤没。
  * <p>
  * 纯函数，不可变，可单测：<b>它因此不记日志</b>——本类每渲染一帧就被调用一次，而日志是按「状态
  * 变化」而不是「被调用」才有意义的（否则同一句话每秒刷几十遍）。它把「本帧舍了右栏」如实报出去
@@ -64,6 +65,9 @@ public final class ChatLayout {
 
     /** 单个纵向区域（{@code DOCK} / {@code TOP}）的总高上限（与终端高度取小）。 */
     static final int REGION_MAX_ROWS_CAP = 12;
+
+    /** 一个纵向面板最少要占的行数（1 行内容 + 上下边框）：少于它就不该占位。 */
+    static final int MIN_PANEL_ROWS = 1 + BORDER * 2;
 
     /** 终端总列数。 */
     private final int terminalWidth;
@@ -135,15 +139,48 @@ public final class ChatLayout {
         // 纵向区域的总高上限：终端很矮时进一步收紧，避免面板把消息区挤到只剩 MIN_MESSAGE_ROWS
         int regionLimit = Math.min(height / 3, REGION_MAX_ROWS_CAP);
 
-        int dockRows = Math.min(panelRows(panelIn(visible, UiRegion.DOCK)), regionLimit);
-        int topRows = Math.min(panelRows(panelIn(visible, UiRegion.TOP)), regionLimit);
-        int bottomRows = Math.max(0, overlayRows) + dockRows
-                + Math.max(0, inputPanelRows) + STATUS_ROWS;
+        // 不可让位的底部各段（浮层 / 输入区 / 状态栏）：它们与纵向面板抢的是同一摞空间
+        int fixedBottom = Math.max(0, overlayRows) + Math.max(0, inputPanelRows) + STATUS_ROWS;
+        // 面板可分的纵向预算 = 总高 − 消息区下限（含它自己的边框）− 不可让位的底部。
+        // 面板只许在这里面分，因此消息区永远不会被挤到下限以下。
+        int panelBudget = Math.max(0, height - (MIN_MESSAGE_ROWS + BORDER * 2) - fixedBottom);
+        int dockRows = allocateRows(panelRows(panelIn(visible, UiRegion.DOCK)), regionLimit, panelBudget);
+        int topRows = allocateRows(panelRows(panelIn(visible, UiRegion.TOP)), regionLimit,
+                panelBudget - dockRows);
+        int bottomRows = fixedBottom + dockRows;
         int messageRows = Math.max(MIN_MESSAGE_ROWS, height - BORDER * 2 - bottomRows - topRows);
 
         Sidebars sidebars = sidebarsOf(width, visible);
         return new ChatLayout(width, bottomRows, topRows, sidebars.messageWidth, messageRows,
                 sidebars.left, sidebars.right, dockRows, sidebars.rightDropped);
+    }
+
+    /**
+     * 在一个纵向区域的可用预算里分配行数。
+     * <p>
+     * <b>为什么需要这个预算</b>：{@code DOCK} / {@code TOP} 的高度由内容决定
+     * （{@code min(内容行, 8) + 边框}），不像侧栏那样跟着消息区自动变矮。于是「浮层 + 两个满面板 +
+     * 输入区 + 状态栏」在矮终端上会超过总高，而 {@code messageRows} 的 {@code max(下限)} 只是把账本
+     * 撑成自相矛盾的数字——框架该占几行还是几行，现场表现是底部被裁掉（审批框的键位提示或输入框
+     * 看不见）。让它们<b>变矮</b>而不是让整帧溢出，与横向「两栏各保下限」是同一条原则。
+     * <p>
+     * 分配按优先级先到先得，不按比例：{@code DOCK} 是工作面板实际落的地方（待办的回退落位、
+     * 子代理面板），{@code TOP} 目前没有官方插件在用，因此预算不够时先矮 {@code TOP}。
+     * 分到的可能少于想要的——渲染时由 {@code UiRender.toVisualLines} 截成「… 还有 N 行」；
+     * 但分不到 {@link #MIN_PANEL_ROWS} 就<b>归零</b>：只剩边框的面板没有意义，
+     * 而 {@link ChatShell} 会据 0 行不渲染它。
+     *
+     * @param desiredRows 该区域按内容想要的行数（含边框）
+     * @param regionLimit 单区域上限
+     * @param budget      本次可用的行数，可为负
+     * @return 分配到的行数；不占位时为 0
+     */
+    private static int allocateRows(int desiredRows, int regionLimit, int budget) {
+        int wanted = Math.min(desiredRows, regionLimit);
+        if (wanted <= 0 || budget < MIN_PANEL_ROWS) {
+            return 0;
+        }
+        return Math.min(wanted, budget);
     }
 
     /**

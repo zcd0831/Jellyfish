@@ -12,7 +12,6 @@ import zcd.jellyfish.tui.text.StyledSegment;
 import zcd.jellyfish.tui.text.VisualLine;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
@@ -131,27 +130,6 @@ public final class ChatShell {
     }
 
     /**
-     * 计算本帧真正要显示的面板。
-     * <p>
-     * <b>模态浮层打开时面板区整体让位</b>：浮层（补全面板 / 二级选择页）是「正在输入、正在挑参数」
-     * 的强交互，和常驻面板同屏只会把焦点搞散，而它就在输入框上方、与面板根本不重叠——
-     * 所以让位是主动的，不是重叠导致的。
-     * <p>
-     * <b>只影响这一帧的显示</b>：传进来的面板集合并不会被改写，外壳的落位状态也不变，
-     * 因此关掉浮层立刻恢复，不需要重新向插件收集（对应「缓存不清」）。
-     *
-     * @param declared 外壳当前选中的面板，可为 {@code null}
-     * @param overlay  本帧浮层，可为 {@code null}
-     * @return 要显示的面板；浮层有内容时为空映射
-     */
-    public static Map<UiRegion, OwnedPanel> visiblePanels(Map<UiRegion, OwnedPanel> declared, Overlay overlay) {
-        if (overlayRows(overlay) > 0) {
-            return Collections.emptyMap();
-        }
-        return declared == null ? Collections.<UiRegion, OwnedPanel>emptyMap() : declared;
-    }
-
-    /**
      * 渲染一帧。
      *
      * @param view       本帧消息区窗口，不可为 {@code null}
@@ -247,16 +225,20 @@ public final class ChatShell {
      * <p>
      * 折行宽度与行数上限都取自账本：<b>插件无权控制尺寸</b>，它给多少内容都不会撑坏版式。
      * 内容折行后若超过分配的高度，由 {@link UiRender#toVisualLines} 截断并留一行提示。
+     * <p>
+     * <b>{@code contentRows} 小于 1 时返回 {@code null}</b>：那是账本在矮终端上把这个区域让出去的结果
+     * （见 {@code ChatLayout.allocateRows}）。缺了这道判断，{@link UiRender#toVisualLines} 会把行数
+     * 下限兜到 1、照样画出一个账本里并不存在的面板，整帧就比账本多占三行——「底部被裁掉」正是这么来的。
      *
      * @param panels       区域面板，可为 {@code null}
      * @param region       区域
      * @param contentWidth 可用内容列数
-     * @param maxRows      可用内容行数
-     * @return 面板元素；该区域没有面板或内容为空时返回 {@code null}
+     * @param contentRows  可用内容行数（已扣除边框）；小于 1 表示本帧不显示
+     * @return 面板元素；该区域没有面板、内容为空或没分到行数时返回 {@code null}
      */
     private static Element panelElement(Map<UiRegion, OwnedPanel> panels, UiRegion region,
-                                        int contentWidth, int maxRows) {
-        if (panels == null) {
+                                        int contentWidth, int contentRows) {
+        if (panels == null || contentRows < 1) {
             return null;
         }
         OwnedPanel panel = panels.get(region);
@@ -264,7 +246,7 @@ public final class ChatShell {
             return null;
         }
         PanelContribution contribution = panel.getContribution();
-        List<VisualLine> lines = UiRender.toVisualLines(contribution, contentWidth, maxRows);
+        List<VisualLine> lines = UiRender.toVisualLines(contribution, contentWidth, contentRows);
         if (lines.isEmpty()) {
             return null;
         }

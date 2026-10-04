@@ -13,14 +13,14 @@ import java.util.EnumMap;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * {@link ChatShell} 中不依赖终端的纯逻辑的单元测试。
  * <p>
- * 真实的元素渲染不在这里断言（它要终端）；这里守的是「面板什么时候该让位」与
- * 「浮层占多少行」这两条账本口径——它们错了就会让消息区被顶掉一行或面板白消失。
+ * 真实的元素渲染不在这里断言（它要终端）；这里守的是「浮层占多少行」以及
+ * 「浮层打开时面板是变矮而不是消失」这两条账本口径——它们错了就会让消息区被顶掉一行、
+ * 或者面板白消失。
  *
  * @author zcd
  */
@@ -50,6 +50,30 @@ class ChatShellTest {
         return map;
     }
 
+    /**
+     * 构造「只有左右侧栏」的区域映射。
+     * <p>
+     * 断言「侧栏变矮了多少」时必须用它：若同时含 {@code DOCK} / {@code TOP}，浮层打开时消息区
+     * 会同时被浮层与纵向面板两头压，两个方向的变化叠在一起就测不出真正想钉的那条。
+     *
+     * @return 映射
+     */
+    private static Map<UiRegion, OwnedPanel> sidebarsOnly() {
+        Map<UiRegion, OwnedPanel> map = new EnumMap<UiRegion, OwnedPanel>(UiRegion.class);
+        map.put(UiRegion.LEFT, panelOf("l", UiRegion.LEFT));
+        map.put(UiRegion.RIGHT, panelOf("r", UiRegion.RIGHT));
+        return map;
+    }
+
+    /**
+     * 构造一个非空浮层。
+     *
+     * @return 浮层
+     */
+    private static Overlay overlay() {
+        return new Overlay(" 命令 ", Collections.singletonList(VisualLine.of("x")));
+    }
+
     @Test
     @DisplayName("空浮层不占行：否则消息区会被白顶掉两行")
     void overlayRows_should_beZero_when_noContent() {
@@ -66,53 +90,36 @@ class ChatShellTest {
     }
 
     @Test
-    @DisplayName("没有浮层时面板照常显示")
-    void visiblePanels_should_keepPanels_when_noOverlay() {
+    @DisplayName("浮层打开时侧栏留下并自己变矮：不消失，只是把行数让给浮层")
+    void layout_should_shrinkSidebars_when_overlayShown() {
+        Map<UiRegion, OwnedPanel> declared = sidebarsOnly();
+        int overlayRows = ChatShell.overlayRows(overlay());
+
+        // 用 202 列（实测终端）：窄于 minWidthForBothSidebars() 时右栏本来就会因为宽度被舍掉，
+        // 那是另一条判据，会把这个用例想验的「浮层导致的差别」盖住
+        ChatLayout without = ChatLayout.compute(202, 40, 5, 0, declared);
+        ChatLayout with = ChatLayout.compute(202, 40, 5, overlayRows, declared);
+
+        assertTrue(with.getRightWidth() > 0, "右栏必须还在——这正是「不消失」");
+        assertEquals(without.getRightWidth(), with.getRightWidth(), "浮层只影响高度，不该动侧栏宽度");
+        assertEquals(overlayRows, without.getMessageRows() - with.getMessageRows(),
+                "侧栏高度取自消息区，因此浮层占的行数正好是侧栏变矮的幅度");
+    }
+
+    @Test
+    @DisplayName("浮层打开时纵向面板留下并按预算变矮：抢的是行数，不是可见性")
+    void layout_should_shrinkVerticalPanel_when_overlayShown() {
         Map<UiRegion, OwnedPanel> declared = docked();
+        int desired = ChatLayout.panelRows(declared.get(UiRegion.DOCK));
 
-        assertSame(declared, ChatShell.visiblePanels(declared, null));
-        assertSame(declared, ChatShell.visiblePanels(declared, Overlay.none()));
-    }
+        ChatLayout without = ChatLayout.compute(100, 30, 5, 0, declared);
+        ChatLayout with = ChatLayout.compute(100, 30, 5, ChatShell.overlayRows(overlay()), declared);
 
-    @Test
-    @DisplayName("模态浮层打开时面板整体让位：浮层是强交互，同屏只会把焦点搞散")
-    void visiblePanels_should_hidePanels_when_overlayShown() {
-        Overlay overlay = new Overlay(" 命令 ", Collections.singletonList(VisualLine.of("x")));
-
-        assertTrue(ChatShell.visiblePanels(docked(), overlay).isEmpty());
-    }
-
-    @Test
-    @DisplayName("让位只影响本帧：传进来的面板集合不被改写，落位状态不受影响")
-    void visiblePanels_should_notMutateDeclared() {
-        Map<UiRegion, OwnedPanel> declared = docked();
-        Overlay overlay = new Overlay(" 命令 ", Collections.singletonList(VisualLine.of("x")));
-
-        ChatShell.visiblePanels(declared, overlay);
-
-        assertEquals(1, declared.size());
-        assertTrue(declared.containsKey(UiRegion.DOCK));
-    }
-
-    @Test
-    @DisplayName("没有面板时返回空映射，不返回 null")
-    void visiblePanels_should_tolerateNull() {
-        assertTrue(ChatShell.visiblePanels(null, null).isEmpty());
-    }
-
-    @Test
-    @DisplayName("浮层打开时账本按「无面板」算：面板让位后消息区应当拿回整宽整高")
-    void layout_should_reclaimSpace_when_panelsYield() {
-        Overlay overlay = new Overlay(" 命令 ", Collections.singletonList(VisualLine.of("x")));
-        Map<UiRegion, OwnedPanel> declared = docked();
-        int dockRows = ChatLayout.panelRows(declared.get(UiRegion.DOCK));
-
-        ChatLayout withPanels = ChatLayout.compute(100, 30, 5, ChatShell.overlayRows(overlay), declared);
-        ChatLayout yielded = ChatLayout.compute(100, 30, 5, ChatShell.overlayRows(overlay),
-                ChatShell.visiblePanels(declared, overlay));
-
-        assertEquals(withPanels.getDockRows() - dockRows, yielded.getDockRows());
-        assertEquals(withPanels.getMessageRows() + dockRows, yielded.getMessageRows());
+        assertEquals(desired, without.getDockRows(), "没有浮层时按内容占满");
+        assertEquals(desired, with.getDockRows(),
+                "高 30 的终端装得下：浮层出现时 DOCK 不该被抽掉");
+        assertEquals(ChatShell.overlayRows(overlay()), without.getMessageRows() - with.getMessageRows(),
+                "浮层占的行数从消息区里出，DOCK 的高度不跟着变");
     }
 
     @Test

@@ -116,26 +116,32 @@ class ChatLayoutTest {
     }
 
     @Test
-    @DisplayName("所有纵向面板合计超限时进一步收紧：区域上限 = min(终端高/3, 12)")
-    void compute_should_capRegionRows() {
+    @DisplayName("纵向面板按预算分配：分不够时先矮 TOP，整帧不许超出终端高度")
+    void compute_should_shareVerticalBudget_whenPanelsExceedHeight() {
         Map<UiRegion, OwnedPanel> visible = visibleOf(
                 UiRegion.DOCK, panelOf("d", 8, UiRegion.DOCK),
                 UiRegion.TOP, panelOf("t", 8, UiRegion.TOP));
 
-        // 终端高 30 → 区域上限 = min(10, 12) = 10
+        // 终端高 30：区域上限 min(10,12)=10，两者各想要 10；扣除消息区下限（5+2 边框）
+        // 与底部固定段（输入 5 + 状态栏 1）后，面板只分得到 17 行
         ChatLayout layout = ChatLayout.compute(100, 30, INPUT_ROWS, 0, visible);
 
-        assertEquals(10, layout.getDockRows());
-        assertEquals(10, layout.getTopRows());
+        assertEquals(10, layout.getDockRows(), "DOCK 优先，拿到自己的上限");
+        assertEquals(7, layout.getTopRows(), "TOP 拿剩下的——分不够就变矮，而不是把它抽掉");
+        assertEquals(ChatLayout.MIN_MESSAGE_ROWS, layout.getMessageRows());
+        assertEquals(30, layout.getTopRows() + layout.getMessageRows() + ChatLayout.BORDER * 2
+                        + layout.getBottomRows(),
+                "整帧必须正好等于终端高度：多出来的部分会把底部（审批提示 / 输入框）裁掉");
     }
 
     @Test
-    @DisplayName("矮终端也要保住消息区下限：面板让路而不是把消息区挤成一条")
+    @DisplayName("矮终端上面板分不到行数就归零：只剩边框的面板没有意义，而消息区下限不许被挤穿")
     void compute_should_keepMinMessageRows() {
         Map<UiRegion, OwnedPanel> visible = visibleOf(UiRegion.DOCK, panelOf("d", 8, UiRegion.DOCK));
 
         ChatLayout layout = ChatLayout.compute(100, 12, INPUT_ROWS, 0, visible);
 
+        assertEquals(0, layout.getDockRows(), "高 12 装不下任何面板：归零而不是画一条边框");
         assertEquals(ChatLayout.MIN_MESSAGE_ROWS, layout.getMessageRows());
     }
 

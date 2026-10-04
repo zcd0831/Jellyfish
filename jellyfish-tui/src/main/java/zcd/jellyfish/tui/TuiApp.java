@@ -484,8 +484,9 @@ public final class TuiApp extends ToolkitApp {
         // 指令进度每帧对齐一次：执行线程只写暂存区，这里负责在它结束时收尾
         syncDirective();
         Overlay overlay = buildOverlay(width);
-        // 模态浮层打开时面板让位（只影响本帧显示，落位与缓存都不动）
-        Map<UiRegion, OwnedPanel> panels = ChatShell.visiblePanels(declared, overlay);
+        // 面板不再因为浮层而让位：它们照常显示，需要时由账本按纵向预算让它们变矮
+        // （见 ChatLayout.allocateRows）——抽掉面板的代价每次交互都要付，而浮层与面板并不重叠
+        Map<UiRegion, OwnedPanel> panels = declared;
         ChatLayout layout = ChatLayout.compute(size.width(), size.height(), input.panelRows(),
                 ChatShell.overlayRows(overlay), panels);
         logSidebarDrop(layout, size.width());

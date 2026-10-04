@@ -491,7 +491,9 @@ flowchart TB
   内核新增扩展点而未分类会让插件仓库构建失败。这与「新增扩展点的公共约定」配套（见
   [constraints/extensions.md](constraints/extensions.md#新增扩展点的公共约定)）。
   - **已落地的脚本侧能力**：handler 可以是 async（Node；Python 的 HTTP 天然同步，无需改造）；
-    逐脚本配置段 `plugins.configurations.<桥接插件>.scripts.<脚本 id>`，与 Java 插件同一条 `${ENV}` 插值通道。
+    逐脚本配置段 `plugins.configurations.<桥接插件>.scripts.<脚本 id>`，与 Java 插件同一条 `${ENV}` 插值通道；
+    工具可返回带 `summary` / `terminal` 的元数据（轨迹行上的一句话与失败标记），并拿得到调用者身份
+    （`parentSessionId` / `runId` / `rootRunId`）。
   - **明确不做的扩展点**：返回 Java 对象的（`ProviderRegistrationRequest` 要一个 `LlmTransport`，脚本给不了）、
     跑在渲染线程 / 启动期的（`ToolRenderHintRequest` / `InputReferenceRequest` / `ShortcutContributionRequest`）——
     脚本调用是一次可能冷启动的进程往返，这些位置不能付这个代价。

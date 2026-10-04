@@ -485,9 +485,9 @@ flowchart TB
 以下是**尚未做**或**明确不做**的部分，不要当成待办之外的现存 API。
 
 - **脚本插件的能力档（不是「与 Java 插件同权」）**：`jellyfish-plugin-python` / `jellyfish-plugin-node` 把脚本目录
-  暴露成标准插件，但**只覆盖一部分扩展点**——已打通 18 个（工具、命令、候选查询、模型目录，
-  提示词 / 状态栏 / 面板贡献，权限拦截，会话持久化三段，压缩策略，工具参数改写与结果整形，
-  回合上下文，会话关闭前与分支前，压缩前）。「还没做」与「明确不做」写入插件仓库的
+  暴露成标准插件，但**只覆盖一部分扩展点**——已打通 24 个（工具、命令、候选查询、模型目录、
+  输入指令，提示词 / 状态栏 / 面板贡献，权限拦截，会话持久化三段，压缩策略，工具参数改写与结果整形，
+  回合上下文，会话关闭前与分支前，压缩前，工具激活，输入改写，回合开始前，请求调优，老化策略）。「还没做」与「明确不做」写入插件仓库的
   `script/extension-points.json`（`in` / `planned` / `excluded` 三档），并由那里的 `ExtensionPointCoverageTest` 守着：
   内核新增扩展点而未分类会让插件仓库构建失败。这与「新增扩展点的公共约定」配套（见
   [constraints/extensions.md](constraints/extensions.md#新增扩展点的公共约定)）。
@@ -498,6 +498,9 @@ flowchart TB
   - **明确不做的扩展点**：返回 Java 对象的（`ProviderRegistrationRequest` 要一个 `LlmTransport`，脚本给不了）、
     跑在渲染线程 / 启动期的（`ToolRenderHintRequest` / `InputReferenceRequest` / `ShortcutContributionRequest`）——
     脚本调用是一次可能冷启动的进程往返，这些位置不能付这个代价。
+  - **热路径点不冷启动**：`request_tuning` / `aging_strategy` 每次组装请求都会被问到，
+    桥接层对它们**不冷启动**（worker 没热着就返回「不表态」）并给 2 秒短截止，
+    避免把一次进程冷启动或一个卡住的脚本变成一次卡住的请求。见 `HotPathPoints`。
   - **已知边界**：脚本进程的环境变量是**严格白名单**（密钥不能靠 env 传，要走上一条配置段）；
     取消令牌能中止在途调用（失败 + 隔离 worker），但**脚本侧看不到取消标志**——worker 单线程，
     在途调用期间读不到新帧，因此脚本不能用它做资源清理；**输出捕获（`ToolOutputSink`）明确不做**——

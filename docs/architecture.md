@@ -493,14 +493,15 @@ flowchart TB
   - **已落地的脚本侧能力**：handler 可以是 async（Node；Python 的 HTTP 天然同步，无需改造）；
     逐脚本配置段 `plugins.configurations.<桥接插件>.scripts.<脚本 id>`，与 Java 插件同一条 `${ENV}` 插值通道；
     工具可返回带 `summary` / `terminal` 的元数据（轨迹行上的一句话与失败标记），并拿得到调用者身份
-    （`parentSessionId` / `runId` / `rootRunId`）。
+    （`parentSessionId` / `runId` / `rootRunId`）；取消令牌会中止在途脚本调用。
   - **明确不做的扩展点**：返回 Java 对象的（`ProviderRegistrationRequest` 要一个 `LlmTransport`，脚本给不了）、
     跑在渲染线程 / 启动期的（`ToolRenderHintRequest` / `InputReferenceRequest` / `ShortcutContributionRequest`）——
     脚本调用是一次可能冷启动的进程往返，这些位置不能付这个代价。
   - **已知边界**：脚本进程的环境变量是**严格白名单**（密钥不能靠 env 传，要走上一条配置段）；
-    脚本工具拿不到取消令牌与输出捕获（长抓取只能等 `invokeTimeoutSeconds`）；脚本没有出向边
-    （`submit` / `present` / 扩展条目 / `delegations`）——这四件是「脚本只处理请求」这个立场的代价，
-    与「同权」无关。
+    取消令牌能中止在途调用（失败 + 隔离 worker），但**脚本侧看不到取消标志**——worker 单线程，
+    在途调用期间读不到新帧，因此脚本不能用它做资源清理；输出捕获（`ToolOutputSink`）仍未开放，
+    超大输出靠内核事后截断；脚本没有出向边（`submit` / `present` / 扩展条目 / `delegations`）——
+    这四件是「脚本只处理请求」这个立场的代价，与「同权」无关。
 
 - **`-server`**：**已落地**（`jellyfish-server`，Undertow 2.2.39.Final）——REST + SSE 接口面、会话按 id 寻址、
   一会话一在途回合（内核 `TurnRegistry`）、HTTP 化人工审批（按会话多槽位）、`GET /health` 都在。**鉴权已落地**（API key：`--api-key` 或环境变量

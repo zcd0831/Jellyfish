@@ -122,6 +122,15 @@
   **插件不可能自己造 TamboUI 组件**（子优先类加载器会让 `Element` 不是同一个 Class）。
 - **区域归外壳**：`preferredRegion` 只是软建议，落位在 `UiPlacement`（用户指定优先于 order）；
   `/ui` 是外壳自有命令，清单要列出被挤下去的候选名字。
+- **`/ui` 的两级选择页靠「命令级联」实现，选择页组件仍是单层的**：`/ui` 给区域候选（二级页），
+  `/ui <region>` 给该区域的 pluginId 与 `on` / `off` 候选（三级页），都只读；落到具体的
+  `<pluginId>` / `on` / `off` / `cycle` 才改 `UiPlacement`。级联成立的前提是
+  **选择页确认＝把取值拼回命令再执行一次**（`confirmChoice` → `command + " " + value`），
+  因此下一级就是命令被再执行一次，不需要给 `CommandChoicePicker` 加层级栈——这是刻意的：
+  那个组件被审批浮层共用（`ApprovalPrompt` 复用它渲染），加层级会同时改动审批的按键语义。
+  **推论（一处易踩的坑）**：`confirmChoice` 必须先走 `executeShellOwned`，
+  否则外壳自有命令被当成内核命令、`/ui dock` 会得到「未知命令」，第二级就断了。
+  `/ui <region>` 因此不再表示轮换（改成了弹三级页），轮换移到 `/ui <region> cycle`。
 - **五边版式全用 `length(n)`，不用 `percent` / `fill`**，账本由 `ChatLayout` 自己算（侧栏单侧 `[20, W/4]`、
   合计 ≤ `W/3`、`W < 80` 隐藏，不足先砍右栏）；收敛规则都为消息区让路，模态浮层打开时面板让位。
 - **UI 贡献「失效时收集」而非每帧**：触发源＝首帧、会话切换、回合开始、回合收敛、命令执行后、

@@ -1,10 +1,12 @@
 package zcd.jellyfish.tui;
 
+import zcd.jellyfish.api.extension.CommandChoice;
 import zcd.jellyfish.api.ui.UiRegion;
 import zcd.jellyfish.infra.ui.OwnedPanel;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -42,8 +44,15 @@ final class UiCommand {
     /** 恢复当前区域或状态栏片段的取值。 */
     private static final String ON = "on";
 
+    /** 在区域内轮换到下一个候选的显式子命令。 */
+    private static final String CYCLE = "cycle";
+
+    /** 直接列出清单文本、不弹选择页的子命令。 */
+    private static final String LIST = "list";
+
     /** 用法说明（清单与报错共用一处，避免两处口径不一致）。 */
-    private static final String USAGE = "用法：" + PREFIX + " [<region> [<pluginId> | " + OFF + " | " + ON + "]]"
+    private static final String USAGE = "用法：" + PREFIX + " [" + LIST + "]"
+            + " | [<region> [<pluginId> | " + CYCLE + " | " + OFF + " | " + ON + "]]"
             + "   <region>：" + String.join(" / ", REGIONS.keySet());
 
     private UiCommand() {
@@ -70,27 +79,43 @@ final class UiCommand {
     /**
      * 执行一条 {@code /ui} 命令。
      * <p>
-     * 无参数时只列清单（<b>纯只读</b>，不改变任何显示状态）；带参数时才改动 {@link UiPlacement}。
+     * <b>两级页面</b>：无参数时给出区域候选（二级页），{@code /ui <region>} 给出该区域的
+     * pluginId 与 on / off 候选（三级页）；这两条路都<b>只读</b>，不改动 {@link UiPlacement}，
+     * 只有落到具体的 {@code <pluginId>} / {@code on} / {@code off} / {@code cycle} 才改动它。
+     * <p>
+     * <b>级联不依赖选择页支持嵌套</b>：外壳确认一条候选时是把取值拼回命令再执行一次
+     * （{@code /ui} → {@code /ui dock} → {@code /ui dock pet}），因此「下一级」就是本方法被再调一次，
+     * 选择页组件本身仍是单层的。
+     * <p>
+     * 清单文本挪到 {@code /ui list}：弹了选择页就贴不了文本，而未生效的插件快捷键说明是诊断行、
+     * 塞不进候选里，因此需要保留一个纯文本入口。返回候选时那份文本仍作为 {@code output} 一并给出，
+     * 好让选择页打不开时（候选为空）还有东西可显示。
+     * <p>
      * 所有非法输入都返回错误结果而不是抛异常：用户敲错命令不该让外壳走异常路径。
      *
      * @param input     命令原文
      * @param placement 落位状态，会被就地修改
      * @param panels    最近一次收集到的面板，可为 {@code null}
      * @param shortcutCandidates 没生效的插件键位说明行，可为 {@code null}
-     * @return 结果（成功文本或错误文本），保证非 {@code null}
+     * @return 结果（文本、或要求挑一个取值的候选），保证非 {@code null}
      */
     static Result execute(String input, UiPlacement placement, List<OwnedPanel> panels,
                           List<String> shortcutCandidates) {
         List<String> args = argsOf(input);
+        String list = renderList(placement, panels) + renderShortcuts(shortcutCandidates);
         if (args.isEmpty()) {
-            return Result.ok(renderList(placement, panels) + renderShortcuts(shortcutCandidates));
+            return Result.choices(list, regionChoices(placement, panels));
         }
-        UiRegion region = REGIONS.get(args.get(0).toLowerCase());
+        String head = args.get(0);
+        if (LIST.equalsIgnoreCase(head)) {
+            return Result.ok(list);
+        }
+        UiRegion region = REGIONS.get(head.toLowerCase());
         if (region == null) {
-            return Result.error("未知区域：" + args.get(0) + "\n" + USAGE);
+            return Result.error("未知区域：" + head + "\n" + USAGE);
         }
         if (args.size() == 1) {
-            return cycle(region, placement, panels, shortcutCandidates);
+            return Result.choices(list, actionChoices(region, placement, panels));
         }
         String action = args.get(1);
         if (OFF.equalsIgnoreCase(action)) {
@@ -101,19 +126,74 @@ final class UiCommand {
             placement.show(region);
             return Result.ok(nameOf(region) + " 区域已恢复显示");
         }
+        if (CYCLE.equalsIgnoreCase(action)) {
+            return cycle(region, placement, panels);
+        }
         return assign(region, action, placement, panels, shortcutCandidates);
     }
 
     /**
-     * 轮换一个区域的显示（或无参数时回到默认）。
+     * 构造二级选择页的候选：区域清单。
+     * <p>
+     * 取值就是区域名，因此确认后拼出的 {@code /ui <region>} 会再进 {@link #execute} 一次、
+     * 进而打开三级页——「两级页面」正是靠这条命令级联成立的。
+     *
+     * @param placement 落位状态
+     * @param panels    面板候选，可为 {@code null}
+     * @return 候选列表，保证非 {@code null}
+     */
+    private static List<CommandChoice> regionChoices(UiPlacement placement, List<OwnedPanel> panels) {
+        Map<UiRegion, List<OwnedPanel>> candidates = placement.candidates(panels);
+        Map<UiRegion, OwnedPanel> selected = placement.selected(panels);
+        List<CommandChoice> choices = new ArrayList<CommandChoice>(REGIONS.size());
+        for (UiRegion region : REGIONS.values()) {
+            String name = nameOf(region);
+            choices.add(new CommandChoice(name, name,
+                    briefOf(region, placement, candidates, selected), false));
+        }
+        return choices;
+    }
+
+    /**
+     * 构造三级选择页的候选：某区域可选的 pluginId，外加 on / off。
+     * <p>
+     * 当前实际显示的那个候选标 {@code current}，选择页会打出「（当前）」——用户据此知道
+     * 自己现在看的是谁的面板。状态栏是拼接型区域，没有可指定的插件，因此只给 on / off。
+     *
+     * @param region    区域
+     * @param placement 落位状态
+     * @param panels    面板候选，可为 {@code null}
+     * @return 候选列表，保证非 {@code null}
+     */
+    private static List<CommandChoice> actionChoices(UiRegion region, UiPlacement placement,
+                                                     List<OwnedPanel> panels) {
+        List<CommandChoice> choices = new ArrayList<CommandChoice>();
+        List<OwnedPanel> list = placement.candidates(panels).get(region);
+        OwnedPanel current = placement.selected(panels).get(region);
+        if (list != null) {
+            for (OwnedPanel panel : list) {
+                String owner = panel.getOwner();
+                boolean isCurrent = current != null && owner.equals(current.getOwner());
+                choices.add(new CommandChoice(owner, owner, titleOf(panel), isCurrent));
+            }
+        }
+        choices.add(new CommandChoice(ON, ON, "恢复本区域显示", false));
+        choices.add(new CommandChoice(OFF, OFF, "关闭本区域（只影响显示，不清候选）", false));
+        return choices;
+    }
+
+    /**
+     * 轮换一个区域的显示。
+     * <p>
+     * 入口是 {@code /ui <region> cycle}：{@code /ui <region>} 现在打开三级选择页，
+     * 轮换因此需要一个显式的字——否则同一串输入要同时表示「弹出一个页面」和「立刻换一个」。
      *
      * @param region    区域
      * @param placement 落位状态
      * @param panels    面板候选
      * @return 结果
      */
-    private static Result cycle(UiRegion region, UiPlacement placement, List<OwnedPanel> panels,
-                                List<String> shortcutCandidates) {
+    private static Result cycle(UiRegion region, UiPlacement placement, List<OwnedPanel> panels) {
         if (region == UiRegion.STATUS) {
             // 状态栏是拼接型：片段共存，没有「一块区域放一个」可轮换，这个子命令的语义就是「显示」
             placement.show(region);
@@ -177,6 +257,9 @@ final class UiCommand {
      * <p>
      * 清单要回答三个问题：<b>哪些区域有东西</b>、<b>现在是哪个插件在用</b>、<b>还有没有别的候选</b>。
      * 最后一个尤其重要——用户看不到「被挤下去的面板」，不告诉他就会以为插件没生效。
+     * <p>
+     * 它是 {@code /ui list} 的全部内容，也是两级选择页的 {@code output} 兜底：选择页把每一条
+     * 压成一行说明（见 {@link #briefOf}），而区域总览与快捷键诊断只有这里给得出来。
      *
      * @param placement 落位状态
      * @param panels    面板候选，可为 {@code null}
@@ -249,15 +332,65 @@ final class UiCommand {
             current = list.get(0);
         }
         sb.append(current.getOwner());
-        String title = current.getContribution().getTitle();
-        if (title != null && !title.trim().isEmpty()) {
-            sb.append(" \u00b7 ").append(title.trim());
+        String title = titleOf(current);
+        if (!title.isEmpty()) {
+            sb.append(" \u00b7 ").append(title);
         }
         if (list.size() > 1) {
             sb.append("（另有 ").append(list.size() - 1).append(" 个候选：").append(otherOwners(list, current))
-                    .append("，用 ").append(PREFIX).append(' ').append(nameOf(region)).append(" 轮换）");
+                    .append("，用 ").append(PREFIX).append(' ').append(nameOf(region)).append(' ')
+                    .append(CYCLE).append(" 轮换）");
         }
         return sb.toString();
+    }
+
+    /**
+     * 取面板标题，没有就返回空串。
+     * <p>
+     * 标题归插件给、可为空白，而清单与选择页都要在它缺失时不留一个悬空的间隔符，
+     * 因此把「空白即没有」这一个判断收在这里。
+     *
+     * @param panel 面板
+     * @return 标题文本，保证非 {@code null}
+     */
+    private static String titleOf(OwnedPanel panel) {
+        String title = panel.getContribution().getTitle();
+        return title == null || title.trim().isEmpty() ? "" : title.trim();
+    }
+
+    /**
+     * 生成选择页上的一行简短说明。
+     * <p>
+     * <b>与 {@link #describe} 的分工</b>：那份是清单文本（可以长、可以带操作建议），
+     * 这份要挤进选择页的一行说明列——那里还要跟标签分列，窄终端下只剩十几列。
+     * 因此这里压到最短：状态 + 当前显示者 + 另有几个候选。
+     *
+     * @param region     区域
+     * @param placement  落位状态
+     * @param candidates 区域候选
+     * @param selected   区域当前显示者
+     * @return 说明文本，保证非 {@code null}
+     */
+    private static String briefOf(UiRegion region, UiPlacement placement,
+                                  Map<UiRegion, List<OwnedPanel>> candidates,
+                                  Map<UiRegion, OwnedPanel> selected) {
+        if (region == UiRegion.STATUS) {
+            // 状态栏是拼接型、没有「一块区域放一个」的语义，因此它不进 candidates（那是面板的分组），
+            // 描述也就不能去数 list——片段有几条是另一条收集路径的事
+            return placement.isHidden(region) ? "[关闭] 状态栏片段已隐藏" : "拼接型：所有片段共存";
+        }
+        List<OwnedPanel> list = candidates.get(region);
+        if (list == null || list.isEmpty()) {
+            return "无贡献";
+        }
+        String prefix = placement.isHidden(region) ? "[关闭] " : "[显示] ";
+        OwnedPanel current = selected.get(region);
+        if (current == null) {
+            // 被关闭时 selected 里没有它，回落到候选首位，好让用户知道重新打开会看到谁
+            current = list.get(0);
+        }
+        String extra = list.size() > 1 ? "（另有 " + (list.size() - 1) + " 个）" : "";
+        return prefix + current.getOwner() + extra;
     }
 
     /**
@@ -343,7 +476,8 @@ final class UiCommand {
     }
 
     /**
-     * {@code /ui} 的执行结果：一段要贴到屏幕上的文本，外加它是否算失败。
+     * {@code /ui} 的执行结果：一段要贴到屏幕上的文本，外加它是否算失败；带候选时则要求外壳
+     * 打开选择页而不是贴文本。
      * <p>
      * 不抛异常的原因：用户敲错区域名是最常见的输入错误，用异常表达会把它和「命令实现坏了」混在一起。
      *
@@ -357,15 +491,22 @@ final class UiCommand {
         /** 结果文本。 */
         private final String text;
 
+        /** 候选；非空时外壳打开选择页，不再贴 {@link #text}。 */
+        private final List<CommandChoice> choices;
+
         /**
          * 构造结果。
          *
-         * @param error 是否算失败
-         * @param text  结果文本
+         * @param error   是否算失败
+         * @param text    结果文本
+         * @param choices 候选，可为 {@code null}
          */
-        private Result(boolean error, String text) {
+        private Result(boolean error, String text, List<CommandChoice> choices) {
             this.error = error;
             this.text = text;
+            this.choices = choices == null
+                    ? Collections.<CommandChoice>emptyList()
+                    : Collections.unmodifiableList(new ArrayList<CommandChoice>(choices));
         }
 
         /**
@@ -375,7 +516,7 @@ final class UiCommand {
          * @return 结果
          */
         static Result ok(String text) {
-            return new Result(false, text);
+            return new Result(false, text, null);
         }
 
         /**
@@ -385,7 +526,21 @@ final class UiCommand {
          * @return 结果
          */
         static Result error(String text) {
-            return new Result(true, text);
+            return new Result(true, text, null);
+        }
+
+        /**
+         * 构造一个「要求用户从候选里挑一个」的结果。
+         * <p>
+         * 文本仍然带上：候选为空时外壳不会打开选择页，那时候这段文本是用户唯一能看到的东西
+         * （清单里「当前没有任何插件贡献」这类信息就靠它传出去）。
+         *
+         * @param text    结果文本（候选打不开时的兜底）
+         * @param choices 候选
+         * @return 结果
+         */
+        static Result choices(String text, List<CommandChoice> choices) {
+            return new Result(false, text, choices);
         }
 
         /**
@@ -404,6 +559,24 @@ final class UiCommand {
          */
         String getText() {
             return text;
+        }
+
+        /**
+         * 判断是否要求打开选择页。
+         *
+         * @return 有候选返回 {@code true}
+         */
+        boolean hasChoices() {
+            return !choices.isEmpty();
+        }
+
+        /**
+         * 获取候选。
+         *
+         * @return 候选列表，保证非 {@code null}、不可变
+         */
+        List<CommandChoice> getChoices() {
+            return choices;
         }
     }
 }

@@ -725,18 +725,7 @@ public final class TuiApp extends ToolkitApp {
         }
         String text = input.takeText();
         // 外壳自有命令必须先截胡：交给命令域只会得到 UNKNOWN，而外壳其实完全听得懂
-        if (ShellCommand.isShellCommand(text)) {
-            if (ShellCommand.isThinkingCommand(text)) {
-                toggleThinking();
-            } else if (ShellCommand.isToolArgsCommand(text)) {
-                toggleToolArguments();
-            } else if (UiCommand.isUi(text)) {
-                executeUi(text);
-            } else if (MouseCommand.isMouse(text)) {
-                executeMouse(text);
-            } else {
-                exitShell();
-            }
+        if (executeShellOwned(text)) {
             return;
         }
         String sessionId = currentSessionIdOrNull();
@@ -753,6 +742,35 @@ public final class TuiApp extends ToolkitApp {
             // 提交是插件内容可能变化的起点（回合可能马上改待办），也可能刚改了当前会话
             uiCache.invalidate();
         }
+    }
+
+    /**
+     * 执行一条外壳自有命令。
+     * <p>
+     * <b>为什么抽成一个方法</b>：这些命令不进内核命令域，而二级选择页的确认会把取值拼回命令
+     * 再执行一次（见 {@link #confirmChoice}），那一步必须先把外壳自己的命令分流出去——
+     * 否则 {@code /ui dock} 会被命令域判成「未知命令」，两级页面从第二级起就断了。
+     * 提交管线与选择页确认因此共用这一处判定，分流顺序不会在两处各自漂移。
+     *
+     * @param text 命令原文
+     * @return 是外壳自有命令（已处理）返回 {@code true}
+     */
+    private boolean executeShellOwned(String text) {
+        if (!ShellCommand.isShellCommand(text)) {
+            return false;
+        }
+        if (ShellCommand.isThinkingCommand(text)) {
+            toggleThinking();
+        } else if (ShellCommand.isToolArgsCommand(text)) {
+            toggleToolArguments();
+        } else if (UiCommand.isUi(text)) {
+            executeUi(text);
+        } else if (MouseCommand.isMouse(text)) {
+            executeMouse(text);
+        } else {
+            exitShell();
+        }
+        return true;
     }
 
     /**
@@ -962,12 +980,20 @@ public final class TuiApp extends ToolkitApp {
      * <p>
      * 面板候选取自当前缓存快照（可能为空——插件没贡献、或本进程已用逃生门关闭插件 UI）。
      * 用户敲错区域名会得到一条错误提示，而不是「未知命令」。
+     * <p>
+     * 返回候选时打开选择页（{@code /ui} 给区域列表、{@code /ui <region>} 给该区域的
+     * pluginId 与 on / off）。两级页面都靠「确认后把取值拼回命令再执行一次」级联下来，
+     * 因此这里不维护任何层级状态：下一步该显示什么，由命令原文里的参数决定。
      *
      * @param text 命令原文
      */
     private void executeUi(String text) {
         UiCommand.Result result = UiCommand.execute(text, uiPlacement, currentPanels(),
                 pluginShortcuts().getCandidates());
+        if (result.hasChoices()) {
+            picker.open(text.trim(), result.getChoices());
+            return;
+        }
         chatState.appendNotice(text, result.getText(),
                 result.isError() ? ShellNotice.Kind.ERROR : ShellNotice.Kind.INFO);
     }
@@ -1053,10 +1079,14 @@ public final class TuiApp extends ToolkitApp {
     }
 
     /**
-     * 确认二级选择页的选中项：拼出「命令原文 + 取值」并执行。
+     * 确认选择页的选中项：拼出「命令原文 + 取值」并执行。
      * <p>
      * 用原文而不是规范命令名拼接：别名同样能被命令域解析（{@code /a coder}），
      * 因此不需要在这里做一次名字解析。
+     * <p>
+     * <b>先给外壳自己一次机会</b>：{@code /ui} 是外壳自有命令、不在命令域里，交给
+     * {@link #executeCommand} 只会得到「未知命令」。而这条确认路正是 {@code /ui} 两级页面的
+     * 级联点（{@code /ui} → {@code /ui dock} → {@code /ui dock pet}），少了这一步第二级就断了。
      */
     private void confirmChoice() {
         CommandChoice choice = picker.selected();
@@ -1066,10 +1096,13 @@ public final class TuiApp extends ToolkitApp {
             return;
         }
         String text = baseCommand + " " + choice.getValue();
+        if (executeShellOwned(text)) {
+            return;
+        }
         try {
             executeCommand(text, currentSessionIdOrNull());
         } catch (JellyfishException e) {
-            LOG.warn("二级选择页执行失败：{}", e.getMessage());
+            LOG.warn("选择页执行失败：{}", e.getMessage());
             chatState.appendNotice(text, "命令执行失败：" + e.getMessage(), ShellNotice.Kind.ERROR);
         }
     }

@@ -38,6 +38,13 @@ import java.util.Objects;
  * <b>它不可能报「过期」</b>：面板显示的是「此刻」的事实，渲染线程取到哪一刻就是哪一刻——
  * 与状态栏片段同口径。真正的「什么时候重新问」由外壳的失效触发源决定。
  * <p>
+ * <b>建议落停靠区（{@code DOCK}）而不是任一纵向栏</b>：这块面板讲的是「此刻正在发生什么」的瞬时事实，
+ * 行是固定的短句（类型 · 状态 · 已运行 Ns），横向放正合适；而纵向栏是插件面板的稀缺资源
+ * （左右两侧合计不超过终端宽的 1/3，超了外壳先砍右栏），占一条的代价是中等宽度的终端上
+ * 另一侧的面板会被整块挤掉。停靠区是内核文档里点名的「最通用的面板落点」；
+ * 与同样建议落 {@code DOCK} 的插件面板并存时，按 {@link SubAgentTools} 声明的 {@code order}
+ * 让它先显示——run 的起止错过就无从追，而别的面板多是常驻信息。
+ * <p>
  * 无状态（只持有运行时门面），可安全跨线程调用。
  *
  * @author zcd
@@ -92,7 +99,7 @@ public final class SubAgentPanel implements ExtensionHandler<PanelContributionRe
         for (AgentRunSnapshot run : runs) {
             lines.add(lineOf(run));
         }
-        return PanelContribution.of(TITLE, lines, UiRegion.RIGHT);
+        return PanelContribution.of(TITLE, lines, UiRegion.DOCK);
     }
 
     /**

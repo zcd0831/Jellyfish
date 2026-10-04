@@ -55,9 +55,9 @@ class SubAgentPanelTest {
         // When
         PanelContribution contribution = panel.handle(new PanelContributionRequest("s1"));
 
-        // Then：只有本会话那一个，且落在右侧区域
+        // Then：只有本会话那一个，且落在停靠区（纵向栏留给插件面板，见 SubAgentPanel 的说明）
         assertEquals("子代理", contribution.getTitle());
-        assertEquals(UiRegion.RIGHT, contribution.getPreferredRegion());
+        assertEquals(UiRegion.DOCK, contribution.getPreferredRegion());
         assertEquals(1, contribution.getLines().size());
         String text = contribution.getLines().get(0).text();
         assertTrue(text.startsWith("coder · "), text);

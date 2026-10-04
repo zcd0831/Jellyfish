@@ -59,6 +59,14 @@ public class SubAgentTools {
     /** 内核注册的 owner 标识。 */
     public static final String OWNER = "core";
 
+    /**
+     * 面板在 {@code DOCK} 里的顺序：取负数。
+     * <p>
+     * {@code DOCK} 里同时有其他贡献者的面板时，同一区域只显示 {@code order} 最小的那一个。
+     * run 的起止是瞬时事实，看漏了就无从追；先让它显示，别家落败一次只是少看一块常驻面板。
+     */
+    private static final int PANEL_ORDER = -10;
+
     /** 同步扩展点策略。 */
     private final ExtensionRegistry extensions;
 
@@ -150,9 +158,10 @@ public class SubAgentTools {
                 taskTool, RegisterOptions.DEFAULT));
         subscriptions.add(extensions.contribute(OWNER, PromptContributionRequest.class, null,
                 this::catalog, RegisterOptions.DEFAULT));
-        // 面板与工具同生共死：没有 task 工具就没有子代理，注册一块永远为空的面板只会白占区域
+        // 面板与工具同生共死：没有 task 工具就没有子代理，注册一块永远为空的面板只会白占区域。
+        // order 取负数：与其他同样建议落 DOCK 的插件面板并存时由它先显示——run 的起止是瞬时事实
         subscriptions.add(extensions.contribute(OWNER, PanelContributionRequest.class, null,
-                panel, RegisterOptions.DEFAULT));
+                panel, RegisterOptions.order(PANEL_ORDER)));
     }
 
     /**

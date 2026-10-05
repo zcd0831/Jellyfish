@@ -312,6 +312,91 @@ class ApprovalChannelTest {
     }
 
     @Test
+    @DisplayName("没有任何待审批项时，完整队列返回空列表")
+    void pendingApprovals_should_return_empty_list_when_nothing_is_waiting() {
+        // When / Then：空列表而非 null，调用方不必再判空
+        assertNotNull(channel.pendingApprovals("session-a"));
+        assertTrue(channel.pendingApprovals("session-a").isEmpty());
+    }
+
+    @Test
+    @DisplayName("完整队列：头槽位在前、排队区在后，头被裁决后整条前移")
+    void pendingApprovals_should_return_head_then_queued_when_requests_are_waiting() throws Exception {
+        channel.attach();
+        AtomicReference<PermissionDecision> first = new AtomicReference<PermissionDecision>();
+        AtomicReference<PermissionDecision> second = new AtomicReference<PermissionDecision>();
+        ApprovalChannel.Pending a1 = pendingFor("session-a");
+        ApprovalChannel.Pending a2 = pendingFor("session-a");
+
+        Thread threadA1 = requestInBackground(a1, first);
+        assertEquals(a1.getId(), awaitPending("session-a").getId());
+        Thread threadA2 = requestInBackground(a2, second);
+        awaitWaiting("session-a", 1);
+
+        // 头槽位 + 排队区按裁决先后列出：这条信息正是「界面只说有一条」时缺失的那部分
+        List<ApprovalChannel.Pending> all = channel.pendingApprovals("session-a");
+        assertEquals(2, all.size());
+        assertEquals(a1.getId(), all.get(0).getId());
+        assertEquals(a2.getId(), all.get(1).getId());
+
+        assertTrue(channel.resolve(a1.getId(), true));
+
+        // 头被裁决后，排队的那条被提为头，整条队列前移
+        List<ApprovalChannel.Pending> advanced = channel.pendingApprovals("session-a");
+        assertEquals(1, advanced.size());
+        assertEquals(a2.getId(), advanced.get(0).getId());
+
+        assertTrue(channel.resolve(a2.getId(), true));
+        threadA1.join(2000L);
+        threadA2.join(2000L);
+        assertTrue(first.get().isAllowed());
+        assertTrue(second.get().isAllowed());
+    }
+
+    @Test
+    @DisplayName("完整队列只含指定会话的请求，不串到别的会话")
+    void pendingApprovals_should_not_include_other_sessions() throws Exception {
+        channel.attach();
+        AtomicReference<PermissionDecision> decisionA = new AtomicReference<PermissionDecision>();
+        AtomicReference<PermissionDecision> decisionB = new AtomicReference<PermissionDecision>();
+        ApprovalChannel.Pending a = pendingFor("session-a");
+        ApprovalChannel.Pending b = pendingFor("session-b");
+
+        Thread threadA = requestInBackground(a, decisionA);
+        assertEquals(a.getId(), awaitPending("session-a").getId());
+        Thread threadB = requestInBackground(b, decisionB);
+        assertEquals(b.getId(), awaitPending("session-b").getId());
+
+        List<ApprovalChannel.Pending> forA = channel.pendingApprovals("session-a");
+        assertEquals(1, forA.size());
+        assertEquals(a.getId(), forA.get(0).getId());
+        assertEquals("session-a", forA.get(0).getSessionId());
+
+        assertTrue(channel.resolve(a.getId(), true));
+        assertTrue(channel.resolve(b.getId(), true));
+        threadA.join(2000L);
+        threadB.join(2000L);
+        assertTrue(decisionA.get().isAllowed());
+        assertTrue(decisionB.get().isAllowed());
+    }
+
+    @Test
+    @DisplayName("完整队列是只读快照，调用方改不动内部状态")
+    void pendingApprovals_should_return_unmodifiable_list_when_requests_are_waiting() throws Exception {
+        channel.attach();
+        AtomicReference<PermissionDecision> decision = new AtomicReference<PermissionDecision>();
+        ApprovalChannel.Pending a = pendingFor("session-a");
+        Thread thread = requestInBackground(a, decision);
+        awaitPending("session-a");
+
+        List<ApprovalChannel.Pending> all = channel.pendingApprovals("session-a");
+
+        assertThrows(UnsupportedOperationException.class, () -> all.add(a));
+        assertTrue(channel.resolve(a.getId(), true));
+        thread.join(2000L);
+    }
+
+    @Test
     void resolve_should_advance_only_its_own_session() throws Exception {
         channel.attach();
         AtomicReference<PermissionDecision> first = new AtomicReference<PermissionDecision>();

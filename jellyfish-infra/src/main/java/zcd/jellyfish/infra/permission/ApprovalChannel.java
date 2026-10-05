@@ -170,6 +170,39 @@ public class ApprovalChannel {
     }
 
     /**
+     * 取指定会话当前全部待审批项：头槽位在前，其后是排队区（按入队先后）。
+     * <p>
+     * <b>为什么要有它</b>：{@link #pending(String)} 只回答「现在该批准哪一条」，
+     * 而外壳还需要回答「还有多少条在等」。只暴露头槽位的后果在<b>多用户</b>下最明显：
+     * 审批者切换会话或稍晚回来时，同一会话排在他后面的请求完全不可见，界面永远显示「就一条」，
+     * 于是「为什么我的工具调用要等到超时」无从解释。
+     * <p>
+     * <b>它能做什么、不能做什么</b>：列表里<b>只有第一条可以被裁决</b>——{@link #resolve} 只对头槽位生效，
+     * 对排队中的请求调用等于无事发生。因此它适合渲染「第 1 / 共 3 条」，不适合拿去做批量裁决。
+     * 另外它是一份<b>瞬时快照</b>：返回之后队列随时可能变化，不要拿它当判定依据。
+     *
+     * @param sessionId 会话标识，可为 {@code null}（归入无会话槽位）
+     * @return 不可修改的列表，按裁决先后排列（头槽位在最前）；没有待审批项时为空列表而非 {@code null}
+     */
+    public List<Pending> pendingApprovals(String sessionId) {
+        String key = sessionKey(sessionId);
+        List<Pending> result = new ArrayList<Pending>();
+        // 头槽位与排队区必须在同一把锁里读：两者是同一次裁决的两个半边，
+        // 分开读会取到「已经推进过头、队列还没轮到的」那种中间态（列表里出现重复或缺口）
+        synchronized (lock) {
+            Pending head = heads.get(key);
+            if (head != null) {
+                result.add(head);
+            }
+            Deque<Pending> queue = waiting.get(key);
+            if (queue != null) {
+                result.addAll(queue);
+            }
+        }
+        return Collections.unmodifiableList(result);
+    }
+
+    /**
      * 取全部会话排队中的请求总数（不含各会话的头槽位）。
      * <p>
      * 只供诊断与测试断言使用，不参与任何判定：排队上限是在 {@link #enqueue} 里现算的，

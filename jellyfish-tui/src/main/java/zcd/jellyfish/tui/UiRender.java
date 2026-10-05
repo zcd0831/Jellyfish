@@ -45,6 +45,9 @@ public final class UiRender {
     /** 错误样式（与外壳提示的 ERROR 同口径）。 */
     private static final Style ERROR_STYLE = Style.EMPTY.red();
 
+    /** 正向结果样式（绿：与 ERROR 对称，表示「朝着好的方向」，不带警示意味）。 */
+    private static final Style SUCCESS_STYLE = Style.EMPTY.green();
+
     /** 截断提示的前缀行样式。 */
     private static final Style TRUNCATED_STYLE = Style.EMPTY.dim();
 
@@ -90,6 +93,8 @@ public final class UiRender {
                 return WARN_STYLE;
             case ERROR:
                 return ERROR_STYLE;
+            case SUCCESS:
+                return SUCCESS_STYLE;
             default:
                 return NORMAL_STYLE;
         }

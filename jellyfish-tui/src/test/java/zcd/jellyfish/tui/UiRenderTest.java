@@ -81,7 +81,17 @@ class UiRenderTest {
     }
 
     @Test
-    @DisplayName("四个非寻常档位都带样式，且五个档位互不相同")
+    @DisplayName("正向与错误两档落在两种不同颜色上（面板的涨跌配色依赖它）")
+    void emphasisStyle_should_mapSuccessAndError_toOppositeColors() {
+        // 这一条**刻意钉住具体颜色**，是该文件里唯一的例外（其余用例只要求「互不相同」，
+        // 好让外壳能自由换主题）：借 ERROR 的红与 SUCCESS 的绿表达「涨红跌绿」这类
+        // 客观方向，是插件唯一能做到的方式，而它依赖的正是这两条映射不许飘
+        assertEquals(Style.EMPTY.red(), UiRender.emphasisStyle(UiEmphasis.ERROR));
+        assertEquals(Style.EMPTY.green(), UiRender.emphasisStyle(UiEmphasis.SUCCESS));
+    }
+
+    @Test
+    @DisplayName("五个非寻常档位都带样式，且六个档位互不相同")
     void emphasisStyle_should_differPerEmphasis() {
         Style normal = UiRender.emphasisStyle(UiEmphasis.NORMAL);
         List<Style> styles = new ArrayList<Style>();

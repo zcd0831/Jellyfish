@@ -84,7 +84,7 @@ final class UiCommand {
      * 只有落到具体的 {@code <pluginId>} / {@code on} / {@code off} / {@code cycle} 才改动它。
      * <p>
      * <b>级联不依赖选择页支持嵌套</b>：外壳确认一条候选时是把取值拼回命令再执行一次
-     * （{@code /ui} → {@code /ui dock} → {@code /ui dock pet}），因此「下一级」就是本方法被再调一次，
+     * （{@code /ui} → {@code /ui dock} → {@code /ui dock <pluginId>}），因此「下一级」就是本方法被再调一次，
      * 选择页组件本身仍是单层的。
      * <p>
      * 清单文本挪到 {@code /ui list}：弹了选择页就贴不了文本，而未生效的插件快捷键说明是诊断行、

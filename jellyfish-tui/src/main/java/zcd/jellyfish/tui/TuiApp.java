@@ -1125,7 +1125,7 @@ public final class TuiApp extends ToolkitApp {
      * <p>
      * <b>先给外壳自己一次机会</b>：{@code /ui} 是外壳自有命令、不在命令域里，交给
      * {@link #executeCommand} 只会得到「未知命令」。而这条确认路正是 {@code /ui} 两级页面的
-     * 级联点（{@code /ui} → {@code /ui dock} → {@code /ui dock pet}），少了这一步第二级就断了。
+     * 级联点（{@code /ui} → {@code /ui dock} → {@code /ui dock <pluginId>}），少了这一步第二级就断了。
      */
     private void confirmChoice() {
         CommandChoice choice = picker.selected();

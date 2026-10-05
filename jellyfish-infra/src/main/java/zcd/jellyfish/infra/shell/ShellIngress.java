@@ -49,6 +49,10 @@ import java.util.Objects;
  * <b>它不是事件总线</b>：没有订阅、没有广播、没有处理器注册，只有一条有界的入站信箱。
  * 内核与插件之间的通知仍然只走 {@code EventChannel}。
  * <p>
+ * <b>{@code SESSION} scope 的贡献必须指向已存在的会话</b>：查不到就回报
+ * {@code DROPPED_NO_SESSION}，<b>绝不因此新建会话</b>——贡献是展示数据，不该有副作用；
+ * {@code SHELL} scope 与任何会话无关，不查会话。
+ * <p>
  * <b>归属按 owner 命名空间回收</b>（与注册表、动作队列同一套规则、同一时刻）：插件停止时整桶丢弃，
  * 之后 {@code present} 由 {@code ContextLifecycle} 挡在插件上下文那一层。
  * <p>

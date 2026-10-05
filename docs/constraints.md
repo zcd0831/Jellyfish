@@ -1,0 +1,917 @@
+# Jellyfish 约束与规范
+
+> 本文件是内核仓库的**技术约束单一真源**：跨模块的规范、边界条件与「不要这么做」。
+> 三层解释的分工是 **代码自身 → javadoc（某个类自己的为什么与实测数据）→ 本文件（跨类的规则）**。
+> 面向使用者的说明在 [`../README.md`](../README.md)；类内部的设计推导与实测数据在对应类的 javadoc 里，本文不重复。
+> 文档与代码之间容易产生偏移，因此**能在类注释里说清的事不写在这里**——剩下的每一条都是「改坏了会静默出错」的规则。
+
+## 整体架构图
+
+内核模块、扩展层、外壳与外部依赖之间的调用关系（`==>` 同步调用；`-->` 内核内部调用；`-.->` 异步通知）。
+模块级的依赖方向与包结构见 [AGENTS.md](../AGENTS.md) 的「仓库结构与模块边界」。
+
+```mermaid
+flowchart TB
+    subgraph "AgentHarness<br>Agent运行时宿主"
+        direction TB
+
+        subgraph "应用层<br>ReAct核心智能"
+            ReAct["ReAct Loop<br>思考 → 行动 → 观察"]
+        end
+
+        subgraph "基础设施层<br>Harness运行时环境"
+            direction TB
+
+            subgraph "内核模块<br>单向依赖 + 构造器注入"
+                direction LR
+                SessionMgr["SessionManager<br>会话 + 消息 + token + 当前态"]
+                AgentMgr["AgentManager + AgentRegistry<br>Agent 定义与权限策略"]
+                CommandMgr["CommandManager<br>解析 / 分发 / 清单（无状态，对外壳中立）"]
+                InputMgr["InputDirectives<br>输入指令：! / @（外壳中立）"]
+                ModelMgr["ModelManager<br>Provider/Model 注册与路由"]
+                LLMClient["LLMClient<br>统一 LLM 调用抽象"]
+                PermMgr["PermissionManager<br>核心策略 → 插件拦截"]
+                SubAgentMgr["SubAgentLauncher + task 工具<br>子代理委派 + 嵌套回合"]
+            end
+
+            subgraph "扩展层<br>内核与插件唯一边界；底座 infra/registry"
+                direction LR
+                Registry["TypeRegistry<br>「类型 + 路由键」→ 有序 handler 集合"]
+                ExtReg["ExtensionRegistry<br>同步派发 · 有返回值 · 不可丢弃"]
+                EventCh["EventChannel<br>异步派发 · void · 可丢弃"]
+                PluginMgr["PF4JPluginManager<br>插件加载 / 热部署"]
+                PluginCtx["PluginContext<br>插件唯一入口"]
+            end
+
+            subgraph "支撑基础设施"
+                direction LR
+                Runtime["RuntimeConfig<br>配置解析/合并/注入（启动期）"]
+                Reloader["ConfigReloader<br>/reload 触发，单飞不回滚"]
+                Metrics["可观测性<br>MetricsRegistry / HealthCheck"]
+            end
+        end
+    end
+
+    subgraph "外壳入口·jellyfish-di / jellyfish-cli / jellyfish-tui"
+        direction LR
+        CLI["jellyfish-di（装配：Dagger 组件 + JellyfishAssembler，交付 JellyfishRuntime）<br>jellyfish-cli / jellyfish-tui / jellyfish-server<br>main · Launcher · RunMode<br>-cli / -tui / -server 已落地"]
+    end
+
+    subgraph "外部依赖·配置"
+        direction LR
+        Models["models.json<br>全局 + 项目"]
+        Jelly["jellyfish.json<br>全局 + 项目"]
+        Agents["agents.json + default-agent.json<br>+ {agentId}.md"]
+    end
+
+    subgraph "外部依赖·模型提供商"
+        direction LR
+        LLM["外部 LLM API<br>OpenAI/Azure/Ollama"]
+    end
+
+    subgraph "外部依赖·插件"
+        direction LR
+        Plugins["PF4J 插件（独立仓库 Jellyfish-Plugins）<br>tools / session-file / todo / project / compact / shell / skills / mcp<br>+ python / node 桥接（脚本进程由它承载）"]
+    end
+
+    %% ===================== 外壳入口：命令走用户输入，不走 LLM =====================
+    CLI ==>|"命令原文 + sessionId"| CommandMgr
+    CLI ==>|"命令名 + 参数 + sessionId"| CommandMgr
+    CLI -->|"chat：唯一入口"| ReAct
+    CLI -->|"! / @：解析 / 执行 / 补全"| InputMgr
+    CommandMgr ==>|"CommandResult / 清单 / 帮助"| CLI
+
+    %% ===================== 内核内部：接口 + 构造器注入（细实线） =====================
+    ReAct -->|"消息 / 上下文 / 当前态 / token"| SessionMgr
+    ReAct ==>|"beginTurn / flush：回合级落盘（不可丢）"| SessionMgr
+    ReAct -->|"解析本次模型（SessionModelResolver）"| ModelMgr
+    ReAct -->|"调用 LLM"| LLMClient
+    ReAct -->|"同步权限检查"| PermMgr
+    ReAct ==>|"task 工具 → 委派（派生 run）"| SubAgentMgr
+    SubAgentMgr ==>|"AgentRuntime.spawn → 调度到 agent-run 池跑完这个 run；run 事件走 RunEventBus"| ReAct
+    SubAgentMgr -->|"run 终结 → 归档（独立命名空间与配额）"| ToolOut["ToolOutputStore<br/>工具结果 / run 归档"]
+    SubAgentMgr ==>|"owner=core 注册 task 工具 + 类型清单 + 运行面板"| ExtReg
+    SubAgentMgr -->|"瞬时会话 / 用量归集到父会话"| SessionMgr
+    SubAgentMgr -->|"工具清单过滤判据（与执行期同一份）"| PermMgr
+    SubAgentMgr -->|"取子代理的偏好模型"| ModelMgr
+    SessionMgr -->|"按 currentAgentId 取定义"| AgentMgr
+    ModelMgr -->|"管理/创建/路由"| LLMClient
+    LLMClient -->|"HTTP/API"| LLM
+
+    %% ===================== 扩展层·同步派发：需要结果或必须完成（粗线） =====================
+    ReAct ==>|"list：工具清单（LlmTool）"| ExtReg
+    ReAct ==>|"ToolCallRequest（工具名 + 参数）"| ExtReg
+    ReAct ==>|"PromptContributionRequest（进 system prompt）"| ExtReg
+    ReAct ==>|"TurnContextRequest（拼进本轮 user 消息）"| ExtReg
+    SessionMgr ==>|"会话持久化 / 恢复（不可丢）"| ExtReg
+    InputMgr ==>|"ToolCallRequest（经 ToolExecutor：权限 + 截断唯一入口）"| ExtReg
+    InputMgr ==>|"结果落 user 消息（不可丢）"| SessionMgr
+    PermMgr ==>|"权限拦截（插件只能返回两态）"| ExtReg
+    ExtReg ==>|"贡献结果"| ReAct
+
+    %% ===================== 扩展层·通知：按角色开放，内核模块作为事件发布者（点线，无返回值） =====================
+    ReAct -.->|"轮次开始 / 工具结果"| EventCh
+    SessionMgr -.->|"会话创建 / 消息追加 / 关闭"| EventCh
+    AgentMgr -.->|"AgentsLoadedEvent"| EventCh
+    ModelMgr -.->|"ModelsLoadedEvent"| EventCh
+    PermMgr -.->|"权限审计"| EventCh
+    CommandMgr -.->|"命令审计（CommandExecutedEvent）"| EventCh
+    EventCh -.->|"分发事件"| Metrics
+
+    %% ===================== 扩展层内部：一份注册表 + 两种派发策略 =====================
+    Registry -->|"同步策略：调用点内联，取返回值"| ExtReg
+    Registry -->|"异步策略：有界队列，可丢弃"| EventCh
+    PluginMgr -->|"加载 / 交付 PluginContext"| PluginCtx
+    PluginMgr -.->|"PluginStateChangedEvent（启动 / 停止 / 失败）"| EventCh
+    PluginCtx -->|"handle：工具 / 命令注册（描述符随 handler 存）"| ExtReg
+    PluginCtx -->|"contribute：其它扩展点注册 / 按 pluginId 退订"| ExtReg
+    PluginCtx -->|"observe / emit：按 pluginId 订阅与退订"| EventCh
+
+    %% ===================== 命令域：handler 与描述符同落一份注册表，CommandManager 只做解析、分发与清单 =====================
+    CommandMgr ==>|"handler(命令名) + invoke：共用分发路径"| ExtReg
+    CommandMgr ==>|"descriptorBindings 取命令名 / 别名 / 帮助"| ExtReg
+
+    %% ===================== 配置热更新：/reload 触发的一次性编排（非运行期总线） =====================
+    Reloader -->|"重读配置 + 刷新快照"| Runtime
+    Reloader ==>|"按差异启停 / 重启插件"| PluginMgr
+    Reloader -.->|"ConfigReloadedEvent"| EventCh
+
+    %% ===================== 边界 <-> 插件 =====================
+    PluginCtx -->|"插件唯一入口"| Plugins
+    ExtReg -->|"按类型 + 路由键有序分发"| Plugins
+    EventCh -->|"按类型广播：有界队列，满则丢弃并记账"| Plugins
+    Plugins -->|"handle / contribute / observe / emit"| PluginCtx
+
+    %% ===================== RuntimeConfig 注入 =====================
+    Runtime -->|"读取合并, 项目级优先"| Models
+    Runtime -->|"读取合并, 项目级优先"| Jelly
+    Runtime -->|"读取合并, 项目级优先"| Agents
+    Runtime -->|"注入配置"| ModelMgr
+    Runtime -->|"注入定义"| AgentMgr
+    Runtime -->|"注入插件配置"| PluginMgr
+    Runtime -->|"注入权限配置"| PermMgr
+    Runtime -->|"注入事件配置"| EventCh
+
+    classDef app fill:#E9F7EF,stroke:#2E8B57,color:#123
+    classDef kernel fill:#E8F4FD,stroke:#2E6DA4,color:#123
+    classDef extlayer fill:#FDF2E3,stroke:#C77B00,color:#123
+    classDef support fill:#F2F2F2,stroke:#888,color:#333
+    classDef ext fill:#FAFAFA,stroke:#AAA,color:#444
+
+    class ReAct app
+    class SessionMgr,AgentMgr,ModelMgr,LLMClient,PermMgr,SubAgentMgr,CommandMgr,InputMgr kernel
+    class Registry,ExtReg,EventCh,PluginMgr,PluginCtx extlayer
+    class Runtime,Reloader,Metrics support
+    class LLM,Plugins,Jelly,Agents ext
+```
+
+> 图例：`==>` 同步调用；`-->` 内核内部调用；`-.->` 异步通知。
+
+## 模块与依赖方向
+
+| 模块 | 职责 | 依赖 |
+| --- | --- | --- |
+| `jellyfish-api` | 插件作者唯一的稳定契约：SPI、扩展点 / 事件模型、统一异常 | 无 |
+| `jellyfish-infra` | 基础设施层全部实现 | api |
+| `jellyfish-core` | 应用层：会话提交管线、ReAct 循环、提示词、压缩机制、系统命令、子代理委派 | api、infra |
+| `jellyfish-tui` / `jellyfish-server` | 两种交互外壳（界面层 / 服务层） | api、infra、core |
+| `jellyfish-di` | 装配层：Dagger2 组件、门面 `JellyfishRuntime`、手工装配 `JellyfishAssembler` | api、infra、core |
+| `jellyfish-cli` | `main`、参数解析、模式分发、shade 可执行 jar | api、infra、core、di、tui、server |
+
+- **依赖方向单向，禁止反向或循环**。界面层与服务层**不得放进 `jellyfish-cli`**（会形成 `cli → 子模块 → cli` 循环）。
+- **`core.subagent` 依赖 `core`，不是反过来**：`RunContext` 归 `core`。
+- **`jellyfish-di` 不带任何资源**：它只装配，不提供配置或提示词（`default-agent.json` / `{agentId}.md` 归 infra，
+  `config.json` / `log4j2*.xml` 归 cli）。
+- **新增依赖绑定两处都要改**：`@Module` 的每条 `@Provides` 在 `JellyfishAssembler` 里都有一行对应物，
+  一致性由 `JellyfishAssemblerTest` 守。
+
+## 扩展层与插件运行时
+
+### 两个注册式能力面 + 三条插件出边
+
+- **`ExtensionRegistry`（同步）**：调用点内联、按 `order` 升序、取返回值、**不可丢**。
+- **`EventChannel`（异步）**：有界队列、无返回值、**可丢**。
+  判据是「能否丢弃」，不是「有没有返回值」：工具、参数改写与结果整形、生命周期钩子、厂商注册与模型目录发现、
+  工具激活、提示词注入、权限拦截、会话持久化、输入改写走**同步侧**；轮次通知、指标、审计走**异步侧**。
+- 两者共用 `infra/registry` 的同一份 `TypeRegistry`。**禁止引入第三方事件总线**（如 Guava EventBus）。
+- **插件的三条出边**：`ActionQueue`（入站动作）、`ShellIngress`（出站贡献）、`SubAgentPort`（出站委派）。
+  前两者是内核自有、**有界、单向**队列，都不是事件总线（无订阅、无广播、无 handler 注册）。
+- **类型即地址**：注册表按「类型 + 路由键」找 handler；插件拿不到的类型就注册不了。
+- 同步派发**没有超时、白名单、异常隔离**：调用点若不能容忍插件阻塞或抛错，必须自己设超时或捕获。
+- **同步侧只提供有序查找与单处理器执行，注册表不做编排**：`handle` 同键唯一（0 个 → `NO_HANDLER`，
+  多个 → `AMBIGUOUS_HANDLER`），`contribute` 是 0..N 个。结果合并规则写在调用点的 `for` 循环里，
+  只有两类：**链式**（逐环传递，无「谁胜」规则）与**合并**（`order` 最小且声明了该字段的那一个胜出）。
+  **禁止「取最后一个非缺省」**。
+
+### 插件动作只在顶层回合内
+
+- 一次 `chat` 调用 = 一个回合，回合边界由外壳决定。投递窗口由 `ReActLooper.chat` 开、回合作业的 `finally` 关；
+  **没有在途顶层回合就没有窗口**，`submit` 当场回报 `FAILED` + `NO_TURN_IN_FLIGHT`，**不新开回合**。
+- **内核不自己起回合**（会弄坏外壳的在途状态、取消入口、输入互斥与并发写历史四件事）；
+  「插件在回合之外想说话」（定时检查点、长任务完成后汇报、自动提交反思结论）**明确不做**。
+- 回合之外**唯一被允许的形态是「显示」**：`present(ShellContribution.notice(...))`。
+- **子代理（嵌套）回合不开窗**：`runNested` 不调 `beginTurn`。
+- **插件没有任何召回入口**：`ActionHandle` 不提供取消、超时与 `get()`；动作清单里没有 `ABORT_TURN`
+  （中止回合是用户主权）。
+- **失败是常态**：插件常从事件订阅回调投递，容易落在回合收敛之后，必须按 `ActionFailureReason` 分流
+  （能否重试由原因码决定），不当异常处理。残留动作只能以 `TURN_ENDED_UNREACHED` / `TURN_SUPERSEDED` 收尾。
+- **`SubAgentPort` 是三条出边里唯一的例外**：不是队列，且是插件出向边里唯一会阻塞的。形态为
+  「句柄式异步 + 调用方阻塞等待」：`spawn` 立即返回句柄，`handle.await()` 阻塞在**插件自己的线程**上。
+  **内核绝不在关键路径上同步回调插件**。它不带来新权限（准入、深度、扇出、并发、预算、取消、归档全走
+  `task` 的同一条代码路径），拿不到端口时**不抛异常**（`unavailable()` 给出的句柄直接带 `REJECTED`），
+  也**不随 `ContextLifecycle` 失效**（它不是注册，而是一次委派）。
+- **`ShellIngress` 不注入 `SessionManager` 与 `AgentHarness`**——「插件不能新建会话、不能起回合」是结构性约束。
+
+### `present` 与 `ShellContribution`
+
+- **推送事件、拉取状态**：通知 / 失效提示走 `present`；面板、状态栏、会话条目的**内容**走拉取。
+- `Kind` 是封闭枚举（`NOTICE` / `INVALIDATED`）；贡献不产生 `LlmMessage`、不参与 prompt 组装、不进 `SessionMessage`、不落盘。
+- **不自动建会话**：`Scope.SESSION` 必须指向**已存在**的会话；查不到 → `DROPPED_NO_SESSION`，**绝不调 `SessionManager.create`**。
+- **没有渲染面就不收**：`-cli` 单次调用 → `DROPPED_NO_RENDERER`（判据是**外壳种类**，不是 `RuntimeInfo.hasUI()`）；
+  未写入运行时信息时落到保守的「不收」一侧。
+- **`DROPPED_QUEUE_FULL` 不重试**；只有 `INVALIDATED` 值得稍后重发（幂等）。
+- 内容行用 `lines`。**空 `lines` 是「不显示」，不是「清空」**。`what` 只是线索，外壳可忽略它并全量重拉。
+- **文本是不可信输入**：`lines` 里的控制字符必须在**渲染面**滤掉，内核不做内容改写。
+- 指标只记计数（`plugin.shellContribution.*`），**不记审计事件**。
+- **投递结果用 `ShellContributionStatus` 回报**；**只有「已停止」抛异常**。
+
+### 新增同步扩展点
+
+- 请求类型**必须显式定义「0 个 handler 时是什么行为」**并写测试：老插件不注册它时，调用点必须走与改造前
+  **逐字段一致**的路径。
+- **必须写明失败语义**（handler 抛错时按 `ABSTAIN` / 保留原值 / 继续 中的哪一个处理）。
+- 请求 / 结果类型放 `api`，**恰好一个可见构造器 + 静态工厂**；新增字段只能用新静态工厂补，**不加兼容构造器**。
+- 新增同步扩展点**必须在脚本桥接的能力档里登记**（`Jellyfish-Plugins` 的
+  `jellyfish-script/src/main/resources/script/extension-points.json`，分 `in` / `planned` / `excluded`）：
+  未分类即让插件仓库构建失败。
+
+### 覆盖是一条链，不是就地替换
+
+- `registerUnique` 遇到已占用的键且声明了 `override(true)` 时，新登记**压在旧登记之上**；旧登记仍在表里，只是不生效。
+  `handler(type, routeKey)` 的「同键唯一」语义对外逐字段不变（只看链顶）。
+- **解除链顶就是一次回退**：`Subscription.close()`、插件停止时的 `removeAllUnder(pluginId)` 都让被压住的那层自动重新生效。
+  若就地替换并丢弃旧登记，插件一走被它顶掉的内核工具 / 命令就**永久消失**。
+- **回收按 owner 判定，与是否生效无关**：收槽位里的**全部**登记，否则被压住的层会在覆盖者离开后悄悄复活。
+
+### 插件生命周期
+
+- **注册窗口是插件的整个存活期，不是 `start()` 之内**；回收仍只按 owner 一次收干净。
+  `Subscription.close()` 是主动注销的正式手段，**注销是可选优化，不是必须动作**。
+- **`stop()` 之后注册一律当场抛 `JellyfishException`（fail-closed）**；产生注册的后台线程**必须在 `stop()` 返回前停下来**。
+- `start()` 抛错 → 插件转 `FAILED`，框架回收已完成的注册，**不保证**再调 `stop()`。
+- **插件碰不到会话、也拿不到工作目录**：`PluginContext.runtimeInfo()` 只有进程级事实（外壳种类、有无交互界面、
+  是否具备审批通道、有无终端），**不含 `sessionId` / `agentId` / `cwd` / 上下文用量 / 提示词**。
+  工具相对路径按进程工作目录解析。
+
+### owner 与命名空间
+
+- **owner 可以是命名空间**：`pluginId` + `api.PluginOwnerNamespace.SEPARATOR` + 子标识；
+  内核按命名空间做前缀回收（`pluginId` 自身与 `pluginId::*` 一起清）。
+- **分隔符常量在 `api`**（跨边界契约，必须同一个真源）。
+- 插件侧用 `PluginContext.subContext(childId)` 派生子上下文，**子身份恒从当前身份派生，无法越界**。
+- **`plugin.id` 含分隔符的插件在描述符体检阶段被拒**。
+- **`EventChannel.unsubscribeAll` 仍是精确匹配**，不参与命名空间前缀回收。
+
+### 插件扫描与配置
+
+- **新增 / 删除插件 jar 需要重启进程**（扫描目录与插件集合只在启动期确定）；
+  `jellyfish.json` 里插件配置段的变化由 `/reload` 按差异重启对应插件。
+- **模式类授权的名单不回内核**：内核不持有「模式」概念（无字段、无枚举、无 `/mode`、无 `--mode`）。
+  按模式收窄的授权是插件的一条普通拦截，名单归插件自己的配置段；**工具描述符里没有「只读」字段**。
+
+## 会话、持久化与配置
+
+### 会话状态
+
+- 会话状态一律归 `Session`，进程内无全局当前态；agentId / 模型是会话字段。**不设 `session` 配置段**。
+- 唯一进程级字段是 `SessionDefaults`（新建会话的待生效默认值），**只在 `create` 那一刻被消费**。
+- `SessionManager.createDefault()` 三项全传 `null`；`null` = 按待生效默认值、其次按更下层默认。
+- **没有「权限模式」字段**：模式是插件能力（存于会话扩展条目），内核不存它，新建会话也不接收它。
+
+### 落盘
+
+`SessionManager` 是唯一变更入口：变更同步派发 `SessionPersistRequest` 且**异常原样上抛**；
+关闭先落盘再移除，删除走 `SessionDeleteRequest`、**删不掉就当没删**。
+
+关闭前钩子 `SessionBeforeCloseRequest` → `LifecycleVerdict`，调用点在**最后一次落盘之前**：
+
+| 触发 | 否决是否被采纳 |
+| --- | --- |
+| `USER_REQUEST` | 采纳（fail-loud：抛 `JellyfishException` 且会话留在表里，**不得静默不关**） |
+| `SHUTDOWN` / `RELOAD` / `INTERNAL` | 忽略（钩子仍被调用） |
+
+handler 抛错**按放行处理**。它只管「结束运行态、保留快照」；删除另走 `SessionDeleteRequest`。
+
+| 场景 | 语义 |
+| --- | --- |
+| 创建 | 不落盘（空会话无文件、无提交）；失败从「创建时暴露」变为「第一次变更时暴露」 |
+| 回合内消息追加 | 只标脏，由 `ReActLooper.execute` 的 `finally` 调 `flush` 落一次；**回合收敛 = 已落盘** |
+| 恢复 `SessionRestoreRequest` | 单插件读不出只告警跳过；**必须排在 `pluginManager.bootstrap()` 之后** |
+| 延迟落盘 `flush` 失败 | 只记 WARN 并**保留脏标记**等下次重试（不得升级为回合失败） |
+| `AgentHarness.shutdown` | **必须在 `pluginManager.close()` 之前**调 `flushAll()` |
+
+- 只有消息追加被挂起；命令、`recordUsage`、`applyCompaction`、`close` 仍即时落盘
+  （独立线程上的自动压缩不受回合作用域影响）。
+
+### 会话种类
+
+- **`SessionKind` 是「哪一类会话」的唯一判定来源**：`NORMAL` / `EPHEMERAL` / `FORKED`；
+  `parentSessionId` 降级为追溯信息，**不得再用它做判定**。
+- `EPHEMERAL`：在会话表里（可追消息、发事件），但**不进 `all()`、不落盘**、不参与恢复；收尾走 `close()`。
+- `FORKED`：**与普通会话同等对待**（进 `all()`、落盘、可 `/resume` 与 `/delete`）。
+- fork 四条硬规则：① 切点必须落在工具调用组边界上且**向「后」推，不得往前退**；② 不复制 `usage`；
+  ③ 压缩摘要只在 `indexOf(boundaryMessageId) <= 切点` 时带上，判定在配对对齐之后；④ 扩展条目照带。
+  `SessionBeforeForkRequest` 的否决**一定被采纳**，请求里给的是**对齐之后的切点**。
+
+### 会话扩展条目
+
+- key 写入时拼 owner 前缀；插件侧 key **不得含 `::`**。
+- 插件侧入口在 `PluginContext`（`putExtensionEntry` / `removeExtensionEntry` / `extensionEntries`），
+  **不在 `SessionManager` 上**；读取按命名空间过滤。
+- 走既有的「唯一变更入口 + 标脏 + `flush`」，**不新增第三条落盘路径**。
+- 条目不进模型上下文，但随会话落盘，**因此有上限**：单条值 64 KiB / 每会话 64 条 / key 256 字符；
+  超限抛 `JellyfishException` 且**不写入**（不截断、不静默淘汰），错误信息带 owner。
+- 插件停止**不删**条目。
+
+### 用量记账
+
+- `recordUsage` 两重载：`LlmUsage` 版 = 一次调用，恒加 1；子代理回合的累计用量走 `SessionUsage` 版，
+  **把调用次数一并带过来**。
+- **调用次数只认 assistant 消息**：user 输入与 tool 结果走 `SessionUsage.plusTokens`（只累加 token），
+  只有 assistant 走 `plus`。
+- 子代理用量归集到父会话；**归集失败只记 WARN**。
+
+### 跨边界载荷
+
+- 跨边界载荷必须是 **api 侧快照值类型**，映射归 `infra/session/SessionSnapshots`，用往返测试守字段。
+- 快照类型**必须恰好一个可见构造器**：新增字段用静态工厂，**不要加兼容构造器**。
+- **`-parameters` 是全局编译约定，不许去掉**。
+
+### 配置加载
+
+- `AppConfig` 绑定 `classpath:config.json`，**只有它声明各配置文件位置与插件扫描目录**；
+  默认全局 `~/.jellyfish/`、项目 `./.jellyfish/`。`SettingsBinder` 做 `${ENV_VAR}` 插值（`\${VAR}` 转义）。
+- **插件扫描目录不参与双源合并**；展开行首 `~`、丢弃空白条目，空列表回退 `plugins`。
+- 四份配置对四类：config→`AppConfig`、models→`ModelSettings`、agents→`AgentSettings`、jellyfish→`JellyfishSettings`；
+  `classpath:default-agent.json` 是内置只读定义，**不走双源**。
+- agent 提示词来自同目录 `{agentId}.md`，JSON 的 `systemPrompt` 被忽略；**默认 agent 恒为内置**
+  （启动与新建会话都绑它，只能 `/agent` 切换）；非法 `agentId` 整条丢弃并告警，用户与内置同名时**保留内置**。
+- 配置驱动索引在启动期建立：构造期只建空索引，`AgentHarness.bootstrap()` 里 `runtimeConfig.refresh()` 之后才装载；
+  **`PluginRuntimeConfig` 必须在 `pluginManager.bootstrap()` 之前刷新**。
+- `global` / `project` 合并：同名 provider / agent / 插件配置段以 project **整对象**覆盖；
+  列表段项目级已声明则整体替换（写 `[]` 即清空）；`react` / `permission` / `subAgent` 段同口径。
+- **「字段缺失」≠「显式空数组」**：`allowedTools` / `plugins.enabled` 缺失为不限制，`[]` 为一个都不放行 / 不启用；
+  `plugins.roots` 不适用。
+
+### `AgentDefinition` 的两个字段
+
+| 字段 | 含义 |
+| --- | --- |
+| `delegatable`（缺省 `false`） | 只回答「能否被 `task` 当作目标」；**不**回答它自己能否再往下委派（后者由深度上限 + 自身 `allowedTools` 是否含 `task` 决定） |
+| `model` | 模型引用的最低一级回落；由 `ModelManager.resolveReference` 统一解析，与 `/model` 共用同一份 |
+
+### 热更新
+
+- 顺序固定：`modelManager.refresh(true)` → `agentManager.refresh(false)` → `pluginRuntimeConfig.refresh`
+  → 比对插件配置段 → `pluginManager.reload` → 广播 `ConfigReloadedEvent`。
+- `synchronized` 单飞，**不回滚**，触发只有 `/reload`。
+- 「重启插件」= stop + start，前提是能力上下文在每次 `start()` 现造；PF4J 插件实例在装载期缓存，**stop 不会重置它**。
+- **`config.json` 不参与热更新**；新增 / 删除插件 jar 仍需重启。
+
+### 待生效默认值与模型解析
+
+- `SessionDefaults` 纯内存、进程退出即失效，**绝不写回任何配置文件**；字段 `null` = 该项继续跟随更下层。
+- 模型解析三级回落收在 `SessionModelResolver`：会话显式 → `agent.model` → 全局默认；`ReActLooper` 与
+  `ConversationCompactor` 共用它。**子代理不继承父会话的模型**。
+
+## 权限与审批
+
+### 权限两层
+
+**核心策略 → 插件拦截**，再统一处理 ASK 与审计。
+
+- **fail-open 只覆盖「取不到策略」**；策略一旦生效，它的否定就是硬结论。
+- **内核不持有「模式」概念**：按模式收窄的授权是插件的一条普通拦截，因此「装了它才有、卸了它就没了」是唯一的分界。
+- **参数改写排在权限判定之前**（防 TOCTOU）：排在之后就会出现「审批浮层显示参数 A、真正执行参数 B」，
+  用户批准的东西与执行的东西不是同一个。排在之前则审批记录、界面轨迹行、`-cli --show-tool-args`、
+  会话里落库的 `toolCalls` 是同一份文本。它**不是放宽权限的入口**：改写之后照旧走核心策略与插件拦截。
+- 参数改写链上的 `DENY` **不进权限审计**：那是「插件拒了这条参数」，压根没有权限结论；
+  它表现为一条 `terminal=REJECTED` 的工具失败结果。
+
+### 插件拦截：三态，取最严
+
+- **`PermissionVerdict` 是三态（`ABSTAIN` / `ASK` / `DENY`）**，合并**取最严**（`DENY > ASK > ABSTAIN`）
+  且 **`DENY` 短路**。**同为 `ASK` 时保留先到者的理由**。
+- **插件抛错按 `ABSTAIN` 处理**。
+- **`PermissionVerdict` 里没有 `ALLOW`，因此「插件不能放宽核心策略」是编译期约束**。
+- **`ToolFilter` 的判据不重写，而是复用执行期判定**（`PermissionManager.usableTools`）。
+  推论：**`ASK` 不算被拒**；**插件拦截不参与过滤**（它要看参数、可能问人）。模式类收窄因此在清单里看不到。
+
+### 审批：fail-closed
+
+- **ASK 由 `ApprovalChannel` 收口，只有明确批准才放行**：**无审批者、超时、溢出、通道关闭、中断一律拒绝**。
+- 超时来自 `permission.approvalTimeoutSeconds`（缺省 120，**每轮现读**）。
+- **`Esc` 是「拒绝 + 中断回合」**，不是只拒绝。
+- **头槽位是每会话一个**：同一会话内是「一个头槽位 + FIFO 队列 + 只对头生效 + 首次结论胜出」，
+  **会话之间互不排队**。`resolve` 返回「是否真的落定了一条头槽位」，供 HTTP 层区分 404；排队中的请求裁决它等于无事发生。
+- **读侧两个口**：`pending(sessionId)` 回答「现在该批准哪一条」；`pendingApprovals(sessionId)` 回答
+  「这个会话一共还欠几条」。**能裁决的始终只有头槽位那一条**。
+- 三种外壳：`-tui` / `-server` 会挂审批者，**`-cli` 不挂**（那里没有审批者，需要审批的调用一律按拒绝处理）。
+- **「有没有审批者」对外只暴露静态语义**：`RuntimeInfo.supportsApproval()` 回答的是「本外壳**具备**审批通道吗」，
+  **不表示此刻有人在线**。插件只能据此做降级决策，不能据此做安全判定。
+
+### 插件侧的模式实现要求（以官方 `jellyfish-plugin-plan` 为准）
+
+- **白名单为空 = 一个都不许**（白名单语义）：「用户没表态」与「用户不准」是同一件事。
+- **拒绝文案必须点明去哪儿声明**（带上配置键）。
+- **白名单为空时补一条 `ConfigWarningEvent`，每种配置只发一次**；挂在「因白名单为空而拒绝」上，**不挂在启动上**。
+- **开关状态放会话扩展条目**，不要自建文件。
+- **子代理不继承插件的模式状态**：开关存在会话上，子代理是另一个会话；要不要传播由插件自己决定。
+
+## ReAct 循环、上下文与子代理
+
+### ReAct 循环
+
+- **`AgentHarness.chat(sessionId, input, listener)` 是外壳唯一智能入口**，委托 `ReActLooper` 在 `react` 线程池
+  异步推进；**工具失败一律转成 tool 结果回灌，只有模型调用本身失败才上抛**。
+- **`react` 池线程数上限 8**（即并发顶层回合数），队列 128，空闲回收 60 秒。
+- **子代理 run 不进 `react` 池，跑在自己的 `agent-run` 池上**：父回合等子代理时阻塞在自己的线程上，
+  把 run 排回 `react` 池会让 8 条线程被并发父回合占满并互相等死。两池不共享队列，并发由
+  `subAgent.maxConcurrentRuns` 的许可门控；**等待中的 run 会让出许可**，否则深度大于 1 时会自锁死。
+- **回合开始前可被拦下（`TurnBeforeRequest` → `TurnDirective`）**，调用点必须在**追加用户消息之前**——
+  一旦消息进了会话，拦下就只剩「再删掉」这条路，而历史是 append-only 的。顶层与嵌套共用同一个入口。拦下后：
+  - **不追加用户消息、不调用模型、不伪造 assistant 消息**，会话一字未改；
+  - `ReActResult` 多一档终态 `blocked`，理由原样带到外壳：TUI 走终局行、`-cli` 走 stderr 并以退出码 `7` 结束
+    （stdout 保持空）、Server 发 `turn_blocked` SSE 终态；
+  - `replaceInput` **只对顶层回合生效**，嵌套回合忽略并记 DEBUG；
+  - handler 抛错按放行处理。
+
+### 提示词布局与缓存
+
+- **system prompt 按「稳定性」分层拼接，不按注册顺序**：`STATIC` → `SESSION` → `VOLATILE`，
+  同一层内保持 `order` 升序。厂商的 prompt 缓存是**前缀匹配**，一块放在第几位直接决定「它一变要作废多少内容」。
+- **易变状态不进 system prompt，随本轮用户消息走**：`TurnContextRequest` 的产物拼进本轮用户消息并**随消息落盘**，
+  因此是 append-only 的。判据只看「会话内会不会变」：不会变 → 提示词贡献；会变 → 回合上下文。
+- **`PromptContribution.of(text)` 的缺省分层是 `SESSION`**：不改的老插件行为与引入分层之前完全一致。
+- **回合上下文不做核内去重**（核内去重会让「上一次注入的内容恰好落在被压缩掉的那一段」变成静默丢失）。
+- **可缓存前缀的实际断裂会被观察并记日志**：`CacheBreakWatcher` 对比同一会话相邻两轮并指出断在哪一层；
+  从稳定变为断裂的那一轮记 WARN，持续期间降到 DEBUG。
+
+### 工具清单
+
+- **工具清单在一个会话内既不换顺序、也不换集合**（它进的是缓存前缀里很靠前的位置，一变则整段请求连同全部历史作废）。
+  - **顺序**：`ToolCatalog` 按 `order` + **名称**排，不用注册顺序。
+  - **集合**：`ToolCatalog` **按会话冻结一份清单**（首次取清单时拍快照），注册表的变化只对**新会话**生效。
+  - **要变就必须显式变**：`PluginAction.rebuildToolCatalog(sessionId, reason)` 清掉该会话的冻结快照，
+    由 `ActionDispatcher` 在**回合边界**排空（对下一个回合生效）。它必定换来一次前缀断裂，因此记一条 WARN。
+    **内核绝不在注册表变化时自动重建**——那会把冻结保证拆掉。
+- **按模式收窄的授权必须走权限拦截，而不是替换工具集**（清单逐字节不变，且拒绝理由能经工具结果回灌给模型）。
+- **插件可以在冻结点表达「这个工具现在不该出现」**：`ToolActivationRequest`（第一个非 `ABSTAIN` 胜出）。
+  **隐藏 ≠ 禁用**：被隐藏的工具不进清单，但仍在注册表里，`ToolExecutor` 直接调用仍会执行。
+
+### 上下文裁剪
+
+- **裁剪只裁本次请求**：`ContextWindow` 按 `contextLength - maxOutputTokens - contextReserveTokens` 从最旧
+  **成组**丢弃（toolCalls 与结果同生共死），**Session 历史一条不动**；模型未配 `contextLength` 时不裁剪。
+- **`ContextWindow` 对 `tool` 消息不做逐字符截断**，直接替成 stub。
+- **上下文老化排在机械裁剪之前**。
+
+### 消息序列的工具调用配对约束
+
+- **出站序列必须满足两条厂商共同强制的规则**：每条 `tool` 消息都有前置的 `assistant(toolCalls)`；
+  每条 `assistant(toolCalls)` 都紧跟齐它的全部结果。违反任一条，厂商以 400 拒掉**整次请求**，且失败会一直重复。
+- **压缩边界必须落在工具调用组的边界上**：起点若落在 `tool` 消息上，就**向前退到组开头**
+  （`keepRecent` 是「**至少**保留最近多少条」）。对齐后退到可压范围下界时，按「没有可压历史」处理。
+- **组装请求时再兜一层**：`PromptAssembler` 出站前跳过开头的孤儿 `tool` 消息、丢弃结尾悬空的 `assistant(toolCalls)`。
+- **回合被取消时必须给未执行的工具调用补结果**：`assistant(toolCalls)` 在**执行工具之前**落盘，
+  因此取消时为剩下的补上「已取消」结果并标 `terminal=CANCELLED`。
+- **`ToolExecutor` 不抛错，因此取消是唯一需要补的来源**。
+
+### 压缩
+
+- **`/compact` 非破坏式、滚动摘要**：消息一条不删，只记
+  `Session.compaction = {boundaryMessageId, summary, droppedMessageCount}`，**失败无副作用**；
+  每次只压「上次边界之后、再留 `keepRecent` 条」的那段，并把上一份摘要一起喂回，**边界只向后移**。
+- **单次压缩、装不下就丢最旧**：待压范围超预算时从最旧侧丢弃，被丢弃条数如实上报并落盘；**至少进摘要 1 条**。
+- **摘要调用复用当前上下文（cache-safe fork）**：发出去的是「父请求的真前缀 + 一条追加指令」，三条都不可省：
+  ① 切的是**父请求自己的字节**；② **工具原样带上**；③ 用 `tool_choice: none` 关掉工具调用。
+- **摘要是一条每次现算的出站合成消息，不落盘**：排在压缩边界之后、被保留历史之前。角色用 `user`，
+  紧随其后也是 `user` 时并入其中。
+- **触发两条**：`/compact`（MANUAL），或每轮组装时自动压（AUTO）——用量达 `react.autoCompactPercent`
+  （缺省 80，写 0 关闭）或本次已被机械裁剪。**无范围时零成本**。
+- **`/compact` 只起头不等结果**，只有无参执行与 `preview` 两种形态；跑在自持 `compact` 线程池，
+  外壳每帧轮询 `status(sessionId)`；**不做用户可见档位**，「没什么可压」报 ERROR，`preview` 同情况返回 OK
+  且**连模型都不解析**。
+
+### 压缩是插件能力、内核只提供机制
+
+- **`CompactionStrategyRequest` → `CompactionStrategy`** 给摘要指令与两个数量参数；没有插件即整体不可用、
+  **不回退内置**，`isAvailable()` 只查注册表。
+- **`CompactionPreRequest` → `CompactionDirective`** 是「这次要不要压、压多少」，调用点在**选定范围之后、
+  发起摘要模型调用之前**——那是唯一「还没花钱」的位置。它可以 `cancel` 或 `keepRecent(n)`；
+  多个钩子同时给 `keepRecent` 时取 **order 最小**的那一个。它只给规模，**不给消息正文**。
+  handler 抛错按放行处理。
+- **插件拿不到消息正文、发起模型调用的能力、否决权**；数值由内核钳制（保留 `[0, 消息总数]`、
+  摘要上限 `[200, 20000]`）；处理器**必须只读且快，不得发布事件**。
+- **摘要指令是插件自带资源 `summary-prompt.md`**；占位符 `{maxSummaryChars}` 由内核替换，缺占位符只告警不失败。
+- **插件上下文只走 system prompt**：按 order 用 `\n\n` 拼接，**不追加进 messages**；单个处理器抛错只记 WARN 跳过。
+
+### 子代理（嵌套回合）
+
+- **它是内核能力而不是插件**：它改的是「循环可以调用自己」。内核以 `owner=core` 注册
+  （`core/subagent/SubAgentTools`），插件要替换必须显式声明 `override`。
+- **开关关掉时连工具一起摘掉，因此它必须自己听 `ConfigReloadedEvent`**（`ConfigReloader` 在 infra、
+  `SubAgentTools` 在 core，**infra 不可能反向知道它**）；重算是 best-effort，丢了的表现是外观陈旧而**不是放行**。
+  **清单贡献里仍要再读一次开关**（重算与组装请求之间有一段窗口）。
+- **子代理与主会话除了传入的任务之外相互隔离**（fresh-only，**没有 fork，且不做**）。
+  它拿到的只有自己那份 `AgentDefinition`、项目约定与任务原文。
+- **准入全部排在副作用之前**：开关、任务非空、回合作用域、层数、预算、类型存在且 `delegatable`、
+  非委派给自己、模型可解析——**一个被拒绝的委派不建会话、不发事件**。
+- **`REJECTED`（换个参数就能修）与 `FAILED`（已经跑起来但出错）分开**。
+- **三道上限 + 一道授权 + 一套预算**：`maxDepth` / `maxSpawnsPerTurn` / `maxConcurrentRuns` 三者正交，
+  叠加单 run 墙钟 / 单 run token / 树 token 三个预算。「子代理能不能再委派」由它自己的 `allowedTools`
+  是否含 `task`（未声明 = 不限制）叠加在深度上。
+- **上下文是一回合一账，不是一次委派一账**：`RunContext` 由 `ReActLooper.execute` 在顶层回合开闭；
+  `RunTree` 跨线程按引用共享。`react` / `agent-run` 线程会被复用，因此**必须**在 `finally` 里清掉上下文。
+- **子代理的工具清单按它自己的 agent 配置收窄**，**过滤只随嵌套回合传递**，主会话路径传 `ToolFilter.none()`。
+- **`ToolFilter` 与工具激活是两个闸门，都要放行**（一个管组装期「该不该出现」，一个管执行期「能不能用」）。
+- **用量归集到父会话且在 `finally` 里只记日志**（子会话马上被关掉，那些 token 是真花掉的）。
+- **归档与工具输出不共用配额**：run 归档写到 `<toolOutput.dir>/subagent-runs/`（独立命名空间 + 独立上限）；
+  归档在 `finally` 里、**先于 `runtime.remove`** 发生；写失败只记 WARN。
+- **run 事件不挂 `ShellTurnEvent`**：走运行时自持的 `RunEventBus`（`core.runtime`），外壳订阅。
+- **广播终态必须早于 `handle.complete`**；run 起跑时要先把状态置为运行中。
+- 呈现：轨迹行上的标识走 `ToolMetadata.KEY_SUMMARY`（`子代理 scout · 3 轮 · 123456 tok`），**不是靠界面认工具名**；
+  摘要里**不带状态词**，轮数与 token **都只在跑过的情况下写**；**`TRUNCATED` 是唯一需要在摘要里额外说一句的状态**，
+  它还要附上子代理最后一段已产出的正文（**只给最后一段**，倒着找第一条带正文的助手消息）。
+  **截断提示按语境指向不同的配置键**（顶层读 `react.maxRounds`，嵌套读 `subAgent.maxRounds`）。
+
+## 工具执行、输入指令与命令域
+
+### 工具执行
+
+- **`ToolExecutor` 是权限 → 路由 → 截断的唯一执行点**：模型发起的工具调用与输入指令（`!`）走同一条路径。
+- **七步顺序不可重排**：参数解析 → `ToolArgumentPreRequest` 链 → `PermissionCheckRequest` → `ToolCallRequest`
+  → `ToolResultPostRequest` 链 → `ToolOutputLimiter.limit` → 落会话与通知。
+  **0 个 handler 时参数与结果原样穿过**（有单测锁定）。
+  - **参数改写必须在权限判定之前**（TOCTOU，见「权限与审批」）——**这是最不能挪的一处**。
+  - **结果整形必须在截断之前**：截断之后回来改文本会产出「信封说被截断、正文却完整」这种自相矛盾的结果，
+    而且落盘文件是截断那一步写的。**`output` 在该步保持原始类型**，不得提前序列化成文本。
+  - **两个改写点的失败语义都是「按无异议处理」**（handler 抛错记 WARN 后继续）。
+  - **参数改写不做重新校验**：内核没有工具的参数 schema，写 `REPLACE` 的插件自己保证参数形状合法。
+
+### 输出截断与落盘
+
+- **工具输出只有一个硬截断点**，**回灌给模型、写入会话、通知外壳用的是同一份文本**；
+  两个触发点（事后截断、捕获期溢出）**共用同一份预览切分与信封实现**。
+- **预览是头 30% + 尾 70%**（比例与省略标记是常量、**不开放配置**）：结论往往在末尾。
+  结构化数组是「前缀 + 哨兵元素 + 后缀」，对象只取前缀字段。
+- **捕获期 sink 让内存占用与输出体积无关**；**落盘只在溢出时发生**，短输出不产生任何文件。
+- **`finish()` 幂等**；**收尾之后再写入会被丢弃并记 WARN**。
+- **落盘上限 `spillMaxBytes`**：触及上限时**写入截到上限为止**（不是整个放弃），并置信封字段 `_partial`。
+- **实时输出是旁路**（不在 react 线程上、可能被并发调用），可丢、抛错被隔离；**它绝不能阻塞**。
+  TUI 保留末 20 行、CLI 直接写 stderr、**Server 按待发条数封顶**（它是唯一必须封顶的）。
+- **区分文本与结构化，绝不按字符切**：字符串按行截断；`Map`/`List` 先序列化再按 JSON 子树截断。
+  **不要在任何地方对可能是 JSON 的输出做 `substring`**。
+- **信封是唯一格式**：超限时完整内容落盘，回灌
+  `{_truncated, _tool, _total_chars, _total_lines, _path, _hint, preview}`。
+  渲染与解析共用 `ToolOutputEnvelope` 的字段常量，**禁止两处各写一遍键名**。
+- **落盘失败不是回合失败**：只 WARN，信封记 `_path: null` 并说明不可恢复。
+- **清理只报告不阻断**：每会话按文件数 / 总字节上限从最旧删起，且**永不删刚落盘的那个**；写临时文件再原子改名。
+  **`_path` 只在保留窗口内有效**（这是「不做引用计数式保留」的直接代价，刻意接受）。
+- **不做「输出体量杀命令」**：无界输出由超时兜住；超出 `spillMaxBytes` 的部分继续排空并丢弃。
+
+### 上下文老化
+
+- **老化排在机械裁剪之前**：`ToolResultAger` 把「保留窗口之外」的信封换成带路径的 stub，
+  **只改本次请求、Session 一条不动**；`keepRecentMessages` 写 `0` 表示关闭。
+- **两种触发口径，由 `react.cache.agingPercent` 选择**：`70`（缺省）只在上下文用量达到该百分比时老化，
+  且**一个压缩周期内只推进一次**，其余轮次边界冻住不动；`0` 则按「距尾部多少条消息」，边界每轮重算（逃生门）。
+  水位口径必须把边界冻住——否则每轮追加 2–3 条消息就让边界前移，移过「最近、最贵、刚被缓存」的那一段。
+- **边界状态按会话有界**（最近 64 个会话），淘汰的代价是「这个会话多断一次」而不是算错。
+- **stub 必须保留预览首行**（工具把退出码 / 终止原因 / cwd 放在正文首行，而落盘文件里只有正文）；
+  首行长度上限 **400 字符**；结构化预览不取首行。
+
+### 结构化元数据
+
+- **界面与审计读字段、模型读文本**。约定只有三个键：`exitCode` / `terminal` 回答「成没成」，
+  `summary` 回答「刚才那一行到底是什么事」；其余键工具自定、**内核只透传不解释**。
+- **判据只有一个实现**：`ToolMetadata.failed()` = 「退出码非零或非正常终止」。
+  **工具抛异常时内核补 `terminal=FAILED`；参数被插件拒绝时补 `terminal=REJECTED`**（后者表示工具压根没跑）。
+  要区分两者请读 `terminal` 的具体取值，**不要在 `failed()` 之外另立判据**。
+- **它不进 `LlmMessage`**，而是随工具结果消息落进会话快照并给外壳。**界面绝不去解析回灌文本的首行文案**。
+- **`summary` 是「工具自己拼好的一句话」而不是一组字段**：外壳对具体工具一无所知是这套架构的前提，
+  因此**外壳永远不该按工具名分支**，而是按「有没有摘要」。
+- **工具抛异常时的原因来自 `JellyfishException` 的消息**：内核只转述工具自己写的那一句（进 `summary`），
+  因此工具应当把消息写成一句给人看的原因，**不要**放密钥或大段内容；非 `JellyfishException` 只标 `FAILED`。
+- **摘要是展示用的事实，不得参与任何逻辑分支**。
+
+### 工具层先自我限流
+
+- **两层都不能省**：工具自己的参数（`max_bytes` / `limit` / `max_line_chars`）+ 中间件兜底。
+- **`read_file` 单行就超过 `max_bytes` 时报错，不切短**（切短会输出一行「看起来完整、实际残缺」的内容）；
+  错误文案给出三条出路。多行累加超预算仍照旧分页——**两条路径的语义要分清**。
+
+### 取消与长任务
+
+- **取消令牌 `CancellationToken` 随 `ToolCallRequest` 交给工具**（未提供时为 `NONE`）：
+  **同步派发不会中断正在执行的工具**。它刻意**不走可丢的事件通道**。
+- **`ReActTurnImpl` 兼作令牌**：回调**恰好执行一次**、单个回调抛错不影响其余；
+  回调可能在渲染线程上执行，**因此只能是「发个信号、置个标志」这类快动作**。
+- **`ToolOutputSink` 是内核实现、插件只往里写**：插件因此不知道落盘路径、目录、命名与信封格式。
+  它**必须线程安全**且**必须持续接受写入**。
+
+### 输入改写（命令之后、指令之前、建会话之前）
+
+- **`InputTransformRequest` → `InputTransformResult`**（`continueAsIs` / `replace` / `handled`），
+  `contribute` + order 升序链式传递；`handled` 立即短路。
+- **三个位置都是硬的**：① 排在**命令判定之后**；② 排在**指令解析之前**，且指令按改写后的文本解析；
+  ③ 排在**建会话之前**。Server 上它还排在**占一个在途回合槽位之前**。
+- **后果之一：插件能把普通文本改成 `!命令`，从而触发一次工具执行**。这个代价是刻意的——
+  工具执行仍走完整的权限与审批链路。**不要把它当漏洞来修**。
+- **`handled(notice)` 复用命令结果的渲染通道**，**不建会话、不起回合、不追加消息、不调模型**。
+- **它跑在调用线程上，TUI 路径上那是渲染线程**：handler 只能纯计算、不得阻塞、不得回调内核；
+  抛错按「保持当前文本」处理；0 个 handler 时行为逐字节不变。
+
+### 输入指令 `!` 与文件引用 `@`
+
+- **输入框的特殊语法归插件，不归外壳**：**没有插件就没有这个语法**，外壳不维护「哪些标记需要哪个插件」的名单。
+- **插件只能声明映射，执行权始终在内核**：`InputDirectiveResult` 只能表达「请用这个工具、这几个参数跑一次」
+  或「我不认领」。插件拿不到 `PermissionManager`，**任何在 handler 里直接执行命令的实现都是错的**。
+- **执行体是 `ToolExecutor`，与模型发起的工具调用同一条路径**。
+- **标记就是路由键**：用 `handle`（同键唯一）注册，两个插件抢同一个标记会在插件启动时以 `DUPLICATE_HANDLER` 当场暴露。
+  标记必须是**单个非空白字符**（`InputMarkers` 一处校验）。
+- **两个请求类型分开**：`InputDirectiveRequest`（行首、提交时一次解析、可触发执行）与
+  `InputReferenceRequest`（行内、渲染线程每帧可能问一次、纯只读）。
+- **`!` 的结果落成 user 消息，不是 tool 消息**（tool 消息必须与 `assistant.toolCalls` 配对，而这里没有模型回合）。
+- **`@` 不内联、不展开**：真正的读取由模型调用 `read_file`，因此权限与 `max_bytes` 照旧生效。
+- **片段切分由内核算，插件不重复实现**。
+- **执行是异步的，界面每帧轮询句柄**；`Esc` 调 `cancel()`。
+  **`beginDirective` 必须早于提交执行**——晚一步重置会抹掉执行线程写出的第一段实时输出。
+- **关闭顺序**：`AgentHarness.shutdown` 在 `reActLooper.close()` 之后调 `InputDirectives.close()`，
+  **仍必须早于 `pluginManager.close()`**。
+
+### 命令域
+
+- **`CommandManager` 不注册处理器、不持有会话、不缓存索引**：命令名即路由键，别名与用法来自
+  `CommandDescriptor`；原文入口与结构化入口共用同一条分发路径，**对外壳中立**。
+- **系统命令由 `core/command/SystemCommands` 以 `owner=core` 注册**，插件命令由插件注册，
+  `/exit` `/ui` `/thinking` `/toolargs` `/mouse` 归外壳；候选查询是与执行**平行**的只读路径，**不执行命令**。
+- **`task` 由 `core/subagent/SubAgentTools` 以 `owner=core` 注册**，必须在插件启动之前完成；
+  插件显式声明 `override` 即可替换。
+- **命令审计每个出口经 `finish()` 收口，任何结果下恰好广播一次 `CommandExecutedEvent`**（**不带输出**）；
+  发布失败只记 WARN。
+- **「需不需要会话」是命令自己声明的事实，不是外壳的名单**：`CommandDescriptor.sessionRequired` 缺省
+  **`true`（保守）**。判定入口是 `CommandManager.shouldRunAsCommand(input, hasSession)`。
+  **未注册的名字与语法错误仍返回 `true`**——否则用户打错命令名会被静默当成提示词发给模型。
+- **`sessionRequired=false` 的命令分两类**：本来就不碰会话的（`/help` `/new` `/session` `/resume` `/delete` `/reload`），
+  与**降级**的（`/model` `/agent` `/mode`：有会话时改当前会话，没会话时改 `SessionDefaults`）。
+  **降级那一类必须保证「无会话时也真的能执行完」**，否则标志就在说谎。
+
+## 三种外壳与可观测性
+
+### 三个外壳的共同约定
+
+- **三种启动模式、一个内核**：共用 main、DI、`AgentHarness`、`CommandManager`，差异收在 `RunMode`。
+- **分流顺序由内核统一，外壳不再自己排**：提交入口是
+  `ConversationService.submit(sessionId, text, source, SubmissionPolicy, listener)`，顺序固定为
+  **命令判定 → 输入改写 → 输入指令 → 起回合**。外壳只声明自己的 `SubmissionPolicy`，
+  并 `switch` 返回的 `Submission.Kind` 做呈现；**外壳不得再自己复制这套顺序**。
+  外壳仍自行截胡**外壳自有命令**（`/exit` `/ui` `/thinking` `/toolargs` `/mouse`：它们不进内核注册表），
+  且在进入 `submit` 之前做。
+- **每轮现读当前会话**：外壳不缓存 sessionId，这样 `/new` `/resume` 之后立刻生效。
+  需要会话的路径由 `SubmissionPolicy.sessions` 决定是「按需建」还是「必须有」：
+  TUI 用 `CREATE_IF_NEEDED`（首页延迟建），CLI / Server 用 `REQUIRE_EXISTING`。
+- **CLI 输出契约**：回答与命令结果走 stdout，诊断 / 进度 / 日志走 stderr；回答按轮缓冲、收敛时整体写出。
+  **退出码 `0/2/3/4/6/7` 是机器契约**。`--show-tool-args` 的参数**单行、200 码点封顶**；
+  该旗标只被 `-cli` 接受，`-tui` / `-server` 退 `2`。
+- **外壳种类是插件可见的进程级事实**：`Launcher` 在 `bootstrap()` **之前**把 `RuntimeInfo` 写进
+  `RuntimeInfoHolder`（插件在 `start()` 里就会读它）。**写入必须早于 bootstrap**，晚一步插件读到的就是
+  「未知外壳」。
+
+  | 外壳 | `shell` | `hasUI` | `supportsApproval` | `interactive` |
+  | --- | --- | --- | --- | --- |
+  | `-cli` | `CLI` | `false` | `false` | `System.console() != null` |
+  | `-tui` | `TUI` | `true` | `true` | `System.console() != null` |
+  | `-server` | `SERVER` | `false` | `true` | `System.console() != null` |
+
+  它**不打开会话与工作目录**：四个字段全是进程级事实。不经过外壳启动流程的用法拿到的是
+  `RuntimeInfo.unknown()` 而不是 `null`。
+
+### TUI
+
+- **视图 = 会话投影 + `InflightTurn` 暂存区**：消息区**不持有第二份消息列表**；
+  流式当前轮尚不在会话里，**必须暂存且随回合终结清空**。工具轨迹不进暂存区。
+- **线程契约**：可靠 lane 的订阅者回调**不在渲染线程上**，界面状态**只在渲染线程变更**；
+  订阅者只向线程安全暂存区追加。
+- **订阅用 `subscribeAll`**：TUI 从首页进入，会话是 `submit` 内部才建的，提交之前拿不到会话标识。
+- **消息区必须是单个 `richText`**（布局子元素到 120～180 个即性能断崖）；滚动偏移是 `ChatState` 自己的字段。
+- **TUI 从首页进入**：无当前会话时显示字标与引导提示（**放不下就整行丢弃而不是裁切**）。
+  **分流完全交给命令域，外壳不维护名字表**——`sessionRequired=false` 的命令在首页直接执行且不建会话；
+  首页手敲一条 `sessionRequired=true` 的命令**按约定当作用户的话发给模型**。
+- **输入指令（`!`）排在命令域之后、对话之前**，且一律先建会话（结果要落进历史）。
+- **首页状态栏按「`SessionDefaults` → 配置默认值」两级解析**。
+- **markdown 只在 assistant 正文渲染**：用户消息与工具轨迹保持纯文本。**commonmark 锁 `0.21.0`**；
+  渲染器**永不抛异常**、解析前先过滤控制字符。**表格画成网格**（格子放不下时在列内**折行**，
+  列数多到分不到 `MIN_COLUMN_WIDTH` 时退回**等宽代码块**降级）。
+- **思考过程默认折叠、可全局展开**（`Ctrl+T` / `/thinking` / `--show-thinking`）：思考随消息落会话，
+  **不进 `LlmMessage`**。开关**必须纳入投影的「未变化」判据**。
+- **工具调用参数进轨迹行**（`⎿ 工具名 · 结果摘要 · 失败后缀 · 调用参数`）：唯一来源是会话里 assistant 的
+  `toolCalls`（执行**之前**已落库），界面**不缓存第二份参数**；配对靠 `toolCallId`。
+  **顺序与文案不变，参数排在最后**——失败后缀不能被参数挤出显示范围。参数按显示列**折行**并受行数上限约束，
+  **不要退回按列截断**。
+- **参数不做脱敏**（三个显示面同口径）：外壳按参数名猜不出哪个是密钥，要遮蔽应由工具或用户**显式声明**；
+  渲染一律走 `infra/support/ToolArgumentsText`（控制字符过滤照旧，与脱敏不是一回事）。
+- **工具参数默认折叠、可全局展开**（`Ctrl+E` / `/toolargs`），开关同样**必须纳入投影的「未变化」判据**。
+- **审批浮层优先级高于二级选择页与补全面板**，可见时吞掉其余按键；详情区必须过滤控制字符、超长参数折行；
+  参数**按原文显示**。
+- **TUI 命令输出按时间戳插进消息流**，不贴投影末尾。**插件通知走同一条通道**（无 `command` 可回显），
+  来源归因交给 `getOwner()`。
+- **输入框必须自己定位终端硬件光标**：框架的 `TextArea.renderWithCursor` 不调用 `Frame.setCursorPosition`，
+  硬件光标会停在上一帧最后写入的那一格，输入法预编辑串会把整屏顶上去，之后所有差量重绘错位。
+  因此 `ChatInputView` 自带定位，且**显示行判定必须与 `TextArea` 同口径**。
+- **键位反转：`Enter` 换行、`Ctrl+S` 发送，不要改成修饰键方案**（框架不解析修饰键编码）。
+- **TUI 日志必须与终端隔离**：`-tui` 在参数解析后、DI 装配前把 `log4j.configurationFile` 切到
+  `log4j2-tui.xml`，**必须赶在第一个 `Logger` 创建之前**。
+- **TUI 启动前必须做终端前置检查**，**不满足退 3**；逃生门 `-Djellyfish.tui.skipTerminalCheck=true`。
+- **鼠标捕获默认开，且可在运行期交还终端**；**非滚轮鼠标事件一律吞掉以保住焦点**；
+  **退回前若与启动配置不一致必须自己关掉上报**。**括号粘贴必须保持打开**。
+
+### 插件界面贡献
+
+- **两条 lane 共用一套订阅形状**：`subscribe` / `subscribeAll` 是**可靠 lane**（同步扇出、不丢、不乱序），
+  `subscribeShell` 是**尽力 lane**（每 owner 有界、可合并、可丢）。**可丢性挂在通道上，不在事件上**。
+- **尽力 lane 要外壳自己来取**：`drainShell()` 在**调用者线程**上把积压的贡献交给订阅者。
+  TUI 在 `render()` 帧首调它，Server 在 SSE 写循环里调它。插件推得再多也拖不住任何线程。
+- **TUI 的贡献落地**：`NOTICE` → `ChatState.appendPluginNotice`，`INVALIDATED` → `uiCache.invalidate()`。
+  文本在落地前必须过 `ControlChars.strip`——`TranscriptProjector` 对提示块**不做**过滤。
+- **插件通知按来源封顶**：淘汰的是**该来源最早的那一条**。
+- **推送事件、拉取状态**：面板 / 状态栏的**内容**仍走拉取；推送只负责说「内容脏了」。
+- **插件只能贡献渲染无关数据**；**插件不可能自己造 TamboUI 组件**（子优先类加载器会让 `Element`
+  不是同一个 Class）。
+- **区域归外壳**：`preferredRegion` 只是软建议，落位在 `UiPlacement`（用户指定优先于 order）。
+- **`/ui` 的两级选择页靠「命令级联」实现，选择页组件仍是单层的**：级联成立的前提是
+  **选择页确认＝把取值拼回命令再执行一次**，因此**不要给 `CommandChoicePicker` 加层级栈**
+  （它被审批浮层共用）。**推论**：`confirmChoice` 必须先走 `executeShellOwned`。
+- **五边版式全用 `length(n)`，不用 `percent` / `fill`**，账本由 `ChatLayout` 自己算。
+  **合计超限时两栏各保下限，而不是直接舍右栏**（只要求 `W/3` 装得下两个下限，再窄才保留旧取舍）。
+  **这条降级按帧间变化记日志，不在账本里记**（账本保持纯函数）。
+  **浮层打开时面板不再整体让位，而是照常显示、需要时变矮**。
+  **推论：整帧高度必须正好等于终端高度**。
+- **UI 贡献「失效时收集」而非每帧**：触发源＝首帧、会话切换、回合开始、回合收敛、命令执行后、
+  `UiInvalidatedEvent`、`ShellContribution.INVALIDATED`、`PluginStateChangedEvent`；**漏一个就是内容永久陈旧**。
+  缓存用版本号而非布尔 dirty。
+- **UI 贡献处理器三条硬约束**：纯只读、不得发布 `UiInvalidatedEvent`、必须快；单处理器抛错只记 WARN 跳过。
+- **文本段有两个正交维度**：`UiSegmentKind`（是什么 → **修饰**）与 `UiEmphasis`（该多抢眼 → **颜色**）。
+  **种类不许改颜色**。词汇表只收**纯样式**；**映射只在 `UiRender` 一处**。
+- **面板与轨迹行只有 TUI 渲染**：`-cli` / `-server` 不消费 `UiSegment`。
+- **工具行渲染提示只改显示，改不了轨迹行的文本**。**全局 `Ctrl+E` 优先于插件的 `showArguments=false`**。
+- **插件快捷键只派发 `/命令`，不回调插件**：键位形状收窄成 `ctrl+[a-z]`，内核保留键位
+  （`Ctrl+C/S/T/E/O`）拒绝占用；**命令存在性在收集时校验**。
+
+### Server
+
+- **会话一律按 path 里的 id 寻址，不读 `SessionManager.current()`**（那是进程级单指针，多客户端下不成立）。
+- **启动期不建会话**。**`--agent` / `--model` / `-p` / `--show-thinking` 只归 CLI**，
+  **其余模式带上这些参数一律判用法错误退 2**——**拒绝而不是静默忽略**。
+- **一会话一在途回合（内核不变量）**：`TurnRegistry` 用非重入的 `Semaphore(1)` 占位，且**占位早于
+  `AgentHarness.chat`**（回合任务一提交就 append 用户消息，事后判断冲突已经污染历史）。
+  **槽位的归还在内核**（`TurnRegistry.releasing` 把「终态回调」与「归还」绑死），调用方不要自己写 `try/finally`。
+- **API key 鉴权包在路由外面**（`ApiKeyGuard` 是外层 handler）：逐个处理器里加校验等于「漏一个就是一条攻击面」，
+  而「新加接口忘了校验」**没有任何测试能可靠拦住**。**目前只有 `GET /health` 豁免**。
+  它自己先 `dispatch` 到工作线程再写 401（**阻塞 I/O 不允许在 IO 线程上**）；密钥比较用
+  `MessageDigest.isEqual` 做**常时比较**。
+- **缺省不鉴权是刻意的，但没配密钥时必须留下一条 WARN**（默认日志级别就是 WARN）。
+- **不接受用 query 参数传密钥**。
+- **SSE 单写者**：socket 写全在 Undertow 工作线程上循环完成，订阅者只把事件投进**无界队列**；
+  写失败即客户端断连，据此取消回合。并发流用 `maxStreams` 封顶（超限 503）。
+- **订阅先于提交**：`turn_start` 与第一批增量由内核发布，晚订阅会丢掉开头那一段。
+- **turnId 由内核生成**并随事件一起到达，外壳不再自造。
+- **审批走 HTTP，路由由内核按会话做**；**断连时主动拒绝仍待审的那条**，否则 react 线程要阻塞到审批超时。
+- **插件贡献也进 SSE，但它是尽力 lane**：**写循环改成 1 秒一片地等**（回合事件一到就走，
+  插件贡献的延后最多一秒）；交付仍只有一个写者。
+- **关闭顺序由 `JellyfishServer` 自己保证**：它的钩子先停 HTTP、再放行 `awaitShutdown()`。
+- **绑定失败退 3**（启动条件不具备），不是 4；**测「绑定失败」用不可用地址，不要用占端口**
+  （macOS 上 Undertow 会设 `SO_REUSEPORT`，已占端口仍能绑上）。
+
+### 可观测性
+
+- **可观测性是纯订阅者，自己绝不发事件**（否则形成「事件 → 指标 → 事件」自激）；只订阅异步侧。
+- **通道是并发派发且允许乱序，因此断言计数时「依赖的每一个计数器都要各自等一遍」**；
+  **修法不是等更久，而是不要假设顺序**。
+- **启动顺序**：`eventChannel.start()` 之后、`runtimeConfig.refresh()` 之前启动 `MetricsSubscriber`；
+  `shutdown()` 先打健康检查，末尾退订并打指标汇总。
+- **诊断输出必须比被诊断对象更稳**：坏仪表跳过、检查项抛错降级为 DOWN、关闭路径日志失败只记 WARN；
+  健康检查三档 UP/WARN/DOWN。**刻意不加 `/metrics`**。
+
+### 跨模块约定
+
+- **异常**统一抛 `JellyfishException`；**序列化**统一走 `ObjectMapperWrapper`，**不要直接 `new ObjectMapper`**。
+- **请求 / 消息模型**：`LlmRequest` / `LlmMessage` / `LlmTool` 是与厂商无关的统一模型，`LlmRequest` 用 builder 构建。
+- **配置类型命名**：项目内部配置类用 `Config` 结尾，暴露给用户的配置类用 `Settings` 结尾。
+
+## Server 接口契约
+
+接口清单（方法 / 路径 / 一句话说明）见 [`../README.md`](../README.md) 的 Server 模式一节，这里只列接入方必须遵守的契约。
+
+### 鉴权
+
+| 情形 | 行为 |
+| --- | --- |
+| 没配密钥（缺省） | **不鉴权**：任何能访问该端口的人都能建会话、跑命令、读全部会话正文。对只绑回环的本地场景够用 |
+| 配了密钥 | 除 `GET /health` 外**所有接口**都要 `Authorization: Bearer <密钥>`，否则 `401` + `{"error":"UNAUTHORIZED"}` 并带 `WWW-Authenticate: Bearer realm="jellyfish"` |
+
+- 密钥来源：`--api-key` 或环境变量 `JELLYFISH_SERVER_API_KEY`（后者推荐：argv 会出现在 `ps` 里）。
+- **没配密钥时必须留下一条 WARN**，否则「以为配了」与「其实没配」在现象上都是「能访问」。
+- **`GET /health` 不校验**：探活必须能在「还没有密钥」的场景下工作，且它不含会话正文与路径。
+- **不接受用 query 参数传密钥**（URL 会进访问日志、浏览器历史与 Referer）。
+- **密钥比较是常时比较**；密钥短于 16 位会在启动日志里告警，但不拒绝启动。
+- **命令域与对话域同权**：`POST /sessions/{id}/commands` 能执行 `/reload` 等系统命令，因此密钥泄露等于整机权限泄露。
+
+### SSE 事件
+
+`POST /sessions/{id}/chat` 的事件类型：
+
+| 事件 | 说明 |
+| --- | --- |
+| `turn_start` | 回合开始 |
+| `text` | 助手正文增量 |
+| `thinking` | 思考过程增量 |
+| `tool_start` | 工具调用开始 |
+| `tool_output` | 工具执行期的实时输出（**可丢**，按待发条数封顶） |
+| `tool_done` | 工具调用结束（**权威结果**） |
+| `approval_required` | 需要人工审批 |
+| `approval_resolved` | 审批已裁决 |
+| `shell_notice` | 插件推的一条通知，载荷 `{owner,sessionId,key,severity,lines}` |
+| `shell_invalidated` | 插件说「我贡献的内容脏了」，载荷 `{owner,sessionId,what}` |
+| `input_handled` | 终态：输入被插件接过去了，**根本没有回合** |
+| `done` | 终态：回合正常结束 |
+| `cancelled` | 终态：回合被取消 |
+| `turn_blocked` | 终态：回合被插件在开始前拦下，载荷 `{turnId,sessionId,reason}` |
+| `error` | 终态：回合出错 |
+
+- `done` / `cancelled` / `turn_blocked` / `input_handled` / `error` 是终态，写出后流结束；
+  空闲超时写 `: keepalive` 注释帧。
+- **`input_handled` 与其他终态的区别**：它不带 `turnId`，也不占一个在途回合槽位。客户端应当把它当成
+  「外壳提示」而不是「回答」。
+- **`turn_blocked` 单独一档而不是归入 `error`**：客户端对两者的处理不同（改请求 / 找人确认 vs 重试 / 报障）。
+  同一条理由在 `-cli` 上是退出码 `7`。
+- **`tool_output` 是可丢的过程信息**，载荷 `{turnId,toolCallId,toolName,chunk}`；
+  **权威结果始终是 `tool_done` 里的 `output`**。
+- **`tool_done` 的 `metadata`**：**前端据字段渲染失败标记，不要去解析 `output` 的首行文案**。
+  `terminal` 取值含 `FAILED` 与 `REJECTED`，两者都让界面显示警示标记。没有元数据时它是空对象 `{}`。
+- **`shell_notice` / `shell_invalidated` 走的是尽力 lane，不是回合事件**：
+  - 与回合**没有关系**：客户端不能把它们当成回合的一部分，也不能用它们判断回合是否结束。
+  - **它们可丢**：每 owner 有界、同 key 可合并、满了丢最新一条；客户端**不得把它们当状态真源**。
+  - **不落盘、不进模型上下文**。**时延最多一秒**。
+  - `severity` 取值是 `INFO` / `WARN` / `ERROR`（语义，不是颜色）；`lines` 是**已经滤掉控制字符**的纯文本行。
+  - **`SHELL` scope 的贡献发给每一条流**；`SESSION` scope 只发给它自己的那条流。
+  - `key` 非空时表示「同 owner + 同 key 的后到者覆盖先到者」，客户端可当作**原地更新**。
+
+### 会话语义
+
+- **会话一律按路径里的 id 寻址**；`--agent` / `--model` 降级为「新建会话的默认值」；启动期不预建任何会话。
+- **同会话同时只允许一个回合**：第二个请求返回 `409`；要打断就用 `POST /sessions/{id}/cancel`，
+  或直接断开 SSE 连接（服务端据此取消回合）。
+- **人工审批走 HTTP**：客户端拿 `requestId` 调 `POST /approvals/{requestId}`。头槽位**每会话一个**，
+  会话之间互不排队。`GET /approvals` 没有会话上下文，取的是跨会话最早的那一条，**只适用于单客户端场景**。
+- **错误体统一为** `{"error":"CODE","message":"…"}`。
+- **与另外两种模式的口径差异**：`-cli` 没有审批界面，`askTools` 一律拒绝；`-server` 恰好相反，
+  审批被显式搬到 HTTP 层。`-server` 是常驻进程，因此**没有** `-cli` 的单次退出码语义，
+  一轮对话的结果只能从 SSE 流里读。
+
+## 边界与明确不做
+
+三种外壳均已端到端可用。以下是**边界与明确不做**的清单，**不要把它们当成现存 API**。
+
+- **脚本插件的能力档（不是「与 Java 插件同权」）**：Python / Node 桥接把脚本目录暴露成标准插件，
+  但**只覆盖一部分扩展点**；具体支持哪些、哪些明确不做，写在插件仓库的
+  `script/extension-points.json`（`in` / `planned` / `excluded` 三档），由那里的 `ExtensionPointCoverageTest` 守着。
+  - **明确不做的扩展点**：返回 Java 对象的（脚本给不了）、跑在渲染线程 / 启动期的
+    （脚本调用是一次可能冷启动的进程往返，这些位置不能付这个代价）。
+  - **已知边界**：脚本进程的环境变量是**严格白名单**（密钥要走上一条配置段）；取消令牌能中止在途调用，
+    但**脚本侧看不到取消标志**；**输出捕获明确不做**（脚本工具没有无界流式输出那个形状）；
+    脚本没有出向边（`submit` / `present` / 扩展条目 / `delegations`）——那是「脚本只处理请求」这个立场的代价。
+- **`-server` 明确不做**：自带 Web 前端、TLS。
+- **压缩**：只有插件提供策略才可用；不启用压缩插件时整体不可用且**不回退内置**（刻意如此）。
+- **插件主动动作明确不做**：
+  - **回合之外的动作**——动作只能落进正在跑的顶层回合（子代理回合不开窗），内核**不自己起回合**；
+  - **中止回合**——**永久不做**，那是用户主权；插件投出的动作也没有任何召回入口。
+- **UI 深度明确不做**：自定义组件 / overlay、替换 editor / footer / header、主题与自定义颜色、
+  消息与条目的自定义渲染器、富文本表格。
+- **工具激活明确不做**：deferred / 延迟加载（需要厂商协议支持，而 `LlmRequest` 是厂商无关的扁平 `tools` 列表）、
+  按轮激活（只在冻结点求值）、自动感知 MCP 的 `tools/list_changed`。
+- **模型厂商可插拔明确不做**：OAuth / 登录命令、插件重写内核的序列化逻辑、
+  插件提供 provider 实例（只加 type，实例一律来自 `models.json`）。
+  **已知边界**：插件停止后不等待在途调用结束。
+- **出站消息序列的工具调用配对已知边界**：**中段**的配对缺失不做归一化
+  （修它要拆掉一个已存在、且可能被后续消息引用到的工具调用）；两端的异常已被兜住。
+- **实时输出已知边界**：`-server` 的丢弃计数只在服务端可观测，没有推给客户端。
+- **工具结果元数据的边界**：`metadata` 只在会话快照里（进不了 `LlmMessage`），因此它也不参与上下文裁剪
+  ——这正是想要的。
+- **子代理明确不做**：
+  - **上下文 fork**（**永久不做，不是推后**）——对话条件型委派只能靠调用方把背景写进 `task.prompt`；
+  - **后台子代理**（需要 spawn 自身进程，而本项目 shade 成单 jar）；
+  - **子代理类型的运行时注册**（只能来自 `agents.json`）；
+  - **并行 / 链式 / 工作流编排**（内核不因此长出一个 workflow 引擎；要编排就装官方 workflow 插件）。
+  - **已知边界**：嵌套（子代理）的审批落在**子会话**自己的头槽位上，因此按主会话 id 取件的外壳看不到它，
+    跨会话取「最早一条」的 `GET /approvals` 才看得到；子代理看不到主会话的模型（刻意）。

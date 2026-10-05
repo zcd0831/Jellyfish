@@ -16,7 +16,7 @@ import java.util.Objects;
  * <p>
  * <b>能改的只有文案与两个阈值</b>：<b>边界怎么算</b>（老化到哪一条为止、一个压缩周期内推进几次）
  * 全部留在内核。这是刻意的边界——那套算法是「前缀不变量」的守卫，而前缀不变量是<b>全局</b>性质，
- * 改坏它会让整条缓存在每一轮都失效（详见 {@code docs/design/llm-cache.md} 的 R2）。
+ * 改坏它会让整条缓存在每一轮都失效（规则见 {@code docs/constraints.md} 的「上下文老化」）。
  * <p>
  * <b>模板占位符</b>（与 {@link CompactionStrategy} 的花括号约定一致）：
  * <table border="1">

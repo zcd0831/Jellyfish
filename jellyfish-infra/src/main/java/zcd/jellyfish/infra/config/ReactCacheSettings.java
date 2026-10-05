@@ -16,8 +16,8 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  *     <li>{@code agingPercent}：工具结果老化的触发水位线。<b>缺省 {@code 70}</b>——只在上下文用量
  *     达到该百分比时老化，且**一个压缩周期内只推进一次**，其余轮次的边界冻住不动，
  *     从而让已发过的前缀保持 append-only。{@code 0} 表示沿用旧口径（按「距尾部多少条消息」
- *     每轮重算，边界随尾部滑动），它是逃生门而不是推荐值。推导见
- *     {@code docs/design/llm-cache.md} 的 R2 与 P3。</li>
+ *     每轮重算，边界随尾部滑动），它是逃生门而不是推荐值。规则见
+ *     {@code docs/constraints.md} 的「上下文老化」一节。</li>
  * </ul>
  * 非法值（负数、超过 100）回退到缺省值：配置问题不阻断启动是本仓库的既有口径，真正的行为约束在
  * 运行期兜底。
@@ -41,8 +41,8 @@ public class ReactCacheSettings {
      * <p>
      * <b>{@code 0} 仍然合法且含义不变</b>（沿用旧口径：按距尾部条数、每轮重算）。它是给「要精确复原
      * 升级前行为」的人留的逃生门，<b>不是推荐值</b>——旧口径每轮把切割点前移 2–3 条，
-     * 恰好移过刚被缓存的那一段，是命中率上不去的头号原因（推导见
-     * {@code docs/design/llm-cache.md} 的 R2 与 P3）。
+     * 恰好移过刚被缓存的那一段，是命中率上不去的头号原因（推导见本类上方
+     * {@code agingPercent} 的说明与 {@code docs/constraints.md} 的「上下文老化」）。
      */
     public static final int DEFAULT_AGING_PERCENT = 70;
 

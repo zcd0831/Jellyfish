@@ -52,8 +52,8 @@ import java.util.Objects;
  * 因此是 append-only 的），或者干脆不进 prompt。
  * <p>
  * <b>压缩摘要为什么改成「合成消息」而不是留在 system prompt</b>：摘要只在压缩时变，留在 system
- * prompt 里并不会造成每轮断裂，因此这一改动<b>不带来命中率收益</b>——推导见
- * {@code docs/design/llm-cache.md} §4.3，那里论证了两种排法的分叉点是同一个位置。换来的是上述
+ * prompt 里并不会造成每轮断裂，因此这一改动<b>不带来命中率收益</b>——两种排法的分叉点是同一个位置，
+ * 规则见 {@code docs/constraints.md} 的「压缩」。换来的是上述
  * 不变量，以及 Anthropic {@code cache_control} 的落点：断点应当打在稳定前缀的末尾，
  * 而 system prompt 的末尾此前恰好是会变的摘要。
  *
@@ -428,7 +428,7 @@ public class PromptAssembler {
      * 老化与裁剪都发生在组装里，只有这里能看到它们对前缀做了什么——在会话历史上看到的「一切正常」，
      * 恰恰是缓存断裂最容易藏身的地方。
      * <p>
-     * <b>为什么断裂只告警一次</b>：断裂当前是设计性的（见 {@code docs/design/llm-cache.md} 的 R1 / R2），
+     * <b>为什么断裂只告警一次</b>：断裂当前是设计性的（见 {@code docs/constraints.md} 的「上下文老化」），
      * 逐轮 WARN 会把日志刷满，反而让「它是什么时候开始的」看不出来。恢复之后再次断裂会重新告警。
      *
      * @param session      会话运行态

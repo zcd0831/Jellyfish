@@ -2,43 +2,21 @@
 
 本文件用于指导 AI 编码代理在本仓库中工作。修改代码前请先阅读。
 
-> **本文件是常驻上下文，只放「每次动手前都该知道的规则」**：项目结构、模块边界、必读索引、编码 / 测试 / Git 约定。
-> 分域的技术约束与类名 / 字段名 / 边界条件在 `docs/constraints/`；设计决策与推导的理由在 `docs/architecture.md`；
-> **推导与实测数据在对应类的注释里，这里只留规则**。未落地与明确不做的部分见 `docs/architecture.md` 的「已知边界与后续项」。
+> **本文件是常驻上下文，只放「每次动手前都该知道的规则」**：项目描述、模块边界、关键不变量、编码 / 测试 / Git 约定。
+> 细节不在本文件里：面向使用者的说明在 `README.md`，跨模块的规范与约束在 `docs/constraints.md`，
+> 推导与实测数据在对应类的 javadoc 里。
 
-## 文档分工
+## 项目描述
 
-面向使用者的说明在 `README.md` 与 `docs/`。**同一条事实两处都出现时，用户向的解释与背景以文档为准，
-类名、字段名、边界条件与「不要这么做」的约束以 `docs/constraints/` 为准。**
+Jellyfish 是一个用 Java 1.8 编写的轻量级 AI Agent 工具，通过 PF4J 插件扩展能力。
 
-| 文档 | 内容 |
-| --- | --- |
-| [README.md](README.md) | 安装、构建、三种模式用法、命令速查、FAQ |
-| [docs/architecture.md](docs/architecture.md) | 整体架构图、模块边界、各处设计决策的理由、已知边界与后续项 |
-| [docs/configuration.md](docs/configuration.md) | 配置全字段、双源合并与优先级 |
-| [docs/server-api.md](docs/server-api.md) | REST 接口、SSE 事件、鉴权 |
-| [docs/constraints/extensions.md](docs/constraints/extensions.md) | 扩展层（注册表 / 事件通道）、插件运行时与 owner |
-| [docs/constraints/session-config.md](docs/constraints/session-config.md) | 会话状态、落盘、配置加载与热更新、模型 / agent 解析 |
-| [docs/constraints/permissions.md](docs/constraints/permissions.md) | 权限三层、插件拦截、审批、只读白名单 |
-| [docs/constraints/react-compact.md](docs/constraints/react-compact.md) | ReAct 循环、上下文裁剪、压缩、子代理委派 |
-| [docs/constraints/tools-output.md](docs/constraints/tools-output.md) | 工具执行、输出截断与落盘、输入指令、命令域 |
-| [docs/constraints/shells.md](docs/constraints/shells.md) | CLI / TUI / Server 外壳、可观测性、跨模块约定 |
-
-**改了用户可见行为就同步改文档**：新增命令 / 参数 / 配置字段 / 接口时，`README.md` 与 `docs/` 的对应位置要一起改；
-改动某条约束时，回看它所在的 `docs/constraints/` 文档是否还成立。
-
-## 项目概述
-
-Jellyfish 是一个用 Java 1.8 编写的轻量级 AI Agent 工具，通过 PF4J 插件扩展能力（用法见 [README.md](README.md)）。
-
-- 坐标：`zcd:jellyfish:0.0.1-SNAPSHOT`
-- 构建：Maven（`pom.xml`）
-- 运行环境：JDK 1.8（**不要使用 Java 9+ 的 API 或语法**）
+- **三种外壳，一个内核**：`-cli` 单次问答、`-tui` 交互终端（TamboUI）、`-server` HTTP（Undertow + REST/SSE）。
+- **工具即能力**：模型能读写文件、跑命令、搜代码，工具全部由插件提供，每次调用都过权限判定。
+- **插件与内核无编译期依赖**：插件是独立打包的 PF4J jar，运行时经 `jellyfish-api` 的 SPI 接入。
+- **官方插件不在本仓库**：它们在 `Jellyfish-Plugins` 仓库（含插件开发教程）。
+- 坐标 `zcd:jellyfish:0.0.1-SNAPSHOT`，构建用 Maven，运行环境 **JDK 1.8**（**不要使用 Java 9+ 的 API 或语法**）。
 
 ## 常用命令
-
-使用者的构建步骤见 [README.md](README.md) 的「构建」；这里是开发期的完整命令（含 README 不列的 `-Pserver-it`，它跑
-Server 模式端到端：真 Undertow + 真内核，走本机回环）。
 
 ```bash
 mvn -q compile
@@ -49,198 +27,92 @@ mvn -q -Dtest=ChatStateTest test   # 单类单测，把类名换成目标测试�
 # 插件端到端测试（script-it / shell-it / mcp-it）在独立插件仓库（Jellyfish-Plugins）
 ```
 
-## 仓库结构与模块边界
+## 技术架构
 
-Maven 多模块；根 `jellyfish`（`zcd:jellyfish:0.0.1-SNAPSHOT`）是 `packaging=pom` 的聚合与父 POM。
-**依赖方向单向，禁止反向或循环**；整体架构图见 [docs/architecture.md](docs/architecture.md) 的「整体架构图」。
+Maven 多模块；根 `jellyfish` 是 `packaging=pom` 的聚合与父 POM。
+**依赖方向单向，禁止反向或循环**：
 
 | 模块 | 职责 | 依赖 |
 | --- | --- | --- |
-| `jellyfish-api` | 插件作者唯一的稳定契约：SPI、扩展点/事件模型、统一异常 | 无 |
+| `jellyfish-api` | 插件作者唯一的稳定契约：SPI、扩展点 / 事件模型、统一异常 | 无 |
 | `jellyfish-infra` | 基础设施层全部实现（会话 / agent / 模型 / 权限 / 插件运行时 / 命令域 / UI / 外壳贡献信箱 / 指标 / 配置） | api |
-| `jellyfish-core` | 应用层：会话提交管线（`ConversationService`，命令/输入改写/输入指令/起回合的顺序）、在途回合表（`TurnRegistry`，每会话一个槽位 + 取消 + 终态自动归还）、外壳通道门面（`ShellStreams`，可靠 lane + 尽力 lane 的唯一订阅入口）、ReAct 循环与 `AgentHarness` 门面、提示词组装、压缩机制、系统命令、子代理委派 | api、infra |
-| `jellyfish-tui` | TUI 外壳：TamboUI 界面、视图投影与滚动、TUI 版可靠 lane 订阅者（`TuiTurnListener`） | api、infra、core |
+| `jellyfish-core` | 应用层：会话提交管线、在途回合表、外壳通道门面、ReAct 循环、提示词组装、压缩机制、系统命令、子代理委派 | api、infra |
+| `jellyfish-tui` | TUI 外壳：TamboUI 界面、视图投影与滚动 | api、infra、core |
 | `jellyfish-server` | HTTP 外壳：Undertow 上的 REST + SSE、会话按 id 寻址、HTTP 化人工审批 | api、infra、core、undertow-core |
-| `jellyfish-di` | 装配层（composition root）：Dagger2 组件与 9 个 Module、不依赖 Dagger 的门面接口 `JellyfishRuntime`、手工装配工厂 `JellyfishAssembler` | api、infra、core、dagger、okhttp |
+| `jellyfish-di` | 装配层（composition root）：Dagger2 组件 + 门面接口 `JellyfishRuntime` + 手工装配工厂 `JellyfishAssembler` | api、infra、core、dagger、okhttp |
 | `jellyfish-cli` | `main`、参数解析、模式分发、shade 可执行 jar | api、infra、core、di、tui、server |
 
-**`jellyfish-di` 为什么单独成模块**：装配知识（谁依赖谁、**哪些实例必须唯一**）此前只写在 `jellyfish-cli` 的
-Dagger Module 里，于是「不打算用 Dagger 的外壳」要么被迫依赖 Dagger 代码生成、要么把这份知识再抄一遍。
-现在同一张图有两种装法、交付同一个 `JellyfishRuntime` 契约，外壳按自己的技术栈挑：CLI 用 Dagger
-（`DaggerJellyfishComponent`），Spring 之类的容器用 `JellyfishAssembler`。
-**代价是新增绑定时两处都要改**——`@Module` 的每条 `@Provides` 在 `JellyfishAssembler` 里都有一行对应物；
-兜底是 `JellyfishAssemblerTest`：它把同一段行为断言对两种装配各跑一遍，其中「从一个入口写、从另一个入口读」
-的设计专治「本该唯一的实例被建了第二份」这类静默故障。
+`jellyfish-di` 为什么单独成模块：装配知识（谁依赖谁、**哪些实例必须唯一**）只写一份，两种装法交付同一个
+`JellyfishRuntime` 契约——CLI 用 Dagger（`DaggerJellyfishComponent`），不用 Dagger 的容器用
+`JellyfishAssembler`。**代价是新增绑定时两处都要改**：`@Module` 的每条 `@Provides` 在 `JellyfishAssembler`
+里都有一行对应物，兜底由 `JellyfishAssemblerTest`（同一段行为对两种装配各跑一遍）守。
 
-跨语言桥接运行时（原 `jellyfish-script`）与官方插件（tools / session-file / todo / project / compact / shell /
-skills / mcp / python / node）都已迁往独立仓库（`Jellyfish-Plugins`）：前者连同 Jackson
-（**含 `jackson-module-parameter-names`**）、Apache Commons Exec **shade 进桥接插件的包**，因此本仓库的
-classpath 上不出现任何跨语言代码；后者由 `PF4JPluginManager` 运行时从 `config.json` 的 `plugins.roots` 加载，
-与内核之间**没有编译期依赖**，因此都不在上面这张表的依赖链里。
-
-包结构（只列包与少数枢纽类；其余类直接读代码）：
+包结构（只列包；其余类直接读代码）：
 
 ```
-jellyfish-api/src/main/java/zcd/jellyfish/api/
-├── JellyfishException.java     # 统一运行时异常
-├── extension/                  # 同步扩展点：请求/结果类型、ToolDescriptor、会话快照
-├── event/                      # 事件基类与 notification/ 下的具体通知
-├── ui/                         # 插件界面内容的渲染无关模型
-├── subagent/                   # 子代理委派端口：SubAgentPort / Delegation{Request,Result,Handle,Status}
-└── plugin/                     # 插件 SPI：JellyfishPlugin / PluginContext / PluginDeclaration
-
-jellyfish-infra/src/main/java/zcd/jellyfish/infra/
-├── registry/                   # 注册表底座 TypeRegistry
-├── extension/                  # 同步派发策略 ExtensionRegistry
-├── event/                      # 异步派发策略 EventChannel
-├── session/                    # 会话运行态 Session / SessionManager / SessionDefaults / SessionSnapshots
-├── agent/                      # Agent 定义注册表 AgentManager / AgentRegistry
-├── command/                    # 命令域服务 CommandManager
-├── model/                      # 模型注册与路由 ModelManager / SessionModelResolver（会话 → 模型的唯一解释器）
-├── llm/                        # LLM 调用抽象与厂商实现
-├── plugin/                     # 插件运行时 PF4JPluginManager / PluginRuntimeConfig / JellyfishPluginAdapter
-├── permission/                 # 权限判定 PermissionManager / ApprovalChannel / PermissionPolicy
-├── ui/                         # UI 贡献门面 UiContributions
-├── shell/                      # 外壳贡献信箱 ShellIngress（每 owner 有界 · 同 key 合并 · 满即丢）
-├── metrics/                    # 指标与健康检查 MetricsRegistry / MetricsSubscriber / HealthCheck
-├── config/                     # 配置加载与热更新 RuntimeConfig / ConfigReloader
-├── tooloutput/                 # 工具结果治理：ToolOutputEnvelope / ToolOutputStore / ToolOutputLimiter
-└── support/                    # 序列化封装、类型常量，以及跨外壳共用的展示口径（ControlChars / ToolArgumentsText）
-
-jellyfish-core/src/main/java/zcd/jellyfish/core/
-├── AgentHarness.java           # 组装门面（chat 是唯一智能入口）
-├── ReActLooper.java            # 思考 → 行动 → 观察（顶层异步 + runNested 交给 RunScheduler 调度）
-├── ReActTurn / ReActListener / ReActResult
-├── RunContext / RunContextHolder  # 一次 run 的作用域：树账本、深度、路径与并发许可（不再靠 ThreadLocal）
-├── prompt/                     # PromptAssembler / ContextWindow / ToolCatalog / ToolFilter / TokenEstimator / ToolResultAger / CacheBreakWatcher / ToolPairing
-├── compact/                    # ConversationCompactor / CompactionPlan / CompactionHealthIndicator
-├── tool/                       # ToolExecutor（权限→路由→截断的唯一执行点）/ CancellationTokenSource
-├── conversation/               # ConversationService / Submission / SubmissionPolicy / TurnRegistry
-│                               #   + ShellStreams / ShellTurnEvent / ShellContributionListener
-├── input/                      # InputDirectives / InputDirectiveRun / InputDirectiveCall / InputReferenceCompletion
-├── subagent/                   # 子代理：SubAgentLauncher / TaskTool / SubAgentTools（owner=core）
-│                               #   + SubAgentRunHandle（派生/等待的句柄）/ SubAgentPanel（运行面板）
-│                               #   + SubAgentArchive（run 归档）/ SubAgentDelegationAdapter（插件委派端口实现）
-├── runtime/                    # agent run 运行时：AgentRuntime / RunRegistry / RunScheduler / RunContext
-│                               #   + RunTree / RunPermit / RunEventBus（可靠 run 事件）/ AgentRunEvent
-└── command/                    # SystemCommands（owner=core）
-
-jellyfish-di/src/main/java/zcd/jellyfish/di/
-├── JellyfishRuntime.java       # 门面接口（20 个访问器，不含任何 DI 注解）——外壳唯一该依赖的契约
-├── JellyfishComponent.java     # Dagger2 组件：DaggerJellyfishComponent 由注解处理器生成
-├── JellyfishAssembler.java     # 纯 Java 装配工厂：不使用 Dagger 的等价装法，交付 JellyfishRuntime
-├── ConfigModule.java           # 应用级配置（AppConfig ← classpath:config.json）
-├── LlmModule.java              # OkHttpClient / 流式线程池 / 七个厂商客户端创建器（@IntoMap 多绑定）
-├── ExtensionModule.java        # 唯一一份 TypeRegistry + 同步扩展点策略
-├── EventModule.java            # 事件通道 + 窄接口视图 EventPublisher
-├── PluginModule.java           # 插件运行时装配输入 / 上下文工厂 / 委派端口绑定 / 插件管理器
-├── AgentModule.java            # PermissionPolicyProvider 绑到 AgentManager
-├── PermissionModule.java       # 空模块（判定协作者都有 @Inject 构造器）
-├── CommandModule.java          # 空模块（系统命令与插件命令同源，经扩展点注册）
-└── MetricsModule.java          # HealthCheck：跨 infra / core 的检查项列表在这里显式拼装
-
-jellyfish-cli/src/main/java/zcd/jellyfish/cli/
-├── JellyfishApplication.java   # main；Launcher 模式选择与生命周期
-├── console/                    # stdout=回答、stderr=诊断
-└── mode/                       # CliRunMode / TuiRunMode / ServerRunMode
-
-jellyfish-tui/src/main/java/zcd/jellyfish/tui/
-├── TuiApp.java                 # 唯一入口：按键路由、回合/命令分流、审批浮层
-├── ChatShell / ChatLayout      # 版式与二维账本
-├── TranscriptProjector / ChatState / InflightTurn   # 视图投影与状态
-├── 其余视图 / 输入 / 插件 UI 类
-└── text/                       # DisplayWidth / LineWrapper / MarkdownRenderer
+jellyfish-api/     extension/（同步扩展点）、event/（事件与通知）、ui/、subagent/、plugin/（SPI）
+jellyfish-infra/   registry/ extension/ event/ session/ agent/ command/ model/ llm/ plugin/
+                   permission/ ui/ shell/ metrics/ config/ tooloutput/ support/
+jellyfish-core/    prompt/ compact/ tool/ conversation/ input/ subagent/ runtime/ command/
+                   + AgentHarness / ReActLooper / RunContext 等枢纽类
+jellyfish-di/      JellyfishRuntime / JellyfishAssembler / 9 个 Dagger Module
+jellyfish-cli/     JellyfishApplication（main）、console/、mode/
+jellyfish-tui/     TuiApp（唯一入口）、ChatShell / TranscriptProjector / text/
+jellyfish-server/  路由、SSE、审批桥
 ```
 
 资源位置：`default-agent.json` / `jellyfish.md` 在 infra 资源根；`summary-prompt.md` 在压缩插件资源根；
-`config.json` / `log4j2*.xml` 在 cli 资源根；**`jellyfish-di` 不带任何资源**（它只装配，不提供配置或提示词）。
+`config.json` / `log4j2*.xml` 在 cli 资源根；**`jellyfish-di` 不带任何资源**（它只装配）。
 
-## 改动前的必读索引
+## 关键不变量
 
-**动手前先按这张表读对应文档**——细则不在本文件里，只在 `docs/constraints/` 里：
+改动任何一处前先确认不会破坏它们（展开说明见 `docs/constraints.md`）：
 
-| 你要改什么 | 先读 |
-| --- | --- |
-| 工具注册 / 输出截断 / 落盘 / 信封 / 元数据 / 取消令牌 | [constraints/tools-output.md](docs/constraints/tools-output.md) |
-| 输入指令 `!` `@` / 命令注册 / `sessionRequired` / 命令审计 | [constraints/tools-output.md](docs/constraints/tools-output.md) |
-| 权限判定 / 插件拦截 / 审批 / 只读白名单 / 工具清单过滤 | [constraints/permissions.md](docs/constraints/permissions.md) |
-| ReAct 循环 / 轮次 / 上下文裁剪 / 压缩 / 提示词组装 | [constraints/react-compact.md](docs/constraints/react-compact.md) |
-| 子代理委派 / `task` / 嵌套回合 / 委派预算 | [constraints/react-compact.md](docs/constraints/react-compact.md) |
-| 会话状态 / 落盘 / 恢复 / 瞬时会话 / 用量记账 | [constraints/session-config.md](docs/constraints/session-config.md) |
-| 配置字段 / 双源合并 / `/reload` 热更新 / 启动装配顺序 | [constraints/session-config.md](docs/constraints/session-config.md)、[configuration.md](docs/configuration.md) |
-| 新增 / 变更依赖绑定（谁拿到哪个实例、哪些必须唯一） | 本文件的「仓库结构与模块边界」——`@Module` 的 `@Provides` 与 `JellyfishAssembler` **两处都要改**，一致性由 `JellyfishAssemblerTest` 守 |
-| agent 定义 / 提示词 md / 模型解析回落 | [constraints/session-config.md](docs/constraints/session-config.md) |
-| 扩展点 / 事件通道 / 插件生命周期 / owner 命名空间 | [constraints/extensions.md](docs/constraints/extensions.md)（**新增扩展点还要在插件仓库的脚本能力档里分档**，见该文「新增扩展点的公共约定」） |
-| CLI 输出契约 / 退出码 / TUI 视图与线程 / 键位 / 插件面板 | [constraints/shells.md](docs/constraints/shells.md) |
-| Server 路由 / SSE / 鉴权 / 审批桥 | [constraints/shells.md](docs/constraints/shells.md)、[server-api.md](docs/server-api.md) |
-| 指标 / 健康检查 | [constraints/shells.md](docs/constraints/shells.md) |
-
-## 内核速览
-
-开工前够用的一句话索引（细节与边界条件全在上面那六份 constraints 里）：
-
-- **`AgentHarness.chat(sessionId, input, listener)` 是外壳唯一智能入口**，委托 `ReActLooper` 在 `react` 线程池
-  异步推进。改循环看 [react-compact.md](docs/constraints/react-compact.md)。
-- **`SessionManager` 是会话的唯一变更入口**，落盘只有「创建不落盘」与「回合内只标脏」两个例外。
+- **`AgentHarness.chat(sessionId, input, listener)` 是外壳唯一的智能入口**，在 `react` 线程池上异步推进。
+- **`SessionManager` 是会话的唯一变更入口**；落盘只有「创建不落盘」与「回合内只标脏」两个例外。
 - **`ToolExecutor` 是权限 → 路由 → 截断的唯一执行点**，模型调用与输入指令共用它。
 - **`ExtensionRegistry`（同步、不可丢）与 `EventChannel`（异步、可丢）是内核与插件之间唯一边界**；
-  判据是「能否丢弃」而不是「有没有返回值」。禁止引入第三方事件总线。
-- **权限两层**：核心策略 → 插件拦截；插件拦截三态且**没有 `ALLOW`**，
-  审批 fail-closed（无审批者 / 超时 / 中断一律拒绝）。
+  判据是「能否丢弃」而不是「有没有返回值」。**禁止引入第三方事件总线**。
+- **权限两层**：核心策略 → 插件拦截；插件拦截三态且**没有 `ALLOW`**，审批 fail-closed
+  （无审批者 / 超时 / 中断一律拒绝）。
 - **`CommandManager` 无状态、对外壳中立**；「需不需要会话」由命令自己声明（`sessionRequired` 缺省 `true`）。
-- **提示词组装**：`PromptAssembler`；裁剪只裁本次请求（`ContextWindow` 成组丢弃），历史一条不动。
 - **压缩是插件能力、内核只提供机制**；没有策略插件即整体不可用，不回退内置。
-- **子代理**：`SubAgentLauncher` + `TaskTool`（owner=core）→ `AgentRuntime.spawn`（`core/runtime`），
-  嵌套回合**调度到独立的 `agent-run` 池上执行，绝不进 `react` 池**；并发由 `subAgent.maxConcurrentRuns`
-  许可门控，等待中的 run 会让出许可，另有墙钟 / token / 深度 / 扇出预算。run 起止走运行时的
-  `RunEventBus`（不是外壳回合 lane），在跑的子代理由 `SubAgentPanel` 展示，终结后由 `SubAgentArchive`
-  写进独立命名空间。**插件要驱动子代理走 `PluginContext.delegations()`**（`SubAgentPort`）：它是
-  `spawn`（非阻塞）+ `handle.await()`（阻塞在插件线程）的句柄式形态，与 `task` 走同一条代码路径，
-  因此 governor / 深度 / 取消 / 归档行为一致。设计见 [docs/design/subagent-runtime.md](docs/design/subagent-runtime.md)、
-  [docs/design/subagent-runtime-p1.md](docs/design/subagent-runtime-p1.md)、
-  [docs/design/subagent-runtime-p2.md](docs/design/subagent-runtime-p2.md)。
+- **提示词组装**：`PromptAssembler`；裁剪只裁本次请求（`ContextWindow` 成组丢弃），历史一条不动。
+- **子代理**：`SubAgentLauncher` + `TaskTool`（owner=core）→ `AgentRuntime.spawn`；嵌套回合**调度到独立的
+  `agent-run` 池上执行，绝不进 `react` 池**；并发由 governor 许可门控，等待中的 run 会让出许可。
+  run 起止走运行时的 `RunEventBus`（不是外壳回合 lane）；**插件要驱动子代理走 `PluginContext.delegations()`**。
 - **跨边界载荷必须是 `api` 侧快照值类型**，且快照类型恰好只有一个可见构造器；**`-parameters` 不许去掉**。
-- **`-tui` / `-server` 的启动期都不建会话**；`--agent` / `--model` / `-p` / `--show-thinking` 只归 CLI，
+- **插件在 `stop()` 之后 fail-closed**：任何注册 / 发布当场失败；`start()` 抛错则插件转 `FAILED` 并回收已完成的注册。
+- **生命周期收尾顺序**：`flushAll()` → `InputDirectives.close()` → `pluginManager.close()`
+  （落盘经扩展点派发给插件，插件一停就没人接了）。
+- **`-tui` / `-server` 的启动期都不建会话**；`--agent` / `--model` / `-p` / `--show-thinking` 只归 `CLI`，
   其余模式带上它们一律判用法错误退 2（**拒绝而不是静默忽略**）。
-- **生命周期收尾顺序**：`flushAll()` → `InputDirectives.close()` → `pluginManager.close()`（落盘经扩展点派发给插件，
-  插件一停就没人接了）。
 
-## 代码约定
-
-- **异常**统一抛 `JellyfishException`；**序列化**统一走 `ObjectMapperWrapper`，**不要直接 new `ObjectMapper`**。
-- **请求 / 消息模型**：`LlmRequest` / `LlmMessage` / `LlmTool` 是与厂商无关的统一模型，`LlmRequest` 用 builder 构建。
-- **配置类型命名**：项目内部配置类用 `Config` 结尾，暴露给用户的配置类用 `Settings` 结尾。
-
-## 已知边界与后续项
-
-三种外壳均已端到端落地；**尚未做**与**明确不做**的清单（含 Server 的「不做 Web 前端 / TLS / 审批多槽位」、
-压缩不回退内置、子代理**永久不做上下文 fork**、不做后台子代理与工作流编排等）见
-[docs/architecture.md](docs/architecture.md) 的「已知边界与后续项」，**不要把它们当成现存 API**。
-
-## 编码约定
+## 编码规范
 
 - 缩进 4 空格，K&R 风格大括号，文件末尾保留换行。
-- 依赖注入一律使用构造器注入 `@Inject`，不使用字段注入。
+- 依赖注入一律用构造器注入 `@Inject`，不用字段注入。
 - 内核与插件之间的交互只走 `ExtensionRegistry` / `EventChannel`，禁止引入第三方事件总线（如 Guava EventBus）。
-- 注释使用中文，说明“为什么”而非复述代码。
-- 类、接口、私有方法、成员变量都要有文档注释，类注释要加`@author zcd`，方法注释要用`@param`写清楚每个参数、用`@return`写清楚返回值。
-- 异常统一抛出 `JellyfishException`。
-- 工具方法/常量类使用 `final` + 私有构造器（如 `ProviderTypes`、`LlmClients`）。
-- 所有代码均需要满足sonar规范要求。
+- 注释用中文，说明「为什么」而非复述代码。
+- 类、接口、私有方法、成员变量都要有文档注释；类注释加 `@author zcd`；方法注释用 `@param` 写清每个参数、
+  用 `@return` 写清返回值。
+- 异常统一抛 `JellyfishException`；**序列化统一走 `ObjectMapperWrapper`，不要直接 `new ObjectMapper`**。
+- 请求 / 消息模型用与厂商无关的 `LlmRequest` / `LlmMessage` / `LlmTool`，`LlmRequest` 用 builder 构建。
+- 配置类型命名：项目内部配置类用 `Config` 结尾，暴露给用户的配置类用 `Settings` 结尾。
+- 工具方法 / 常量类用 `final` + 私有构造器（如 `ProviderTypes`、`LlmClients`）。
+- 所有代码均需满足 sonar 规范要求。
 
-## 单元测试
+## 单元测试规范
 
-- 使用 Junit5 + Mockito 进行单元测试，使用 JaCoCo 收集单元测试覆盖率。
-- 单元测试类的包路径与被测试类的路径一致。
-- 单元测试类命名统一按`{被测试类命}Test`格式。
-- 测试方法命名统一按 `{被测试方法}_should_{预期结果}_when_{条件}` 格式。
-- 一个测试方法只验证一个行为，测试独立、可重复、无外部依赖。
-- 测试结构遵循 Given/When/Then 或 Arrange/Act/Assert。
+- JUnit5 + Mockito，JaCoCo 收集覆盖率。
+- 测试类包路径与被测类一致；命名 `{被测试类名}Test`。
+- 方法名 `{被测试方法}_should_{预期结果}_when_{条件}`；一个方法只验一个行为；测试独立、可重复、无外部依赖。
+- 结构遵循 Given/When/Then 或 Arrange/Act/Assert。
 - 只 mock 外部依赖或协作者，不 mock 被测类、POJO、DTO。
-- 使用 `@ExtendWith(MockitoExtension.class)`，统一 JUnit5 API，不混用 JUnit4。
-- 断言使用 JUnit5 `Assertions` 或 AssertJ，异常用 `assertThrows`。
+- 用 `@ExtendWith(MockitoExtension.class)`，统一 JUnit5 API，不混用 JUnit4。
+- 断言用 JUnit5 `Assertions` 或 AssertJ，异常用 `assertThrows`。
 - 多组输入用 `@ParameterizedTest`，覆盖正常、边界、异常场景。
-- 单元测试不启动 Spring 容器，不访问数据库、网络等真实外部资源。
+- 单测不启动 Spring 容器，不访问数据库、网络等真实外部资源。
 
 ## Git 约定
 
@@ -257,3 +129,5 @@ jellyfish-tui/src/main/java/zcd/jellyfish/tui/
 ## 行为准则
 
 - 开发时必须严格按与用户确认的方案执行，如果开发过程中发现方案有问题，先征求用户意见，禁止私自变更方案。
+- **改了用户可见行为就同步改文档**：新增命令 / 参数 / 配置字段 / 接口时，`README.md` 与 `docs/constraints.md`
+  的对应位置要一起改。

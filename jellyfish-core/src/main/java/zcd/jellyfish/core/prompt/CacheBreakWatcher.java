@@ -47,7 +47,7 @@ import java.util.Objects;
  * 会话的相邻两轮之间才有意义；混在一起看，只会得到一份读不出因果的统计。
  * <p>
  * <b>告警按「一轮断裂」节流</b>：只要会话足够长，{@code ToolResultAger} 的老化就会
- * <b>每轮都改写历史中段</b>（见 {@code docs/design/llm-cache.md} 的 R2），逐轮 WARN 会把日志刷满。
+ * <b>每轮都改写历史中段</b>（见 {@code docs/constraints.md} 的「上下文老化」），逐轮 WARN 会把日志刷满。
  * 因此只在「从稳定变为断裂」的那一轮告警，断裂持续期间降到 DEBUG；恢复之后再次断裂会重新告警。
  * <p>
  * <b>状态有界</b>：只保留最近 {@value #MAX_SESSIONS} 个会话的指纹，按访问顺序淘汰。会话关闭后

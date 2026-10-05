@@ -17,8 +17,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * {@link ApprovalBridge} 的头槽位过滤与裁决契约。
  * <p>
- * 用真的 {@link ApprovalChannel}（infra，无外部依赖）：审批的难点全在「单槽位 + 队列 + 只对头生效」
- * 这套既有语义上，mock 掉通道等于把被测对象赖以成立的约束抽走。
+ * 用真的 {@link ApprovalChannel}（infra，无外部依赖）：审批的难点全在「每会话一个头槽位 + FIFO 队列 +
+ * 只对头生效」这套既有语义上，mock 掉通道等于把被测对象赖以成立的约束抽走。
  *
  * @author zcd
  */

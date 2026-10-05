@@ -461,7 +461,8 @@ curl -sN -X POST localhost:9096/sessions/$SID/chat \
 | `GET` | `/health` | 健康报告（UP / WARN / DOWN） |
 
 几条接入方必须知道的：**同会话同时只允许一个回合**（第二个请求 `409`，要打断用 `/cancel` 或断开 SSE）；
-**人工审批走 HTTP**（流里推 `approval_required`，拿 `requestId` 调 `POST /approvals/{id}`，全局单槽位因此多会话会排队）；
+**人工审批走 HTTP**（流里推 `approval_required`，拿 `requestId` 调 `POST /approvals/{id}`；头槽位**每会话一个**，
+会话之间互不排队，同一会话内是 FIFO 队列、上限 8 条，超出直接按拒绝处理）；
 **`tool_output` 是可丢的过程信息**，权威结果是 `tool_done` 的 `output`；**错误体统一为** `{"error":"CODE","message":"…"}`。
 
 ## 常见问题

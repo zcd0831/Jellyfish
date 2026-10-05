@@ -8,14 +8,14 @@ import zcd.jellyfish.server.http.Responses;
 import java.util.Optional;
 
 /**
- * 审批通道与 HTTP 之间的桥：把 {@link ApprovalChannel} 的单槽位语义翻译成接口语义。
+ * 审批通道与 HTTP 之间的桥：把 {@link ApprovalChannel} 按会话的头槽位语义翻译成接口语义。
  * <p>
  * <b>为什么需要这一层</b>：三条路径（SSE 内嵌、{@code GET /approvals}、{@code POST /approvals/{id}}）
  * 读写的都是同一个事实，散在三处必然出现「一处按 id 比对、一处不比对」这类不一致。这里把
- * 「取头槽位」「按会话过滤」「按 id 裁决」收成三四个方法，三处调用点共用。
+ * 「取本会话的头槽位」「按会话过滤」「按 id 裁决」收成三四个方法，三处调用点共用。
  * <p>
- * <b>为什么不改 {@code ApprovalChannel}</b>：它是内核的既有语义（全局单槽位 + 队列 + 只对头生效），
- * 改它要重新设计审批模型，收益是「多会话并行审批」——首轮明确不做，只如实暴露现状。
+ * <b>它是只读的一侧</b>：审批的判定与队列语义全在 {@code ApprovalChannel} 里，
+ * 这里只做投影与错误映射，不自己维护任何审批状态。
  * <p>
  * 无状态（只持有通道），可安全跨线程调用。
  *

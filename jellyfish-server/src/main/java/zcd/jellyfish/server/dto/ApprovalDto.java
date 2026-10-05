@@ -13,9 +13,10 @@ import java.util.Map;
  * 字段与 {@link ApprovalChannel.Pending} 一一对应，投影一次的理由与 {@link CommandInfoDto} 相同：
  * HTTP 合同不跟内核类型走。{@code requestId} 是裁决时回填的东西，前端必须原样带回来。
  * <p>
- * <b>关于「同一时刻只有一条」</b>：{@code ApprovalChannel} 是全局单槽位，排队中的请求对外不可见，
- * 因此本接口在任一时刻最多暴露一条待审批项。多会话并发时，一条未决会挡住其它会话的审批——
- * 这是既有内核语义，不是在接口层可以做掉的。
+ * <b>关于「同一时刻只有一条」</b>：{@code ApprovalChannel} 的头槽位是<b>每会话一个</b>，
+ * 会话之间互不排队；但同一会话内仍是「一个头槽位 + FIFO 队列」，排队中的请求对外不可见，
+ * 因此本接口在任一时刻最多暴露某会话的头槽位那一条。要回答「这个会话还欠几条」用
+ * {@code ApprovalChannel.pendingApprovals(sessionId)}，它才带得出整条队列。
  * <p>
  * 不可变，可安全跨线程传递。
  *

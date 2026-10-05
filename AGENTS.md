@@ -61,7 +61,16 @@ Maven 多模块；根 `jellyfish`（`zcd:jellyfish:0.0.1-SNAPSHOT`）是 `packag
 | `jellyfish-core` | 应用层：会话提交管线（`ConversationService`，命令/输入改写/输入指令/起回合的顺序）、在途回合表（`TurnRegistry`，每会话一个槽位 + 取消 + 终态自动归还）、外壳通道门面（`ShellStreams`，可靠 lane + 尽力 lane 的唯一订阅入口）、ReAct 循环与 `AgentHarness` 门面、提示词组装、压缩机制、系统命令、子代理委派 | api、infra |
 | `jellyfish-tui` | TUI 外壳：TamboUI 界面、视图投影与滚动、TUI 版可靠 lane 订阅者（`TuiTurnListener`） | api、infra、core |
 | `jellyfish-server` | HTTP 外壳：Undertow 上的 REST + SSE、会话按 id 寻址、HTTP 化人工审批 | api、infra、core、undertow-core |
-| `jellyfish-cli` | `main`、参数解析、模式分发、Dagger 装配、shade 可执行 jar | api、infra、core、tui、server |
+| `jellyfish-di` | 装配层（composition root）：Dagger2 组件与 9 个 Module、不依赖 Dagger 的门面接口 `JellyfishRuntime`、手工装配工厂 `JellyfishAssembler` | api、infra、core、dagger、okhttp |
+| `jellyfish-cli` | `main`、参数解析、模式分发、shade 可执行 jar | api、infra、core、di、tui、server |
+
+**`jellyfish-di` 为什么单独成模块**：装配知识（谁依赖谁、**哪些实例必须唯一**）此前只写在 `jellyfish-cli` 的
+Dagger Module 里，于是「不打算用 Dagger 的外壳」要么被迫依赖 Dagger 代码生成、要么把这份知识再抄一遍。
+现在同一张图有两种装法、交付同一个 `JellyfishRuntime` 契约，外壳按自己的技术栈挑：CLI 用 Dagger
+（`DaggerJellyfishComponent`），Spring 之类的容器用 `JellyfishAssembler`。
+**代价是新增绑定时两处都要改**——`@Module` 的每条 `@Provides` 在 `JellyfishAssembler` 里都有一行对应物；
+兜底是 `JellyfishAssemblerTest`：它把同一段行为断言对两种装配各跑一遍，其中「从一个入口写、从另一个入口读」
+的设计专治「本该唯一的实例被建了第二份」这类静默故障。
 
 跨语言桥接运行时（原 `jellyfish-script`）与官方插件（tools / session-file / todo / project / compact / shell /
 skills / mcp / python / node）都已迁往独立仓库（`Jellyfish-Plugins`）：前者连同 Jackson
@@ -116,11 +125,24 @@ jellyfish-core/src/main/java/zcd/jellyfish/core/
 │                               #   + RunTree / RunPermit / RunEventBus（可靠 run 事件）/ AgentRunEvent
 └── command/                    # SystemCommands（owner=core）
 
+jellyfish-di/src/main/java/zcd/jellyfish/di/
+├── JellyfishRuntime.java       # 门面接口（20 个访问器，不含任何 DI 注解）——外壳唯一该依赖的契约
+├── JellyfishComponent.java     # Dagger2 组件：DaggerJellyfishComponent 由注解处理器生成
+├── JellyfishAssembler.java     # 纯 Java 装配工厂：不使用 Dagger 的等价装法，交付 JellyfishRuntime
+├── ConfigModule.java           # 应用级配置（AppConfig ← classpath:config.json）
+├── LlmModule.java              # OkHttpClient / 流式线程池 / 七个厂商客户端创建器（@IntoMap 多绑定）
+├── ExtensionModule.java        # 唯一一份 TypeRegistry + 同步扩展点策略
+├── EventModule.java            # 事件通道 + 窄接口视图 EventPublisher
+├── PluginModule.java           # 插件运行时装配输入 / 上下文工厂 / 委派端口绑定 / 插件管理器
+├── AgentModule.java            # PermissionPolicyProvider 绑到 AgentManager
+├── PermissionModule.java       # 空模块（判定协作者都有 @Inject 构造器）
+├── CommandModule.java          # 空模块（系统命令与插件命令同源，经扩展点注册）
+└── MetricsModule.java          # HealthCheck：跨 infra / core 的检查项列表在这里显式拼装
+
 jellyfish-cli/src/main/java/zcd/jellyfish/cli/
 ├── JellyfishApplication.java   # main；Launcher 模式选择与生命周期
 ├── console/                    # stdout=回答、stderr=诊断
-├── mode/                       # CliRunMode / TuiRunMode / ServerRunMode
-└── di/                         # Dagger 组件与 Module
+└── mode/                       # CliRunMode / TuiRunMode / ServerRunMode
 
 jellyfish-tui/src/main/java/zcd/jellyfish/tui/
 ├── TuiApp.java                 # 唯一入口：按键路由、回合/命令分流、审批浮层
@@ -131,7 +153,7 @@ jellyfish-tui/src/main/java/zcd/jellyfish/tui/
 ```
 
 资源位置：`default-agent.json` / `jellyfish.md` 在 infra 资源根；`summary-prompt.md` 在压缩插件资源根；
-`config.json` / `log4j2*.xml` 在 cli 资源根。
+`config.json` / `log4j2*.xml` 在 cli 资源根；**`jellyfish-di` 不带任何资源**（它只装配，不提供配置或提示词）。
 
 ## 改动前的必读索引
 
@@ -146,6 +168,7 @@ jellyfish-tui/src/main/java/zcd/jellyfish/tui/
 | 子代理委派 / `task` / 嵌套回合 / 委派预算 | [constraints/react-compact.md](docs/constraints/react-compact.md) |
 | 会话状态 / 落盘 / 恢复 / 瞬时会话 / 用量记账 | [constraints/session-config.md](docs/constraints/session-config.md) |
 | 配置字段 / 双源合并 / `/reload` 热更新 / 启动装配顺序 | [constraints/session-config.md](docs/constraints/session-config.md)、[configuration.md](docs/configuration.md) |
+| 新增 / 变更依赖绑定（谁拿到哪个实例、哪些必须唯一） | 本文件的「仓库结构与模块边界」——`@Module` 的 `@Provides` 与 `JellyfishAssembler` **两处都要改**，一致性由 `JellyfishAssemblerTest` 守 |
 | agent 定义 / 提示词 md / 模型解析回落 | [constraints/session-config.md](docs/constraints/session-config.md) |
 | 扩展点 / 事件通道 / 插件生命周期 / owner 命名空间 | [constraints/extensions.md](docs/constraints/extensions.md)（**新增扩展点还要在插件仓库的脚本能力档里分档**，见该文「新增扩展点的公共约定」） |
 | CLI 输出契约 / 退出码 / TUI 视图与线程 / 键位 / 插件面板 | [constraints/shells.md](docs/constraints/shells.md) |

@@ -128,6 +128,7 @@
   是内置只读定义，**不走双源**。
 - **资源跟着读者走**：`default-agent.json` / `{agentId}.md` 归 infra，`config.json` / `log4j2*.xml` 归 cli——
   否则换 composition root 时会以「内置 agent 缺失」启动失败而单测全绿。（摘要指令等资源归各自插件。）
+  **装配模块（`jellyfish-di`）刻意不带任何资源**：它只回答「谁依赖谁」，配置与提示词都归真正的读者。
 - **agent 提示词来自同目录 `{agentId}.md`**，JSON 里的 `systemPrompt` 被忽略；**默认 agent 恒为内置**
   （启动与新建会话都绑它，只能 `/agent` 切换）。非法 `agentId` 整条丢弃并告警，用户与内置同名时**保留内置**。
 - **配置驱动的索引在启动期建立**：构造期只建空索引，`AgentHarness.bootstrap()` 里 `runtimeConfig.refresh()`

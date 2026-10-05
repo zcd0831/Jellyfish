@@ -1,4 +1,4 @@
-package zcd.jellyfish.cli.di;
+package zcd.jellyfish.di;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

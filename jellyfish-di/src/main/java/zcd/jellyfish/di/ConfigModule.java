@@ -1,4 +1,4 @@
-package zcd.jellyfish.cli.di;
+package zcd.jellyfish.di;
 
 import dagger.Module;
 import dagger.Provides;
@@ -12,7 +12,7 @@ import javax.inject.Singleton;
  * <p>
  * {@link AppConfig} 是纯数据类，读取 classpath 的 {@code config.json} 需要文件 IO 与解析器，
  * 因此把「如何得到 AppConfig」放在最外层的 composition root，由 {@link ConfigLoader} 创建，
- * infra 只暴露不带副作用的构造器。组件与 Module 只存在于 {@code jellyfish-cli}。
+ * infra 只暴露不带副作用的构造器。组件与 Module 只存在于 {@code jellyfish-di}。
  *
  * @author zcd
  */

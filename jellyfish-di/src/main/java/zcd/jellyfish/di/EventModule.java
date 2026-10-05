@@ -1,4 +1,4 @@
-package zcd.jellyfish.cli.di;
+package zcd.jellyfish.di;
 
 import dagger.Module;
 import dagger.Provides;
@@ -12,7 +12,7 @@ import javax.inject.Singleton;
 /**
  * 事件通道相关依赖的 Dagger2 模块。
  * <p>
- * infra 只暴露带参数的构造器，组件与 Module 只存在于最外层 {@code jellyfish-cli}。
+ * infra 只暴露带参数的构造器，组件与 Module 只存在于 {@code jellyfish-di}。
  * 这里额外提供一个窄接口视图 {@link EventPublisher}，让配置层只依赖接口。
  *
  * @author zcd

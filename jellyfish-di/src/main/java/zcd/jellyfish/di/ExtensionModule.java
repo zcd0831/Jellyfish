@@ -1,4 +1,4 @@
-package zcd.jellyfish.cli.di;
+package zcd.jellyfish.di;
 
 import dagger.Module;
 import dagger.Provides;

@@ -1,4 +1,4 @@
-package zcd.jellyfish.cli.di;
+package zcd.jellyfish.di;
 
 import dagger.Component;
 import zcd.jellyfish.core.AgentHarness;
@@ -27,13 +27,17 @@ import javax.inject.Singleton;
 /**
  * 应用级 Dagger2 组件：在最外层（composition root）装配共享的 {@code OkHttpClient}、
  * LLM 客户端注册表、配置门面、扩展层（注册表 / 同步策略 / 事件通道）、插件运行时、agent 定义与权限判定。
+ * <p>
+ * <b>它继承 {@link JellyfishRuntime}</b>：那 20 个访问器是「装配完成后对外交付什么」的契约，
+ * 与具体装法无关；本组件是 Dagger 侧的实现，{@link JellyfishAssembler} 是手工装配侧的实现。
+ * 继承而非各写一份，是为了让「两边少交付一个入口」在编译期就暴露，而不是等某个外壳用到时才发现。
  *
  * @author zcd
  */
 @Singleton
 @Component(modules = {ConfigModule.class, LlmModule.class, ExtensionModule.class, EventModule.class,
         PluginModule.class, AgentModule.class, PermissionModule.class, CommandModule.class, MetricsModule.class})
-public interface JellyfishComponent {
+public interface JellyfishComponent extends JellyfishRuntime {
 
     /**
      * 获取 LLM 客户端工厂。

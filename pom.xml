@@ -16,6 +16,7 @@
         <module>jellyfish-core</module>
         <module>jellyfish-tui</module>
         <module>jellyfish-server</module>
+        <module>jellyfish-di</module>
         <module>jellyfish-cli</module>
     </modules>
 

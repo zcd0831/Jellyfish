@@ -1,4 +1,4 @@
-package zcd.jellyfish.cli.di;
+package zcd.jellyfish.di;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;

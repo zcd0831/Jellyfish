@@ -5,7 +5,7 @@ import org.slf4j.LoggerFactory;
 import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.RuntimeInfo;
 import zcd.jellyfish.cli.console.ConsoleIO;
-import zcd.jellyfish.cli.di.JellyfishComponent;
+import zcd.jellyfish.di.JellyfishComponent;
 import zcd.jellyfish.cli.mode.CliRunMode;
 import zcd.jellyfish.cli.mode.RunMode;
 import zcd.jellyfish.cli.mode.ServerRunMode;

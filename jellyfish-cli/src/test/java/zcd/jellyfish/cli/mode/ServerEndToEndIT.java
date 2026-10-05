@@ -1,8 +1,8 @@
 package zcd.jellyfish.cli.mode;
 
 import org.junit.jupiter.api.Test;
-import zcd.jellyfish.cli.di.DaggerJellyfishComponent;
-import zcd.jellyfish.cli.di.JellyfishComponent;
+import zcd.jellyfish.di.DaggerJellyfishComponent;
+import zcd.jellyfish.di.JellyfishComponent;
 import zcd.jellyfish.core.AgentHarness;
 import zcd.jellyfish.server.JellyfishServer;
 import zcd.jellyfish.server.ServerConfig;

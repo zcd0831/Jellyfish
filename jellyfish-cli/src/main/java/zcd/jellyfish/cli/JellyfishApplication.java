@@ -3,7 +3,7 @@ package zcd.jellyfish.cli;
 import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.cli.console.ConsoleIO;
 import zcd.jellyfish.cli.console.SystemConsoleIO;
-import zcd.jellyfish.cli.di.DaggerJellyfishComponent;
+import zcd.jellyfish.di.DaggerJellyfishComponent;
 
 /**
  * 进程入口：解析启动参数 → 组装 → 按模式运行 → 以退出码结束进程。

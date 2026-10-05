@@ -1,4 +1,4 @@
-package zcd.jellyfish.cli.di;
+package zcd.jellyfish.di;
 
 import dagger.Module;
 import dagger.Provides;
@@ -28,7 +28,7 @@ import java.util.concurrent.TimeUnit;
  *     <li>通过 {@code @IntoMap} 将所有 LlmClient 实现注册到
  *     {@code Map<String, LlmClientCreator>}，再由 {@code LlmClientFactory} 消费。</li>
  * </ul>
- * 组件与 Module 只存在于最外层 {@code jellyfish-cli}，infra 只暴露带 {@code @Inject} 的构造器。
+ * 组件与 Module 只存在于 {@code jellyfish-di}，infra 只暴露带 {@code @Inject} 的构造器。
  *
  * @author zcd
  */

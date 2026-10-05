@@ -16,7 +16,9 @@ jellyfish-infra（基础设施层：注册表、扩展、事件通道、插件�
       ↑
 jellyfish-core（应用层：ReAct 循环与 AgentHarness 门面、提示词组装、压缩机制、系统命令、子代理委派）
       ↑
-jellyfish-tui（TUI 外壳）  jellyfish-server（HTTP 外壳）  →  jellyfish-cli（入口 + DI 装配 + 模式分发 + shade 可执行 jar）
+jellyfish-tui（TUI 外壳）  jellyfish-server（HTTP 外壳）  →  jellyfish-cli（入口 + 模式分发 + shade 可执行 jar）
+      ↑
+jellyfish-di（装配层：同一张对象图的两种装法——Dagger 组件 / 手工装配工厂，交付同一个 JellyfishRuntime 契约）
 ```
 
 | 模块 | 职责 |
@@ -26,7 +28,14 @@ jellyfish-tui（TUI 外壳）  jellyfish-server（HTTP 外壳）  →  jellyfish
 | `jellyfish-core` | 应用层：ReAct 循环与 `AgentHarness` 门面、提示词组装、压缩机制、系统命令、子代理委派 |
 | `jellyfish-tui` | TUI 外壳：TamboUI 界面、视图投影与滚动、TUI 版可靠 lane 订阅者（`TuiTurnListener`） |
 | `jellyfish-server` | HTTP 外壳：Undertow 上的 REST + SSE、会话按 id 寻址、HTTP 化人工审批 |
-| `jellyfish-cli` | `main`、参数解析、模式分发、Dagger 装配、shade 可执行 jar |
+| `jellyfish-di` | 装配层（composition root）：Dagger2 组件与 Module、门面接口 `JellyfishRuntime`、手工装配工厂 `JellyfishAssembler` |
+| `jellyfish-cli` | `main`、参数解析、模式分发、shade 可执行 jar |
+
+**装配层为什么单独成模块**：装配知识此前只以 Dagger Module 的形式躺在 `jellyfish-cli` 里，
+于是「不用 Dagger 的外壳」（例如 Spring Boot starter）只能二选一——被迫依赖 Dagger 代码生成，
+或把这份知识再抄一遍。抽出来之后两种装法并存、交付同一个 `JellyfishRuntime` 契约：
+CLI 用 Dagger（`DaggerJellyfishComponent`），其它容器用 `JellyfishAssembler`。
+**代价是新增绑定时两处都要改**，一致性由 `JellyfishAssemblerTest` 的两组行为断言守（同一段断言对两种装配各跑一遍）。
 
 **官方插件已拆分到独立仓库**（`Jellyfish-Plugins`），与内核之间没有编译期依赖：由 `PF4JPluginManager` 运行时从
 `config.json` 的 `plugins.roots` 加载，因此不在上面的依赖链里。跨语言桥接运行时（原 `jellyfish-script`）也随桥接插件走，
@@ -364,9 +373,9 @@ flowchart TB
         end
     end
 
-    subgraph "外壳入口·jellyfish-cli / jellyfish-tui"
+    subgraph "外壳入口·jellyfish-di / jellyfish-cli / jellyfish-tui"
         direction LR
-        CLI["jellyfish-cli / jellyfish-tui / jellyfish-server<br>main · Launcher · RunMode · Dagger 装配<br>-cli / -tui / -server 已落地"]
+        CLI["jellyfish-di（装配：Dagger 组件 + JellyfishAssembler，交付 JellyfishRuntime）<br>jellyfish-cli / jellyfish-tui / jellyfish-server<br>main · Launcher · RunMode<br>-cli / -tui / -server 已落地"]
     end
 
     subgraph "外部依赖·配置"

@@ -31,6 +31,13 @@
             <artifactId>jellyfish-core</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <!-- 装配层：composition root（Dagger2 组件与 Module）已迁到独立模块，
+             这样其他外壳（如 Spring Boot starter）也能复用同一份装配知识 -->
+        <dependency>
+            <groupId>zcd</groupId>
+            <artifactId>jellyfish-di</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         <dependency>
             <groupId>zcd</groupId>
             <artifactId>jellyfish-tui</artifactId>

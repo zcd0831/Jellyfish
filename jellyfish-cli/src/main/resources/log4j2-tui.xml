@@ -10,17 +10,30 @@
   4. 默认路径是**绝对路径**（用户主目录下），不是相对路径：相对路径按进程 CWD 解析，
      在项目目录里启动就会往项目里丢日志文件（有被误提交的风险），在只读目录里启动则静默写失败。
      缺失的父目录由 Log4j2 自建（实测多级也能建），不需要应用代码预先创建。
-  注意：XML 注释里不能出现连续两个减号。
+  5. 必须**滚动**而不是只写一个文件：TUI 是长时间驻留的外壳（一次开几天），而详细日志开关会把它放进
+     DEBUG 级别，于是这个文件只增不减——一个没人看的 8M 日志和一个没人看的 8G 日志，
+     排查成本差着数量级。上限是「单个文件 + 保留档数」两个属性，见下。
+  注意：XML 注释里不能出现连续两个减号，因此本文件不写任何命令行参数原样示例（上面第 5 点本来想举
+  详细日志开关的例子，正因为这个限制才改成文字描述）。
 -->
 <Configuration>
     <Properties>
         <Property name="logLevel">${sys:jellyfish.log.level:-WARN}</Property>
         <Property name="logFile">${sys:jellyfish.log.file:-${sys:user.home}/.jellyfish/jellyfish-tui.log}</Property>
+        <!-- 滚动预算：单文件上限与保留档数。两者都可经 -D 覆盖，缺省 10 MB x 5 档（含当前文件上限约 60 MB） -->
+        <Property name="logMaxSize">${sys:jellyfish.log.maxSize:-10 MB}</Property>
+        <Property name="logMaxFiles">${sys:jellyfish.log.maxFiles:-5}</Property>
     </Properties>
     <Appenders>
-        <File name="TuiFile" fileName="${logFile}" append="true">
+        <!-- 当前日志始终写在 logFile 这个名字上（用户与文档引用的就是它），滚出来的历史是 logFile.1、.2……
+             这样「看最新日志」永远不需要先找文件在哪儿。 -->
+        <RollingFile name="TuiFile" fileName="${logFile}" filePattern="${logFile}.%i" append="true">
             <PatternLayout pattern="%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level %logger{36} - %msg%n"/>
-        </File>
+            <!-- 按大小滚动：没有按时间滚动的必要——TUI 可能整天不在写日志，按时间只会滚出一堆空文件 -->
+            <SizeBasedTriggeringPolicy size="${logMaxSize}"/>
+            <!-- 超出保留档数的旧文件从这里被删掉，这就是「无限增长」被终结的地方 -->
+            <DefaultRolloverStrategy max="${logMaxFiles}"/>
+        </RollingFile>
     </Appenders>
     <Loggers>
         <Root level="${logLevel}">

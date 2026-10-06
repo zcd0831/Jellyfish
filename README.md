@@ -223,6 +223,11 @@ java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -tui
 
 **TUI 没有 stdout 契约**：它独占备用屏，`> answer.txt` 不适用，退出后也不回显会话内容。日志改写到文件
 `<用户主目录>/.jellyfish/jellyfish-tui.log`（可用 `-Djellyfish.log.file=...` 改路径），绝不写 stderr。
+**它会自动滚动**：单文件涨到 10 MB 就轮换一次，历史是 `jellyfish-tui.log.1`、`.2`……**最多留 5 个历史档**
+（再加当前文件，磁盘上限约 60 MB），更早的自动删掉——TUI 是长时间驻留的外壳，不这样的话这个文件会只增不减。
+两个值可用 `-Djellyfish.log.maxSize=20MB`（写法 `20MB` / `20 MB` / `1048576` 都认，单位 `KB`/`MB`/`GB`）
+与 `-Djellyfish.log.maxFiles=10`（历史档数）调整。`-cli` / `-server` 模式没有文件日志，它们只写 stderr
+（若你自己把 stderr 重定向到文件，那是你的事，不归这条管）。
 
 **已知限制**：界面滚动到内容末尾时自动跟随，用户上翻后不再打扰，状态栏出现 `↓ N 行`（生成中则显示
 `↓ 正在生成…`）。消息区只投影最近 500 条消息，更早的以 `⎿ N 条更早的消息已折叠` 占位。编辑器的

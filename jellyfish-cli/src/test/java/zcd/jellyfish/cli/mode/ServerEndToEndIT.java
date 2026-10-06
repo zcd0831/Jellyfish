@@ -47,7 +47,8 @@ class ServerEndToEndIT {
         harness.bootstrap();
         JellyfishServer server = new JellyfishServer(ServerConfig.builder("127.0.0.1", 0).build(),
                 component.conversationService(), component.sessionManager(), component.commandManager(), component.agentManager(),
-                component.modelManager(), component.approvalChannel(), component.healthCheck(), component.turnRegistry(),
+                component.modelManager(), component.approvalChannel(), component.askChannel(),
+                component.healthCheck(), component.turnRegistry(),
                 component.shellStreams(), component.runEventBus());
         server.start();
         int boundPort = server.boundPort();
@@ -105,7 +106,8 @@ class ServerEndToEndIT {
         JellyfishServer restarted = new JellyfishServer(
                 ServerConfig.builder("127.0.0.1", boundPort).build(),
                 component.conversationService(), component.sessionManager(), component.commandManager(), component.agentManager(),
-                component.modelManager(), component.approvalChannel(), component.healthCheck(), component.turnRegistry(),
+                component.modelManager(), component.approvalChannel(), component.askChannel(),
+                component.healthCheck(), component.turnRegistry(),
                 component.shellStreams(), component.runEventBus());
         try {
             restarted.start();
@@ -123,7 +125,8 @@ class ServerEndToEndIT {
         JellyfishServer server = new JellyfishServer(
                 ServerConfig.builder("127.0.0.1", 0).apiKey("s3cret-api-key").build(),
                 component.conversationService(), component.sessionManager(), component.commandManager(), component.agentManager(),
-                component.modelManager(), component.approvalChannel(), component.healthCheck(), component.turnRegistry(),
+                component.modelManager(), component.approvalChannel(), component.askChannel(),
+                component.healthCheck(), component.turnRegistry(),
                 component.shellStreams(), component.runEventBus());
         server.start();
         String base = "http://127.0.0.1:" + server.boundPort();

@@ -2,6 +2,7 @@ package zcd.jellyfish.infra.plugin;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import zcd.jellyfish.api.ask.AskPort;
 import zcd.jellyfish.api.plugin.PluginContext;
 import zcd.jellyfish.api.plugin.PluginDeclaration;
 import zcd.jellyfish.api.plugin.PluginOwnerNamespace;
@@ -71,11 +72,14 @@ public final class PluginContextFactory {
     /** 子代理委派端口（api 类型，实现在 core）：与上下文一起交给插件。 */
     private final SubAgentPort delegations;
 
+    /** 向用户提问端口（api 类型，实现在 infra）：与上下文一起交给插件。 */
+    private final AskPort asks;
+
     /** 根 {@code pluginId} → 存活标记；停止时据此让该插件的全部上下文失效。 */
     private final Map<String, ContextLifecycle> lifecycles = new ConcurrentHashMap<String, ContextLifecycle>();
 
     /**
-     * 构造工厂。
+     * 构造工厂，并给出「没有委派能力」「没有提问能力」的端口。
      *
      * @param extensions  同步扩展点策略，不可为 {@code null}
      * @param events      事件通道，不可为 {@code null}
@@ -93,11 +97,15 @@ public final class PluginContextFactory {
     }
 
     /**
-     * 构造工厂，并把子代理委派端口一并下传给每个插件上下文。
+     * 构造工厂，只把委派端口交给插件（提问能力缺失）。
      * <p>
-     * <b>不带端口的那条重载不是「测试专用」</b>：它表达的是一个真实状态——当前装配没有提供委派能力
-     * （内核未升级到带端口的版本、或某个外壳只装配了子集）。插件因此不需要为「能力缺失」写分支，
-     * 见 {@link SubAgentPort#unavailable()}。
+     * <b>它表达一个真实状态而不是「测试专用」</b>：装配提供了委派，但没有把提问端口接进来。
+     * 与上一版内核共存的插件、以及只装配了子集的外壳都属于这种情形，它们因此不必为
+     * 「提问能力不存在」写分支——拿到的会是 {@link AskPort#unavailable()}。
+     * <p>
+     * <b>不会掩盖内核自己的装配遗漏</b>：两条真正的装配路径（{@code PluginModule} 的
+     * {@code @Provides} 与 {@link zcd.jellyfish.di.JellyfishAssembler}）都走下面那个全参构造器，
+     * 「少接一根线」在那里是编译错误；本重载影响不到它们。
      *
      * @param extensions   同步扩展点策略，不可为 {@code null}
      * @param events       事件通道，不可为 {@code null}
@@ -108,10 +116,34 @@ public final class PluginContextFactory {
      * @param shellIngress 外壳贡献信箱，不可为 {@code null}
      * @param delegations  子代理委派端口，不可为 {@code null}
      */
-    @Inject
     public PluginContextFactory(ExtensionRegistry extensions, EventChannel events, TypeRegistry registry,
                                RuntimeInfoHolder runtimeInfo, ActionQueue actions, SessionManager sessions,
                                ShellIngress shellIngress, SubAgentPort delegations) {
+        this(extensions, events, registry, runtimeInfo, actions, sessions, shellIngress, delegations,
+                AskPort.unavailable());
+    }
+
+    /**
+     * 构造工厂，并把两个出向端口一并下传给每个插件上下文。
+     * <p>
+     * <b>不带端口的那条重载不是「测试专用」</b>：它表达的是一个真实状态——当前装配没有提供这些能力
+     * （内核未升级到带端口的版本、或某个外壳只装配了子集）。插件因此不需要为「能力缺失」写分支，
+     * 见 {@link SubAgentPort#unavailable()} 与 {@link AskPort#unavailable()}。
+     *
+     * @param extensions   同步扩展点策略，不可为 {@code null}
+     * @param events       事件通道，不可为 {@code null}
+     * @param registry     共用注册表，不可为 {@code null}
+     * @param runtimeInfo  运行时信息持有者，不可为 {@code null}
+     * @param actions      动作队列，不可为 {@code null}
+     * @param sessions     会话域服务，不可为 {@code null}
+     * @param shellIngress 外壳贡献信箱，不可为 {@code null}
+     * @param delegations  子代理委派端口，不可为 {@code null}
+     * @param asks         向用户提问端口，不可为 {@code null}
+     */
+    @Inject
+    public PluginContextFactory(ExtensionRegistry extensions, EventChannel events, TypeRegistry registry,
+                               RuntimeInfoHolder runtimeInfo, ActionQueue actions, SessionManager sessions,
+                               ShellIngress shellIngress, SubAgentPort delegations, AskPort asks) {
         this.extensions = Objects.requireNonNull(extensions, "extensions must not be null");
         this.events = Objects.requireNonNull(events, "events must not be null");
         this.registry = Objects.requireNonNull(registry, "registry must not be null");
@@ -120,6 +152,7 @@ public final class PluginContextFactory {
         this.sessions = Objects.requireNonNull(sessions, "sessions must not be null");
         this.shellIngress = Objects.requireNonNull(shellIngress, "shellIngress must not be null");
         this.delegations = Objects.requireNonNull(delegations, "delegations must not be null");
+        this.asks = Objects.requireNonNull(asks, "asks must not be null");
     }
 
     /**
@@ -139,7 +172,7 @@ public final class PluginContextFactory {
             previous.close();
         }
         return new PluginContextImpl(declaration, extensions, events, lifecycle, runtimeInfo, actions, sessions,
-                shellIngress, delegations);
+                shellIngress, delegations, asks);
     }
 
     /**

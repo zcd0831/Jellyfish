@@ -15,6 +15,7 @@ import zcd.jellyfish.core.conversation.TurnRegistry;
 import zcd.jellyfish.core.runtime.RunEventBus;
 import zcd.jellyfish.infra.session.SessionManager;
 import zcd.jellyfish.server.ApprovalBridge;
+import zcd.jellyfish.server.AskBridge;
 import zcd.jellyfish.server.ServerConfig;
 import zcd.jellyfish.server.SseContributionListener;
 import zcd.jellyfish.server.SseEvent;
@@ -22,6 +23,8 @@ import zcd.jellyfish.server.SseRunListener;
 import zcd.jellyfish.server.SseTurnListener;
 import zcd.jellyfish.server.dto.ApprovalDto;
 import zcd.jellyfish.server.dto.ApprovalResolvedEvent;
+import zcd.jellyfish.server.dto.AskDto;
+import zcd.jellyfish.server.dto.AskResolvedEvent;
 import zcd.jellyfish.server.dto.ChatRequest;
 import zcd.jellyfish.server.dto.InputHandledEvent;
 import zcd.jellyfish.server.http.ApiException;
@@ -91,6 +94,9 @@ public final class ChatHandler {
     /** 审批桥。 */
     private final ApprovalBridge approvals;
 
+    /** 提问桥：本流把本会话的待答提问以 {@code ask_required} / {@code ask_resolved} 推给客户端。 */
+    private final AskBridge asks;
+
     /** 并发流许可。 */
     private final Semaphore streamPermit;
 
@@ -104,10 +110,11 @@ public final class ChatHandler {
      * @param sessions 会话域服务，不可为 {@code null}
      * @param config   运行参数，不可为 {@code null}
      * @param approvals 审批桥，不可为 {@code null}
+     * @param asks     提问桥，不可为 {@code null}
      */
     public ChatHandler(ConversationService conversations, ShellStreams streams, TurnRegistry turns,
                        RunEventBus runEvents, SessionManager sessions, ServerConfig config,
-                       ApprovalBridge approvals) {
+                       ApprovalBridge approvals, AskBridge asks) {
         this.conversations = Objects.requireNonNull(conversations, "conversations must not be null");
         this.streams = Objects.requireNonNull(streams, "streams must not be null");
         this.turns = Objects.requireNonNull(turns, "turns must not be null");
@@ -115,6 +122,7 @@ public final class ChatHandler {
         this.sessions = sessions;
         this.config = config;
         this.approvals = approvals;
+        this.asks = asks;
         this.streamPermit = new Semaphore(config.getMaxStreams());
     }
 
@@ -180,16 +188,16 @@ public final class ChatHandler {
             throw new ApiException(Responses.BAD_REQUEST, Responses.CODE_BAD_REQUEST,
                     "/chat 只接受对话消息，命令请用 POST /sessions/{id}/commands");
         }
-        String emittedApprovalId = null;
+        Emitted emitted = new Emitted();
         try {
             SseWriter writer = SseWriter.prepare(exchange);
-            emittedApprovalId = streamUntilTerminal(writer, listener, contributions, runs, sessionId,
-                    emittedApprovalId);
+            streamUntilTerminal(writer, listener, contributions, runs, sessionId, emitted);
         } catch (IOException e) {
             // 客户端断开：这是最正常的取消来源，不记为错误
             LOG.info("SSE 客户端断开，取消回合: sessionId={}", sessionId);
             cancelQuietly(sessionId);
-            approvals.rejectIfPending(emittedApprovalId);
+            approvals.rejectIfPending(emitted.approvalId);
+            asks.cancelIfPending(emitted.askId);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             cancelQuietly(sessionId);
@@ -242,16 +250,14 @@ public final class ChatHandler {
      * @param contributions      尽力 lane 的订阅者（插件贡献，自带队列）
      * @param runs               run 事件总线订阅者（自带队列）
      * @param sessionId          会话标识
-     * @param emittedApprovalId  已推送给客户端的审批请求 id，可为 {@code null}
-     * @return 循环结束时仍待审批的请求 id，可为 {@code null}
+     * @param emitted            已推送出去的「待人工响应」请求 id，循环中原地更新
      * @throws IOException          客户端断开或写出失败时抛出
      * @throws InterruptedException 等待被中断时抛出
      */
-    private String streamUntilTerminal(SseWriter writer, SseTurnListener listener,
-                                       SseContributionListener contributions, SseRunListener runs,
-                                       String sessionId, String emittedApprovalId)
+    private void streamUntilTerminal(SseWriter writer, SseTurnListener listener,
+                                     SseContributionListener contributions, SseRunListener runs,
+                                     String sessionId, Emitted emitted)
             throws IOException, InterruptedException {
-        String pending = emittedApprovalId;
         int idleSeconds = 0;
         while (true) {
             // 一秒一片地等，而不是一次等满 keepalive 间隔：回合事件一到就走（与改造前一致），
@@ -260,14 +266,15 @@ public final class ChatHandler {
             if (event != null) {
                 writer.event(event.getName(), event.getPayload());
                 if (event.isTerminal()) {
-                    return pending;
+                    return;
                 }
             } else if (++idleSeconds >= config.getKeepaliveSeconds()) {
                 // keepalive 的语义没变：连续空闲满一个间隔就发一帧注释，把中间设备与客户端的超时推开
                 writer.comment("keepalive");
                 idleSeconds = 0;
             }
-            pending = syncApproval(writer, sessionId, pending);
+            syncApproval(writer, sessionId, emitted);
+            syncAsk(writer, sessionId, emitted);
             flushContributions(writer, contributions);
             flushRuns(writer, runs);
         }
@@ -317,24 +324,50 @@ public final class ChatHandler {
      *
      * @param writer    SSE 写出器
      * @param sessionId 会话标识
-     * @param emittedId 已推送的请求 id，可为 {@code null}
-     * @return 本次推送后仍待审批的请求 id，可为 {@code null}
+     * @param emitted   已推送的请求 id，原地更新
      * @throws IOException 写出失败时抛出
      */
-    private String syncApproval(SseWriter writer, String sessionId, String emittedId) throws IOException {
+    private void syncApproval(SseWriter writer, String sessionId, Emitted emitted) throws IOException {
         Optional<ApprovalDto> head = approvals.headFor(sessionId);
         if (head.isPresent()) {
             ApprovalDto dto = head.get();
-            if (!dto.getRequestId().equals(emittedId)) {
+            if (!dto.getRequestId().equals(emitted.approvalId)) {
                 writer.event("approval_required", dto);
-                return dto.getRequestId();
+                emitted.approvalId = dto.getRequestId();
             }
-            return emittedId;
+            return;
         }
-        if (emittedId != null) {
-            writer.event("approval_resolved", new ApprovalResolvedEvent(emittedId));
+        if (emitted.approvalId != null) {
+            writer.event("approval_resolved", new ApprovalResolvedEvent(emitted.approvalId));
+            emitted.approvalId = null;
         }
-        return null;
+    }
+
+    /**
+     * 同步提问头槽位到流：新出现则推 {@code ask_required}，消失则推 {@code ask_resolved}。
+     * <p>
+     * 与 {@link #syncApproval} 同形，但<b>顺序有讲究</b>：审批先于提问。审批是 fail-closed 的，
+     * 先让它落地能让那个回合立刻继续或收敛；而提问只是一次确认，晚一帧没有代价。
+     *
+     * @param writer    SSE 写出器
+     * @param sessionId 会话标识
+     * @param emitted   已推送的请求 id，原地更新
+     * @throws IOException 写出失败时抛出
+     */
+    private void syncAsk(SseWriter writer, String sessionId, Emitted emitted) throws IOException {
+        Optional<AskDto> head = asks.headFor(sessionId);
+        if (head.isPresent()) {
+            AskDto dto = head.get();
+            if (!dto.getRequestId().equals(emitted.askId)) {
+                writer.event("ask_required", dto);
+                emitted.askId = dto.getRequestId();
+            }
+            return;
+        }
+        if (emitted.askId != null) {
+            writer.event("ask_resolved", new AskResolvedEvent(emitted.askId));
+            emitted.askId = null;
+        }
     }
 
     /**
@@ -379,5 +412,21 @@ public final class ChatHandler {
         } catch (RuntimeException e) {
             LOG.warn("取消回合失败（忽略）: {}", e.getMessage());
         }
+    }
+
+    /**
+     * 本次流已推送出去的「待人工响应」请求 id。
+     * <p>
+     * <b>为什么两者要一起带着走</b>：审批与提问各有自己的头槽位，各自可能在不同时刻出现与消失，
+     * 而客户端断开时两者都要收掉——只收其中一个，另一个的 {@code react} 线程要一直阻塞到超时。
+     * 用一个可变对象承载，是因为它们要在写循环的每一轮里被同步更新，而循环的返回值只能带一样东西。
+     */
+    private static final class Emitted {
+
+        /** 已推送的待审批请求 id，可为 {@code null}。 */
+        private String approvalId;
+
+        /** 已推送的待答提问请求 id，可为 {@code null}。 */
+        private String askId;
     }
 }

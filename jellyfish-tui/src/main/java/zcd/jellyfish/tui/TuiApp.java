@@ -13,6 +13,7 @@ import dev.tamboui.tui.event.MouseEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import zcd.jellyfish.api.JellyfishException;
+import zcd.jellyfish.api.ask.AskAnswer;
 import zcd.jellyfish.api.event.Subscription;
 import zcd.jellyfish.api.extension.CommandChoice;
 import zcd.jellyfish.api.extension.CommandDescriptor;
@@ -32,6 +33,7 @@ import zcd.jellyfish.core.input.InputDirectiveRun;
 import zcd.jellyfish.core.input.InputDirectives;
 import zcd.jellyfish.core.input.InputReferenceCompletion;
 import zcd.jellyfish.infra.agent.AgentManager;
+import zcd.jellyfish.infra.ask.AskChannel;
 import zcd.jellyfish.infra.support.ControlChars;
 import zcd.jellyfish.infra.command.CommandInfo;
 import zcd.jellyfish.infra.command.CommandManager;
@@ -152,6 +154,16 @@ public final class TuiApp extends ToolkitApp {
     private final ApprovalChannel approvals;
 
     /**
+     * 提问通道：本外壳是唯一的答复者（{@code -tui} 启动时挂上）。
+     * <p>
+     * 与审批通道同形——{@code react} 线程在通道那头阻塞等待，本外壳每帧取件、按键回填——
+     * 但<b>两者不合并</b>：审批的结论是「放不放行」，{@code Esc} 是拒绝并中断回合；
+     * 提问的结论是一个答案，{@code Esc} 只是这次没问到，回合继续。载荷与语义都不同，
+     * 共用一个通道只会让两边的口径互相牵制。
+     */
+    private final AskChannel asks;
+
+    /**
      * 会话压缩器：{@code /compact} 的执行体。
      * <p>
      * <b>只读状态，不驱动它</b>：压缩跑在 {@code compact} 线程上，本外壳每帧取一次状态
@@ -218,6 +230,20 @@ public final class TuiApp extends ToolkitApp {
 
     /** 审批浮层当前承载的请求 id：换了请求就要重建选项，否则选中态会从上一个请求继承。 */
     private String renderedApprovalId;
+
+    /** 提问浮层的选项状态：与审批、二级选择页各自独立（三者可能前后脚出现）。 */
+    private final CommandChoicePicker askPicker = new CommandChoicePicker();
+
+    /** 提问浮层当前承载的请求 id：换了请求就要重建选项，否则选中态会从上一个提问继承。 */
+    private String renderedAskId;
+
+    /**
+     * 是否处于「自己输入答案」的编辑态。
+     * <p>
+     * 编辑态下按键放行给常驻输入框（本外壳不新写文本编辑器），只有 {@code Enter} 与 {@code Esc}
+     * 被截走：前者提交答案，后者退回选项态。
+     */
+    private boolean askEditing;
 
     /** 外壳自有命令在补全清单里的条目：命令名不含前缀，与命令域清单同构。 */
     private static final CommandInfo EXIT_INFO = new CommandInfo(ShellCommand.EXIT_NAME,
@@ -333,6 +359,7 @@ public final class TuiApp extends ToolkitApp {
      * @param agents   agent 门面，不可为 {@code null}
      * @param uiContributions 插件 UI 贡献门面，不可为 {@code null}
      * @param approvals 人工审批通道，不可为 {@code null}
+     * @param asks     提问通道，不可为 {@code null}
      * @param compactor 会话压缩器，不可为 {@code null}
      * @param inputDirectives 输入指令服务，不可为 {@code null}
      * @param thinkingExpanded 启动时是否展开思考过程（{@code --show-thinking} 置为 {@code true}）
@@ -341,7 +368,8 @@ public final class TuiApp extends ToolkitApp {
     public TuiApp(ConversationService conversations, TurnRegistry turnRegistry, ShellStreams streams,
                   CommandManager commands,
                   SessionManager sessions, ModelManager models, AgentManager agents,
-                  UiContributions uiContributions, ApprovalChannel approvals, ConversationCompactor compactor,
+                  UiContributions uiContributions, ApprovalChannel approvals, AskChannel asks,
+                  ConversationCompactor compactor,
                   InputDirectives inputDirectives, boolean thinkingExpanded, SessionDefaults sessionDefaults) {
         this.conversations = Objects.requireNonNull(conversations, "conversations must not be null");
         this.turnRegistry = Objects.requireNonNull(turnRegistry, "turnRegistry must not be null");
@@ -352,6 +380,7 @@ public final class TuiApp extends ToolkitApp {
         this.agents = Objects.requireNonNull(agents, "agents must not be null");
         this.uiContributions = Objects.requireNonNull(uiContributions, "uiContributions must not be null");
         this.approvals = Objects.requireNonNull(approvals, "approvals must not be null");
+        this.asks = Objects.requireNonNull(asks, "asks must not be null");
         this.compactor = Objects.requireNonNull(compactor, "compactor must not be null");
         this.inputDirectives = Objects.requireNonNull(inputDirectives, "inputDirectives must not be null");
         this.sessionDefaults = Objects.requireNonNull(sessionDefaults, "sessionDefaults must not be null");
@@ -576,6 +605,13 @@ public final class TuiApp extends ToolkitApp {
             syncApproval(pending);
             return new Overlay(ApprovalPrompt.TITLE, ApprovalPrompt.render(pending, approvalPicker, width));
         }
+        // 提问排在审批之后：两者背后都有一条阻塞的 react 线程，但审批卡的是「能不能执行」，
+        // 而它是 fail-closed 的——先放行或先拒绝就能让那个回合继续或收敛，提问则只是问一句
+        AskChannel.Pending ask = pendingAsk();
+        if (ask != null) {
+            syncAsk(ask);
+            return new Overlay(AskPrompt.TITLE, AskPrompt.render(ask, askPicker, width, askEditing));
+        }
         if (picker.isActive()) {
             return new Overlay(" " + picker.getBaseCommand() + " ",
                     CommandChoicePickerView.render(picker, width));
@@ -669,6 +705,36 @@ public final class TuiApp extends ToolkitApp {
         renderedApprovalId = pending.getId();
         approvalPicker.dismiss();
         approvalPicker.open("", ApprovalPrompt.choices());
+    }
+
+    /**
+     * 取当前会话的待答提问。
+     * <p>
+     * 与审批同口径：按会话取而不是取全局单槽位，否则会把别的会话的提问画到本界面上。
+     * 首页（无会话）时归到无会话槽位，与内核的键一致。
+     *
+     * @return 待答提问；本会话没有时返回 {@code null}
+     */
+    private AskChannel.Pending pendingAsk() {
+        return asks.pending(currentSessionIdOrNull()).orElse(null);
+    }
+
+    /**
+     * 让提问选项跟上当前提问。
+     * <p>
+     * 只有换了提问（id 变了）才重建选项，理由与审批相同：每帧重建会让上下键看起来完全没用。
+     * 换了提问时同时退出编辑态——上一个问题的答案草稿绝不能跟着带到下一个问题里。
+     *
+     * @param pending 当前待答提问
+     */
+    private void syncAsk(AskChannel.Pending pending) {
+        if (pending.getId().equals(renderedAskId)) {
+            return;
+        }
+        renderedAskId = pending.getId();
+        askEditing = false;
+        askPicker.dismiss();
+        askPicker.open("", AskPrompt.choices(pending.getRequest()));
     }
 
     /**
@@ -1519,6 +1585,9 @@ public final class TuiApp extends ToolkitApp {
             if (pendingApproval() != null) {
                 return handleApproval(action);
             }
+            if (pendingAsk() != null) {
+                return handleAsk(action);
+            }
             if (picker.isActive()) {
                 return handlePicker(action);
             }
@@ -1723,6 +1792,126 @@ public final class TuiApp extends ToolkitApp {
             approvals.resolve(pending.getId(), approved);
             approvalPicker.dismiss();
             renderedApprovalId = null;
+        }
+
+        /**
+         * 处理提问浮层的按键。
+         * <p>
+         * <b>选项态是模态的</b>：除导航、确认、放弃与退出外，其余按键一律吞掉——与审批同理，
+         * 它背后也有一条阻塞的 {@code react} 线程，而把字符敲进输入框再发送只会污染会话。
+         * <p>
+         * <b>{@code Esc} 与审批不同：它是「放弃作答」而不是「中断回合」</b>。提问不涉及权限，
+         * 用户不想答既不表示拒绝也不表示要停下；工具会收到一条「用户取消了提问」的结果，
+         * 模型据此自己判断或说明假设，那个回合照常跑完。
+         *
+         * @param action 按键动作
+         * @return 处理结果
+         */
+        private EventResult handleAsk(InputAction action) {
+            AskChannel.Pending pending = pendingAsk();
+            if (pending == null) {
+                // 本帧刚被超时 / 关闭收敛掉：不把这次按键算成任何操作
+                return EventResult.HANDLED;
+            }
+            syncAsk(pending);
+            if (askEditing) {
+                return handleAskEditing(action);
+            }
+            switch (action) {
+                case COMPLETE_PREV:
+                    askPicker.moveUp();
+                    return EventResult.HANDLED;
+                case COMPLETE_NEXT:
+                    askPicker.moveDown();
+                    return EventResult.HANDLED;
+                case COMPLETE_ACCEPT:
+                    acceptAskChoice(pending);
+                    return EventResult.HANDLED;
+                case CANCEL:
+                    resolveAsk(AskAnswer.cancelled(AskChannel.CANCELLED));
+                    return EventResult.HANDLED;
+                case QUIT:
+                    exitShell();
+                    return EventResult.HANDLED;
+                default:
+                    return EventResult.HANDLED;
+            }
+        }
+
+        /**
+         * 确认当前选中项：选到「其它」就进编辑态，否则直接把那一项作为答案回填。
+         *
+         * @param pending 当前待答提问
+         */
+        private void acceptAskChoice(AskChannel.Pending pending) {
+            CommandChoice choice = askPicker.selected();
+            if (choice == null) {
+                return;
+            }
+            if (AskPrompt.isCustom(choice)) {
+                // 进编辑态前清空输入框：那里面可能还留着用户没发出去的草稿，
+                // 与「现在开始输入答案」撞在一起会让人分不清哪一段会被提交
+                askEditing = true;
+                input.clear();
+                return;
+            }
+            resolveAsk(AskAnswer.answered(choice.getValue()));
+        }
+
+        /**
+         * 处理编辑态（自己输入答案）的按键。
+         * <p>
+         * <b>为什么把编辑交给常驻输入框</b>：字符、退格、光标移动、粘贴、中文输入法这些
+         * 输入框已经处理得很完整，在浮层里再写一个编辑器只会得到第二套（且更差的）行为。
+         * 因此编辑态只截住两个键——{@code Enter} 提交、{@code Esc} 退回选项态——其余一律放行。
+         * 代价是答案会显示在输入框里，而不是浮层里；对用户来说那是同一个位置（就在浮层下方）。
+         *
+         * @param action 按键动作
+         * @return 处理结果
+         */
+        private EventResult handleAskEditing(InputAction action) {
+            switch (action) {
+                case COMPLETE_ACCEPT:
+                    String answer = input.takeText().trim();
+                    if (answer.isEmpty()) {
+                        // 空答案不是答复：留在编辑态，让用户把话说完或按 Esc 退回去
+                        return EventResult.HANDLED;
+                    }
+                    resolveAsk(AskAnswer.custom(answer));
+                    return EventResult.HANDLED;
+                case CANCEL:
+                    // 退回选项态，并丢掉这段答案草稿：它是上一个选择的痕迹，不是下一条消息
+                    askEditing = false;
+                    input.clear();
+                    return EventResult.HANDLED;
+                case SEND:
+                    // 编辑态是模态的：Ctrl+S 不能顺手把答案当成一条用户消息发出去
+                    return EventResult.HANDLED;
+                case QUIT:
+                    exitShell();
+                    return EventResult.HANDLED;
+                default:
+                    return EventResult.UNHANDLED;
+            }
+        }
+
+        /**
+         * 回填答复并收起浮层。
+         * <p>
+         * <b>按当前待答项取 id 而不是用参数传进来的那一条</b>：与审批的
+         * {@code resolveApproval} 同一理由——两端之间可能刚好发生了超时或通道关闭。
+         * 那种情况下 {@code resolve} 返回 {@code false} 且本来就无事可做。
+         *
+         * @param answer 答复，不可为 {@code null}
+         */
+        private void resolveAsk(AskAnswer answer) {
+            AskChannel.Pending pending = pendingAsk();
+            if (pending != null) {
+                asks.resolve(pending.getId(), answer);
+            }
+            askPicker.dismiss();
+            askEditing = false;
+            renderedAskId = null;
         }
 
         /**

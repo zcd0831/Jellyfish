@@ -2,6 +2,7 @@ package zcd.jellyfish.di;
 
 import dagger.Module;
 import dagger.Provides;
+import zcd.jellyfish.api.ask.AskPort;
 import zcd.jellyfish.api.subagent.SubAgentPort;
 import zcd.jellyfish.core.subagent.SubAgentDelegationAdapter;
 import zcd.jellyfish.infra.action.ActionQueue;
@@ -72,6 +73,7 @@ public final class PluginModule {
      * @param sessions    会话域服务
      * @param shellIngress 外壳贡献信箱
      * @param delegations  子代理委派端口（实现在 core）
+     * @param asks         向用户提问端口（实现在 infra）
      * @return 插件上下文工厂
      */
     @Provides
@@ -80,9 +82,10 @@ public final class PluginModule {
                                                             TypeRegistry registry,
                                                             RuntimeInfoHolder runtimeInfo,
                                                             ActionQueue actions, SessionManager sessions,
-                                                            ShellIngress shellIngress, SubAgentPort delegations) {
+                                                            ShellIngress shellIngress, SubAgentPort delegations,
+                                                            AskPort asks) {
         return new PluginContextFactory(extensions, events, registry, runtimeInfo, actions, sessions, shellIngress,
-                delegations);
+                delegations, asks);
     }
 
     /**

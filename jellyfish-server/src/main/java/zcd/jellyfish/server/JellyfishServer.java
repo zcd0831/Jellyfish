@@ -13,9 +13,11 @@ import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.command.CommandManager;
 import zcd.jellyfish.infra.metrics.HealthCheck;
 import zcd.jellyfish.infra.model.ModelManager;
+import zcd.jellyfish.infra.ask.AskChannel;
 import zcd.jellyfish.infra.permission.ApprovalChannel;
 import zcd.jellyfish.infra.session.SessionManager;
 import zcd.jellyfish.server.handler.ApprovalHandlers;
+import zcd.jellyfish.server.handler.AskHandlers;
 import zcd.jellyfish.server.handler.ChatHandler;
 import zcd.jellyfish.server.handler.CommandHandlers;
 import zcd.jellyfish.server.handler.HealthHandler;
@@ -71,6 +73,9 @@ public final class JellyfishServer {
     /** 审批桥。 */
     private final ApprovalBridge approvals;
 
+    /** 提问桥：把内核提问通道的头槽位语义翻译成 HTTP 语义。 */
+    private final AskBridge asks;
+
     /** 健康检查汇总。 */
     private final HealthCheck healthCheck;
 
@@ -105,6 +110,7 @@ public final class JellyfishServer {
      * @param agents      agent 门面，不可为 {@code null}
      * @param models      模型门面，不可为 {@code null}
      * @param approvals   内核审批通道，不可为 {@code null}
+     * @param asks        内核提问通道，不可为 {@code null}
      * @param healthCheck 健康检查汇总，不可为 {@code null}
      * @param turns       在途回合表（内核拥有），不可为 {@code null}
      * @param streams     可靠 lane，不可为 {@code null}
@@ -112,8 +118,8 @@ public final class JellyfishServer {
      */
     public JellyfishServer(ServerConfig config, ConversationService conversations, SessionManager sessions,
                            CommandManager commands, AgentManager agents, ModelManager models,
-                           ApprovalChannel approvals, HealthCheck healthCheck, TurnRegistry turns,
-                           ShellStreams streams, RunEventBus runEvents) {
+                           ApprovalChannel approvals, AskChannel asks, HealthCheck healthCheck,
+                           TurnRegistry turns, ShellStreams streams, RunEventBus runEvents) {
         this.config = config;
         this.conversations = conversations;
         this.sessions = sessions;
@@ -121,6 +127,7 @@ public final class JellyfishServer {
         this.agents = agents;
         this.models = models;
         this.approvals = new ApprovalBridge(approvals);
+        this.asks = new AskBridge(asks);
         this.healthCheck = healthCheck;
         this.turns = turns;
         this.streams = streams;
@@ -137,6 +144,8 @@ public final class JellyfishServer {
      */
     public void start() {
         approvals.attach();
+        // 提问答复者同批挂上：服务模式把提问搬到 HTTP 层，与审批同一条路
+        asks.attach();
         HttpHandler router = buildRouter();
         if (config.getApiKey() != null) {
             // 包在路由外面：新接口默认就被保护，例外只能是显式声明的（探活）
@@ -151,6 +160,7 @@ public final class JellyfishServer {
             server.start();
         } catch (RuntimeException e) {
             approvals.detach();
+            asks.detach();
             throw new JellyfishException("启动 HTTP 服务失败（" + config.getHost() + ":" + config.getPort()
                     + "）：" + e.getMessage(), e);
         }
@@ -208,6 +218,8 @@ public final class JellyfishServer {
             }
         }
         approvals.detach();
+        // 提问答复者同批摘下：未决提问立刻收敛成「这次没问到」，等待线程随即继续
+        asks.detach();
         shutdown.countDown();
         removeHook();
     }
@@ -235,9 +247,10 @@ public final class JellyfishServer {
     private HttpHandler buildRouter() {
         SessionHandlers sessionHandlers = new SessionHandlers(config, sessions, agents, models, turns);
         ChatHandler chatHandler = new ChatHandler(conversations, streams, turns, runEvents, sessions, config,
-                approvals);
+                approvals, asks);
         CommandHandlers commandHandlers = new CommandHandlers(commands, config);
         ApprovalHandlers approvalHandlers = new ApprovalHandlers(approvals, config);
+        AskHandlers askHandlers = new AskHandlers(asks, config);
         HealthHandler healthHandler = new HealthHandler(healthCheck);
         return new Router()
                 .route("POST", "/sessions", sessionHandlers::create)
@@ -251,6 +264,8 @@ public final class JellyfishServer {
                 .route("GET", "/commands/{name}/options", commandHandlers::options)
                 .route("GET", "/approvals", approvalHandlers::get)
                 .route("POST", "/approvals/{requestId}", approvalHandlers::decide)
+                .route("GET", "/asks", askHandlers::get)
+                .route("POST", "/asks/{requestId}", askHandlers::answer)
                 .route("GET", "/health", healthHandler::handle);
     }
 

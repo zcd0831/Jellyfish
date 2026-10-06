@@ -9,6 +9,7 @@ import zcd.jellyfish.api.action.ActionHandle;
 import zcd.jellyfish.api.action.ActionStatus;
 import zcd.jellyfish.api.action.DeliverAs;
 import zcd.jellyfish.api.action.PluginAction;
+import zcd.jellyfish.api.ask.AskPort;
 import zcd.jellyfish.api.event.JellyfishEvent;
 import zcd.jellyfish.api.event.RegisterOptions;
 import zcd.jellyfish.api.event.notification.ConfigWarningEvent;
@@ -580,7 +581,7 @@ class PluginContextImplTest {
     private PluginContextImpl contextWithDelegations(SubAgentPort port) {
         return new PluginContextImpl(PluginDeclaration.of("plugin-a"), extensions, events,
                 new ContextLifecycle(), new RuntimeInfoHolder(), new ActionQueue(), sessions,
-                new ShellIngress(new MetricsRegistry()), port);
+                new ShellIngress(new MetricsRegistry()), port, AskPort.unavailable());
     }
 
     /**

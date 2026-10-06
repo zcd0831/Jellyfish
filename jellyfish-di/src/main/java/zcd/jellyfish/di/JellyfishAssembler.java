@@ -36,6 +36,7 @@ import zcd.jellyfish.core.tool.ToolExecutor;
 import zcd.jellyfish.infra.action.ActionQueue;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.agent.AgentRegistry;
+import zcd.jellyfish.infra.ask.AskChannel;
 import zcd.jellyfish.infra.command.CommandManager;
 import zcd.jellyfish.infra.config.AgentPromptLoader;
 import zcd.jellyfish.infra.config.AppConfig;
@@ -172,6 +173,7 @@ public final class JellyfishAssembler {
         private AgentManager agentManager;
         private PermissionManager permissionManager;
         private ApprovalChannel approvalChannel;
+        private AskChannel askChannel;
         private ConversationCompactor conversationCompactor;
         private InputDirectives inputDirectives;
         private CommandManager commandManager;
@@ -238,8 +240,10 @@ public final class JellyfishAssembler {
             commandManager = new CommandManager(extensionRegistry, publisher);
 
             // 第五层：权限与审批。策略来源就是 AgentManager 本身（不能换一个适配器，
-            // 否则「未命中即 fail-open」会出现第二个落点）
+            // 否则「未命中即 fail-open」会出现第二个落点）。提问通道与审批通道并列：
+            // 两者都是「react 线程阻塞、外壳每帧取件」，但结论语义不同，因此各有一个实现
             approvalChannel = new ApprovalChannel();
+            askChannel = new AskChannel(runtimeConfig);
             PermissionPolicyProvider policies = agentManager;
             permissionManager = new PermissionManager(policies, extensionRegistry, publisher, approvalChannel,
                     runtimeConfig);
@@ -299,11 +303,12 @@ public final class JellyfishAssembler {
             SubAgentPanel subAgentPanel = new SubAgentPanel(agentRuntime);
             SubAgentPort delegations = new SubAgentDelegationAdapter(subAgentLauncher);
 
-            // 第十四层：插件运行时（必须排在 ReAct / 压缩链之后，因为它要拿到委派端口）
+            // 第十四层：插件运行时（必须排在 ReAct / 压缩链之后，因为它要拿到两个出向端口）
             PluginRuntimeConfig pluginRuntimeConfig = PluginRuntimeConfig.defaults();
             pluginRuntimeConfig.refresh(runtimeConfig.getPluginRoots(), runtimeConfig.getPluginsSettings());
             PluginContextFactory pluginContextFactory = new PluginContextFactory(extensionRegistry, eventChannel,
-                    registry, runtimeInfoHolder, actionQueue, sessionManager, shellIngress, delegations);
+                    registry, runtimeInfoHolder, actionQueue, sessionManager, shellIngress, delegations,
+                    askChannel);
             PF4JPluginManager pluginManager = new PF4JPluginManager(pluginContextFactory, pluginRuntimeConfig,
                     eventChannel);
 
@@ -443,6 +448,11 @@ public final class JellyfishAssembler {
         @Override
         public ApprovalChannel approvalChannel() {
             return approvalChannel;
+        }
+
+        @Override
+        public AskChannel askChannel() {
+            return askChannel;
         }
 
         @Override

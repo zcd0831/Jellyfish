@@ -5,6 +5,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import zcd.jellyfish.api.event.Subscription;
 import zcd.jellyfish.api.event.notification.ConfigWarningEvent;
+import zcd.jellyfish.api.ask.AskAnswer;
+import zcd.jellyfish.api.ask.AskPort;
 import zcd.jellyfish.api.plugin.PluginContext;
 import zcd.jellyfish.api.plugin.PluginDeclaration;
 import zcd.jellyfish.api.subagent.DelegationHandle;
@@ -121,7 +123,7 @@ class PluginModuleTest {
         // When
         PluginContextFactory factory = PluginModule.providePluginContextFactory(extensions, events, registry,
                 new RuntimeInfoHolder(), new ActionQueue(),
-                org.mockito.Mockito.mock(zcd.jellyfish.infra.session.SessionManager.class), new ShellIngress(new MetricsRegistry()), SubAgentPort.unavailable());
+                org.mockito.Mockito.mock(zcd.jellyfish.infra.session.SessionManager.class), new ShellIngress(new MetricsRegistry()), SubAgentPort.unavailable(), AskPort.unavailable());
         PluginContext context = factory.create(PluginDeclaration.of("plugin-a"));
         Subscription subscription = context.observe(ConfigWarningEvent.class, event -> {
                     // 仅用于产生一条订阅
@@ -159,13 +161,32 @@ class PluginModuleTest {
                 new EventChannel(EventChannelOptions.defaults(), new TypeRegistry()),
                 new TypeRegistry(), new RuntimeInfoHolder(), new ActionQueue(),
                 org.mockito.Mockito.mock(zcd.jellyfish.infra.session.SessionManager.class),
-                new ShellIngress(new MetricsRegistry()), port);
+                new ShellIngress(new MetricsRegistry()), port, AskPort.unavailable());
 
         // When
         PluginContext context = factory.create(PluginDeclaration.of("plugin-a"));
 
         // Then：插件看到的必须是它——否则插件拿到的会是「永远拒绝」的占位
         assertSame(port, context.delegations());
+    }
+
+    @Test
+    @DisplayName("装配出来的插件上下文拿到的就是绑定的那个提问端口")
+    void providePluginContextFactory_shouldHandTheAskPortToPlugins() {
+        // Given：一个可辨认的端口实现
+        AskPort asks = request -> AskAnswer.cancelled("测试用");
+        PluginContextFactory factory = PluginModule.providePluginContextFactory(
+                new ExtensionRegistry(new TypeRegistry()),
+                new EventChannel(EventChannelOptions.defaults(), new TypeRegistry()),
+                new TypeRegistry(), new RuntimeInfoHolder(), new ActionQueue(),
+                org.mockito.Mockito.mock(zcd.jellyfish.infra.session.SessionManager.class),
+                new ShellIngress(new MetricsRegistry()), SubAgentPort.unavailable(), asks);
+
+        // When
+        PluginContext context = factory.create(PluginDeclaration.of("plugin-a"));
+
+        // Then：插件看到的必须是它——否则插件拿到的会是「当前内核没有提供向用户提问的能力」
+        assertSame(asks, context.askUser());
     }
 
     @Test
@@ -178,7 +199,7 @@ class PluginModuleTest {
                 events,
                 registry,
                 new RuntimeInfoHolder(), new ActionQueue(),
-                org.mockito.Mockito.mock(zcd.jellyfish.infra.session.SessionManager.class), new ShellIngress(new MetricsRegistry()), SubAgentPort.unavailable());
+                org.mockito.Mockito.mock(zcd.jellyfish.infra.session.SessionManager.class), new ShellIngress(new MetricsRegistry()), SubAgentPort.unavailable(), AskPort.unavailable());
 
         // When
         PF4JPluginManager manager = PluginModule.providePluginManager(factory,

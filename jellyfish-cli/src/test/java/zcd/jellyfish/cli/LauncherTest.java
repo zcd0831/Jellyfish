@@ -5,6 +5,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
+import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
 import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.RuntimeInfo;
@@ -34,6 +35,7 @@ import zcd.jellyfish.infra.shell.ShellIngress;
 import zcd.jellyfish.core.compact.ConversationCompactor;
 import zcd.jellyfish.core.prompt.PromptAssembler;
 import zcd.jellyfish.core.input.InputDirectives;
+import zcd.jellyfish.infra.ask.AskChannel;
 import zcd.jellyfish.infra.config.RuntimeConfig;
 import zcd.jellyfish.infra.permission.ApprovalChannel;
 import zcd.jellyfish.infra.plugin.RuntimeInfoHolder;
@@ -97,6 +99,13 @@ class LauncherTest {
 
     /** 真实审批通道，仅为满足 TUI / Server 装配（未挂审批者，因此不会真的等答复）。 */
     private final ApprovalChannel approvalChannel = new ApprovalChannel();
+
+    /**
+     * 提问通道：TUI 与 Server 装配都需要它。
+     * <p>
+     * 用真通道（只依赖一个 mock 的配置门面）：本用例验的是「装配能不能建成」，不是提问行为。
+     */
+    private final AskChannel asks = new AskChannel(Mockito.mock(RuntimeConfig.class));
 
     /**
      * 真实运行时信息持有者：外壳种类由 {@code Launcher} 写入，本用例据此断言「写在了 bootstrap 之前」。
@@ -372,6 +381,7 @@ conversationCompactor = new ConversationCompactor(sessions, models, runtimeConfi
         when(component.extensionRegistry()).thenReturn(extensionRegistry);
         when(component.eventChannel()).thenReturn(eventChannel);
         when(component.approvalChannel()).thenReturn(approvalChannel);
+        when(component.askChannel()).thenReturn(asks);
         when(component.conversationCompactor()).thenReturn(conversationCompactor);
         when(component.inputDirectives()).thenReturn(inputDirectives);
         when(component.turnRegistry()).thenReturn(turnRegistry);
@@ -387,6 +397,7 @@ conversationCompactor = new ConversationCompactor(sessions, models, runtimeConfi
         when(component.modelManager()).thenReturn(models);
         when(component.agentManager()).thenReturn(agents);
         when(component.approvalChannel()).thenReturn(approvalChannel);
+        when(component.askChannel()).thenReturn(asks);
         when(component.healthCheck()).thenReturn(healthCheck);
         when(component.turnRegistry()).thenReturn(turnRegistry);
         when(component.runEventBus()).thenReturn(runEventBus);

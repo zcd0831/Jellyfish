@@ -18,6 +18,7 @@ import zcd.jellyfish.infra.event.EventChannel;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.plugin.RuntimeInfoHolder;
 import zcd.jellyfish.infra.model.ModelManager;
+import zcd.jellyfish.infra.ask.AskChannel;
 import zcd.jellyfish.infra.permission.ApprovalChannel;
 import zcd.jellyfish.infra.session.SessionDefaults;
 import zcd.jellyfish.infra.session.SessionManager;
@@ -100,6 +101,14 @@ public final class TuiRunMode implements RunMode {
      */
     private final ApprovalChannel approvals;
 
+    /**
+     * 提问通道：与审批通道一并挂上。
+     * <p>
+     * 同样只有本模式会挂——{@code -cli} 没有界面，{@code -server} 把提问搬到 HTTP 层。
+     * 不挂答复者时提问会立刻返回「无法送达用户」，模型据此照自己的判断继续。
+     */
+    private final AskChannel asks;
+
     /** 会话压缩器：{@code /compact} 的执行体，交界面每帧读状态。 */
     private final ConversationCompactor compactor;
 
@@ -126,6 +135,7 @@ public final class TuiRunMode implements RunMode {
      * @param events     事件通道，不可为 {@code null}
      * @param runtimeInfo 运行时信息持有者，不可为 {@code null}
      * @param approvals  人工审批通道，不可为 {@code null}
+     * @param asks      提问通道，不可为 {@code null}
      * @param compactor  会话压缩器，不可为 {@code null}
      * @param inputDirectives 输入指令服务，不可为 {@code null}
      * @param console    输出面板，不可为 {@code null}
@@ -136,7 +146,7 @@ public final class TuiRunMode implements RunMode {
                       SessionManager sessions,
                       ModelManager models, AgentManager agents, ExtensionRegistry extensions,
                       EventChannel events, RuntimeInfoHolder runtimeInfo, ApprovalChannel approvals,
-                      ConversationCompactor compactor,
+                      AskChannel asks, ConversationCompactor compactor,
                       InputDirectives inputDirectives, ConsoleIO console,
                       SessionDefaults sessionDefaults) {
         this.conversations = Objects.requireNonNull(conversations, "conversations must not be null");
@@ -150,6 +160,7 @@ public final class TuiRunMode implements RunMode {
         this.events = Objects.requireNonNull(events, "events must not be null");
         this.runtimeInfo = Objects.requireNonNull(runtimeInfo, "runtimeInfo must not be null");
         this.approvals = Objects.requireNonNull(approvals, "approvals must not be null");
+        this.asks = Objects.requireNonNull(asks, "asks must not be null");
         this.compactor = Objects.requireNonNull(compactor, "compactor must not be null");
         this.inputDirectives = Objects.requireNonNull(inputDirectives, "inputDirectives must not be null");
         this.console = Objects.requireNonNull(console, "console must not be null");
@@ -185,9 +196,11 @@ public final class TuiRunMode implements RunMode {
         // 挂上审批者：本模式有能力承载「需要人工审批」的模态交互。必须在界面跑起来之前挂，
         // 否则启动瞬间发生的工具调用会拿不到审批者而被按拒绝处理。
         approvals.attach();
+        // 提问通道同批挂上，理由相同：界面跑起来之前发生的提问同样要能摆到用户面前
+        asks.attach();
         try {
             new TuiApp(conversations, turns, streams, commands, sessions, models, agents, uiContributions,
-                    approvals, compactor, inputDirectives, options.isShowThinking(), sessionDefaults).run();
+                    approvals, asks, compactor, inputDirectives, options.isShowThinking(), sessionDefaults).run();
             return ExitCodes.OK;
         } catch (JellyfishException e) {
             // 回合未收敛仍然只算正常结束：它是「答完了但没收敛」，不是执行失败。
@@ -206,6 +219,8 @@ public final class TuiRunMode implements RunMode {
             // 先摘审批者再关界面订阅：摘下会把仍在等待的审批请求一律判拒绝，
             // 否则那些 react 线程要一直阻塞到超时（进程都要退了）。
             approvals.detach();
+            // 提问通道同批摘下：未决的提问会立刻收敛成「无法送达用户」，等待线程随即继续
+            asks.detach();
             // close 幂等：它只解除本门面建立的订阅，不清空共用注册表（那是插件回收的职责）
             uiContributions.close();
         }

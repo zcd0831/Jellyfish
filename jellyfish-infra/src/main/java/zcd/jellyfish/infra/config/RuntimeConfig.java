@@ -301,6 +301,17 @@ public class RuntimeConfig {
     }
 
     /**
+     * 获取向用户提问段。
+     * <p>
+     * 与审批超时同口径：超时值每次提问现读而不缓存，改配置后无需重启即可生效。
+     *
+     * @return 提问段，保证非 {@code null}
+     */
+    public AskSettings getAskSettings() {
+        return snapshot.getJellyfishSettings().getAsk();
+    }
+
+    /**
      * 获取合并后的插件段。
      * <p>
      * 不重复存放：插件段随 {@link JellyfishSettings} 一起进快照，这里只是转发。
@@ -434,7 +445,32 @@ public class RuntimeConfig {
                 mergePluginsSettings(pluginsOf(global), pluginsOf(project)),
                 mergeReactSettings(reactOf(global), reactOf(project)),
                 mergePermissionSettings(permissionOf(global), permissionOf(project)),
-                mergeSubAgentSettings(subAgentOf(global), subAgentOf(project)));
+                mergeSubAgentSettings(subAgentOf(global), subAgentOf(project)),
+                mergeAskSettings(askOf(global), askOf(project)));
+    }
+
+    /**
+     * 取一份运行期设置里的提问段，缺省时返回 {@code null}，交给合并函数按缺省处理。
+     *
+     * @param settings 运行期设置，可为 {@code null}
+     * @return 提问段，未配置时为 {@code null}
+     */
+    private static AskSettings askOf(JellyfishSettings settings) {
+        return settings == null ? null : settings.getAsk();
+    }
+
+    /**
+     * 合并全局级与项目级提问段。
+     * <p>
+     * 与 provider / agent / react / permission / subAgent 同口径的「整对象覆盖」：项目级非空则整体
+     * 替换全局级，否则回退全局级，两者都缺省时由 {@link JellyfishSettings} 的构造器落到缺省值。
+     *
+     * @param global  全局级提问段，可为 {@code null}
+     * @param project 项目级提问段，可为 {@code null}
+     * @return 合并结果，可能为 {@code null}（表示用缺省值）
+     */
+    private static AskSettings mergeAskSettings(AskSettings global, AskSettings project) {
+        return project != null ? project : global;
     }
 
     /**

@@ -17,11 +17,15 @@ import zcd.jellyfish.core.conversation.SubmissionPolicy;
 import zcd.jellyfish.core.conversation.TurnInProgressException;
 import zcd.jellyfish.core.conversation.TurnRegistry;
 import zcd.jellyfish.core.runtime.RunEventBus;
+import zcd.jellyfish.infra.ask.AskChannel;
+import zcd.jellyfish.infra.config.AskSettings;
+import zcd.jellyfish.infra.config.RuntimeConfig;
 import zcd.jellyfish.infra.permission.ApprovalChannel;
 import zcd.jellyfish.infra.session.SessionManager;
 import zcd.jellyfish.infra.metrics.MetricsRegistry;
 import zcd.jellyfish.infra.shell.ShellIngress;
 import zcd.jellyfish.server.ApprovalBridge;
+import zcd.jellyfish.server.AskBridge;
 import zcd.jellyfish.server.ServerConfig;
 import zcd.jellyfish.server.http.ApiException;
 import zcd.jellyfish.server.http.PathParams;
@@ -76,6 +80,9 @@ class ChatHandlerTest {
     /** 审批桥（真 ApprovalChannel + 真桥）。 */
     private ApprovalBridge approvals;
 
+    /** 提问桥（真 AskChannel + 真桥）。 */
+    private AskBridge asks;
+
     /** 被测试的处理器。 */
     private ChatHandler handler;
 
@@ -87,7 +94,23 @@ class ChatHandlerTest {
         sessions = Mockito.mock(SessionManager.class);
         config = ServerConfig.builder("127.0.0.1", 9096).build();
         approvals = new ApprovalBridge(new ApprovalChannel());
-        handler = new ChatHandler(conversations, streams, turns, new RunEventBus(), sessions, config, approvals);
+        asks = askBridge();
+        handler = new ChatHandler(conversations, streams, turns, new RunEventBus(), sessions, config, approvals,
+                asks);
+    }
+
+    /**
+     * 造一个真的提问桥。
+     * <p>
+     * 提问通道与审批通道不同：它要读 {@code ask.timeoutSeconds} 才能算超时，因此需要一份配置。
+     * 本用例只关心「事件推没推出去」，所以给缺省值即可。
+     *
+     * @return 提问桥，保证非 {@code null}
+     */
+    private static AskBridge askBridge() {
+        RuntimeConfig runtimeConfig = Mockito.mock(RuntimeConfig.class);
+        Mockito.when(runtimeConfig.getAskSettings()).thenReturn(new AskSettings());
+        return new AskBridge(new AskChannel(runtimeConfig));
     }
 
     /**
@@ -180,7 +203,7 @@ class ChatHandlerTest {
     void handle_should_release_stream_permit_when_turn_completes() {
         // 并发流许可是外壳自己的资源（内核管的是会话槽位）。最大 1 条：第一条跑完必须能跑第二条
         ChatHandler limited = new ChatHandler(conversations, streams, turns, new RunEventBus(), sessions,
-                ServerConfig.builder("127.0.0.1", 9096).maxStreams(1).build(), approvals);
+                ServerConfig.builder("127.0.0.1", 9096).maxStreams(1).build(), approvals, asks);
         stubTurn("s1", "hi", lane -> lane.publish(ShellTurnEvent.completed("s1", "t1", "x", 1, false)));
 
         limited.handle(fixture("{\"message\":\"hi\"}").exchange, idParam("s1"));
@@ -237,7 +260,7 @@ class ChatHandlerTest {
     @Test
     void handle_should_return_503_when_stream_limit_reached() {
         ChatHandler limited = new ChatHandler(conversations, streams, turns, new RunEventBus(), sessions,
-                ServerConfig.builder("127.0.0.1", 9096).maxStreams(0).build(), approvals);
+                ServerConfig.builder("127.0.0.1", 9096).maxStreams(0).build(), approvals, asks);
 
         ApiException error = assertThrows(ApiException.class,
                 () -> limited.handle(fixture("{\"message\":\"hi\"}").exchange, idParam("s1")));

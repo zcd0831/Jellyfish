@@ -4,6 +4,7 @@ import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.RuntimeInfo;
 import zcd.jellyfish.api.action.ActionHandle;
 import zcd.jellyfish.api.action.PluginAction;
+import zcd.jellyfish.api.ask.AskPort;
 import zcd.jellyfish.api.event.JellyfishEvent;
 import zcd.jellyfish.api.event.RegisterOptions;
 import zcd.jellyfish.api.event.Subscription;
@@ -85,6 +86,9 @@ public final class PluginContextImpl implements PluginContext {
     /** 子代理委派端口：插件驱动子代理 run 的唯一入口（api 类型，实现在 core）。 */
     private final SubAgentPort delegations;
 
+    /** 向用户提问端口：插件把问题交给当前外壳的唯一入口（api 类型，实现在 infra）。 */
+    private final AskPort asks;
+
     /**
      * 构造一个<b>自持有存活标记</b>的插件上下文。
      * <p>
@@ -103,12 +107,13 @@ public final class PluginContextImpl implements PluginContext {
     public PluginContextImpl(PluginDeclaration declaration, ExtensionRegistry extensions, EventChannel events,
                              SessionManager sessions) {
         this(declaration, extensions, events, new ContextLifecycle(), new RuntimeInfoHolder(), new ActionQueue(),
-                sessions, new ShellIngress(new MetricsRegistry()), SubAgentPort.unavailable());
+                sessions, new ShellIngress(new MetricsRegistry()), SubAgentPort.unavailable(),
+                AskPort.unavailable());
     }
 
     /**
      * 构造插件上下文，共用调用方给定的存活标记、运行时信息持有者与动作队列，
-     * 并给出一个「没有委派能力」的端口。
+     * 并给出「没有委派能力」「没有提问能力」的端口。
      *
      * @param declaration 插件声明，不可为 {@code null}
      * @param extensions  同步扩展点策略，不可为 {@code null}
@@ -123,15 +128,15 @@ public final class PluginContextImpl implements PluginContext {
                       ContextLifecycle lifecycle, RuntimeInfoHolder runtimeInfo, ActionQueue actions,
                       SessionManager sessions, ShellIngress shellIngress) {
         this(declaration, extensions, events, lifecycle, runtimeInfo, actions, sessions, shellIngress,
-                SubAgentPort.unavailable());
+                SubAgentPort.unavailable(), AskPort.unavailable());
     }
 
     /**
-     * 构造插件上下文，并把子代理委派端口一并交给插件。
+     * 构造插件上下文，并把子代理委派端口与提问端口一并交给插件。
      * <p>
-     * 端口是 api 类型，实现住在 {@code core}（{@code SubAgentDelegationAdapter}）——{@code core → infra}
-     * 是既有方向，因此这里只能持有接口，由装配方注入实现。<b>能力缺失时给
-     * {@link SubAgentPort#unavailable()} 而不是 {@code null}</b>：插件不必为「内核版本旧」写分支。
+     * 两个端口都是 api 类型，实现分别住在 {@code core}（{@code SubAgentDelegationAdapter}）与
+     * {@code infra}（{@code AskChannel}）——这里只能持有接口，由装配方注入实现。
+     * <b>能力缺失时给 {@code unavailable()} 而不是 {@code null}</b>：插件不必为「内核版本旧」写分支。
      *
      * @param declaration  插件声明，不可为 {@code null}
      * @param extensions   同步扩展点策略，不可为 {@code null}
@@ -142,10 +147,12 @@ public final class PluginContextImpl implements PluginContext {
      * @param sessions     会话域服务，不可为 {@code null}；子上下文同样复用它
      * @param shellIngress 外壳贡献信箱，不可为 {@code null}；子上下文同样复用它
      * @param delegations  子代理委派端口，不可为 {@code null}；子上下文同样复用它
+     * @param asks         向用户提问端口，不可为 {@code null}；子上下文同样复用它
      */
     PluginContextImpl(PluginDeclaration declaration, ExtensionRegistry extensions, EventChannel events,
                       ContextLifecycle lifecycle, RuntimeInfoHolder runtimeInfo, ActionQueue actions,
-                      SessionManager sessions, ShellIngress shellIngress, SubAgentPort delegations) {
+                      SessionManager sessions, ShellIngress shellIngress, SubAgentPort delegations,
+                      AskPort asks) {
         this.declaration = declaration;
         this.extensions = extensions;
         this.events = events;
@@ -155,6 +162,7 @@ public final class PluginContextImpl implements PluginContext {
         this.sessions = sessions;
         this.shellIngress = shellIngress;
         this.delegations = delegations;
+        this.asks = asks;
     }
 
     @Override
@@ -180,6 +188,13 @@ public final class PluginContextImpl implements PluginContext {
     }
 
     @Override
+    public AskPort askUser() {
+        // 与 delegations() 同口径：提问不是注册，而是「发起一次提问」，能不能问由通道按会话判定
+        // （AskChannel 里挂没挂答复者），因此不需要 requireAlive
+        return asks;
+    }
+
+    @Override
     public PluginContext subContext(String childId) {
         // 身份从「当前」身份派生而非从根插件标识派生：子上下文再派生子上下文就会自然形成
         // a::b::c 这样的层级，而回收侧的前缀匹配本就支持任意深度，无需特殊处理
@@ -189,7 +204,7 @@ public final class PluginContextImpl implements PluginContext {
         // 本方法刻意不做存活检查——它不产生任何注册，真正需要被拦住的是注册那一刻。
         // 运行时信息持有者也一并复用：外壳是进程级事实，子单元与父单元看到的必须一致
         return new PluginContextImpl(PluginDeclaration.of(childPluginId, declaration.getConfiguration()),
-                extensions, events, lifecycle, runtimeInfo, actions, sessions, shellIngress, delegations);
+                extensions, events, lifecycle, runtimeInfo, actions, sessions, shellIngress, delegations, asks);
     }
 
     @Override

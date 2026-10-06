@@ -9,6 +9,7 @@ import zcd.jellyfish.core.compact.ConversationCompactor;
 import zcd.jellyfish.core.input.InputDirectives;
 import zcd.jellyfish.core.runtime.RunEventBus;
 import zcd.jellyfish.infra.agent.AgentManager;
+import zcd.jellyfish.infra.ask.AskChannel;
 import zcd.jellyfish.infra.command.CommandManager;
 import zcd.jellyfish.infra.config.RuntimeConfig;
 import zcd.jellyfish.infra.event.EventChannel;
@@ -28,7 +29,7 @@ import javax.inject.Singleton;
  * 应用级 Dagger2 组件：在最外层（composition root）装配共享的 {@code OkHttpClient}、
  * LLM 客户端注册表、配置门面、扩展层（注册表 / 同步策略 / 事件通道）、插件运行时、agent 定义与权限判定。
  * <p>
- * <b>它继承 {@link JellyfishRuntime}</b>：那 20 个访问器是「装配完成后对外交付什么」的契约，
+ * <b>它继承 {@link JellyfishRuntime}</b>：那 21 个访问器是「装配完成后对外交付什么」的契约，
  * 与具体装法无关；本组件是 Dagger 侧的实现，{@link JellyfishAssembler} 是手工装配侧的实现。
  * 继承而非各写一份，是为了让「两边少交付一个入口」在编译期就暴露，而不是等某个外壳用到时才发现。
  *
@@ -36,7 +37,8 @@ import javax.inject.Singleton;
  */
 @Singleton
 @Component(modules = {ConfigModule.class, LlmModule.class, ExtensionModule.class, EventModule.class,
-        PluginModule.class, AgentModule.class, PermissionModule.class, CommandModule.class, MetricsModule.class})
+        PluginModule.class, AgentModule.class, PermissionModule.class, AskModule.class, CommandModule.class,
+        MetricsModule.class})
 public interface JellyfishComponent extends JellyfishRuntime {
 
     /**
@@ -92,6 +94,19 @@ public interface JellyfishComponent extends JellyfishRuntime {
      * @return ApprovalChannel
      */
     ApprovalChannel approvalChannel();
+
+    /**
+     * 获取向用户提问通道。
+     * <p>
+     * 调用点是外壳装配：{@code -tui} 与 {@code -server} 会 {@code attach()}——它们各自有把问题
+     * 摆到人面前的方式；{@code -cli} 不挂答复者，因此提问会立刻返回「无法送达用户」。
+     * <p>
+     * <b>它与审批的口径差异是刻意的</b>：审批挂不上时按拒绝处理（fail-closed，绝不静默放宽权限），
+     * 而提问挂不上时只是「问不到人」，模型可以照自己的判断继续。
+     *
+     * @return AskChannel
+     */
+    AskChannel askChannel();
 
     /**
      * 获取会话压缩器。

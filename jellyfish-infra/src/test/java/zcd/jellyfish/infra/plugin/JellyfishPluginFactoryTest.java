@@ -11,6 +11,7 @@ import org.pf4j.RuntimeMode;
 import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.plugin.JellyfishPlugin;
 import zcd.jellyfish.api.plugin.PluginContext;
+import zcd.jellyfish.api.ask.AskPort;
 import zcd.jellyfish.api.extension.ToolCallRequest;
 import zcd.jellyfish.api.extension.ToolCallResult;
 import zcd.jellyfish.api.subagent.SubAgentPort;
@@ -63,7 +64,8 @@ class JellyfishPluginFactoryTest {
             new TypeRegistry(),
             new RuntimeInfoHolder(),
             new ActionQueue(),
-            sessions, new ShellIngress(new MetricsRegistry()), SubAgentPort.unavailable());
+            sessions, new ShellIngress(new MetricsRegistry()), SubAgentPort.unavailable(),
+            AskPort.unavailable());
 
     /** 记录插件生命周期回调。 */
     private static final List<String> RECORDED = new ArrayList<>();

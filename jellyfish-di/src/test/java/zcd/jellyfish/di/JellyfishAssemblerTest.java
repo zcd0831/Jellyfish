@@ -54,7 +54,7 @@ class JellyfishAssemblerTest {
 
     @Test
     void accessors_should_all_be_present_when_assembled() {
-        // Given / When / Then：20 个访问器一个都不能是 null，否则外壳会在第一次用到时才发现
+        // Given / When / Then：21 个访问器一个都不能是 null，否则外壳会在第一次用到时才发现
         forEachRuntime(assembly -> {
             assertNotNull(assembly.runtimeConfig(), "runtimeConfig");
             assertNotNull(assembly.agentHarness(), "agentHarness");
@@ -63,6 +63,7 @@ class JellyfishAssemblerTest {
             assertNotNull(assembly.llmClientFactory(), "llmClientFactory");
             assertNotNull(assembly.permissionManager(), "permissionManager");
             assertNotNull(assembly.approvalChannel(), "approvalChannel");
+            assertNotNull(assembly.askChannel(), "askChannel");
             assertNotNull(assembly.commandManager(), "commandManager");
             assertNotNull(assembly.sessionManager(), "sessionManager");
             assertNotNull(assembly.sessionDefaults(), "sessionDefaults");

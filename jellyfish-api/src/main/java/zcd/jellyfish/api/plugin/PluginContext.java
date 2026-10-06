@@ -2,6 +2,7 @@ package zcd.jellyfish.api.plugin;
 
 import zcd.jellyfish.api.RuntimeInfo;
 import zcd.jellyfish.api.action.ActionHandle;
+import zcd.jellyfish.api.ask.AskPort;
 import zcd.jellyfish.api.action.PluginAction;
 import zcd.jellyfish.api.event.JellyfishEvent;
 import zcd.jellyfish.api.extension.SessionExtensionEntry;
@@ -413,5 +414,27 @@ public interface PluginContext {
      */
     default SubAgentPort delegations() {
         return SubAgentPort.unavailable();
+    }
+
+    /**
+     * 获取向用户提问的端口。
+     * <p>
+     * <b>它同样是出向边</b>：与 {@link #delegations()} 并列，解决的是同一类需求——插件要主动
+     * 让内核做一件事（这次是「把我的问题摆到用户面前，并把答复带回来」）。提问需要模态界面，
+     * 而插件在架构上碰不到界面，因此答复者只能是外壳；插件能做的只是发起一次提问并等待答复。
+     * <p>
+     * <b>它可能没有人回答</b>：没有交互界面的外壳（{@code -cli}）不挂答复者，{@code ask} 会立刻
+     * 返回 {@link zcd.jellyfish.api.ask.AskAnswer.Status#UNAVAILABLE}。这不是异常路径，
+     * 也不是安全边界——提问拿不到答案不代表哪次工具调用被拒绝。内核没有装配这个能力时（旧内核、
+     * 不完整装配）返回的是 {@link AskPort#unavailable()}，因此插件不必为「内核版本旧」写分支。
+     * <p>
+     * <b>线程语义是阻塞</b>：{@code ask} 在调用线程上等到答复或超时。工具处理器本来就在
+     * {@code react} 线程上被同步调用，因此这不会额外占用线程；但插件不应在事件回调等
+     * 「不该阻塞的位置」调用它。
+     *
+     * @return 提问端口，保证非 {@code null}
+     */
+    default AskPort askUser() {
+        return AskPort.unavailable();
     }
 }

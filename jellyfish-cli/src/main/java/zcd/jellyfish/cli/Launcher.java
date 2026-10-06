@@ -134,13 +134,14 @@ public final class Launcher {
                         component.commandManager(),
                         component.sessionManager(), component.modelManager(), component.agentManager(),
                         component.extensionRegistry(), component.eventChannel(), component.runtimeInfoHolder(),
-                        component.approvalChannel(),
+                        component.approvalChannel(), component.askChannel(),
                         component.conversationCompactor(), component.inputDirectives(),
                         console, component.sessionDefaults());
             case SERVER:
                 return new ServerRunMode(component.conversationService(), component.commandManager(),
                         component.sessionManager(), component.modelManager(), component.agentManager(),
-                        component.approvalChannel(), component.healthCheck(), component.turnRegistry(),
+                        component.approvalChannel(), component.askChannel(), component.healthCheck(),
+                        component.turnRegistry(),
                         component.shellStreams(), component.runEventBus(), console);
             case CLI:
             default:

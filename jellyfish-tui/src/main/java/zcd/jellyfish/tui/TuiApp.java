@@ -788,6 +788,22 @@ public final class TuiApp extends ToolkitApp {
     }
 
     /**
+     * 取一条命令的可选值，供补全面板接受时打开选择页。
+     * <p>
+     * <b>外壳自有命令优先</b>：{@code /ui} 这类命令不在命令域里，问命令域只会得到空清单，
+     * 于是它会退化成「回填命令名、下次发送才弹页」——而 {@code /resume} 是选中即弹。
+     * 候选由 {@link ShellCommand#options} 给出，本方法不维护第二份「哪条命令有候选」的名单。
+     * 顺序与 {@link #executeShellOwned} 一致：外壳自有命令先截胡，认不下再回落命令域。
+     *
+     * @param commandName 命令名（不含前缀）
+     * @return 候选清单；两边都没有时为空列表
+     */
+    private List<CommandChoice> optionsFor(String commandName) {
+        List<CommandChoice> shell = ShellCommand.options(commandName, uiPlacement, currentPanels());
+        return shell.isEmpty() ? optionsOf(commandName) : shell;
+    }
+
+    /**
      * 识别会话切换：清掉属于旧会话的外壳提示，并让插件界面内容重新收集一遍。
      * <p>
      * 提示是「外壳刚刚说过的话」，属于上一次交互的上下文；换了会话还留着，会让用户以为那是新会话的一部分。
@@ -1663,8 +1679,11 @@ public final class TuiApp extends ToolkitApp {
         /**
          * 确认补全面板的选中项。
          * <p>
-         * <b>有候选 → 直接进二级选择页</b>（只读查询，不执行命令，因此不会误触发 {@code /new} 这类副作用）；
+         * <b>有候选 → 直接进选择页</b>（只读查询，不执行命令，因此不会误触发 {@code /new} 这类副作用）；
          * <b>无候选 → 保持原行为回填命令名</b>，用户接着敲参数或发送。
+         * <p>
+         * 候选先问外壳自有命令再问命令域（见 {@link TuiApp#optionsFor}）：少了前者，
+         * {@code /ui} 就得「先发送一次」才弹页，与 {@code /resume} 的「选中即弹」不一致。
          *
          * @return 处理结果
          */
@@ -1673,7 +1692,7 @@ public final class TuiApp extends ToolkitApp {
             if (candidate == null) {
                 return EventResult.UNHANDLED;
             }
-            List<CommandChoice> options = optionsOf(candidate.getName());
+            List<CommandChoice> options = optionsFor(candidate.getName());
             if (!options.isEmpty()) {
                 // 清掉已敲的命令词：选择页确认后会按「命令名 + 取值」重新执行，半截输入留着只会造成误解
                 input.takeText();

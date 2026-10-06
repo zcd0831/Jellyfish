@@ -1,5 +1,11 @@
 package zcd.jellyfish.tui;
 
+import zcd.jellyfish.api.extension.CommandChoice;
+import zcd.jellyfish.infra.ui.OwnedPanel;
+
+import java.util.Collections;
+import java.util.List;
+
 /**
  * 外壳自有命令：用户与外壳之间的约定，不进内核的命令注册表。
  * <p>
@@ -11,6 +17,9 @@ package zcd.jellyfish.tui;
  * <p>
  * <b>判定必须早于 {@code CommandManager.execute}</b>：一旦把它们交给命令域，就会以
  * {@code UNKNOWN} 的形式回到屏幕上，用户看到的是「没有这条命令」——而实际上外壳完全听得懂。
+ * <p>
+ * <b>本类也是这些命令的候选入口</b>（见 {@link #options}）：补全面板选中一条命令时，
+ * 命令域答不出外壳自有命令的可选值，这一处是外壳侧唯一的答复方。
  *
  * @author zcd
  */
@@ -52,6 +61,32 @@ public final class ShellCommand {
     public static boolean isShellCommand(String input) {
         return isExitCommand(input) || isThinkingCommand(input) || isToolArgsCommand(input)
                 || UiCommand.isUi(input) || MouseCommand.isMouse(input);
+    }
+
+    /**
+     * 取一条外壳自有命令的只读候选（不执行命令、不改任何状态）。
+     * <p>
+     * <b>为什么需要这个入口</b>：补全面板在用户按下选中键时会先问「这条命令有没有可选值」，
+     * 有就直接打开选择页、没有才把命令名回填进输入框。而外壳自有命令不进内核命令域，
+     * 问命令域只会得到空清单——{@code /ui} 因此要「先发送一次」才弹页，与 {@code /resume}
+     * （内核注册了候选处理器）行为不一致。这里给出外壳侧的唯一入口，顺序与提交路径一致：
+     * 外壳自有命令优先于命令域（见 {@code TuiApp#executeShellOwned}）。
+     * <p>
+     * <b>新增一条带候选的外壳命令，只改本方法</b>：补全的接受路只认这个入口，
+     * 不需要在 {@code TuiApp} 里为每条命令再开一个分支。这也是它与 {@link #isShellCommand} 的分工——
+     * 后者答「这是不是外壳命令」，本方法答「它有哪些可选值」。
+     *
+     * @param name      命令名（不含前缀），一般是补全清单里的 {@code CommandInfo.getName()}，可为 {@code null}
+     * @param placement 面板落位状态，不可为 {@code null}
+     * @param panels    最近一次收集到的面板，可为 {@code null}
+     * @return 候选清单，保证非 {@code null}；该命令没有候选时为空列表
+     */
+    static List<CommandChoice> options(String name, UiPlacement placement, List<OwnedPanel> panels) {
+        if (UiCommand.NAME.equals(name)) {
+            return UiCommand.regionChoices(placement, panels);
+        }
+        // /exit /thinking /toolargs /mouse 都是开合型开关，没有可挑的取值
+        return Collections.emptyList();
     }
 
     /**

@@ -133,16 +133,21 @@ final class UiCommand {
     }
 
     /**
-     * 构造二级选择页的候选：区域清单。
+     * 构造区域候选：区域清单。
      * <p>
      * 取值就是区域名，因此确认后拼出的 {@code /ui <region>} 会再进 {@link #execute} 一次、
      * 进而打开三级页——「两级页面」正是靠这条命令级联成立的。
+     * <p>
+     * <b>两个调用点，同一处构造</b>：{@link #execute}（命令被真正执行时）与
+     * {@link ShellCommand#options}（补全面板选中 {@code /ui}、命令还没执行但用户已经要看候选时）。
+     * 后者是只读查询，因此这里刻意不碰 {@link UiPlacement} 的任何写方法——
+     * 否则「选中命令名」就成了一次有副作用的操作。
      *
-     * @param placement 落位状态
+     * @param placement 落位状态，不可为 {@code null}
      * @param panels    面板候选，可为 {@code null}
      * @return 候选列表，保证非 {@code null}
      */
-    private static List<CommandChoice> regionChoices(UiPlacement placement, List<OwnedPanel> panels) {
+    static List<CommandChoice> regionChoices(UiPlacement placement, List<OwnedPanel> panels) {
         Map<UiRegion, List<OwnedPanel>> candidates = placement.candidates(panels);
         Map<UiRegion, OwnedPanel> selected = placement.selected(panels);
         List<CommandChoice> choices = new ArrayList<CommandChoice>(REGIONS.size());

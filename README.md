@@ -314,6 +314,9 @@ java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -tui
 选择页的「当前」标记告诉你现在看的是谁的面板；二级页里没有贡献的区域标 `无贡献`。
 快捷键诊断（「我绑的键为什么没反应」）只在 `/ui list` 里。
 
+打开它的方式有两种：把 `/ui` 敲到输入框里、在补全面板里按 `Enter` 选中（与 `/resume` 等内核命令一致，
+只读查询、不执行命令），或者直接把 `/ui` 发出去。两者打开的是同一个区域选择页。
+
 界面窄于 80 列时左右侧栏自动隐藏；窄到放不下时面板会让位给消息区，而不是反过来。整体不要插件 UI 时用
 `-Djellyfish.tui.pluginPanels=false`。
 

@@ -581,6 +581,19 @@ Gemini 那种 `generationConfig` 容器不会被挤掉；`vendorHeaders` **只�
 | Claude | `thinking.type` + `output_config.effort` | `adaptive`（当前推荐）；老代际用 `enabled` + `budget_tokens`；强度 `low`–`max` |
 | Gemini | `generationConfig.thinkingConfig.thinkingLevel` | `minimal` `low` `medium` `high`；2.5 系改用整数 `thinkingBudget` |
 
+**同一家的键名还取决于走哪种协议**——DeepSeek 同时提供三种格式，键名各不相同（下表以它为例；
+OpenAI 与 Anthropic 各家只有自己那一种，不存在这个问题）：
+
+| 协议 | 在 Jellyfish 里怎么到达 | 思考开关 | 思考强度 |
+| --- | --- | --- | --- |
+| Chat Completions（OpenAI 格式） | `type: openai` / `deepseek` / `minimax`，请求发到 `/v1/chat/completions` | `{"thinking": {"type": "enabled/disabled"}}` | `reasoning_effort`：`low` `high` `max`（`medium` / `xhigh` 折算为 `high`） |
+| Anthropic Messages 格式 | `type: claude`，baseUrl 指向 `https://api.deepseek.com/anthropic`，请求发到 `/v1/messages` | `thinking`（其中 `budget_tokens` 被忽略） | `output_config.effort`：`low` `high` `max` |
+| Responses API 格式 | **到不了**——内核没有 Responses 客户端 | `{"reasoning": {"effort": "none/low/high/max"}}`（`none` 即关掉思考） | 与开关是同一个字段 |
+
+所以 **`type: deepseek` 下写 `{"reasoning": {"effort": "high"}}` 是 Responses 的形状**：它会原样进
+Chat Completions 的请求体，然后被端点忽略——不报错，也不生效。同理 `output_config.effort` 只在
+「Claude 客户端 + Anthropic 端点」这条路上才有意义，后端是 Claude 官方还是别的 Anthropic 兼容端点都一样。
+
 ```jsonc
 // 各厂商最小写法（键名与取值都随厂商接口演进，抄前对一遍官方文档）
 OpenAI 系   { "vendorBody": { "reasoning_effort": "high" } }

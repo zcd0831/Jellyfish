@@ -93,6 +93,26 @@ public class ReActLooper implements AutoCloseable {
     /** 达到最大轮次时回灌给调用方的提示模板；占位符是「下一步该调哪个配置键」。 */
     private static final String MAX_ROUNDS_MESSAGE = "已达到最大轮次仍未收敛，如需继续请调大 %s 或换一个更明确的指令。";
 
+    /**
+     * 同一回合内对「模型返回空回复」的重试次数上限。
+     * <p>
+     * <b>为什么是 1 而不是「重试到成功」</b>：空回复有两种来源——一次性的抖动（重试就能好）
+     * 与稳定的故障（重试多少次都一样，比如模型侧对这份输入就是不产出）。前者一次就够，
+     * 后者多试只是重复花同样的钱，还会把「用户按 Esc 之前一直在转」这段时间拉长。
+     * <p>
+     * 定成常量而不是配置项：它是一个「兜底」而不是一个需要按场景调优的旋钮，
+     * 多一个配置键就多一处要维护、要解释的语义。
+     */
+    private static final int MAX_EMPTY_REPLY_RETRIES = 1;
+
+    /** 模型连续返回空回复时给用户的提示模板；占位符是已重试次数。 */
+    private static final String EMPTY_REPLY_NOTICE =
+            "模型这次没有给出任何回复（已自动重试 %d 次）。可能是模型侧异常，重发一次或换一个模型试试。";
+
+    /** 回复被输出上限截断时给用户的提示模板；占位符是厂商给的结束原因。 */
+    private static final String TRUNCATED_NOTICE =
+            "回复被输出上限截断（结束原因：%s），上面的内容可能不完整。需要完整回复请调大该模型的 maxOutputTokens。";
+
     /** 顶层回合的轮数上限配置键名。 */
     private static final String REACT_MAX_ROUNDS_KEY = "react.maxRounds";
 
@@ -393,6 +413,7 @@ public class ReActLooper implements AutoCloseable {
     private ReActResult loop(ReActTurnImpl turn, Session session, ReActListener listener, int maxRounds,
                              ToolFilter toolFilter, boolean nested) {
         String sessionId = session.getSessionId();
+        int emptyReplies = 0;
         for (int round = 1; round <= maxRounds; round++) {
             if (turn.isCancelled()) {
                 return cancel(sessionId, listener, round - 1);
@@ -408,6 +429,27 @@ public class ReActLooper implements AutoCloseable {
                 return cancel(sessionId, listener, round - 1);
             }
             List<LlmToolCall> toolCalls = normalizeToolCalls(response.getToolCalls());
+            // 空回复（既没正文也没工具调用）在形状上与「答完了」一模一样，因此它会被当成一次正常收敛，
+            // 而用户什么也看不到。先重试有限次；用尽后如实收敛并给一句可执行的提示。
+            // 它必须排在下面 appendMessage 之前：一条空的 assistant 消息对界面与模型都没有信息量，
+            // 落进会话反而会跟着之后的每一次请求发出去
+            if (toolCalls.isEmpty() && StringUtils.isBlank(response.getContent())) {
+                // 账照记：这一次调用真的花了钱，只是结果没用（与压缩的摘要调用同一口径）
+                sessionManager.recordUsage(sessionId, response.getUsage());
+                if (emptyReplies < MAX_EMPTY_REPLY_RETRIES) {
+                    emptyReplies++;
+                    LOG.warn("模型返回空回复，重试: sessionId={} round={} retry={}/{}",
+                            sessionId, round, emptyReplies, MAX_EMPTY_REPLY_RETRIES);
+                    continue;
+                }
+                LOG.warn("模型连续返回空回复，回合收敛: sessionId={} round={} retries={}",
+                        sessionId, round, emptyReplies);
+                actionDispatcher.drainTurnBoundary(sessionId, round < maxRounds);
+                ReActResult empty = ReActResult.completed(sessionId, null, round,
+                        String.format(EMPTY_REPLY_NOTICE, emptyReplies));
+                listener.onComplete(empty);
+                return empty;
+            }
             sessionManager.appendMessage(sessionId, assistantMessage(response, toolCalls), response.getUsage(),
                     response.getThinking());
             String budgetExceeded = budgetExceededReason(session, response);
@@ -427,7 +469,11 @@ public class ReActLooper implements AutoCloseable {
                 if (actionDispatcher.drainConvergence(sessionId, round < maxRounds)) {
                     continue;
                 }
-                ReActResult result = ReActResult.completed(sessionId, response.getContent(), round);
+                // 被输出上限截断的回复与「正常答完」形状完全一样，用户分不出来，因此这里补一句提示。
+                // 只提示、不自动续写：续写要么改请求、要么多发一轮，两种都会动到缓存前缀与计费口径，
+                // 而「回一句更长的上限」本来就是用户该自己决定的事
+                ReActResult result = ReActResult.completed(sessionId, response.getContent(), round,
+                        truncationNoticeOf(response));
                 listener.onComplete(result);
                 return result;
             }
@@ -469,6 +515,22 @@ public class ReActLooper implements AutoCloseable {
     private static String maxRoundsMessage(boolean nested) {
         return String.format(Locale.ROOT, MAX_ROUNDS_MESSAGE,
                 nested ? SUBAGENT_MAX_ROUNDS_KEY : REACT_MAX_ROUNDS_KEY);
+    }
+
+    /**
+     * 组装「回复被输出上限截断」的提示；没被截断时返回 {@code null}。
+     * <p>
+     * <b>为什么不把厂商的结束原因直接当提示</b>：{@code length} / {@code max_tokens} / {@code MAX_TOKENS}
+     * 对用户都不是可执行的信息。提示里带上它只为可排查，主体必须是「该改哪个配置」。
+     *
+     * @param response 本轮模型响应，不可为 {@code null}
+     * @return 提示文本；本轮回复没有被截断时返回 {@code null}
+     */
+    private static String truncationNoticeOf(LlmResponse response) {
+        if (!response.isTruncated()) {
+            return null;
+        }
+        return String.format(Locale.ROOT, TRUNCATED_NOTICE, response.getFinishReason());
     }
 
     /**

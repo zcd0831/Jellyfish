@@ -196,7 +196,8 @@ class ChatHandlerTest {
         assertTrue(body.contains("\"chunk\":\"building...\""), body);
         assertTrue(body.contains("event: tool_done"), body);
         assertTrue(body.contains("event: done\ndata: {\"turnId\":"), body);
-        assertTrue(body.contains("\"content\":\"hello\",\"rounds\":1,\"truncated\":false}"), body);
+        assertTrue(body.contains("\"content\":\"hello\",\"rounds\":1,\"truncated\":false,\"notice\":null}"),
+                body);
     }
 
     @Test

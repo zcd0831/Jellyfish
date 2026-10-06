@@ -10,6 +10,10 @@ package zcd.jellyfish.core;
  *     <li>{@link #cancelled}：调用方取消了本回合；</li>
  *     <li>{@link #blocked}：插件在回合开始前拦下了它，<b>用户消息根本未进会话</b>。</li>
  * </ul>
+ * 除终态之外还可以带一句 {@link #getNotice() 提示}：它回答的是「这次收敛有没有需要你知道的例外」——
+ * 例如<b>回复被输出上限截断</b>（形状与正常答完完全一样，用户分不出来）、或<b>模型这次一个字都没回</b>。
+ * 它不是错误（回合确实结束了），也不该被塞进正文冒充模型的话，因此单独一个字段，由外壳走自己的提示通道。
+ * <p>
  * 不可变值对象，可安全跨线程传递。
  *
  * @author zcd
@@ -34,6 +38,9 @@ public final class ReActResult {
     /** 是否被插件拦下。 */
     private final boolean blocked;
 
+    /** 收敛时附带的一句提示，无需提示时为 {@code null}。 */
+    private final String notice;
+
     /**
      * 构造结果。
      *
@@ -43,15 +50,17 @@ public final class ReActResult {
      * @param truncated 是否截断
      * @param cancelled 是否取消
      * @param blocked   是否被拦下
+     * @param notice    收敛时的提示，可为 {@code null}
      */
     private ReActResult(String sessionId, String content, int rounds, boolean truncated, boolean cancelled,
-                        boolean blocked) {
+                        boolean blocked, String notice) {
         this.sessionId = sessionId;
         this.content = content;
         this.rounds = rounds;
         this.truncated = truncated;
         this.cancelled = cancelled;
         this.blocked = blocked;
+        this.notice = notice;
     }
 
     /**
@@ -63,7 +72,23 @@ public final class ReActResult {
      * @return 结果
      */
     public static ReActResult completed(String sessionId, String content, int rounds) {
-        return new ReActResult(sessionId, content, rounds, false, false, false);
+        return new ReActResult(sessionId, content, rounds, false, false, false, null);
+    }
+
+    /**
+     * 构造带提示的「正常完成」结果。
+     * <p>
+     * <b>什么时候用它</b>：回合确实收敛了（模型不会再说话了），但结果里有一处用户需要知道、
+     * 且<b>从正文看不出来</b>的例外——目前两处：回复被输出上限截断、模型一个字都没回。
+     *
+     * @param sessionId 会话标识
+     * @param content   最终文本，可为 {@code null}
+     * @param rounds    实际轮数
+     * @param notice    收敛时的提示，可为 {@code null}
+     * @return 结果
+     */
+    public static ReActResult completed(String sessionId, String content, int rounds, String notice) {
+        return new ReActResult(sessionId, content, rounds, false, false, false, notice);
     }
 
     /**
@@ -75,7 +100,7 @@ public final class ReActResult {
      * @return 结果
      */
     public static ReActResult truncated(String sessionId, String content, int rounds) {
-        return new ReActResult(sessionId, content, rounds, true, false, false);
+        return new ReActResult(sessionId, content, rounds, true, false, false, null);
     }
 
     /**
@@ -86,7 +111,7 @@ public final class ReActResult {
      * @return 结果
      */
     public static ReActResult cancelled(String sessionId, int rounds) {
-        return new ReActResult(sessionId, null, rounds, false, true, false);
+        return new ReActResult(sessionId, null, rounds, false, true, false, null);
     }
 
     /**
@@ -104,7 +129,7 @@ public final class ReActResult {
      * @return 结果
      */
     public static ReActResult blocked(String sessionId, String reason) {
-        return new ReActResult(sessionId, reason, 0, false, false, true);
+        return new ReActResult(sessionId, reason, 0, false, false, true, null);
     }
 
     /**
@@ -173,9 +198,23 @@ public final class ReActResult {
         return blocked ? content : null;
     }
 
+    /**
+     * 获取收敛时附带的提示。
+     * <p>
+     * <b>它与 {@link #getContent()} 是两回事</b>：正文是模型说的话，提示是内核对这次收敛的补充说明。
+     * 外壳应当走自己的提示通道（TUI 的提示行、{@code -cli} 的 stderr、Server 的 SSE 字段），
+     * <b>而不是把它拼进正文</b>——那会让用户以为模型说过这句话，也会污染后续的会话历史。
+     *
+     * @return 提示文本，无需提示时为 {@code null}
+     */
+    public String getNotice() {
+        return notice;
+    }
+
     @Override
     public String toString() {
         return "ReActResult{sessionId=" + sessionId + ", rounds=" + rounds
-                + ", truncated=" + truncated + ", cancelled=" + cancelled + ", blocked=" + blocked + '}';
+                + ", truncated=" + truncated + ", cancelled=" + cancelled + ", blocked=" + blocked
+                + ", notice=" + (notice == null ? "none" : "set") + '}';
     }
 }

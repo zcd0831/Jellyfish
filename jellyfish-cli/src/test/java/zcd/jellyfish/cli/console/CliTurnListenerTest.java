@@ -355,6 +355,31 @@ class CliTurnListenerTest {
     }
 
     @Test
+    void onComplete_should_write_notice_to_stderr_when_present() {
+        // 被输出上限截断与正常答完在 stdout 上长得一样，因此提示必须走 stderr——
+        // stdout 保持「回答」这一条语义，脚本才不会被混进一行系统说明
+        RecordingConsoleIO console = new RecordingConsoleIO(null);
+        CliTurnListener listener = new CliTurnListener(console, false, false);
+
+        listener.onTurnEvent(ShellTurnEvent.completed("s1", "t1", "半句话", 1, false,
+                "回复被输出上限截断（结束原因：length），上面的内容可能不完整。"));
+
+        assertEquals("半句话\n", console.out());
+        assertTrue(console.err().contains("回复被输出上限截断"), console.err());
+    }
+
+    @Test
+    void onComplete_should_keep_stderr_quiet_when_no_notice() {
+        RecordingConsoleIO console = new RecordingConsoleIO(null);
+        CliTurnListener listener = new CliTurnListener(console, false, false);
+
+        listener.onTurnEvent(ShellTurnEvent.completed("s1", "t1", "正常答复", 1, false));
+
+        assertEquals("正常答复\n", console.out());
+        assertTrue(console.err().isEmpty(), console.err());
+    }
+
+    @Test
     void onToolCallStarted_should_move_buffered_text_to_stderr_as_trace() {
         RecordingConsoleIO console = new RecordingConsoleIO(null);
         CliTurnListener listener = new CliTurnListener(console, false, false);

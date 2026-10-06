@@ -143,6 +143,28 @@ class TuiTurnListenerTest {
     }
 
     @Test
+    @DisplayName("收敛时带提示：终局仍是 COMPLETED，提示原样带进快照")
+    void onComplete_should_carry_notice_when_present() {
+        // 被输出上限截断 / 模型一个字都没回，都属于「收敛但有例外」——
+        // 终局不能变成 TRUNCATED（那是「已达最大轮次」，文案完全不同）
+        listener.onTurnEvent(ShellTurnEvent.completed("s1", "t1", "半句话", 1, false,
+                "回复被输出上限截断（结束原因：length）"));
+
+        InflightTurn.Snapshot snapshot = inflight.snapshot();
+        assertEquals(InflightTurn.Outcome.COMPLETED, snapshot.getOutcome());
+        assertEquals("回复被输出上限截断（结束原因：length）", snapshot.getNote());
+    }
+
+    @Test
+    @DisplayName("收敛时无提示：快照里不留下上一回合的旧说明")
+    void onComplete_should_leave_note_null_when_absent() {
+        listener.onTurnEvent(ShellTurnEvent.completed("s1", "t1", "正常答复", 1, false));
+
+        assertEquals(InflightTurn.Outcome.COMPLETED, inflight.snapshot().getOutcome());
+        assertNull(inflight.snapshot().getNote());
+    }
+
+    @Test
     @DisplayName("onCancelled 清空正文并标记中断")
     void onCancelled_should_finish_cancelled() {
         listener.onTurnEvent(ShellTurnEvent.text("s1", "t1", "说了半句"));
@@ -161,7 +183,7 @@ class TuiTurnListenerTest {
 
         InflightTurn.Snapshot snapshot = inflight.snapshot();
         assertEquals(InflightTurn.Outcome.ERROR, snapshot.getOutcome());
-        assertEquals("连接超时", snapshot.getErrorMessage());
+        assertEquals("连接超时", snapshot.getNote());
     }
 
     @Test
@@ -169,7 +191,7 @@ class TuiTurnListenerTest {
     void onError_should_fall_back_to_simple_name() {
         listener.onTurnEvent(ShellTurnEvent.error("s1", "t1", new JellyfishException()));
 
-        assertEquals(JellyfishException.class.getSimpleName(), inflight.snapshot().getErrorMessage());
+        assertEquals(JellyfishException.class.getSimpleName(), inflight.snapshot().getNote());
     }
 
     @Test
@@ -177,7 +199,7 @@ class TuiTurnListenerTest {
     void onError_should_tolerate_null_error() {
         listener.onTurnEvent(ShellTurnEvent.error("s1", "t1", null));
 
-        assertEquals("未知错误", inflight.snapshot().getErrorMessage());
+        assertEquals("未知错误", inflight.snapshot().getNote());
     }
 
     @Test

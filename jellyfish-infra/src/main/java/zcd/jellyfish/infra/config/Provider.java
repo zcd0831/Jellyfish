@@ -2,8 +2,8 @@ package zcd.jellyfish.infra.config;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
-import zcd.jellyfish.infra.support.ExtraBody;
-import zcd.jellyfish.infra.support.ExtraHeaders;
+import zcd.jellyfish.infra.support.VendorBody;
+import zcd.jellyfish.infra.support.VendorHeaders;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -19,7 +19,7 @@ import java.util.Map;
  * 的项目级定义<b>整对象替换</b>全局级定义，不同 key 视为新增 provider。
  * <p>
  * 除类型与凭据之外还有三组「怎么跟这家端点说话」的配置，边界见各自字段：{@link #cache}（影响命中率）、
- * {@link #sampling}（内核认得的采样参数）、{@link #extraBody} / {@link #extraHeaders}（内核不解释、
+ * {@link #sampling}（内核认得的采样参数）、{@link #vendorBody} / {@link #vendorHeaders}（内核不解释、
  * 原样透传的厂商私有字段）。
  *
  * @author zcd
@@ -50,13 +50,13 @@ public class Provider {
     /**
      * 直通请求体字段，不可变；未配置时为空映射。
      * <p>
-     * 它在<b>解析配置时</b>就已清洗过（见 {@link ExtraBody#sanitize}）：保留键、超深子树与非法值
+     * 它在<b>解析配置时</b>就已清洗过（见 {@link VendorBody#sanitize}）：保留键、超深子树与非法值
      * 都已被丢弃，因此读取方拿到的一定是可安全下发的结构。
      */
-    private final Map<String, Object> extraBody;
+    private final Map<String, Object> vendorBody;
 
-    /** 直通请求头，不可变；未配置时为空映射。清洗规则见 {@link ExtraHeaders#sanitize}。 */
-    private final Map<String, String> extraHeaders;
+    /** 直通请求头，不可变；未配置时为空映射。清洗规则见 {@link VendorHeaders#sanitize}。 */
+    private final Map<String, String> vendorHeaders;
 
     /**
      * 兼容旧调用点的便捷构造器：缓存段与三个直通段都按缺省值处理。
@@ -102,8 +102,8 @@ public class Provider {
      * @param models       模型列表，可为 {@code null}
      * @param cache        缓存治理段，{@code null} 按缺省值处理
      * @param sampling     采样参数基线，{@code null} 按「三项都不表态」处理
-     * @param extraBody    直通请求体字段，{@code null} 按空处理
-     * @param extraHeaders 直通请求头，{@code null} 按空处理
+     * @param vendorBody    直通请求体字段，{@code null} 按空处理
+     * @param vendorHeaders 直通请求头，{@code null} 按空处理
      */
     @JsonCreator
     public Provider(@JsonProperty("name") String name,
@@ -113,8 +113,8 @@ public class Provider {
                     @JsonProperty("models") List<Model> models,
                     @JsonProperty("cache") ProviderCacheSettings cache,
                     @JsonProperty("sampling") SamplingSettings sampling,
-                    @JsonProperty("extraBody") Map<String, Object> extraBody,
-                    @JsonProperty("extraHeaders") Map<String, String> extraHeaders) {
+                    @JsonProperty("vendorBody") Map<String, Object> vendorBody,
+                    @JsonProperty("vendorHeaders") Map<String, String> vendorHeaders) {
         this.name = name;
         this.type = type;
         this.apiKey = apiKey;
@@ -124,8 +124,8 @@ public class Provider {
                 : Collections.unmodifiableList(new ArrayList<>(models));
         this.cache = cache == null ? new ProviderCacheSettings() : cache;
         this.sampling = sampling == null ? new SamplingSettings() : sampling;
-        this.extraBody = ExtraBody.sanitize(extraBody, "provider[" + (name == null ? "?" : name) + "]");
-        this.extraHeaders = ExtraHeaders.sanitize(extraHeaders, "provider[" + (name == null ? "?" : name) + "]");
+        this.vendorBody = VendorBody.sanitize(vendorBody, "provider[" + (name == null ? "?" : name) + "]");
+        this.vendorHeaders = VendorHeaders.sanitize(vendorHeaders, "provider[" + (name == null ? "?" : name) + "]");
     }
 
     /**
@@ -199,8 +199,8 @@ public class Provider {
      *
      * @return 只读映射，可能为空但不会为 {@code null}
      */
-    public Map<String, Object> getExtraBody() {
-        return extraBody;
+    public Map<String, Object> getVendorBody() {
+        return vendorBody;
     }
 
     /**
@@ -210,8 +210,8 @@ public class Provider {
      *
      * @return 只读映射，可能为空但不会为 {@code null}
      */
-    public Map<String, String> getExtraHeaders() {
-        return extraHeaders;
+    public Map<String, String> getVendorHeaders() {
+        return vendorHeaders;
     }
 
     /**
@@ -221,7 +221,7 @@ public class Provider {
      * @return 除 name 外与当前对象完全一致的新实例
      */
     public Provider withName(String newName) {
-        return new Provider(newName, type, apiKey, baseUrl, models, cache, sampling, extraBody, extraHeaders);
+        return new Provider(newName, type, apiKey, baseUrl, models, cache, sampling, vendorBody, vendorHeaders);
     }
 
     /**
@@ -235,6 +235,6 @@ public class Provider {
      * @return 除模型列表外与当前对象完全一致的新实例
      */
     public Provider withModels(List<Model> newModels) {
-        return new Provider(name, type, apiKey, baseUrl, newModels, cache, sampling, extraBody, extraHeaders);
+        return new Provider(name, type, apiKey, baseUrl, newModels, cache, sampling, vendorBody, vendorHeaders);
     }
 }

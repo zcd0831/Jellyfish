@@ -469,6 +469,19 @@ handler 抛错**按放行处理**。它只管「结束运行态、保留快照�
 - **`AgentHarness.chat(sessionId, input, listener)` 是外壳唯一智能入口**，委托 `ReActLooper` 在 `react` 线程池
   异步推进；**工具失败一律转成 tool 结果回灌，只有模型调用本身失败才上抛**。
 - **`react` 池线程数上限 8**（即并发顶层回合数），队列 128，空闲回收 60 秒。
+- **收敛有两种「形状正常、内容不对」的例外，由内核兜底**（此前会被静默当成正常收敛，用户看不出区别）：
+  - **空回复**（无正文且无工具调用）：同一回合内**自动重试 1 次**，且**不落库**——一条空的 assistant 消息
+    对界面与模型都没有信息量，落进历史反而会跟着之后的每次请求发出去；**token 照记**（`recordUsage`，
+    与压缩的摘要调用同一口径，因为钱确实花了）。重试用尽后收敛并带提示。
+    **上限是常量而不是配置项**：它是兜底，不是需要按场景调优的旋钮。
+  - **被输出上限截断**（`LlmResponse.isTruncated()`：`length` / `max_tokens` / `MAX_TOKENS`，大小写不敏感）：
+    **只提示、不自动续写**——续写要么改请求、要么多发一轮，都会动到缓存前缀与计费口径。
+- **提示走 `ReActResult.notice`，与正文严格分开**：它不是模型说的话，因此**不得拼进 `content`**
+  （会让人以为模型说过，且污染历史与缓存前缀）。链路是 `ReActResult.notice` → `ShellTurnEvent.COMPLETED`
+  → 外壳各自的提示通道（TUI 的提示行、`-cli` 的 stderr、Server 的 `TurnCompleteEvent.notice`）。
+  **它与 `truncated` 是两回事**：后者是「达到最大轮次未收敛」，在 TUI 里有自己的文案，
+  两者混用会让截断提示显示成「已达最大轮次」。
+  TUI 侧承载它的字段叫 `note`（原先叫 `errorMessage`——被拦下与截断提示都不是错误，名字必须对得上含义）。
 - **子代理 run 不进 `react` 池，跑在自己的 `agent-run` 池上**：父回合等子代理时阻塞在自己的线程上，
   把 run 排回 `react` 池会让 8 条线程被并发父回合占满并互相等死。两池不共享队列，并发由
   `subAgent.maxConcurrentRuns` 的许可门控；**等待中的 run 会让出许可**，否则深度大于 1 时会自锁死。
@@ -855,16 +868,25 @@ handler 抛错**按放行处理**。它只管「结束运行态、保留快照�
 
 - **异常**统一抛 `JellyfishException`；**序列化**统一走 `ObjectMapperWrapper`，**不要直接 `new ObjectMapper`**。
 - **请求 / 消息模型**：`LlmRequest` / `LlmMessage` / `LlmTool` 是与厂商无关的统一模型，`LlmRequest` 用 builder 构建。
-- **厂商私有字段只有一条受控入口**：`models.json` 的 `providers.<name>.extraBody` / `models[].extraBody`（请求体）与
-  `extraHeaders`（请求头），经 `ExtraBody` / `ExtraHeaders` 清洗后由 `PromptAssembler` 挂在 `LlmRequest` 上。
-  内核**不解释键含义、不校验字段名**，只保证四件事：保留键（结构性键 + 采样类键，三家拼法各算一个）在**任意深度**
-  被丢弃并告警；头名/头值按 HTTP 字符集校验（不然非法配置会在每次请求时由 HTTP 客户端抛一个带值原文的异常）；
-  清洗在**解析配置时**完成（请求期只做纯函数深合并，不刷日志）；规则**只有一处**——`ModelTuning.applyTo(builder)`，
-  正常组装、cache-safe fork、缓存保活、压缩回退四条构造请求的路径都调它。
-  **采样参数不走这条路**：`temperature` / `topP` / `stop` 有正式入口（`sampling` 段），一个参数只能有一个入口。
+- **厂商私有字段只有一条受控入口**：`models.json` 的 `providers.<name>.vendorBody` / `models[].vendorBody`（请求体）与
+  `vendorHeaders`（请求头），经 `VendorBody` / `VendorHeaders` 清洗后由 `PromptAssembler` 挂在 `LlmRequest` 上。
+  内核**不解释键含义、不校验字段名**，只保证五件事：保留键（结构性键 / 候选数键 `n`·`candidateCount` /
+  采样类键 / Anthropic 的 `cache_control`，四家拼法各算一个）在**任意深度**被丢弃并告警；头名/头值按
+  HTTP 字符集校验（不然非法配置会在每次请求时由 HTTP 客户端抛一个带值原文的异常）；清洗在**解析配置时**完成（请求期只做纯函数深合并，不刷日志）；
+  规则**只有一处**——`ModelTuning.applyTo(builder)`，正常组装、cache-safe fork、缓存保活、压缩回退四条构造请求的
+  路径都调它；各请求来源的复制路径（`PromptAssembler.reuseOf`）要把全部调优字段带上。
+  **采样参数不走这条路**：`sampling` 段的七个字段（`temperature` / `topP` / `topK` / `seed` /
+  `frequencyPenalty` / `presencePenalty` / `stop`）各有正式入口，一个参数只能有一个入口。
+  **内核只声明意图、客户端判断「自家认不认」**（如 `top_k` 不下发给 OpenAI 系、`seed` 不下发给 Claude）；
+  「同一家不同代际认不认」（Claude 4.7+ 移除温度类参数、DeepSeek 思考模式忽略采样参数）属于厂商知识，
+  内核不按模型名猜，只在 README 写明。
+  **唯一由配置决定的「内核自己写的字段名」是输出上限**：`Model.maxTokensField` 决定下发 `max_tokens`
+  还是 `max_completion_tokens`（OpenAI 的推理模型与 gpt-5 之后拒收前者，DeepSeek / OpenRouter 只认前者）。
+  它只挂模型级（同一端点下不同模型的答案不同），且**取值在 `Model` 构造期校验**：这一处不适用「不校验」的口径——
+  键是内核写的，写错既不会命中厂商字段、也没有任何提示（输出上限被静默忽略）。
   请求头只有 provider 级（端点是 provider 的属性），因此客户端直接读 `Provider`，模型列表这类没有请求对象的调用也带上它。
   **模型目录发现只换规格**：插件报回的目录按 id 覆盖 `contextLength` / `maxOutputTokens`，用户写的 `sampling` /
-  `extraBody` 按 id 带过来（否则一次元数据刷新会悄悄清掉配置里还写着的参数）。
+  `vendorBody` / `maxTokensField` 按 id 带过来（否则一次元数据刷新会悄悄清掉配置里还写着的参数）。
 - **配置类型命名**：项目内部配置类用 `Config` 结尾，暴露给用户的配置类用 `Settings` 结尾。
 
 ## Server 接口契约
@@ -975,7 +997,7 @@ handler 抛错**按放行处理**。它只管「结束运行态、保留快照�
 - **模型厂商可插拔明确不做**：OAuth / 登录命令、插件重写内核的序列化逻辑、
   插件提供 provider 实例（只加 type，实例一律来自 `models.json`）。
   **已知边界**：插件停止后不等待在途调用结束。
-  **厂商私有字段的边界**：可以透传（`extraBody` / `extraHeaders`），但内核不会因此认识厂商语义——
+  **厂商私有字段的边界**：可以透传（`vendorBody` / `vendorHeaders`），但内核不会因此认识厂商语义——
   它不做按字段名的分支、不校验字段名是否被端点认识（**打错就是静默无效**），也不替厂商维护「哪些模型认哪些字段」。
   需要按模型 / 按运行期状态决定发什么，那仍然是插件的事（`RequestTuningRequest`）。
 - **出站消息序列的工具调用配对已知边界**：**中段**的配对缺失不做归一化

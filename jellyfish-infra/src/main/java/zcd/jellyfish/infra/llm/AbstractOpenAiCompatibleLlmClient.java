@@ -4,9 +4,10 @@ import com.fasterxml.jackson.databind.JsonNode;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import zcd.jellyfish.api.JellyfishException;
+import zcd.jellyfish.infra.config.Model;
 import zcd.jellyfish.infra.config.Provider;
-import zcd.jellyfish.infra.support.ExtraBody;
-import zcd.jellyfish.infra.support.ExtraHeaders;
+import zcd.jellyfish.infra.support.VendorBody;
+import zcd.jellyfish.infra.support.VendorHeaders;
 import zcd.jellyfish.infra.support.LlmClients;
 import zcd.jellyfish.infra.support.ObjectMapperWrapper;
 
@@ -75,12 +76,12 @@ public abstract class AbstractOpenAiCompatibleLlmClient extends AbstractHttpLlmC
     /**
      * 构造带 Bearer 鉴权头的请求构建器。
      * <p>
-     * <b>用户自定义请求头在这里落上</b>（{@code provider.extraHeaders}）：它没有模型级的那一份，
+     * <b>用户自定义请求头在这里落上</b>（{@code provider.vendorHeaders}）：它没有模型级的那一份，
      * 因此从 provider 直接读，而不是从请求对象读——这样连「拉模型列表」这类没有请求对象的调用也带上它，
      * 否则需要自定义鉴权头的网关会在发现模型那一步就失败。
      * <p>
      * 用户头在鉴权头<b>之后</b>应用，因此同名头是「用户覆盖内核」；{@code Content-Type} 这类协议头
-     * 已在配置期被挡掉（见 {@code ExtraHeaders}）。
+     * 已在配置期被挡掉（见 {@code VendorHeaders}）。
      *
      * @param url 请求地址
      * @return 已带鉴权头与用户自定义头的请求构建器
@@ -88,7 +89,7 @@ public abstract class AbstractOpenAiCompatibleLlmClient extends AbstractHttpLlmC
     protected Request.Builder authorizedRequest(String url) {
         Request.Builder builder = jsonRequest(url)
                 .header("Authorization", "Bearer " + LlmClients.requireApiKey(provider));
-        ExtraHeaders.applyTo(builder, provider.getExtraHeaders());
+        VendorHeaders.applyTo(builder, provider.getVendorHeaders());
         return builder;
     }
 
@@ -152,11 +153,26 @@ public abstract class AbstractOpenAiCompatibleLlmClient extends AbstractHttpLlmC
         if (request.getTopP() != null) {
             body.put("top_p", request.getTopP());
         }
+        if (request.getFrequencyPenalty() != null) {
+            body.put("frequency_penalty", request.getFrequencyPenalty());
+        }
+        if (request.getPresencePenalty() != null) {
+            body.put("presence_penalty", request.getPresencePenalty());
+        }
+        if (request.getSeed() != null) {
+            body.put("seed", request.getSeed());
+        }
+        // 不下发 top_k：OpenAI 系没有这个字段，写进去只会被端点忽略或报错。
+        // 「哪家认哪项」由客户端判断，内核的 LlmRequest 只声明意图
+        // 输出上限的字段名由配置决定：OpenAI 的推理模型与 gpt-5 之后只认 max_completion_tokens，
+        // DeepSeek / OpenRouter 这类兼容端点只认 max_tokens。猜错就是 400，因此不猜，取下发的字段名
+        String maxTokensField = LlmClients.isNotBlank(request.getMaxTokensField())
+                ? request.getMaxTokensField() : Model.DEFAULT_MAX_TOKENS_FIELD;
         if (request.isMinimalOutput()) {
             // OpenAI 与 DeepSeek 的下限都是 1，0 会被 400 拒绝（"'0' is less than the minimum of 1"）
-            body.put("max_tokens", MIN_OUTPUT_TOKENS);
+            body.put(maxTokensField, MIN_OUTPUT_TOKENS);
         } else if (request.getMaxTokens() != null && request.getMaxTokens() > 0) {
-            body.put("max_tokens", request.getMaxTokens());
+            body.put(maxTokensField, request.getMaxTokens());
         }
         if (!request.getStop().isEmpty()) {
             body.put("stop", request.getStop());
@@ -180,7 +196,7 @@ public abstract class AbstractOpenAiCompatibleLlmClient extends AbstractHttpLlmC
         // 直通字段最后落：用户配的厂商私有参数（reasoning_effort、service_tier 等）由内核原样送出去，
         // 不做语义判断。内核自己的键排在它前面且不可被覆盖（保留键在配置期已挡），
         // 因此「谁赢」不取决于这里的顺序
-        ExtraBody.applyTo(body, request.getExtraBody());
+        VendorBody.applyTo(body, request.getVendorBody());
         return body;
     }
 

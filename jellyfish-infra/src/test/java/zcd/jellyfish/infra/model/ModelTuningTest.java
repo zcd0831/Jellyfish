@@ -15,6 +15,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -43,7 +44,8 @@ class ModelTuningTest {
         // Given：provider 给基线，model 只改温度
         Provider provider = provider(new SamplingSettings(0.2d, 0.9d, null),
                 Collections.<String, Object>emptyMap(), Collections.<String, String>emptyMap());
-        Model model = new Model("gpt-4o", "gpt-4o", 1000, 100, new SamplingSettings(1d, null, null), null);
+        Model model = new Model("gpt-4o", "gpt-4o", 1000, 100, null,
+                new SamplingSettings(1d, null, null), null);
 
         // When
         ModelTuning tuning = ModelTuning.of(provider, model);
@@ -59,13 +61,13 @@ class ModelTuningTest {
         // （temperature 这类采样键在这里是保留键，只能走 sampling 段，因此用别的嵌套键）
         Map<String, Object> providerBody = new LinkedHashMap<String, Object>();
         providerBody.put("generationConfig", new LinkedHashMap<String, Object>(
-                Collections.<String, Object>singletonMap("candidateCount", 1)));
+                Collections.<String, Object>singletonMap("responseMimeType", "application/json")));
         providerBody.put("service_tier", "flex");
         Map<String, Object> modelBody = new LinkedHashMap<String, Object>();
         Map<String, Object> modelConfig = new LinkedHashMap<String, Object>();
         modelConfig.put("thinkingConfig", Collections.<String, Object>singletonMap("thinkingBudget", 1024));
         modelBody.put("generationConfig", modelConfig);
-        Model model = new Model("gpt-4o", "gpt-4o", 1000, 100, null, modelBody);
+        Model model = new Model("gpt-4o", "gpt-4o", 1000, 100, null, null, modelBody);
         Provider provider = provider(new SamplingSettings(), providerBody,
                 Collections.singletonMap("x-tenant", "t-1"));
 
@@ -74,12 +76,12 @@ class ModelTuningTest {
 
         // Then：深合并保住了 provider 级那一项，同时带上 model 级的
         @SuppressWarnings("unchecked")
-        Map<String, Object> config = (Map<String, Object>) tuning.getExtraBody().get("generationConfig");
-        assertEquals(1, config.get("candidateCount"));
+        Map<String, Object> config = (Map<String, Object>) tuning.getVendorBody().get("generationConfig");
+        assertEquals("application/json", config.get("responseMimeType"));
         assertTrue(config.containsKey("thinkingConfig"));
-        assertEquals("flex", tuning.getExtraBody().get("service_tier"));
+        assertEquals("flex", tuning.getVendorBody().get("service_tier"));
         // 请求头只有 provider 级，原样沿用
-        assertEquals("t-1", tuning.getExtraHeaders().get("x-tenant"));
+        assertEquals("t-1", tuning.getVendorHeaders().get("x-tenant"));
     }
 
     @Test
@@ -97,12 +99,41 @@ class ModelTuningTest {
     }
 
     @Test
-    void applyTo_should_set_sampling_and_extraBody_on_builder() {
+    void applyTo_should_set_maxTokensField_on_builder() {
+        // Given：一个只认 max_completion_tokens 的模型
+        Provider provider = provider(new SamplingSettings(), Collections.<String, Object>emptyMap(),
+                Collections.<String, String>emptyMap());
+        Model model = new Model("gpt-5", "gpt-5", 1000, 100,
+                Model.COMPLETION_MAX_TOKENS_FIELD, null, null);
+        LlmRequest.Builder builder = LlmRequest.builder("gpt-5").message(LlmMessage.user("你好"));
+
+        // When
+        ModelTuning.of(provider, model).applyTo(builder);
+
+        // Then：字段名与 maxTokens 一起在这里落——压缩回退路径曾因为自己写 maxTokens 而漏了它
+        assertEquals(Model.COMPLETION_MAX_TOKENS_FIELD, builder.build().getMaxTokensField());
+    }
+
+    @Test
+    void isEmpty_should_be_false_when_only_maxTokensField_is_set() {
+        // Given
+        Provider provider = provider(new SamplingSettings(), Collections.<String, Object>emptyMap(),
+                Collections.<String, String>emptyMap());
+        Model model = new Model("gpt-5", "gpt-5", 1000, 100,
+                Model.COMPLETION_MAX_TOKENS_FIELD, null, null);
+
+        // When / Then：它也是调优内容的一部分，不能被当成「什么都没配」
+        assertFalse(ModelTuning.of(provider, model).isEmpty());
+    }
+
+    @Test
+    void applyTo_should_set_sampling_and_vendorBody_on_builder() {
         // Given：provider 配了温度与直通字段，model 覆盖温度
         Provider provider = provider(new SamplingSettings(0.2d, 0.9d, null),
                 Collections.<String, Object>singletonMap("service_tier", "flex"),
                 Collections.<String, String>emptyMap());
-        Model model = new Model("gpt-4o", "gpt-4o", 1000, 100, new SamplingSettings(1d, null, null), null);
+        Model model = new Model("gpt-4o", "gpt-4o", 1000, 100, null,
+                new SamplingSettings(1d, null, null), null);
         LlmRequest.Builder builder = LlmRequest.builder("gpt-4o").message(LlmMessage.user("你好"));
 
         // When
@@ -112,7 +143,7 @@ class ModelTuningTest {
         LlmRequest request = builder.build();
         assertEquals(1d, request.getTemperature());
         assertEquals(0.9d, request.getTopP());
-        assertEquals("flex", request.getExtraBody().get("service_tier"));
+        assertEquals("flex", request.getVendorBody().get("service_tier"));
     }
 
     @Test
@@ -131,21 +162,21 @@ class ModelTuningTest {
         assertNull(request.getTemperature());
         assertNull(request.getTopP());
         assertTrue(request.getStop().isEmpty());
-        assertTrue(request.getExtraBody().isEmpty());
+        assertTrue(request.getVendorBody().isEmpty());
     }
 
     /**
      * 构造测试用 provider。
      *
      * @param sampling     采样参数
-     * @param extraBody    直通请求体字段
-     * @param extraHeaders 直通请求头
+     * @param vendorBody    直通请求体字段
+     * @param vendorHeaders 直通请求头
      * @return provider
      */
-    private static Provider provider(SamplingSettings sampling, Map<String, Object> extraBody,
-                                     Map<String, String> extraHeaders) {
+    private static Provider provider(SamplingSettings sampling, Map<String, Object> vendorBody,
+                                     Map<String, String> vendorHeaders) {
         return new Provider("openai", "openai", "key", "https://api.openai.com",
                 Arrays.asList(new Model("gpt-4o", "gpt-4o", 1000, 100)), new ProviderCacheSettings(),
-                sampling, extraBody, extraHeaders);
+                sampling, vendorBody, vendorHeaders);
     }
 }

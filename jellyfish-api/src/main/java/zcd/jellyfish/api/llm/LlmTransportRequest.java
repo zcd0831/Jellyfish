@@ -16,7 +16,7 @@ import java.util.Map;
  * 我家协议并发出去」，不是「内核的序列化逻辑改由插件写」。因此这里只出现各家都有对应物的字段
  * （模型、系统提示词、消息、工具、采样参数）。
  * <p>
- * <b>但厂商私有字段有一个受控的入口</b>：{@link #getExtraBody()} 与 {@link #getExtraHeaders()}——
+ * <b>但厂商私有字段有一个受控的入口</b>：{@link #getVendorBody()} 与 {@link #getVendorHeaders()}——
  * 用户在 {@code models.json} 里配的、内核<b>不解释其含义</b>的键值。它们是「原样搬运」而不是
  * 「内核也开始认识厂商协议」：内核不按厂商语义分支、不校验字段名，只保证内核自己生成的那些键
  * （{@code model} / {@code messages} / {@code tools} …）不会被人从这条路覆盖掉。
@@ -77,8 +77,34 @@ public final class LlmTransportRequest {
     /** 最大生成 token 数，{@code null} 表示未设置。 */
     private final Integer maxTokens;
 
+    /**
+     * 承载 {@link #maxTokens} 的请求体字段名。
+     * <p>
+     * <b>{@code null} 的含义是「用户没配」，不是「你自己挑」</b>：内核的缺省是 {@code max_tokens}，
+     * 端点若只认 {@code max_completion_tokens}（OpenAI 的推理模型与 gpt-5 之后），用户会在
+     * {@code models.json} 里把它显式配出来，那时这个值非空。因此插件照下面两种做法都对，
+     * 但别把 {@code null} 理解成「省略该字段」——那会让输出上限凭空消失：
+     * <ul>
+     *     <li>直接用非空值作为键名，{@code null} 时用 {@code max_tokens}；</li>
+     *     <li>或者忽略它、按自家协议固定一个名字（那就与内核的配置项脱钩了，用户配了不生效）。</li>
+     * </ul>
+     */
+    private final String maxTokensField;
+
     /** 核采样概率，{@code null} 表示未设置。 */
     private final Double topP;
+
+    /** Top-K 采样，{@code null} 表示未设置。 */
+    private final Integer topK;
+
+    /** 随机种子，{@code null} 表示未设置。 */
+    private final Long seed;
+
+    /** 频率惩罚，{@code null} 表示未设置。 */
+    private final Double frequencyPenalty;
+
+    /** 存在惩罚，{@code null} 表示未设置。 */
+    private final Double presencePenalty;
 
     /** 停止序列。 */
     private final List<String> stop;
@@ -107,19 +133,19 @@ public final class LlmTransportRequest {
      * 在解析配置时就被挡掉了，{@code temperature} 这类已有正式入口的也一样。
      * <b>插件不得再往里塞内核的字段</b>：那是内核的保留键，插件的立场由 {@code LlmRequest} 的正式字段表达。
      */
-    private final Map<String, Object> extraBody;
+    private final Map<String, Object> vendorBody;
 
     /**
      * 直通请求头：用户在 {@code models.json} 的 provider 段里写的自定义头部。
      * <p>
-     * 与 {@link #extraBody} 同一立场：内核不解释，插件照发即可。协议头
+     * 与 {@link #vendorBody} 同一立场：内核不解释，插件照发即可。协议头
      * （{@code Content-Type} / {@code Accept} / {@code Host} / {@code Content-Length}）已在内核侧挡掉，
      * 因为它们由传输实现自己决定，用户写死会造成请求与连接不自洽。
      * <p>
      * <b>值可能与密钥同级敏感</b>（自定义鉴权头就是密钥），与 {@link #getApiKey()} 同一口径：
      * 不得写进日志、事件载荷或错误信息。
      */
-    private final Map<String, String> extraHeaders;
+    private final Map<String, String> vendorHeaders;
 
     /** 取消令牌。 */
     private final CancellationToken cancellationToken;
@@ -144,7 +170,12 @@ public final class LlmTransportRequest {
         this.toolChoice = builder.toolChoice;
         this.temperature = builder.temperature;
         this.maxTokens = builder.maxTokens;
+        this.maxTokensField = builder.maxTokensField;
         this.topP = builder.topP;
+        this.topK = builder.topK;
+        this.seed = builder.seed;
+        this.frequencyPenalty = builder.frequencyPenalty;
+        this.presencePenalty = builder.presencePenalty;
         this.stop = builder.stop == null
                 ? Collections.<String>emptyList()
                 : Collections.unmodifiableList(new ArrayList<String>(builder.stop));
@@ -152,12 +183,12 @@ public final class LlmTransportRequest {
         this.cacheRetention = builder.cacheRetention;
         this.cacheBreakpoints = builder.cacheBreakpoints;
         this.minimalOutput = builder.minimalOutput;
-        this.extraBody = builder.extraBody == null
+        this.vendorBody = builder.vendorBody == null
                 ? Collections.<String, Object>emptyMap()
-                : Collections.unmodifiableMap(new LinkedHashMap<String, Object>(builder.extraBody));
-        this.extraHeaders = builder.extraHeaders == null
+                : Collections.unmodifiableMap(new LinkedHashMap<String, Object>(builder.vendorBody));
+        this.vendorHeaders = builder.vendorHeaders == null
                 ? Collections.<String, String>emptyMap()
-                : Collections.unmodifiableMap(new LinkedHashMap<String, String>(builder.extraHeaders));
+                : Collections.unmodifiableMap(new LinkedHashMap<String, String>(builder.vendorHeaders));
         this.cancellationToken = builder.cancellationToken == null
                 ? CancellationToken.NONE : builder.cancellationToken;
     }
@@ -225,8 +256,59 @@ public final class LlmTransportRequest {
         return maxTokens;
     }
 
+    /**
+     * 获取承载最大生成 token 数的请求体字段名。
+     * <p>
+     * <b>{@code null} 表示用户没配</b>，内核的缺省是 {@code max_tokens}；非空时请原样用作请求体里的键名
+     * （端点只认它时才有人会配出来）。<b>不要把它当成「省略该字段」的信号</b>——那等于把输出上限丢掉。
+     *
+     * @return 字段名，用户没配时为 {@code null}
+     */
+    public String getMaxTokensField() {
+        return maxTokensField;
+    }
+
     public Double getTopP() {
         return topP;
+    }
+
+    /**
+     * 获取 Top-K 采样值。
+     * <p>
+     * <b>插件要自己判断自家协议认不认</b>：这一项只有 Anthropic 与 Gemini 有对应字段，
+     * 内核只声明意图，不做「谁认」的判断。
+     *
+     * @return Top-K 值，未设置时为 {@code null}
+     */
+    public Integer getTopK() {
+        return topK;
+    }
+
+    /**
+     * 获取随机种子。
+     *
+     * @return 随机种子，未设置时为 {@code null}
+     */
+    public Long getSeed() {
+        return seed;
+    }
+
+    /**
+     * 获取频率惩罚。
+     *
+     * @return 频率惩罚，未设置时为 {@code null}
+     */
+    public Double getFrequencyPenalty() {
+        return frequencyPenalty;
+    }
+
+    /**
+     * 获取存在惩罚。
+     *
+     * @return 存在惩罚，未设置时为 {@code null}
+     */
+    public Double getPresencePenalty() {
+        return presencePenalty;
     }
 
     public List<String> getStop() {
@@ -266,8 +348,8 @@ public final class LlmTransportRequest {
      *
      * @return 只读映射，可能为空但不会为 {@code null}
      */
-    public Map<String, Object> getExtraBody() {
-        return extraBody;
+    public Map<String, Object> getVendorBody() {
+        return vendorBody;
     }
 
     /**
@@ -278,8 +360,8 @@ public final class LlmTransportRequest {
      *
      * @return 只读映射，可能为空但不会为 {@code null}
      */
-    public Map<String, String> getExtraHeaders() {
-        return extraHeaders;
+    public Map<String, String> getVendorHeaders() {
+        return vendorHeaders;
     }
 
     /**
@@ -350,8 +432,23 @@ public final class LlmTransportRequest {
         /** 最大生成 token 数。 */
         private Integer maxTokens;
 
+        /** 承载最大生成 token 数的请求体字段名。 */
+        private String maxTokensField;
+
         /** 核采样概率。 */
         private Double topP;
+
+        /** Top-K 采样。 */
+        private Integer topK;
+
+        /** 随机种子。 */
+        private Long seed;
+
+        /** 频率惩罚。 */
+        private Double frequencyPenalty;
+
+        /** 存在惩罚。 */
+        private Double presencePenalty;
 
         /** 停止序列。 */
         private List<String> stop;
@@ -369,10 +466,10 @@ public final class LlmTransportRequest {
         private boolean minimalOutput;
 
         /** 直通请求体字段。 */
-        private Map<String, Object> extraBody;
+        private Map<String, Object> vendorBody;
 
         /** 直通请求头。 */
-        private Map<String, String> extraHeaders;
+        private Map<String, String> vendorHeaders;
 
         /** 取消令牌。 */
         private CancellationToken cancellationToken;
@@ -454,8 +551,64 @@ public final class LlmTransportRequest {
             return this;
         }
 
+        /**
+         * 设置承载最大生成 token 数的请求体字段名。空串归一成 {@code null}（同 {@link #cacheKey(String)}）。
+         *
+         * @param maxTokensField 字段名，可为 {@code null}
+         * @return 当前构建器
+         */
+        public Builder maxTokensField(String maxTokensField) {
+            this.maxTokensField = maxTokensField == null || maxTokensField.trim().isEmpty()
+                    ? null : maxTokensField.trim();
+            return this;
+        }
+
         public Builder topP(Double topP) {
             this.topP = topP;
+            return this;
+        }
+
+        /**
+         * 设置 Top-K 采样。
+         *
+         * @param topK Top-K 值
+         * @return 当前构建器
+         */
+        public Builder topK(Integer topK) {
+            this.topK = topK;
+            return this;
+        }
+
+        /**
+         * 设置随机种子。
+         *
+         * @param seed 随机种子
+         * @return 当前构建器
+         */
+        public Builder seed(Long seed) {
+            this.seed = seed;
+            return this;
+        }
+
+        /**
+         * 设置频率惩罚。
+         *
+         * @param frequencyPenalty 频率惩罚
+         * @return 当前构建器
+         */
+        public Builder frequencyPenalty(Double frequencyPenalty) {
+            this.frequencyPenalty = frequencyPenalty;
+            return this;
+        }
+
+        /**
+         * 设置存在惩罚。
+         *
+         * @param presencePenalty 存在惩罚
+         * @return 当前构建器
+         */
+        public Builder presencePenalty(Double presencePenalty) {
+            this.presencePenalty = presencePenalty;
             return this;
         }
 
@@ -508,22 +661,22 @@ public final class LlmTransportRequest {
         /**
          * 设置直通请求体字段。
          *
-         * @param extraBody 直通字段，可为 {@code null}（等价空）
+         * @param vendorBody 直通字段，可为 {@code null}（等价空）
          * @return 当前构建器
          */
-        public Builder extraBody(Map<String, Object> extraBody) {
-            this.extraBody = extraBody;
+        public Builder vendorBody(Map<String, Object> vendorBody) {
+            this.vendorBody = vendorBody;
             return this;
         }
 
         /**
          * 设置直通请求头。
          *
-         * @param extraHeaders 直通头部，可为 {@code null}（等价空）
+         * @param vendorHeaders 直通头部，可为 {@code null}（等价空）
          * @return 当前构建器
          */
-        public Builder extraHeaders(Map<String, String> extraHeaders) {
-            this.extraHeaders = extraHeaders;
+        public Builder vendorHeaders(Map<String, String> vendorHeaders) {
+            this.vendorHeaders = vendorHeaders;
             return this;
         }
 

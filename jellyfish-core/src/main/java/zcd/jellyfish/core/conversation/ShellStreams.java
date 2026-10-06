@@ -311,7 +311,9 @@ public class ShellStreams {
             boolean truncated = result != null && result.isTruncated();
             String content = result == null ? null : result.getContent();
             int rounds = result == null ? 0 : result.getRounds();
-            publish(ShellTurnEvent.completed(sessionId, turnId, content, rounds, truncated));
+            // 提示与正文分开走：它是内核的补充说明，不是模型说的话，因此外壳用各自的提示通道渲染
+            String notice = result == null ? null : result.getNotice();
+            publish(ShellTurnEvent.completed(sessionId, turnId, content, rounds, truncated, notice));
         }
 
         @Override

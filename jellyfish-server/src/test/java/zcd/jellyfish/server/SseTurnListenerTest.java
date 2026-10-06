@@ -192,6 +192,19 @@ class SseTurnListenerTest {
     }
 
     @Test
+    void completed_should_carry_notice_when_event_has_one() {
+        // 提示必须原样进 SSE 载荷：客户端要能区分「模型答完了」与「模型被上限截断了」
+        SseTurnListener listener = listener();
+
+        listener.onTurnEvent(ShellTurnEvent.completed(SESSION, TURN, "半句话", 1, false, "被输出上限截断"));
+
+        SseEvent event = listener.pollNow();
+        TurnCompleteEvent payload = (TurnCompleteEvent) event.getPayload();
+        assertEquals("半句话", payload.getContent());
+        assertEquals("被输出上限截断", payload.getNotice());
+    }
+
+    @Test
     void cancelled_should_enqueue_terminal_cancelled_event() {
         SseTurnListener listener = listener();
 

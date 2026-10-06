@@ -428,7 +428,7 @@ class PluginLlmClientAdapterTest {
     }
 
     @Test
-    void chat_should_pass_extraBody_and_extraHeaders_to_transport() {
+    void chat_should_pass_vendorBody_and_vendorHeaders_to_transport() {
         // Given：provider 配了自定义头，请求里带上直通字段
         PluginLlmClientAdapter pluginAdapter = adapter(providerWithPassthrough(), (request, listener) -> {
             captured = request;
@@ -436,15 +436,61 @@ class PluginLlmClientAdapterTest {
         });
         LlmRequest passthrough = LlmRequest.builder("gpt-4o")
                 .message(LlmMessage.user("你好"))
-                .extraBody(Collections.<String, Object>singletonMap("service_tier", "flex"))
+                .vendorBody(Collections.<String, Object>singletonMap("service_tier", "flex"))
                 .build();
 
         // When
         pluginAdapter.chat(passthrough);
 
         // Then：两项都要交到插件手上——否则用户会遇到「换了 type 之后配的字段就不生效」
-        assertEquals("flex", captured.getExtraBody().get("service_tier"));
-        assertEquals("t-1", captured.getExtraHeaders().get("x-tenant"));
+        assertEquals("flex", captured.getVendorBody().get("service_tier"));
+        assertEquals("t-1", captured.getVendorHeaders().get("x-tenant"));
+    }
+
+    @Test
+    void chat_should_pass_maxTokensField_to_transport() {
+        // Given：插件接管时也要看得见输出上限的字段名——否则同一个配置换个 type 就 400
+        PluginLlmClientAdapter pluginAdapter = adapter((request, listener) -> {
+            captured = request;
+            listener.onComplete(LlmTransportResponse.text("ok"));
+        });
+        LlmRequest withField = LlmRequest.builder("gpt-5")
+                .message(LlmMessage.user("你好"))
+                .maxTokens(8192)
+                .maxTokensField(Model.COMPLETION_MAX_TOKENS_FIELD)
+                .build();
+
+        // When
+        pluginAdapter.chat(withField);
+
+        // Then
+        assertEquals(Model.COMPLETION_MAX_TOKENS_FIELD, captured.getMaxTokensField());
+        assertEquals(8192, captured.getMaxTokens());
+    }
+
+    @Test
+    void chat_should_pass_sampling_extras_to_transport() {
+        // Given：插件接管时也要看得见这些采样参数——插件自己决定自家协议认不认
+        PluginLlmClientAdapter pluginAdapter = adapter((request, listener) -> {
+            captured = request;
+            listener.onComplete(LlmTransportResponse.text("ok"));
+        });
+        LlmRequest withSampling = LlmRequest.builder("gpt-4o")
+                .message(LlmMessage.user("你好"))
+                .topK(40)
+                .seed(7L)
+                .frequencyPenalty(0.5d)
+                .presencePenalty(-0.5d)
+                .build();
+
+        // When
+        pluginAdapter.chat(withSampling);
+
+        // Then
+        assertEquals(40, captured.getTopK());
+        assertEquals(7L, captured.getSeed());
+        assertEquals(0.5d, captured.getFrequencyPenalty());
+        assertEquals(-0.5d, captured.getPresencePenalty());
     }
 
     /**

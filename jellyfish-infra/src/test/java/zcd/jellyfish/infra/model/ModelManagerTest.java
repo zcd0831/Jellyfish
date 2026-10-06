@@ -550,7 +550,7 @@ class ModelManagerTest {
     void refreshCatalogs_should_carryConfiguredTuning_when_replacing_models() {
         // Given：配置里给这个模型配了采样与直通字段，插件报回来的目录里也有同一个 id
         Provider provider = new Provider(PROVIDER, "my-type", "api-key", "https://api.example.com",
-                Arrays.asList(new Model("llama-3", "Llama 3", 128000, 4096,
+                Arrays.asList(new Model("llama-3", "Llama 3", 128000, 4096, null,
                         new SamplingSettings(0.2d, null, null),
                         Collections.<String, Object>singletonMap("reasoning_effort", "low"))));
         when(runtimeConfig.getProviders()).thenReturn(Collections.singletonList(provider));
@@ -570,7 +570,30 @@ class ModelManagerTest {
         Model indexed = captor.getValue().get(0).getModels().get(0);
         assertEquals(8192, indexed.getContextLength());
         assertEquals(0.2d, indexed.getSampling().getTemperature());
-        assertEquals("low", indexed.getExtraBody().get("reasoning_effort"));
+        assertEquals("low", indexed.getVendorBody().get("reasoning_effort"));
+    }
+
+    @Test
+    void refreshCatalogs_should_carryMaxTokensField_when_replacing_models() {
+        // Given：配置里声明了这个模型只认 max_completion_tokens
+        Provider provider = new Provider(PROVIDER, "my-type", "api-key", "https://api.example.com",
+                Arrays.asList(new Model("llama-3", "Llama 3", 128000, 4096,
+                        Model.COMPLETION_MAX_TOKENS_FIELD, null, null)));
+        when(runtimeConfig.getProviders()).thenReturn(Collections.singletonList(provider));
+        when(llmClientFactory.isBuiltinType("my-type")).thenReturn(false);
+        extensions.handle("plugin-a", ModelCatalogRequest.class, PROVIDER, null, request -> ModelCatalogResult.of(
+                Arrays.asList(new ModelDescriptor("llama-3", "Llama 3", 8192, 2048))),
+                RegisterOptions.DEFAULT);
+        ModelManager manager = newModelManager();
+
+        // When
+        manager.refreshCatalogs();
+
+        // Then：与 sampling / vendorBody 同一口径——发现只换规格，字段名按 id 带过来
+        ArgumentCaptor<List<Provider>> captor = ArgumentCaptor.forClass(List.class);
+        verify(modelRegistry, times(2)).refresh(captor.capture());
+        assertEquals(Model.COMPLETION_MAX_TOKENS_FIELD,
+                captor.getValue().get(0).getModels().get(0).getMaxTokensField());
     }
 
     @Test
@@ -592,7 +615,7 @@ class ModelManagerTest {
         verify(modelRegistry, times(2)).refresh(captor.capture());
         Model indexed = captor.getValue().get(0).getModels().get(0);
         assertTrue(indexed.getSampling().isEmpty());
-        assertTrue(indexed.getExtraBody().isEmpty());
+        assertTrue(indexed.getVendorBody().isEmpty());
     }
 
     @Test

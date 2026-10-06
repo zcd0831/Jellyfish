@@ -138,7 +138,7 @@ public final class SseTurnListener implements ShellTurnListener {
                 break;
             case COMPLETED:
                 queue.offer(new SseEvent("done", new TurnCompleteEvent(turnId, sessionId, event.getText(),
-                        event.getRounds(), event.isTruncated()), true));
+                        event.getRounds(), event.isTruncated(), event.getNotice()), true));
                 break;
             case CANCELLED:
                 queue.offer(new SseEvent("cancelled", new TurnCancelledEvent(turnId, sessionId), true));

@@ -480,6 +480,24 @@ class TranscriptProjectorTest {
     }
 
     @Test
+    @DisplayName("收敛但带提示的回合补一行提示：截断与正常答完在屏幕上是两回事")
+    void project_should_emit_completed_notice() {
+        List<VisualLine> lines = project(Collections.<SessionMessage>emptyList(),
+                finished(InflightTurn.Outcome.COMPLETED, "回复被输出上限截断（结束原因：length），上面的内容可能不完整。"));
+
+        assertEquals(Collections.singletonList(
+                "      \u23bf 回复被输出上限截断（结束原因：length），上面的内容可能不完整。"), texts(lines));
+    }
+
+    @Test
+    @DisplayName("收敛且无提示时不补任何行")
+    void project_should_emit_nothing_when_completed_without_notice() {
+        List<VisualLine> lines = project(Collections.<SessionMessage>emptyList(), completed());
+
+        assertTrue(lines.isEmpty(), () -> "正文由会话消息承载，收敛本身不需要额外提示：" + texts(lines));
+    }
+
+    @Test
     @DisplayName("失败的回合补一行错误原因")
     void project_should_emit_error_notice_with_reason() {
         List<VisualLine> lines = project(Collections.<SessionMessage>emptyList(),

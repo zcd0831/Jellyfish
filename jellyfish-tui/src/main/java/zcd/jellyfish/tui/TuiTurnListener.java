@@ -76,8 +76,9 @@ public final class TuiTurnListener implements ShellTurnListener {
             case COMPLETED:
                 inflight.clearText();
                 inflight.clearToolOutput();
+                // 提示（被截断 / 空回复）跟着终局一起交给渲染层：它不是错误，但必须让用户看到
                 inflight.finish(event.isTruncated() ? InflightTurn.Outcome.TRUNCATED
-                        : InflightTurn.Outcome.COMPLETED, null);
+                        : InflightTurn.Outcome.COMPLETED, event.getNotice());
                 break;
             case CANCELLED:
                 inflight.clearText();

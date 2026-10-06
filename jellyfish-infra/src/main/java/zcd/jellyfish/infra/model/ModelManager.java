@@ -191,8 +191,9 @@ public class ModelManager {
             Model existing = configured.get(descriptor.getId());
             models.add(new Model(descriptor.getId(), descriptor.getName(),
                     descriptor.getContextLength(), descriptor.getMaxOutputTokens(),
+                    existing == null ? null : existing.getMaxTokensField(),
                     existing == null ? null : existing.getSampling(),
-                    existing == null ? null : existing.getExtraBody()));
+                    existing == null ? null : existing.getVendorBody()));
         }
         if (models.isEmpty()) {
             return provider;

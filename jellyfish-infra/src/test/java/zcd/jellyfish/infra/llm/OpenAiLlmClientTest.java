@@ -374,13 +374,37 @@ class OpenAiLlmClientTest {
     }
 
     @Test
-    void chat_should_send_extraBody_when_configured() throws IOException {
+    void chat_should_send_penalties_and_seed_when_configured() throws IOException {
+        // Given：OpenAI 系认这三项，但不认 top_k
+        StubInterceptor stub = jsonStub("{\"choices\":[{\"message\":{\"content\":\"ok\"}}]}");
+        OpenAiLlmClient client = client(stub);
+        LlmRequest request = LlmRequest.builder("gpt-4o")
+                .message(LlmMessage.user("hello"))
+                .frequencyPenalty(0.5d)
+                .presencePenalty(-0.5d)
+                .seed(7L)
+                .topK(40)
+                .build();
+
+        // When
+        client.chat(request);
+
+        // Then：认的三项按 OpenAI 拼法下发，top_k 一个字节都不写——写进去只会被忽略或报错
+        JsonNode body = json(requestBody(stub.lastRequest()));
+        assertEquals(0.5, body.path("frequency_penalty").asDouble());
+        assertEquals(-0.5, body.path("presence_penalty").asDouble());
+        assertEquals(7, body.path("seed").asLong());
+        assertFalse(body.has("top_k"));
+    }
+
+    @Test
+    void chat_should_send_vendorBody_when_configured() throws IOException {
         // Given
         StubInterceptor stub = jsonStub("{\"choices\":[{\"message\":{\"content\":\"ok\"}}]}");
         OpenAiLlmClient client = client(stub);
         LlmRequest request = LlmRequest.builder("gpt-4o")
                 .message(LlmMessage.user("hello"))
-                .extraBody(Collections.<String, Object>singletonMap("service_tier", "flex"))
+                .vendorBody(Collections.<String, Object>singletonMap("service_tier", "flex"))
                 .build();
 
         // When
@@ -391,7 +415,7 @@ class OpenAiLlmClientTest {
     }
 
     @Test
-    void chat_should_send_extraHeaders_and_let_them_win_over_kernel_header() throws IOException {
+    void chat_should_send_vendorHeaders_and_let_them_win_over_kernel_header() throws IOException {
         // Given：provider 配了自定义头，其中一个与内核鉴权头同名
         StubInterceptor stub = jsonStub("{\"choices\":[{\"message\":{\"content\":\"ok\"}}]}");
         Provider custom = new Provider("openai", "openai", "key", BASE_URL, Collections.emptyList(),
@@ -405,6 +429,45 @@ class OpenAiLlmClientTest {
         Request httpRequest = stub.lastRequest();
         assertEquals("t-1", httpRequest.header("x-tenant"));
         assertEquals("Bearer custom", httpRequest.header("Authorization"));
+    }
+
+    @Test
+    void chat_should_send_max_completion_tokens_when_model_requires_it() throws IOException {
+        // Given：OpenAI 的推理模型 / gpt-5 之后拒收 max_tokens（Unsupported parameter 400）
+        StubInterceptor stub = jsonStub("{\"choices\":[{\"message\":{\"content\":\"ok\"}}]}");
+        OpenAiLlmClient client = client(stub);
+        LlmRequest request = LlmRequest.builder("gpt-5")
+                .message(LlmMessage.user("hello"))
+                .maxTokens(8192)
+                .maxTokensField("max_completion_tokens")
+                .build();
+
+        // When
+        client.chat(request);
+
+        // Then：上限只发一份，且发的是目标模型认的那个拼法
+        JsonNode body = json(requestBody(stub.lastRequest()));
+        assertEquals(8192, body.path("max_completion_tokens").asInt());
+        assertFalse(body.has("max_tokens"));
+    }
+
+    @Test
+    void chat_should_default_to_max_tokens_field() throws IOException {
+        // Given：没配 maxTokensField（DeepSeek / OpenRouter 这类兼容端点认 max_tokens）
+        StubInterceptor stub = jsonStub("{\"choices\":[{\"message\":{\"content\":\"ok\"}}]}");
+        OpenAiLlmClient client = client(stub);
+        LlmRequest request = LlmRequest.builder("deepseek-flash")
+                .message(LlmMessage.user("hello"))
+                .maxTokens(4096)
+                .build();
+
+        // When
+        client.chat(request);
+
+        // Then
+        JsonNode body = json(requestBody(stub.lastRequest()));
+        assertEquals(4096, body.path("max_tokens").asInt());
+        assertFalse(body.has("max_completion_tokens"));
     }
 
     @Test

@@ -278,7 +278,31 @@ class GeminiLlmClientTest {
     }
 
     @Test
-    void chat_should_deep_merge_extraBody_into_generationConfig_when_configured() throws IOException {
+    void chat_should_send_generationConfig_sampling_extras_when_configured() throws IOException {
+        // Given：Gemini 把全部采样参数都放在 generationConfig 里
+        StubInterceptor stub = jsonStub("{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ok\"}]}}]}");
+        GeminiLlmClient client = client(stub);
+        LlmRequest request = LlmRequest.builder("gemini-1.5-pro")
+                .message(LlmMessage.user("hi"))
+                .topK(40)
+                .seed(7L)
+                .frequencyPenalty(0.5d)
+                .presencePenalty(-0.5d)
+                .build();
+
+        // When
+        client.chat(request);
+
+        // Then：拼法是驼峰，与 OpenAI 的下划线不同
+        JsonNode config = json(requestBody(stub.lastRequest())).path("generationConfig");
+        assertEquals(40, config.path("topK").asInt());
+        assertEquals(7, config.path("seed").asLong());
+        assertEquals(0.5, config.path("frequencyPenalty").asDouble());
+        assertEquals(-0.5, config.path("presencePenalty").asDouble());
+    }
+
+    @Test
+    void chat_should_deep_merge_vendorBody_into_generationConfig_when_configured() throws IOException {
         // Given：用户在 generationConfig 里加思考预算，同时采样参数走内核字段
         StubInterceptor stub = jsonStub("{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ok\"}]}}]}");
         GeminiLlmClient client = client(stub);
@@ -290,7 +314,7 @@ class GeminiLlmClientTest {
                 .message(LlmMessage.user("hi"))
                 .temperature(0.5)
                 .maxTokens(128)
-                .extraBody(Collections.<String, Object>singletonMap("generationConfig", generationConfig))
+                .vendorBody(Collections.<String, Object>singletonMap("generationConfig", generationConfig))
                 .build();
 
         // When

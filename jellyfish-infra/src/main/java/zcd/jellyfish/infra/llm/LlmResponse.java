@@ -1,8 +1,12 @@
 package zcd.jellyfish.infra.llm;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Set;
 
 /**
  * 一次 LLM 调用的统一返回结果。不可变，构造时对工具调用列表做防御性拷贝。
@@ -10,6 +14,16 @@ import java.util.List;
  * @author zcd
  */
 public final class LlmResponse {
+
+    /**
+     * 各厂商表示「输出被上限截断」的结束原因取值（已小写归一）。
+     * <p>
+     * OpenAI 系是 {@code length}；Anthropic 的 {@code stop_reason} 是 {@code max_tokens}；
+     * Gemini 的 {@code finishReason} 是 {@code MAX_TOKENS}——<b>小写之后后两者恰好同一个词</b>，
+     * 因此这里只留两个取值。内核不能把原文当判据散在各处，那会让「哪个厂商叫什么」变成调用方要记住的知识。
+     */
+    private static final Set<String> TRUNCATION_REASONS = Collections.unmodifiableSet(
+            new HashSet<String>(Arrays.asList("length", "max_tokens")));
 
     /** 模型的文本回复，无文本内容时为 {@code null}。 */
     private final String content;
@@ -107,6 +121,23 @@ public final class LlmResponse {
      */
     public boolean hasToolCalls() {
         return !toolCalls.isEmpty();
+    }
+
+    /**
+     * 判断本次回复是否被输出上限截断。
+     * <p>
+     * <b>为什么内核需要它</b>：被截断的回复在形状上与「正常答完」完全一样——有正文、没有工具调用，
+     * 因此会被当成一次正常收敛，而屏幕上留下的是一句没说完的话。<b>用户没有任何办法分辨</b>，
+     * 这正是「配了 maxOutputTokens 却没配够」最典型的症状。
+     * <p>
+     * 各厂商的结束原因取值见 {@link #TRUNCATION_REASONS}，大小写不敏感（Gemini 给的是大写）。
+     * 取值不认识时返回 {@code false}：宁可少提示，也不要凭猜测把一次正常回复说成截断。
+     *
+     * @return 被输出上限截断时返回 {@code true}
+     */
+    public boolean isTruncated() {
+        return finishReason != null
+                && TRUNCATION_REASONS.contains(finishReason.trim().toLowerCase(Locale.ROOT));
     }
 
     /**

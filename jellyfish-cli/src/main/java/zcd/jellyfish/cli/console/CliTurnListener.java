@@ -384,6 +384,11 @@ public final class CliTurnListener implements ShellTurnListener {
         if (event.isTruncated()) {
             console.writeErrLine("回合未收敛：已达最大轮次，上面的回答可能不完整。");
         }
+        // 收敛也可以带提示：回复被输出上限截断、或模型一个字都没回。两者从正文都看不出来，
+        // 因此走 stderr 说出来——stdout 保持「回答」这一条语义，不然会破坏脚本契约
+        if (event.getNotice() != null && !event.getNotice().trim().isEmpty()) {
+            console.writeErrLine(event.getNotice());
+        }
     }
 
     /**

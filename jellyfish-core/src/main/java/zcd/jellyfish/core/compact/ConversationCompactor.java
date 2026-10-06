@@ -441,9 +441,9 @@ public class ConversationCompactor implements AutoCloseable {
         LlmRequest.Builder builder = LlmRequest.builder(resolvedModel.getModel().getId())
                 .systemPrompt(instructions)
                 .messages(Collections.singletonList(LlmMessage.user(body)));
-        // 调优参数（采样 + 厂商私有直通字段）必须与 fork 路径一致：两条路都在做同一件事（写摘要），
-        // 走哪条只取决于「前缀还能不能原样复现」，不该顺带换掉参数。少落一项的后果不对称——
-        // fork 那条路是「命中率与钱」，这条路上却可能是「端点直接拒掉这次摘要」
+        // 调优参数（采样 + 厂商私有直通字段 + 输出上限的字段名）必须与 fork 路径一致：
+        // 两条路都在做同一件事（写摘要），走哪条只取决于「前缀还能不能原样复现」，不该顺带换掉参数。
+        // 少落一项的后果不对称——fork 那条路是「命中率与钱」，这条路上却可能是「端点直接拒掉这次摘要」
         ModelTuning.of(resolvedModel.getProvider(), resolvedModel.getModel()).applyTo(builder);
         int modelMaxOutput = resolvedModel.getModel().getMaxOutputTokens();
         if (modelMaxOutput > 0) {

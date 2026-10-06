@@ -86,6 +86,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -608,6 +609,83 @@ class ReActLooperTest {
         assertEquals(1, result.getRounds());
         assertNotNull(result.getContent());
         assertTrue(result.getContent().contains("react.maxRounds"));
+    }
+
+    @Test
+    void chat_should_retryOnce_then_return_when_model_givesEmptyReply() {
+        // Given：第一次一个字都没回，第二次正常答复
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        stubResponses(LlmResponse.text(""), LlmResponse.text("补上了"));
+        Session session = sessionManager.createDefault();
+        RecordingListener listener = new RecordingListener();
+
+        // When
+        ReActResult result = newLooper().chat(session.getSessionId(), "你好", listener).await();
+
+        // Then：重试拿到答复后照常收敛，且不给用户任何提示（这次没有例外）
+        assertEquals("补上了", result.getContent());
+        assertNull(result.getNotice());
+        assertEquals(2, result.getRounds());
+        // 空的那一次不落库：一条空的 assistant 消息对界面与模型都没有信息量，
+        // 落进历史反而会跟着之后的每一次请求发出去
+        assertEquals(2, session.size());
+        assertEquals("补上了", session.getMessages().get(1).getMessage().getContent());
+    }
+
+    @Test
+    void chat_should_convergeWithNotice_when_model_keepsGivingEmptyReply() {
+        // Given：每次都空回复——重试用尽后必须如实收敛，而不是让用户对着空屏幕以为还在跑
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        stubResponses(LlmResponse.text(""));
+        Session session = sessionManager.createDefault();
+        RecordingListener listener = new RecordingListener();
+
+        // When
+        ReActResult result = newLooper().chat(session.getSessionId(), "你好", listener).await();
+
+        // Then
+        assertNull(result.getContent());
+        assertNotNull(result.getNotice());
+        assertTrue(result.getNotice().contains("没有给出任何回复"), result.getNotice());
+        assertFalse(result.isCancelled());
+        // 1 次首答 + 1 次重试，都空
+        assertEquals(2, result.getRounds());
+        // 两次都不落库：会话里只有用户输入那条
+        assertEquals(1, session.size());
+        assertEquals(Collections.singletonList(result), listener.completed);
+    }
+
+    @Test
+    void chat_should_notice_when_replyTruncatedByOutputLimit() {
+        // Given：模型答到一半被输出上限截断——正文看着像答完了，形状与正常收敛完全一样
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        stubResponses(new LlmResponse("半句话", null, null, new LlmUsage(1, 1, 2), "length"));
+        Session session = sessionManager.createDefault();
+
+        // When
+        ReActResult result = newLooper().chat(session.getSessionId(), "写篇长文", new RecordingListener()).await();
+
+        // Then：正文照旧交给外壳，另附一句可执行的提示（提示不是正文的一部分）
+        assertEquals("半句话", result.getContent());
+        assertNotNull(result.getNotice());
+        assertTrue(result.getNotice().contains("maxOutputTokens"), result.getNotice());
+        assertTrue(result.getNotice().contains("length"), result.getNotice());
+        // 它不是「达到最大轮次」那种未收敛，两者必须分得开
+        assertFalse(result.isTruncated());
+    }
+
+    @Test
+    void chat_should_notNotice_when_finishReasonIsNormalStop() {
+        // Given：正常答完（stop / 无结束原因都不该被当成截断）
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        stubResponses(new LlmResponse("完整的答复", null, null, new LlmUsage(1, 1, 2), "stop"));
+        Session session = sessionManager.createDefault();
+
+        // When
+        ReActResult result = newLooper().chat(session.getSessionId(), "你好", new RecordingListener()).await();
+
+        // Then：宁可少提示，也不要把一次正常回复说成截断
+        assertNull(result.getNotice());
     }
 
     @Test

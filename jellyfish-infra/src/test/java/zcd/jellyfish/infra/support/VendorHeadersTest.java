@@ -13,16 +13,16 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * {@link ExtraHeaders} 的单元测试：保留头、头名清洗、覆盖语义与只读副本。
+ * {@link VendorHeaders} 的单元测试：保留头、头名清洗、覆盖语义与只读副本。
  *
  * @author zcd
  */
-class ExtraHeadersTest {
+class VendorHeadersTest {
 
     @Test
     void sanitize_should_return_empty_map_when_raw_is_null() {
         // When / Then
-        assertTrue(ExtraHeaders.sanitize(null, "provider[openai]").isEmpty());
+        assertTrue(VendorHeaders.sanitize(null, "provider[openai]").isEmpty());
     }
 
     @Test
@@ -34,7 +34,7 @@ class ExtraHeadersTest {
                 "x-tenant", "t-1");
 
         // When
-        Map<String, String> result = ExtraHeaders.sanitize(raw, "provider[openai]");
+        Map<String, String> result = VendorHeaders.sanitize(raw, "provider[openai]");
 
         // Then：协议头与「由传输层为自己机制计算」的头全部丢弃，自定义头保留。
         // Accept-Encoding / Range 尤其隐蔽：用户自带会让传输层不再透明解压，响应体以压缩字节进解析
@@ -47,7 +47,7 @@ class ExtraHeadersTest {
         Map<String, String> raw = mapOf("x 租户", "t-1", "x-tenant id", "t-1", "x-tenant", "t-1");
 
         // When
-        Map<String, String> result = ExtraHeaders.sanitize(raw, "provider[openai]");
+        Map<String, String> result = VendorHeaders.sanitize(raw, "provider[openai]");
 
         // Then：非法的在解析期就丢掉，而不是等到发请求时由 HTTP 客户端抛异常
         assertEquals(Collections.singletonMap("x-tenant", "t-1"), result);
@@ -59,7 +59,7 @@ class ExtraHeadersTest {
         Map<String, String> raw = mapOf("x-tenant", "团队 A", "x-multiline", "a\nb", "x-ok", "t-1");
 
         // When
-        Map<String, String> result = ExtraHeaders.sanitize(raw, "provider[openai]");
+        Map<String, String> result = VendorHeaders.sanitize(raw, "provider[openai]");
 
         // Then：非法值在配置期丢弃——否则异常文本会把值原文（可能就是密钥）带进日志
         assertEquals(Collections.singletonMap("x-ok", "t-1"), result);
@@ -71,7 +71,7 @@ class ExtraHeadersTest {
         Map<String, String> raw = mapOf("  x-tenant  ", " spaced value ");
 
         // When
-        Map<String, String> result = ExtraHeaders.sanitize(raw, "provider[openai]");
+        Map<String, String> result = VendorHeaders.sanitize(raw, "provider[openai]");
 
         // Then
         assertEquals(" spaced value ", result.get("x-tenant"));
@@ -85,7 +85,7 @@ class ExtraHeadersTest {
         raw.put("x-tenant", null);
 
         // When
-        Map<String, String> result = ExtraHeaders.sanitize(raw, "provider[openai]");
+        Map<String, String> result = VendorHeaders.sanitize(raw, "provider[openai]");
 
         // Then
         assertTrue(result.isEmpty());
@@ -94,7 +94,7 @@ class ExtraHeadersTest {
     @Test
     void sanitize_should_return_unmodifiable_map() {
         // When
-        Map<String, String> result = ExtraHeaders.sanitize(mapOf("x-tenant", "t-1"), "provider[openai]");
+        Map<String, String> result = VendorHeaders.sanitize(mapOf("x-tenant", "t-1"), "provider[openai]");
 
         // Then
         assertThrows(UnsupportedOperationException.class, () -> result.put("x-other", "v"));
@@ -107,7 +107,7 @@ class ExtraHeadersTest {
                 .header("Authorization", "Bearer kernel");
 
         // When：用户自定义了同名头
-        ExtraHeaders.applyTo(builder, mapOf("Authorization", "Bearer user", "x-tenant", "t-1"));
+        VendorHeaders.applyTo(builder, mapOf("Authorization", "Bearer user", "x-tenant", "t-1"));
 
         // Then：同名头以用户为准（替换而不是追加成多值），其余头一起加上
         Request request = builder.build();
@@ -122,9 +122,9 @@ class ExtraHeadersTest {
         Request.Builder builder = new Request.Builder().url("https://api.openai.com/v1/chat/completions");
 
         // When / Then：空头部不改变请求
-        ExtraHeaders.applyTo(builder, null);
-        ExtraHeaders.applyTo(builder, Collections.<String, String>emptyMap());
-        ExtraHeaders.applyTo(null, mapOf("x-tenant", "t-1"));
+        VendorHeaders.applyTo(builder, null);
+        VendorHeaders.applyTo(builder, Collections.<String, String>emptyMap());
+        VendorHeaders.applyTo(null, mapOf("x-tenant", "t-1"));
         Request request = builder.build();
         assertNull(request.header("x-tenant"));
     }

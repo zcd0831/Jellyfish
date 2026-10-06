@@ -927,22 +927,31 @@ public final class TranscriptProjector {
             case TRUNCATED:
                 out.add(VisualLine.of(new StyledSegment(NOTICE_PREFIX + "回合未收敛：已达最大轮次", CANCELLED_STYLE)));
                 break;
+            case COMPLETED:
+                // 收敛也可以带提示：回复被输出上限截断、或模型一个字都没回。两种都与「正常答完」
+                // 在屏幕上一模一样，因此这里必须说出来——否则用户会拿半截话当完整答案。
+                // 用中性样式：回合是正常结束的，把它染成错误色会让人以为请求失败了
+                if (inflight.getNote() != null && !inflight.getNote().isEmpty()) {
+                    out.addAll(LineWrapper.wrap(new StyledSegment(NOTICE_PREFIX, CANCELLED_STYLE),
+                            wrapBody(inflight.getNote(), CANCELLED_STYLE), width));
+                }
+                break;
             case ERROR:
-                String reason = inflight.getErrorMessage();
+                String reason = inflight.getNote();
                 String label = reason == null || reason.isEmpty() ? "回合失败" : "回合失败：" + reason;
                 out.addAll(LineWrapper.wrap(new StyledSegment(NOTICE_PREFIX, ERROR_STYLE),
                         wrapBody(label, ERROR_STYLE), width));
                 break;
             case BLOCKED:
                 // 中性样式：被拦下不是错误，也不是用户中断，而是「这次压根没跑」
-                String blocked = inflight.getErrorMessage();
+                String blocked = inflight.getNote();
                 String blockedLabel = blocked == null || blocked.isEmpty()
                         ? "回合被拦下" : "回合被拦下：" + blocked;
                 out.addAll(LineWrapper.wrap(new StyledSegment(NOTICE_PREFIX, CANCELLED_STYLE),
                         wrapBody(blockedLabel, CANCELLED_STYLE), width));
                 break;
             default:
-                // COMPLETED / RUNNING：正文已由会话消息承载，这里不补任何行
+                // RUNNING：正文由会话消息承载，这里不补任何行
                 break;
         }
     }

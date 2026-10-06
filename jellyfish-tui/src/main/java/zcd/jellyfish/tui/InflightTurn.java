@@ -102,8 +102,17 @@ public final class InflightTurn {
     /** 回合终局。开场为 {@link Outcome#IDLE}。 */
     private Outcome outcome = Outcome.IDLE;
 
-    /** 失败原因，仅 {@link Outcome#ERROR} 时非空。 */
-    private String errorMessage;
+    /**
+     * 终局说明，三种终局各有用途：
+     * <ul>
+     *     <li>{@link Outcome#ERROR}：失败原因；</li>
+     *     <li>{@link Outcome#BLOCKED}：拦下的理由；</li>
+     *     <li>{@link Outcome#COMPLETED}：内核补的提示（回复被输出上限截断、模型一个字都没回）。</li>
+     * </ul>
+     * <b>为什么不叫 errorMessage</b>：它早就不是「错误」专属了——被拦下不是错误，截断提示更不是。
+     * 名字与含义对不上时，下一个人会把「不是错误」的那两种当成错误来处理（例如染成红色）。
+     */
+    private String note;
 
     /** 当前轮正文增量。 */
     private final StringBuilder text = new StringBuilder();
@@ -168,7 +177,7 @@ public final class InflightTurn {
             textTruncated = false;
             thinkingTruncated = false;
             outcome = Outcome.RUNNING;
-            errorMessage = null;
+            note = null;
             dirty = true;
         }
     }
@@ -297,14 +306,14 @@ public final class InflightTurn {
     /**
      * 标记回合终结。
      *
-     * @param outcome      终局，不可为 {@code null}
-     * @param errorMessage 失败原因，仅 {@link Outcome#ERROR} 时有意义，可为 {@code null}
+     * @param outcome 终局，不可为 {@code null}
+     * @param note    终局说明，用途见 {@link #note}，可为 {@code null}
      */
-    public void finish(Outcome outcome, String errorMessage) {
+    public void finish(Outcome outcome, String note) {
         Objects.requireNonNull(outcome, "outcome must not be null");
         synchronized (this) {
             this.outcome = outcome;
-            this.errorMessage = errorMessage;
+            this.note = note;
             dirty = true;
         }
     }
@@ -334,7 +343,7 @@ public final class InflightTurn {
      * @return 快照，保证非 {@code null}
      */
     public synchronized Snapshot snapshot() {
-        return new Snapshot(outcome, errorMessage, text.toString(), thinking.toString(),
+        return new Snapshot(outcome, note, text.toString(), thinking.toString(),
                 textTruncated, thinkingTruncated, runningToolName, runningToolArguments, toolLines());
     }
 
@@ -448,8 +457,8 @@ public final class InflightTurn {
         /** 回合终局。 */
         private final Outcome outcome;
 
-        /** 失败原因，可为 {@code null}。 */
-        private final String errorMessage;
+        /** 终局说明（ERROR 的原因 / BLOCKED 的理由 / COMPLETED 的提示），可为 {@code null}。 */
+        private final String note;
 
         /** 正文文本，保证非 {@code null}。 */
         private final String text;
@@ -476,7 +485,7 @@ public final class InflightTurn {
          * 构造快照。
          *
          * @param outcome           回合终局
-         * @param errorMessage      失败原因，可为 {@code null}
+         * @param note              终局说明，可为 {@code null}
          * @param text              正文文本
          * @param thinking          思考过程文本
          * @param textTruncated     正文是否被截断
@@ -484,11 +493,11 @@ public final class InflightTurn {
          * @param runningToolName   正在执行的工具名，可为 {@code null}
          * @param toolOutputLines   运行中工具的输出行
          */
-        Snapshot(Outcome outcome, String errorMessage, String text, String thinking,
+        Snapshot(Outcome outcome, String note, String text, String thinking,
                  boolean textTruncated, boolean thinkingTruncated, String runningToolName,
                  Map<String, Object> runningToolArguments, List<String> toolOutputLines) {
             this.outcome = outcome;
-            this.errorMessage = errorMessage;
+            this.note = note;
             this.text = text;
             this.thinking = thinking;
             this.textTruncated = textTruncated;
@@ -508,12 +517,15 @@ public final class InflightTurn {
         }
 
         /**
-         * 获取失败原因。
+         * 获取终局说明。
+         * <p>
+         * 三种终局各有用途，见 {@link InflightTurn#note}。<b>不要假定它只在失败时才有值</b>：
+         * 收敛时它承载的是内核的提示（回复被输出上限截断、模型一个字都没回）。
          *
-         * @return 失败原因，无则为 {@code null}
+         * @return 终局说明，无则为 {@code null}
          */
-        public String getErrorMessage() {
-            return errorMessage;
+        public String getNote() {
+            return note;
         }
 
         /**

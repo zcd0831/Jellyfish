@@ -106,7 +106,7 @@ class InflightTurnTest {
 
         turn.finish(InflightTurn.Outcome.ERROR, "连接超时");
 
-        assertEquals("连接超时", turn.snapshot().getErrorMessage());
+        assertEquals("连接超时", turn.snapshot().getNote());
     }
 
     @Test

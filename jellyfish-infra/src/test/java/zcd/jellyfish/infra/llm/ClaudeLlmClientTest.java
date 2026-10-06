@@ -677,7 +677,7 @@ class ClaudeLlmClientTest {
     }
 
     @Test
-    void chat_should_send_extraBody_and_custom_headers_when_configured() throws IOException {
+    void chat_should_send_vendorBody_and_custom_headers_when_configured() throws IOException {
         // Given：Anthropic 的 thinking / metadata 都是消息体里的私有字段，网关则常要自定义头
         // （直通字段由 PromptAssembler 从 provider + model 合成后挂在请求上，请求头只有 provider 级）
         StubInterceptor stub = jsonStub("{\"content\":[]}");
@@ -691,7 +691,7 @@ class ClaudeLlmClientTest {
         // When
         customClient.chat(LlmRequest.builder("claude-3-5-sonnet")
                 .message(LlmMessage.user("hi"))
-                .extraBody(Collections.<String, Object>singletonMap("thinking", thinking))
+                .vendorBody(Collections.<String, Object>singletonMap("thinking", thinking))
                 .build());
 
         // Then：私有字段原样送出（含嵌套对象），自定义头也带上
@@ -699,6 +699,30 @@ class ClaudeLlmClientTest {
         assertEquals("enabled", body.path("thinking").path("type").asText());
         assertEquals(2048, body.path("thinking").path("budget_tokens").asInt());
         assertEquals("t-1", stub.lastRequest().header("x-tenant"));
+    }
+
+    @Test
+    void chat_should_send_topK_but_not_seed_or_penalties() throws IOException {
+        // Given：Anthropic 认 top_k，没有 seed 与两个惩罚项
+        StubInterceptor stub = jsonStub("{\"content\":[]}");
+        ClaudeLlmClient client = client(stub);
+        LlmRequest request = LlmRequest.builder("claude-3-5-sonnet")
+                .message(LlmMessage.user("hi"))
+                .topK(40)
+                .seed(7L)
+                .frequencyPenalty(0.5d)
+                .presencePenalty(-0.5d)
+                .build();
+
+        // When
+        client.chat(request);
+
+        // Then
+        JsonNode body = json(requestBody(stub.lastRequest()));
+        assertEquals(40, body.path("top_k").asInt());
+        assertFalse(body.has("seed"));
+        assertFalse(body.has("frequency_penalty"));
+        assertFalse(body.has("presence_penalty"));
     }
 
     /**

@@ -30,8 +30,33 @@ public final class LlmRequest {
     /** 最大生成 token 数。 */
     private final Integer maxTokens;
 
+    /**
+     * 承载 {@link #maxTokens} 的请求体字段名；{@code null} 表示用 OpenAI 兼容端点的缺省拼法
+     * （{@code max_tokens}）。
+     * <p>
+     * <b>为什么一个「字段名」要由配置决定</b>：OpenAI 的 o1 / o3 / o4-mini 与 gpt-5 之后只认
+     * {@code max_completion_tokens}，对 {@code max_tokens} 直接 400；而 DeepSeek、OpenRouter 这类
+     * 兼容端点只认 {@code max_tokens}。内核不能按模型名猜（那正是本项目一贯拒绝的做法），
+     * 因此把它作为配置项从 {@code models.json} 一路传到这里。
+     * <p>
+     * 只有 OpenAI 兼容客户端会读它：Claude 与 Gemini 各有固定的字段位置，不受影响。
+     */
+    private final String maxTokensField;
+
     /** 核采样概率。 */
     private final Double topP;
+
+    /** Top-K 采样；未设置时为 {@code null}（不下发）。 */
+    private final Integer topK;
+
+    /** 随机种子；未设置时为 {@code null}（不下发）。 */
+    private final Long seed;
+
+    /** 频率惩罚；未设置时为 {@code null}（不下发）。 */
+    private final Double frequencyPenalty;
+
+    /** 存在惩罚；未设置时为 {@code null}（不下发）。 */
+    private final Double presencePenalty;
 
     /** 停止序列。 */
     private final List<String> stop;
@@ -83,15 +108,15 @@ public final class LlmRequest {
     /**
      * 直通请求体字段：原样合并进请求体的厂商私有参数，内核不解释其含义。
      * <p>
-     * 它已经在配置期清洗过（保留键与超深子树已丢弃，见 {@code ExtraBody}），且是 provider 级与
+     * 它已经在配置期清洗过（保留键与超深子树已丢弃，见 {@code VendorBody}），且是 provider 级与
      * model 级合并后的结果（见 {@code ModelTuning}）——**请求层不再做任何取舍判断**，
      * 只负责把它交给客户端。
      * <p>
      * <b>为什么请求头不在这里</b>：请求头是端点属性，没有模型级的那一份，因此由客户端直接读 provider
-     * （见 {@code Provider#getExtraHeaders()}）。这也让「模型列表」这类没有请求对象的调用自然带上它，
+     * （见 {@code Provider#getVendorHeaders()}）。这也让「模型列表」这类没有请求对象的调用自然带上它，
      * 否则需要自定义鉴权头的网关会在发现模型那一步就失败。
      */
-    private final Map<String, Object> extraBody;
+    private final Map<String, Object> vendorBody;
 
     /**
      * 由 builder 构造请求，并对所有集合做防御性拷贝。
@@ -104,7 +129,12 @@ public final class LlmRequest {
         this.messages = Collections.unmodifiableList(new ArrayList<>(builder.messages));
         this.temperature = builder.temperature;
         this.maxTokens = builder.maxTokens;
+        this.maxTokensField = builder.maxTokensField;
         this.topP = builder.topP;
+        this.topK = builder.topK;
+        this.seed = builder.seed;
+        this.frequencyPenalty = builder.frequencyPenalty;
+        this.presencePenalty = builder.presencePenalty;
         this.stop = builder.stop == null
                 ? Collections.<String>emptyList()
                 : Collections.unmodifiableList(new ArrayList<>(builder.stop));
@@ -116,9 +146,9 @@ public final class LlmRequest {
         this.cacheRetention = builder.cacheRetention;
         this.cacheBreakpoints = builder.cacheBreakpoints;
         this.minimalOutput = builder.minimalOutput;
-        this.extraBody = builder.extraBody == null
+        this.vendorBody = builder.vendorBody == null
                 ? Collections.<String, Object>emptyMap()
-                : Collections.unmodifiableMap(new LinkedHashMap<>(builder.extraBody));
+                : Collections.unmodifiableMap(new LinkedHashMap<>(builder.vendorBody));
     }
 
     /**
@@ -177,12 +207,60 @@ public final class LlmRequest {
     }
 
     /**
+     * 获取承载最大生成 token 数的请求体字段名。
+     *
+     * @return 字段名；未配置时为 {@code null}，调用方按 {@code max_tokens} 处理
+     */
+    public String getMaxTokensField() {
+        return maxTokensField;
+    }
+
+    /**
      * 获取核采样概率。
      *
      * @return 核采样概率，未设置时为 {@code null}
      */
     public Double getTopP() {
         return topP;
+    }
+
+    /**
+     * 获取 Top-K 采样值。
+     * <p>
+     * 只有 Anthropic 与 Gemini 认这一项，OpenAI 系没有对应字段——<b>客户端按自家协议决定下发</b>，
+     * 内核只声明意图，因此这里不带「谁认」的判断。
+     *
+     * @return Top-K 值，未设置时为 {@code null}
+     */
+    public Integer getTopK() {
+        return topK;
+    }
+
+    /**
+     * 获取随机种子。
+     *
+     * @return 随机种子，未设置时为 {@code null}
+     */
+    public Long getSeed() {
+        return seed;
+    }
+
+    /**
+     * 获取频率惩罚。
+     *
+     * @return 频率惩罚，未设置时为 {@code null}
+     */
+    public Double getFrequencyPenalty() {
+        return frequencyPenalty;
+    }
+
+    /**
+     * 获取存在惩罚。
+     *
+     * @return 存在惩罚，未设置时为 {@code null}
+     */
+    public Double getPresencePenalty() {
+        return presencePenalty;
     }
 
     /**
@@ -262,8 +340,8 @@ public final class LlmRequest {
      *
      * @return 只读映射，可能为空但不会为 {@code null}
      */
-    public Map<String, Object> getExtraBody() {
-        return extraBody;
+    public Map<String, Object> getVendorBody() {
+        return vendorBody;
     }
 
     /**
@@ -288,8 +366,23 @@ public final class LlmRequest {
         /** 最大生成 token 数。 */
         private Integer maxTokens;
 
+        /** 承载最大生成 token 数的请求体字段名。 */
+        private String maxTokensField;
+
         /** 核采样概率。 */
         private Double topP;
+
+        /** Top-K 采样。 */
+        private Integer topK;
+
+        /** 随机种子。 */
+        private Long seed;
+
+        /** 频率惩罚。 */
+        private Double frequencyPenalty;
+
+        /** 存在惩罚。 */
+        private Double presencePenalty;
 
         /** 停止序列。 */
         private List<String> stop;
@@ -313,7 +406,7 @@ public final class LlmRequest {
         private boolean minimalOutput;
 
         /** 直通请求体字段。 */
-        private Map<String, Object> extraBody;
+        private Map<String, Object> vendorBody;
 
         /**
          * 构造构建器。
@@ -384,6 +477,21 @@ public final class LlmRequest {
         }
 
         /**
+         * 设置承载最大生成 token 数的请求体字段名。
+         * <p>
+         * <b>空串归一成 {@code null}</b>：与 {@link #cacheKey(String)} 同理，「设了一个空值」与「没设」
+         * 在客户端是两回事——前者会下发一个空字段名。归一之后只留一种含义。
+         *
+         * @param maxTokensField 字段名，可为 {@code null}
+         * @return 当前构建器
+         */
+        public Builder maxTokensField(String maxTokensField) {
+            this.maxTokensField = maxTokensField == null || maxTokensField.trim().isEmpty()
+                    ? null : maxTokensField.trim();
+            return this;
+        }
+
+        /**
          * 设置核采样概率。
          *
          * @param topP 核采样概率
@@ -391,6 +499,50 @@ public final class LlmRequest {
          */
         public Builder topP(Double topP) {
             this.topP = topP;
+            return this;
+        }
+
+        /**
+         * 设置 Top-K 采样。
+         *
+         * @param topK Top-K 值
+         * @return 当前构建器
+         */
+        public Builder topK(Integer topK) {
+            this.topK = topK;
+            return this;
+        }
+
+        /**
+         * 设置随机种子。
+         *
+         * @param seed 随机种子
+         * @return 当前构建器
+         */
+        public Builder seed(Long seed) {
+            this.seed = seed;
+            return this;
+        }
+
+        /**
+         * 设置频率惩罚。
+         *
+         * @param frequencyPenalty 频率惩罚
+         * @return 当前构建器
+         */
+        public Builder frequencyPenalty(Double frequencyPenalty) {
+            this.frequencyPenalty = frequencyPenalty;
+            return this;
+        }
+
+        /**
+         * 设置存在惩罚。
+         *
+         * @param presencePenalty 存在惩罚
+         * @return 当前构建器
+         */
+        public Builder presencePenalty(Double presencePenalty) {
+            this.presencePenalty = presencePenalty;
             return this;
         }
 
@@ -481,13 +633,13 @@ public final class LlmRequest {
          * 设置直通请求体字段：原样合并进请求体的厂商私有参数。
          * <p>
          * <b>内核不解释这里任何键的含义</b>，也不在这里做校验——清洗已在配置期完成
-         * （见 {@code ExtraBody}）。这里只搬不改，是「厂商知识不进内核」这条边界的落点。
+         * （见 {@code VendorBody}）。这里只搬不改，是「厂商知识不进内核」这条边界的落点。
          *
-         * @param extraBody 直通字段，可为 {@code null}（等价空）
+         * @param vendorBody 直通字段，可为 {@code null}（等价空）
          * @return 当前构建器
          */
-        public Builder extraBody(Map<String, Object> extraBody) {
-            this.extraBody = extraBody;
+        public Builder vendorBody(Map<String, Object> vendorBody) {
+            this.vendorBody = vendorBody;
             return this;
         }
 

@@ -270,14 +270,21 @@ public class PromptAssembler {
                 // 而用户从配置里看不出发生过这件事
                 .temperature(base.getTemperature())
                 .topP(base.getTopP())
+                .topK(base.getTopK())
+                .seed(base.getSeed())
+                .frequencyPenalty(base.getFrequencyPenalty())
+                .presencePenalty(base.getPresencePenalty())
                 .stop(base.getStop().isEmpty() ? null : base.getStop())
-                .extraBody(base.getExtraBody());
+                .vendorBody(base.getVendorBody());
         Integer output = base.getMaxTokens();
         if (minimalOutput) {
             builder.minimalOutput();
         } else if (output != null) {
             builder.maxTokens(output);
         }
+        // 字段名与 maxTokens 是一件事，必须一起复制：漏了它，保活/压缩会按默认拼法发出去，
+        // 而目标模型可能只认另一种拼法——那是「输出上限被 400 拒」，与本次调用的目的毫无关系
+        builder.maxTokensField(base.getMaxTokensField());
         return builder.build();
     }
 

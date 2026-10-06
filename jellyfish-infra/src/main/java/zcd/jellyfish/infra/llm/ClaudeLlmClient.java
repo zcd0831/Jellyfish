@@ -6,8 +6,8 @@ import okhttp3.Request;
 import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.extension.RequestTuning;
 import zcd.jellyfish.infra.config.Provider;
-import zcd.jellyfish.infra.support.ExtraBody;
-import zcd.jellyfish.infra.support.ExtraHeaders;
+import zcd.jellyfish.infra.support.VendorBody;
+import zcd.jellyfish.infra.support.VendorHeaders;
 import zcd.jellyfish.infra.support.LlmClients;
 import zcd.jellyfish.infra.support.ObjectMapperWrapper;
 
@@ -100,10 +100,10 @@ public class ClaudeLlmClient extends AbstractHttpLlmClient {
     /**
      * 构造带 x-api-key 与 anthropic-version 头的请求构建器。
      * <p>
-     * <b>用户自定义请求头在这里落上</b>（{@code provider.extraHeaders}，仅 provider 级）：
+     * <b>用户自定义请求头在这里落上</b>（{@code provider.vendorHeaders}，仅 provider 级）：
      * 常见用途是企业网关要求的额外鉴权 / 租户头，以及覆盖 {@code anthropic-version} 去试新版本。
      * 用户头排在最后，因此同名头以用户为准；协议头（{@code Content-Type} / {@code Accept} 等）
-     * 已在配置期被挡掉，见 {@code ExtraHeaders}。
+     * 已在配置期被挡掉，见 {@code VendorHeaders}。
      *
      * @return 已带鉴权头与用户自定义头的请求构建器
      */
@@ -111,7 +111,7 @@ public class ClaudeLlmClient extends AbstractHttpLlmClient {
         Request.Builder builder = jsonRequest(messagesUrl())
                 .header("x-api-key", LlmClients.requireApiKey(provider))
                 .header("anthropic-version", ANTHROPIC_VERSION);
-        ExtraHeaders.applyTo(builder, provider.getExtraHeaders());
+        VendorHeaders.applyTo(builder, provider.getVendorHeaders());
         return builder;
     }
 
@@ -173,6 +173,12 @@ public class ClaudeLlmClient extends AbstractHttpLlmClient {
         if (request.getTopP() != null) {
             body.put("top_p", request.getTopP());
         }
+        if (request.getTopK() != null) {
+            body.put("top_k", request.getTopK());
+        }
+        // 不下发 seed / frequency_penalty / presence_penalty：Anthropic 没有这三个字段。
+        // 另外 Claude 4.7 及之后的模型连 temperature / top_p / top_k 都不再接受（设非缺省值会被 400），
+        // 那是「同一家不同代际的差异」，内核不按模型名猜，用户需要时按 model 级 sampling 分别配
         if (!request.getStop().isEmpty()) {
             body.put("stop_sequences", request.getStop());
         }
@@ -201,9 +207,9 @@ public class ClaudeLlmClient extends AbstractHttpLlmClient {
             }
         }
         // 直通字段最后落：thinking / metadata / service_tier 这类 Anthropic 私有字段由内核原样送出。
-        // system / messages / tools 等内核键已在配置期挡住（见 ExtraBody 的保留键），
+        // system / messages / tools 等内核键已在配置期挡住（见 VendorBody 的保留键），
         // 否则用户能通过直通把整段对话换掉、并顺带毁掉缓存前缀
-        ExtraBody.applyTo(body, request.getExtraBody());
+        VendorBody.applyTo(body, request.getVendorBody());
         return body;
     }
 

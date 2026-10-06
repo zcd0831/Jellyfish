@@ -5,7 +5,7 @@ import zcd.jellyfish.infra.config.Model;
 import zcd.jellyfish.infra.config.Provider;
 import zcd.jellyfish.infra.config.SamplingSettings;
 import zcd.jellyfish.infra.llm.LlmRequest;
-import zcd.jellyfish.infra.support.ExtraBody;
+import zcd.jellyfish.infra.support.VendorBody;
 
 import java.util.Collections;
 import java.util.Map;
@@ -17,12 +17,17 @@ import java.util.Map;
  * （采样参数、直通请求体、直通请求头），如果各自在调用点现算，就会出现「三处合并规则长得不完全一样」
  * 这种没人能从行为上验证的差异。合成一次、发一份，规则只有一处。
  * <p>
+ * <b>为什么连「输出上限的字段名」也放在这里</b>：它不是合并出来的值，只是模型的属性，但它与
+ * {@code maxTokens} 是同一件事的两半——有值没名就是 400，有名没值就是白配。把它们收在同一个
+ * 「落到请求上」的动作里（{@link #applyTo}），新增构造请求的路径就不可能只落一半：
+ * 压缩回退路径就曾因为「自己写 maxTokens 而没写字段名」把摘要请求打成 400。
+ * <p>
  * <b>为什么它不挂在 {@link ResolvedModel} 上</b>：解析结果回答的是「这次用哪个模型」，
  * 而本类回答的是「这次请求带什么参数」——后者随请求组装而变化（例如缓存保活与压缩 fork 只改内容、
  * 不改调优），混进解析结果会让那个值对象的职责变得说不清。
  * <p>
  * 合并规则：采样参数逐字段覆盖（见 {@link SamplingSettings#merge}）、直通请求体深合并
- * （见 {@link ExtraBody#merge}）、直通请求头只有 provider 级、原样沿用。
+ * （见 {@link VendorBody#merge}）、直通请求头只有 provider 级、原样沿用，输出上限的字段名取模型级。
  * <p>
  * 不可变，可安全跨线程传递。
  *
@@ -34,23 +39,28 @@ public final class ModelTuning {
     private final SamplingSettings sampling;
 
     /** 合并后的直通请求体字段。 */
-    private final Map<String, Object> extraBody;
+    private final Map<String, Object> vendorBody;
 
     /** 直通请求头（仅 provider 级）。 */
-    private final Map<String, String> extraHeaders;
+    private final Map<String, String> vendorHeaders;
+
+    /** 承载输出上限的请求体字段名；{@code null} 表示用客户端缺省拼法。 */
+    private final String maxTokensField;
 
     /**
      * 构造调优结果。
      *
-     * @param sampling     合并后的采样参数，不可为 {@code null}
-     * @param extraBody    合并后的直通请求体字段，可为 {@code null}
-     * @param extraHeaders 直通请求头，可为 {@code null}
+     * @param sampling       合并后的采样参数，不可为 {@code null}
+     * @param vendorBody     合并后的直通请求体字段，可为 {@code null}
+     * @param vendorHeaders  直通请求头，可为 {@code null}
+     * @param maxTokensField 承载输出上限的字段名，可为 {@code null}
      */
-    private ModelTuning(SamplingSettings sampling, Map<String, Object> extraBody,
-                        Map<String, String> extraHeaders) {
+    private ModelTuning(SamplingSettings sampling, Map<String, Object> vendorBody,
+                        Map<String, String> vendorHeaders, String maxTokensField) {
         this.sampling = sampling;
-        this.extraBody = extraBody == null ? Collections.<String, Object>emptyMap() : extraBody;
-        this.extraHeaders = extraHeaders == null ? Collections.<String, String>emptyMap() : extraHeaders;
+        this.vendorBody = vendorBody == null ? Collections.<String, Object>emptyMap() : vendorBody;
+        this.vendorHeaders = vendorHeaders == null ? Collections.<String, String>emptyMap() : vendorHeaders;
+        this.maxTokensField = maxTokensField;
     }
 
     /**
@@ -67,8 +77,9 @@ public final class ModelTuning {
         }
         return new ModelTuning(
                 SamplingSettings.merge(provider.getSampling(), model.getSampling()),
-                ExtraBody.merge(provider.getExtraBody(), model.getExtraBody()),
-                provider.getExtraHeaders());
+                VendorBody.merge(provider.getVendorBody(), model.getVendorBody()),
+                provider.getVendorHeaders(),
+                model.getMaxTokensField());
     }
 
     /**
@@ -85,8 +96,8 @@ public final class ModelTuning {
      *
      * @return 只读映射，可能为空但不会为 {@code null}
      */
-    public Map<String, Object> getExtraBody() {
-        return extraBody;
+    public Map<String, Object> getVendorBody() {
+        return vendorBody;
     }
 
     /**
@@ -94,8 +105,8 @@ public final class ModelTuning {
      *
      * @return 只读映射，可能为空但不会为 {@code null}
      */
-    public Map<String, String> getExtraHeaders() {
-        return extraHeaders;
+    public Map<String, String> getVendorHeaders() {
+        return vendorHeaders;
     }
 
     /**
@@ -117,16 +128,24 @@ public final class ModelTuning {
         }
         builder.temperature(sampling.getTemperature())
                 .topP(sampling.getTopP())
+                .topK(sampling.getTopK())
+                .seed(sampling.getSeed())
+                .frequencyPenalty(sampling.getFrequencyPenalty())
+                .presencePenalty(sampling.getPresencePenalty())
                 .stop(sampling.getStop().isEmpty() ? null : sampling.getStop())
-                .extraBody(extraBody);
+                .vendorBody(vendorBody)
+                // 字段名与 maxTokens 是同一件事的两半，必须一起落：漏了它，目标模型可能只认另一种拼法，
+                // 于是整个请求被 400 拒——而症状看起来与本次调用的目的毫无关系
+                .maxTokensField(maxTokensField);
     }
 
     /**
-     * 判断三段是否都为空，用于跳过无意义的设置动作。
+     * 判断是否没有任何调优内容，用于跳过无意义的设置动作。
      *
-     * @return 三段都为空时返回 {@code true}
+     * @return 采样、直通请求体/头与输出上限字段名都没表态时返回 {@code true}
      */
     public boolean isEmpty() {
-        return sampling.isEmpty() && extraBody.isEmpty() && extraHeaders.isEmpty();
+        return sampling.isEmpty() && vendorBody.isEmpty() && vendorHeaders.isEmpty()
+                && maxTokensField == null;
     }
 }

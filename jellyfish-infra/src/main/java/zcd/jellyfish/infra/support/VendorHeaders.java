@@ -13,18 +13,21 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * {@code models.json} 里 {@code extraHeaders} 的清洗与应用：把用户自定义的请求头加进出站请求。
+ * {@code models.json} 里 {@code vendorHeaders} 的清洗与应用：把用户自定义的请求头加进出站请求。
+ * <p>
+ * <b>段名为什么以 {@code vendor} 开头</b>：同 {@link VendorBody}——它属于「内核不解释、原样发出」的那一类，
+ * 与内核定义并校验的 {@code sampling} 段分属两条边界。它承载的通常是厂商或企业网关在文档之外要求的头部。
  * <p>
  * <b>为什么需要它</b>：企业网关、自建代理、区域端点常要求一个厂商文档之外的头部
  * （自定义鉴权、租户标识、路由标签），而内核不认识它们，也不该为此发version。
- * 与 {@code extraBody} 同一立场：<b>只搬运、不解释</b>，用户比内核更清楚自己的端点认什么。
+ * 与 {@code vendorBody} 同一立场：<b>只搬运、不解释</b>，用户比内核更清楚自己的端点认什么。
  * <p>
  * <b>它只挂在 provider 上</b>（模型级没有这个字段）：请求头是<b>端点</b>属性，同一个 provider 下的
  * 所有模型共享同一套地址、鉴权与网关规则；做成模型级只会多出「两个模型发不同头部」这种
  * 没人能验证、也没人需要的能力。
  * <p>
  * <b>用户头部覆盖内核同名头部，但有六个头必须挡住</b>（见 {@link #RESERVED_HEADERS}）：
- * 与 {@code extraBody} 里挡结构性键同一个理由——允许覆盖 {@code Content-Type} / {@code Accept} 不是
+ * 与 {@code vendorBody} 里挡结构性键同一个理由——允许覆盖 {@code Content-Type} / {@code Accept} 不是
  * 「可能坏事」而是「必然坏事」：前者让厂商拒收请求体，后者让流式响应按普通 JSON 解析。反过来，
  * <b>鉴权类头部是放行的</b>：网关要求的自定义鉴权头正是这条路的正经用途，而密钥本来就是用户自己的。
  * <p>
@@ -40,7 +43,7 @@ import java.util.Set;
  *
  * @author zcd
  */
-public final class ExtraHeaders {
+public final class VendorHeaders {
 
     /**
      * 保留头部：由内核按协议语义生成，用户覆盖它只会弄坏请求。
@@ -57,14 +60,14 @@ public final class ExtraHeaders {
                     "accept-encoding", "range")));
 
     /** 配置期告警用；请求期不刷日志。 */
-    private static final Logger LOG = LoggerFactory.getLogger(ExtraHeaders.class);
+    private static final Logger LOG = LoggerFactory.getLogger(VendorHeaders.class);
 
     /** 工具类，不实例化。 */
-    private ExtraHeaders() {
+    private VendorHeaders() {
     }
 
     /**
-     * 清洗一段 {@code extraHeaders}：丢弃保留头、空白头名与空值，并把结果包装为只读映射。
+     * 清洗一段 {@code vendorHeaders}：丢弃保留头、空白头名与空值，并把结果包装为只读映射。
      *
      * @param raw   原始配置值，可为 {@code null}
      * @param owner 归属描述（如 {@code provider[openai]}），仅用于告警文本
@@ -78,26 +81,26 @@ public final class ExtraHeaders {
         for (Map.Entry<String, String> entry : raw.entrySet()) {
             String name = entry.getKey();
             if (name == null || name.trim().isEmpty()) {
-                LOG.warn("extraHeaders 的空白头名已丢弃: owner={}", owner);
+                LOG.warn("vendorHeaders 的空白头名已丢弃: owner={}", owner);
                 continue;
             }
             String trimmed = name.trim();
             if (RESERVED_HEADERS.contains(trimmed.toLowerCase(Locale.ROOT))) {
-                LOG.warn("extraHeaders 的保留头已丢弃（它由内核按协议生成）: owner={} header={}", owner, trimmed);
+                LOG.warn("vendorHeaders 的保留头已丢弃（它由内核按协议生成）: owner={} header={}", owner, trimmed);
                 continue;
             }
             String value = entry.getValue();
             if (value == null) {
-                LOG.warn("extraHeaders 的头值为空，已丢弃: owner={} header={}", owner, trimmed);
+                LOG.warn("vendorHeaders 的头值为空，已丢弃: owner={} header={}", owner, trimmed);
                 continue;
             }
             if (!isValidName(trimmed)) {
-                LOG.warn("extraHeaders 的头名含非法字符，已丢弃: owner={} header={}", owner, trimmed);
+                LOG.warn("vendorHeaders 的头名含非法字符，已丢弃: owner={} header={}", owner, trimmed);
                 continue;
             }
             if (!isValidValue(value)) {
                 // 不把值打进日志：错的可能正是密钥本身（自定义鉴权头），而头名足够定位
-                LOG.warn("extraHeaders 的头值含非法字符（换行、非 ASCII 等），已丢弃: owner={} header={}",
+                LOG.warn("vendorHeaders 的头值含非法字符（换行、非 ASCII 等），已丢弃: owner={} header={}",
                         owner, trimmed);
                 continue;
             }

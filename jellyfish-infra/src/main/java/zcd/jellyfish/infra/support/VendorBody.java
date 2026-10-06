@@ -14,7 +14,12 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * {@code models.json} 里 {@code extraBody} 的清洗与合并：让用户能把厂商私有字段原样带进请求体。
+ * {@code models.json} 里 {@code vendorBody} 的清洗与合并：让用户能把厂商私有字段原样带进请求体。
+ * <p>
+ * <b>段名为什么以 {@code vendor} 开头</b>：读配置的人要能一眼看出「这一段里的键由厂商定义、内核不解释」。
+ * 与之相对的是 {@code sampling} 段——那里的键是<b>内核定义的封闭字段集</b>，带校验、带「未表态」语义
+ * （虽然各家认其中哪几项不同）。两条边界并存于同一份配置里，名字上先分开，否则一旦「配了不生效」，
+ * 没人知道该怀疑哪一边。
  * <p>
  * <b>为什么需要它</b>：{@code reasoning_effort}、{@code thinking}、{@code service_tier} 这类字段
  * 各家叫法、语义、单位都不一样，内核认了就等于替厂商背书一个不成立的抽象。用户比内核更清楚自己的
@@ -42,7 +47,7 @@ import java.util.Set;
  *
  * @author zcd
  */
-public final class ExtraBody {
+public final class VendorBody {
 
     /**
      * 透传的最大嵌套深度。
@@ -59,27 +64,42 @@ public final class ExtraBody {
      * 大小写敏感（厂商字段名就是大小写敏感的）：{@code topP} 是 Gemini 的、{@code top_p} 是 OpenAI 与
      * Claude 的，{@code stopSequences} 是 Gemini 的、{@code stop_sequences} 是 Claude 的，
      * 少写一个就等于给同一个参数留了后门（它会被深合并整体替换掉内核生成的那份，且不报错）。
+     * 采样类的每一项都按这个方式列全：{@code seed} 两家同名，{@code frequency_penalty} 与
+     * {@code frequencyPenalty} 是 OpenAI 与 Gemini 的两种拼法。
+     * <p>
+     * {@code n} / {@code candidateCount} 也在这里，但理由不同：它们不是「已有正式入口」，
+     * 而是<b>内核只解析第一个候选</b>（{@code choices.get(0)} / {@code candidates.get(0)}），
+     * 配上去只会让计费翻倍而多出来的候选被丢掉。
      */
     private static final Set<String> RESERVED_KEYS = Collections.unmodifiableSet(new HashSet<String>(Arrays.asList(
             // 结构性：请求形状与缓存前缀
             "model", "messages", "contents", "system", "systemInstruction", "tools", "toolConfig",
             "tool_choice", "stream", "stream_options", "prompt_cache_key", "prompt_cache_retention",
+            // 多候选：内核只解析第一个候选（choices.get(0) / candidates.get(0)），配了就是白花钱
+            "n", "candidateCount",
             // 采样类：已有 sampling 段这个正式入口
-            "temperature", "top_p", "topP", "stop", "stop_sequences", "stopSequences",
-            "max_tokens", "maxOutputTokens")));
+            "temperature", "top_p", "topP", "top_k", "topK", "seed",
+            "frequency_penalty", "frequencyPenalty", "presence_penalty", "presencePenalty",
+            "stop", "stop_sequences", "stopSequences", "max_tokens", "maxOutputTokens",
+            // 输出上限的另一种拼法：由 model 的 maxTokensField 决定用哪个，不能两处各配一个
+            "max_completion_tokens",
+            // Anthropic 的缓存断点标记：内核按 cacheBreakpoints 与 cacheRetention 显式标注，
+            // 用户从顶层再标一份会与块级标记的 TTL 冲突（Anthropic 对不一致的 TTL 直接 400）。
+            // 要调 TTL 用 cacheRetention，要调断点数用 cacheBreakpoints
+            "cache_control")));
 
     /** 被丢弃的值在内部流转时用的哨兵，避免用 {@code null} 表达「丢弃」（{@code null} 是合法值）。 */
     private static final Object DROPPED = new Object();
 
     /** 日志只用于配置期的一次性告警；请求期不刷日志。 */
-    private static final Logger LOG = LoggerFactory.getLogger(ExtraBody.class);
+    private static final Logger LOG = LoggerFactory.getLogger(VendorBody.class);
 
     /** 工具类，不实例化。 */
-    private ExtraBody() {
+    private VendorBody() {
     }
 
     /**
-     * 清洗一段 {@code extraBody}：丢弃保留键、超深子树与非法值，并把结果深拷贝为只读结构。
+     * 清洗一段 {@code vendorBody}：丢弃保留键、超深子树与非法值，并把结果深拷贝为只读结构。
      *
      * @param raw   原始配置值，可为 {@code null}
      * @param owner 归属描述（如 {@code provider[openai]}），仅用于告警文本
@@ -105,7 +125,7 @@ public final class ExtraBody {
     }
 
     /**
-     * 深合并两份 {@code extraBody}：对象递归合并，数组与标量整体由 {@code override} 替换。
+     * 深合并两份 {@code vendorBody}：对象递归合并，数组与标量整体由 {@code override} 替换。
      * <p>
      * <b>为什么必须是深合并</b>：Gemini 的生成参数全在 {@code generationConfig} 这个容器里。
      * 浅合并下，用户写 {@code {"generationConfig":{"thinkingConfig":{…}}}} 会把内核生成的
@@ -172,7 +192,7 @@ public final class ExtraBody {
         }
         if (!applied.isEmpty() && LOG.isDebugEnabled()) {
             // 只打键名：直通的值可能是任意内容（含凭据），进日志就是泄密
-            LOG.debug("出站请求体已应用 extraBody 直通字段: keys={}", applied);
+            LOG.debug("出站请求体已应用 vendorBody 直通字段: keys={}", applied);
         }
         return applied;
     }
@@ -193,15 +213,15 @@ public final class ExtraBody {
             String key = entry.getKey();
             String keyPath = path.isEmpty() ? String.valueOf(key) : path + "." + key;
             if (key == null || key.trim().isEmpty()) {
-                logDrop(verbose, "extraBody 的空白键已丢弃: owner={}", owner);
+                logDrop(verbose, "vendorBody 的空白键已丢弃: owner={}", owner);
                 continue;
             }
             if (RESERVED_KEYS.contains(key)) {
-                logDrop(verbose, "extraBody 的保留键已丢弃（该参数请用内核字段配置）: owner={} key={}", owner, keyPath);
+                logDrop(verbose, "vendorBody 的保留键已丢弃（该参数请用内核字段配置）: owner={} key={}", owner, keyPath);
                 continue;
             }
             if (depth > MAX_DEPTH) {
-                logDrop(verbose, "extraBody 嵌套超过 {} 层，整棵子树已丢弃: owner={} key={}",
+                logDrop(verbose, "vendorBody 嵌套超过 {} 层，整棵子树已丢弃: owner={} key={}",
                         MAX_DEPTH, owner, keyPath);
                 continue;
             }
@@ -243,7 +263,7 @@ public final class ExtraBody {
             }
             return Collections.unmodifiableList(items);
         }
-        logDrop(verbose, "extraBody 的值类型无法透传，已丢弃: owner={} key={}", owner, path);
+        logDrop(verbose, "vendorBody 的值类型无法透传，已丢弃: owner={} key={}", owner, path);
         return DROPPED;
     }
 

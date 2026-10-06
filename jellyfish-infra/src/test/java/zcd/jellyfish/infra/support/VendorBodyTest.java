@@ -14,16 +14,16 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * {@link ExtraBody} 的单元测试：保留键、深度上限、深合并与只读副本。
+ * {@link VendorBody} 的单元测试：保留键、深度上限、深合并与只读副本。
  *
  * @author zcd
  */
-class ExtraBodyTest {
+class VendorBodyTest {
 
     @Test
     void sanitize_should_return_empty_map_when_raw_is_null() {
         // When / Then
-        assertTrue(ExtraBody.sanitize(null, "provider[openai]").isEmpty());
+        assertTrue(VendorBody.sanitize(null, "provider[openai]").isEmpty());
     }
 
     @Test
@@ -35,7 +35,7 @@ class ExtraBodyTest {
                 "generationConfig", generationConfig);
 
         // When
-        Map<String, Object> result = ExtraBody.sanitize(raw, "provider[openai]");
+        Map<String, Object> result = VendorBody.sanitize(raw, "provider[openai]");
 
         // Then：两个保留键都被丢弃，其余原样保留——只看顶层等于给同一个参数留了后门
         assertFalse(result.containsKey("messages"));
@@ -49,12 +49,12 @@ class ExtraBodyTest {
     void sanitize_should_drop_subtree_beyond_max_depth() {
         // Given：构造一条正好超过深度上限的链路，末端放一个可辨认的键
         Map<String, Object> current = mapOf("tooDeep", "v");
-        for (int i = 0; i < ExtraBody.MAX_DEPTH; i++) {
+        for (int i = 0; i < VendorBody.MAX_DEPTH; i++) {
             current = mapOf("level" + i, current);
         }
 
         // When
-        Map<String, Object> result = ExtraBody.sanitize(current, "provider[openai]");
+        Map<String, Object> result = VendorBody.sanitize(current, "provider[openai]");
 
         // Then：整棵超深子树被丢弃，而不是截断成半截参数
         Map<String, Object> probe = result;
@@ -70,7 +70,7 @@ class ExtraBodyTest {
         Map<String, Object> raw = mapOf("weird", new Object(), "ok", "v");
 
         // When
-        Map<String, Object> result = ExtraBody.sanitize(raw, "provider[openai]");
+        Map<String, Object> result = VendorBody.sanitize(raw, "provider[openai]");
 
         // Then
         assertFalse(result.containsKey("weird"));
@@ -84,7 +84,7 @@ class ExtraBodyTest {
         Map<String, Object> raw = mapOf("generationConfig", nested);
 
         // When
-        Map<String, Object> result = ExtraBody.sanitize(raw, "provider[openai]");
+        Map<String, Object> result = VendorBody.sanitize(raw, "provider[openai]");
 
         // Then：返回值与被清洗的原始对象都不能被读取方改动
         assertThrows(UnsupportedOperationException.class, () -> result.put("extra", "x"));
@@ -103,7 +103,7 @@ class ExtraBodyTest {
                 "stopList", Collections.singletonList("c"));
 
         // When
-        Map<String, Object> merged = ExtraBody.merge(base, override);
+        Map<String, Object> merged = VendorBody.merge(base, override);
 
         // Then：对象递归合并——浅合并会把内核生成的 temperature 整块挤掉，且不报错
         Map<String, Object> config = castMap(merged.get("generationConfig"));
@@ -120,9 +120,9 @@ class ExtraBodyTest {
         Map<String, Object> base = mapOf("service_tier", "flex");
 
         // When / Then：空的一侧不产生新对象，也不丢另一侧
-        assertEquals(base, ExtraBody.merge(base, Collections.<String, Object>emptyMap()));
-        assertEquals(base, ExtraBody.merge(Collections.<String, Object>emptyMap(), base));
-        assertTrue(ExtraBody.merge(null, null).isEmpty());
+        assertEquals(base, VendorBody.merge(base, Collections.<String, Object>emptyMap()));
+        assertEquals(base, VendorBody.merge(Collections.<String, Object>emptyMap(), base));
+        assertTrue(VendorBody.merge(null, null).isEmpty());
     }
 
     @Test
@@ -131,7 +131,7 @@ class ExtraBodyTest {
         Map<String, Object> body = mapOf("model", "gpt-4o", "stream", true);
 
         // When
-        List<String> applied = ExtraBody.applyTo(body, mapOf("service_tier", "flex"));
+        List<String> applied = VendorBody.applyTo(body, mapOf("service_tier", "flex"));
 
         // Then
         assertEquals("flex", body.get("service_tier"));
@@ -145,7 +145,7 @@ class ExtraBodyTest {
         Map<String, Object> extra = mapOf("model", "另一个模型", "temperature", 0.5d, "service_tier", "flex");
 
         // When
-        List<String> applied = ExtraBody.applyTo(body, extra);
+        List<String> applied = VendorBody.applyTo(body, extra);
 
         // Then：保留键一个都不落，其余照发
         assertEquals("gpt-4o", body.get("model"));
@@ -160,19 +160,25 @@ class ExtraBodyTest {
         Map<String, Object> body = mapOf("model", "gpt-4o");
 
         // When / Then
-        assertTrue(ExtraBody.applyTo(body, null).isEmpty());
-        assertTrue(ExtraBody.applyTo(body, Collections.<String, Object>emptyMap()).isEmpty());
+        assertTrue(VendorBody.applyTo(body, null).isEmpty());
+        assertTrue(VendorBody.applyTo(body, Collections.<String, Object>emptyMap()).isEmpty());
     }
 
     @Test
     void sanitize_should_drop_every_sampling_key_spelling() {
         // Given：三家对同一批参数各有拼法，少写一个就等于给同一个参数留后门
+        // max_completion_tokens 与 cache_control 同理：前者由 model.maxTokensField 决定，
+        // 后者是内核按 cacheBreakpoints 显式标注的断点标记（顶层再标一份会与块级 TTL 冲突）
         Map<String, Object> raw = mapOf("temperature", 0.5d, "top_p", 0.9d, "topP", 0.9d,
+                "top_k", 40, "topK", 40, "seed", 7, "frequency_penalty", 0.5d, "frequencyPenalty", 0.5d,
+                "presence_penalty", 0.5d, "presencePenalty", 0.5d,
                 "stop", "x", "stop_sequences", "x", "stopSequences", "x",
-                "max_tokens", 1, "maxOutputTokens", 1, "service_tier", "flex");
+                "max_tokens", 1, "max_completion_tokens", 1, "maxOutputTokens", 1,
+                "cache_control", mapOf("type", "ephemeral"),
+                "n", 2, "candidateCount", 2, "service_tier", "flex");
 
         // When
-        Map<String, Object> result = ExtraBody.sanitize(raw, "provider[openai]");
+        Map<String, Object> result = VendorBody.sanitize(raw, "provider[openai]");
 
         // Then：只剩那个真正私有的字段
         assertEquals(Collections.singletonMap("service_tier", "flex"), result);
@@ -181,11 +187,16 @@ class ExtraBodyTest {
     @Test
     void isReserved_should_recognize_structural_and_sampling_keys() {
         // When / Then：大小写敏感——Gemini 的 topP 与 OpenAI 的 top_p 是两个键，都得挡
-        assertTrue(ExtraBody.isReserved("messages"));
-        assertTrue(ExtraBody.isReserved("top_p"));
-        assertTrue(ExtraBody.isReserved("topP"));
-        assertFalse(ExtraBody.isReserved("service_tier"));
-        assertFalse(ExtraBody.isReserved(null));
+        assertTrue(VendorBody.isReserved("messages"));
+        assertTrue(VendorBody.isReserved("top_p"));
+        assertTrue(VendorBody.isReserved("topP"));
+        assertTrue(VendorBody.isReserved("frequencyPenalty"));
+        assertTrue(VendorBody.isReserved("seed"));
+        assertTrue(VendorBody.isReserved("candidateCount"));
+        assertTrue(VendorBody.isReserved("max_completion_tokens"));
+        assertTrue(VendorBody.isReserved("cache_control"));
+        assertFalse(VendorBody.isReserved("service_tier"));
+        assertFalse(VendorBody.isReserved(null));
     }
 
     /**

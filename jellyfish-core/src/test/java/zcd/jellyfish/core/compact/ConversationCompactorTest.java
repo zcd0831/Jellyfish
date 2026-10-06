@@ -251,14 +251,15 @@ class ConversationCompactorTest {
     }
 
     @Test
-    @DisplayName("回退路径也带上采样与直通参数：走哪条路只该影响钱，不该换参数")
+    @DisplayName("回退路径也带上采样、直通参数与输出上限字段名：走哪条路只该影响钱，不该换参数")
     void plan_should_carryTuning_when_fallingBack() {
         sessionWithMessages(6);
         // 用真实 Provider/Model：调优参数来自配置，mock 掉就测不到合成规则
         Provider provider = new Provider("openai", "openai", "key", "https://api.openai.com",
                 Collections.<Model>emptyList(), null, new SamplingSettings(0.2d, null, null),
                 Collections.<String, Object>singletonMap("service_tier", "flex"), null);
-        ResolvedModel resolved = new ResolvedModel(provider, new Model("gpt-4o", "gpt-4o", 128_000, 4_000));
+        ResolvedModel resolved = new ResolvedModel(provider, new Model("gpt-5", "gpt-5", 128_000, 4_000,
+                Model.COMPLETION_MAX_TOKENS_FIELD, null, null));
         when(modelManager.resolveDefault()).thenReturn(resolved);
         lenient().when(modelManager.getClient(resolved)).thenReturn(client);
         applyKeepRecent(3);
@@ -269,7 +270,10 @@ class ConversationCompactorTest {
 
         // 少落一项的后果不对称：fork 那条路是「命中率与钱」，这条路上却可能是「端点直接拒掉这次摘要」
         assertEquals(0.2d, plan.getRequest().getTemperature());
-        assertEquals("flex", plan.getRequest().getExtraBody().get("service_tier"));
+        assertEquals("flex", plan.getRequest().getVendorBody().get("service_tier"));
+        // 输出上限的字段名与 maxTokens 是同一件事的两半：这条路径曾漏掉它，导致只认
+        // max_completion_tokens 的模型把摘要请求打成 400
+        assertEquals(Model.COMPLETION_MAX_TOKENS_FIELD, plan.getRequest().getMaxTokensField());
     }
 
     @Test

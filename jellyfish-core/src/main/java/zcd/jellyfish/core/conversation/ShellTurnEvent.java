@@ -100,6 +100,15 @@ public final class ShellTurnEvent {
     /** 是否因达到最大轮次而未收敛；仅 {@link Kind#COMPLETED} 有意义。 */
     private final boolean truncated;
 
+    /**
+     * 收敛时附带的一句给用户看的提示；其余种类为 {@code null}。
+     * <p>
+     * 目前有两处来源：回复被输出上限截断、模型一个字都没回。两者都与「正常答完」形状相同，
+     * 因此必须由内核补一句，否则用户分不出「模型说完了」与「模型其实没说完 / 没说」。
+     * <b>它不是正文</b>：外壳走自己的提示通道，不要拼进回答里。
+     */
+    private final String notice;
+
     /** 被拦下的理由；仅 {@link Kind#BLOCKED} 可能非 {@code null}。 */
     private final String reason;
 
@@ -121,13 +130,14 @@ public final class ShellTurnEvent {
      * @param metadata      工具结果元数据，可为 {@code null}
      * @param rounds        轮数
      * @param truncated     是否未收敛
+     * @param notice        收敛时的提示，可为 {@code null}
      * @param reason        拦下理由，可为 {@code null}
      * @param error         失败原因，可为 {@code null}
      */
     private ShellTurnEvent(Kind kind, String sessionId, String turnId, String text, String toolCallId,
                            String toolName, Map<String, Object> toolArguments, boolean success, String output,
-                           Map<String, Object> metadata, int rounds, boolean truncated, String reason,
-                           Throwable error) {
+                           Map<String, Object> metadata, int rounds, boolean truncated, String notice,
+                           String reason, Throwable error) {
         this.kind = kind;
         this.sessionId = sessionId;
         this.turnId = turnId;
@@ -144,6 +154,7 @@ public final class ShellTurnEvent {
                 : Collections.unmodifiableMap(new LinkedHashMap<String, Object>(metadata));
         this.rounds = rounds;
         this.truncated = truncated;
+        this.notice = notice;
         this.reason = reason;
         this.error = error;
     }
@@ -157,7 +168,7 @@ public final class ShellTurnEvent {
      */
     public static ShellTurnEvent started(String sessionId, String turnId) {
         return new ShellTurnEvent(Kind.STARTED, sessionId, turnId, null, null, null, null, false, null, null,
-                0, false, null, null);
+                0, false, null, null, null);
     }
 
     /**
@@ -170,7 +181,7 @@ public final class ShellTurnEvent {
      */
     public static ShellTurnEvent text(String sessionId, String turnId, String delta) {
         return new ShellTurnEvent(Kind.TEXT, sessionId, turnId, delta, null, null, null, false, null, null,
-                0, false, null, null);
+                0, false, null, null, null);
     }
 
     /**
@@ -183,7 +194,7 @@ public final class ShellTurnEvent {
      */
     public static ShellTurnEvent thinking(String sessionId, String turnId, String delta) {
         return new ShellTurnEvent(Kind.THINKING, sessionId, turnId, delta, null, null, null, false, null, null,
-                0, false, null, null);
+                0, false, null, null, null);
     }
 
     /**
@@ -199,7 +210,7 @@ public final class ShellTurnEvent {
     public static ShellTurnEvent toolStarted(String sessionId, String turnId, String toolCallId,
                                              String toolName, Map<String, Object> arguments) {
         return new ShellTurnEvent(Kind.TOOL_STARTED, sessionId, turnId, null, toolCallId, toolName, arguments,
-                false, null, null, 0, false, null, null);
+                false, null, null, 0, false, null, null, null);
     }
 
     /**
@@ -215,7 +226,7 @@ public final class ShellTurnEvent {
     public static ShellTurnEvent toolOutput(String sessionId, String turnId, String toolCallId,
                                             String toolName, String chunk) {
         return new ShellTurnEvent(Kind.TOOL_OUTPUT, sessionId, turnId, chunk, toolCallId, toolName, null,
-                false, null, null, 0, false, null, null);
+                false, null, null, 0, false, null, null, null);
     }
 
     /**
@@ -234,7 +245,7 @@ public final class ShellTurnEvent {
                                                String toolName, boolean success, String output,
                                                Map<String, Object> metadata) {
         return new ShellTurnEvent(Kind.TOOL_COMPLETED, sessionId, turnId, null, toolCallId, toolName, null,
-                success, output, metadata, 0, false, null, null);
+                success, output, metadata, 0, false, null, null, null);
     }
 
     /**
@@ -247,7 +258,7 @@ public final class ShellTurnEvent {
      */
     public static ShellTurnEvent blocked(String sessionId, String turnId, String reason) {
         return new ShellTurnEvent(Kind.BLOCKED, sessionId, turnId, null, null, null, null, false, null, null,
-                0, false, reason, null);
+                0, false, null, reason, null);
     }
 
     /**
@@ -262,8 +273,28 @@ public final class ShellTurnEvent {
      */
     public static ShellTurnEvent completed(String sessionId, String turnId, String content, int rounds,
                                            boolean truncated) {
+        return completed(sessionId, turnId, content, rounds, truncated, null);
+    }
+
+    /**
+     * 构造「回合收敛」（带提示）。
+     * <p>
+     * <b>提示与正文是两回事</b>：{@code content} 是模型说的话，{@code notice} 是内核对这次收敛的补充说明
+     * （回复被输出上限截断、模型一个字都没回）。外壳应当把 {@code notice} 走自己的提示通道，
+     * <b>而不是拼进回答里</b>——那会让用户以为模型说过这句话。
+     *
+     * @param sessionId 会话标识
+     * @param turnId    回合标识
+     * @param content   最终正文，可为 {@code null}
+     * @param rounds    轮数
+     * @param truncated 是否因达到最大轮次而未收敛
+     * @param notice    收敛时的提示，可为 {@code null}
+     * @return 事件，保证非 {@code null}
+     */
+    public static ShellTurnEvent completed(String sessionId, String turnId, String content, int rounds,
+                                           boolean truncated, String notice) {
         return new ShellTurnEvent(Kind.COMPLETED, sessionId, turnId, content, null, null, null, false, null,
-                null, rounds, truncated, null, null);
+                null, rounds, truncated, notice, null, null);
     }
 
     /**
@@ -275,7 +306,7 @@ public final class ShellTurnEvent {
      */
     public static ShellTurnEvent cancelled(String sessionId, String turnId) {
         return new ShellTurnEvent(Kind.CANCELLED, sessionId, turnId, null, null, null, null, false, null, null,
-                0, false, null, null);
+                0, false, null, null, null);
     }
 
     /**
@@ -288,7 +319,7 @@ public final class ShellTurnEvent {
      */
     public static ShellTurnEvent error(String sessionId, String turnId, Throwable error) {
         return new ShellTurnEvent(Kind.ERROR, sessionId, turnId, null, null, null, null, false, null, null,
-                0, false, null, error);
+                0, false, null, null, error);
     }
 
     /**
@@ -409,6 +440,19 @@ public final class ShellTurnEvent {
      */
     public boolean isTruncated() {
         return truncated;
+    }
+
+    /**
+     * 获取收敛时附带的提示。
+     * <p>
+     * <b>它不是正文、也不是错误</b>：回合确实收敛了，只是有一处从正文看不出来的例外需要告诉用户
+     * （回复被输出上限截断、模型一个字都没回）。外壳应走自己的提示通道渲染它——
+     * 拼进回答里会让用户以为模型说过这句话。
+     *
+     * @return 提示文本，无需提示时为 {@code null}
+     */
+    public String getNotice() {
+        return notice;
     }
 
     /**

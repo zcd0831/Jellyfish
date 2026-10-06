@@ -197,15 +197,20 @@ public final class PluginLlmClientAdapter implements LlmClient {
                 .toolChoice(request.getToolChoice())
                 .temperature(request.getTemperature())
                 .maxTokens(request.getMaxTokens())
+                .maxTokensField(request.getMaxTokensField())
                 .topP(request.getTopP())
+                .topK(request.getTopK())
+                .seed(request.getSeed())
+                .frequencyPenalty(request.getFrequencyPenalty())
+                .presencePenalty(request.getPresencePenalty())
                 .stop(request.getStop().isEmpty() ? null : request.getStop())
                 .cacheKey(request.getCacheKey())
                 .cacheRetention(request.getCacheRetention())
                 .cacheBreakpoints(request.getCacheBreakpoints())
                 // 直通字段一并交出去：插件看不到它的话，用户会遇到「换了 type 之后配的 reasoning_effort
                 // 就不再生效」。请求头只有 provider 级，因此从 provider 读（与内置客户端同一口径）
-                .extraBody(request.getExtraBody())
-                .extraHeaders(provider.getExtraHeaders());
+                .vendorBody(request.getVendorBody())
+                .vendorHeaders(provider.getVendorHeaders());
         if (request.isMinimalOutput()) {
             builder.minimalOutput();
         }

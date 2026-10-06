@@ -941,7 +941,7 @@ class PromptAssemblerTest {
         when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
         Provider provider = new Provider("openai", "openai", null, null, null, new ProviderCacheSettings(),
                 new SamplingSettings(0.2d, 0.9d, Collections.singletonList("</done>")), null, null);
-        Model model = new Model("gpt-4o", "gpt-4o", 128_000, 4096,
+        Model model = new Model("gpt-4o", "gpt-4o", 128_000, 4096, null,
                 new SamplingSettings(1d, null, null), null);
 
         // When
@@ -951,6 +951,89 @@ class PromptAssemblerTest {
         assertEquals(1d, request.getTemperature());
         assertEquals(0.9d, request.getTopP());
         assertEquals(Collections.singletonList("</done>"), request.getStop());
+    }
+
+    @Test
+    void buildRequest_should_applyMaxTokensField_fromModel() {
+        // Given：一个只认 max_completion_tokens 的模型（内核不知道这件事，由配置声明）
+        Session session = newSession();
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        Provider provider = new Provider("openai", "openai", null, null, null);
+        Model model = new Model("gpt-5", "gpt-5", 400_000, 8192,
+                Model.COMPLETION_MAX_TOKENS_FIELD, null, null);
+
+        // When
+        LlmRequest request = assembler.buildRequest(session, new ResolvedModel(provider, model));
+
+        // Then：上限与承载它的字段名一起下发，缺一个就是 400 或静默无效
+        assertEquals(Model.COMPLETION_MAX_TOKENS_FIELD, request.getMaxTokensField());
+        assertEquals(8192, request.getMaxTokens());
+    }
+
+    @Test
+    void buildFork_should_carryMaxTokensField_fromParent() {
+        // Given
+        SessionManager sessions = newSessionManager();
+        Session session = sessions.createDefault();
+        sessions.appendMessage(session.getSessionId(), LlmMessage.user("一"), null);
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        Provider provider = new Provider("openai", "openai", null, null, null);
+        ResolvedModel resolved = new ResolvedModel(provider, new Model("gpt-5", "gpt-5", 400_000, 8192,
+                Model.COMPLETION_MAX_TOKENS_FIELD, null, null));
+
+        // When
+        LlmRequest parent = assembler.buildRequest(session, resolved);
+        LlmRequest fork = assembler.buildFork(session, resolved, 0, 0, "写摘要");
+
+        // Then：fork 同样是真实调用，字段名漏了就按默认拼法发出去，目标模型可能直接 400
+        assertEquals(parent.getMaxTokensField(), fork.getMaxTokensField());
+    }
+
+    @Test
+    void buildRequest_should_applyAllSevenSamplingFields_fromProviderAndModel() {
+        // Given：provider 给基线，model 覆盖其中两项
+        Session session = newSession();
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        Provider provider = new Provider("openai", "openai", null, null, null, new ProviderCacheSettings(),
+                new SamplingSettings(0.2d, 0.9d, 40, 7L, 0.5d, 0.5d, Collections.singletonList("</done>")),
+                null, null);
+        Model model = new Model("gpt-4o", "gpt-4o", 128_000, 4096, null,
+                new SamplingSettings(1d, null, null, 99L, null, null, null), null);
+
+        // When
+        LlmRequest request = assembler.buildRequest(session, new ResolvedModel(provider, model));
+
+        // Then：model 表了态的两项被换掉，其余六项原样沿用
+        assertEquals(1d, request.getTemperature());
+        assertEquals(0.9d, request.getTopP());
+        assertEquals(40, request.getTopK());
+        assertEquals(99L, request.getSeed());
+        assertEquals(0.5d, request.getFrequencyPenalty());
+        assertEquals(0.5d, request.getPresencePenalty());
+        assertEquals(Collections.singletonList("</done>"), request.getStop());
+    }
+
+    @Test
+    void buildFork_should_carrySamplingExtras_fromParent() {
+        // Given
+        SessionManager sessions = newSessionManager();
+        Session session = sessions.createDefault();
+        sessions.appendMessage(session.getSessionId(), LlmMessage.user("一"), null);
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        Provider provider = new Provider("openai", "openai", null, null, null, new ProviderCacheSettings(),
+                new SamplingSettings(null, null, 40, 7L, 0.5d, 0.5d, null), null, null);
+        ResolvedModel resolved = new ResolvedModel(provider,
+                new Model("gpt-4o", "gpt-4o", 128_000, 4096, null, null, null));
+
+        // When
+        LlmRequest parent = assembler.buildRequest(session, resolved);
+        LlmRequest fork = assembler.buildFork(session, resolved, 0, 0, "写摘要");
+
+        // Then：fork 是一次真实、计费的调用，参数必须与父请求一致
+        assertEquals(parent.getTopK(), fork.getTopK());
+        assertEquals(parent.getSeed(), fork.getSeed());
+        assertEquals(parent.getFrequencyPenalty(), fork.getFrequencyPenalty());
+        assertEquals(parent.getPresencePenalty(), fork.getPresencePenalty());
     }
 
     @Test
@@ -969,7 +1052,7 @@ class PromptAssemblerTest {
     }
 
     @Test
-    void buildRequest_should_applyExtraBody_mergedFromProviderAndModel() {
+    void buildRequest_should_applyVendorBody_mergedFromProviderAndModel() {
         // Given：provider 级与 model 级各写一个厂商私有字段
         Session session = newSession();
         when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
@@ -979,18 +1062,18 @@ class PromptAssemblerTest {
         modelBody.put("reasoning_effort", "low");
         Provider provider = new Provider("openai", "openai", null, null, null, new ProviderCacheSettings(),
                 null, providerBody, null);
-        Model model = new Model("gpt-4o", "gpt-4o", 128_000, 4096, null, modelBody);
+        Model model = new Model("gpt-4o", "gpt-4o", 128_000, 4096, null, null, modelBody);
 
         // When
         LlmRequest request = assembler.buildRequest(session, new ResolvedModel(provider, model));
 
         // Then：两级都带上，内核不解释它们的含义
-        assertEquals("flex", request.getExtraBody().get("service_tier"));
-        assertEquals("low", request.getExtraBody().get("reasoning_effort"));
+        assertEquals("flex", request.getVendorBody().get("service_tier"));
+        assertEquals("low", request.getVendorBody().get("reasoning_effort"));
     }
 
     @Test
-    void buildFork_should_carrySamplingAndExtraBody_fromParent() {
+    void buildFork_should_carrySamplingAndVendorBody_fromParent() {
         // Given：配齐采样与直通字段
         SessionManager sessions = newSessionManager();
         Session session = sessions.createDefault();
@@ -1000,7 +1083,7 @@ class PromptAssemblerTest {
         providerBody.put("service_tier", "flex");
         Provider provider = new Provider("openai", "openai", null, null, null, new ProviderCacheSettings(),
                 new SamplingSettings(0.2d, 0.9d, null), providerBody, null);
-        Model model = new Model("gpt-4o", "gpt-4o", 128_000, 4096, null, null);
+        Model model = new Model("gpt-4o", "gpt-4o", 128_000, 4096, null, null, null);
         ResolvedModel resolved = new ResolvedModel(provider, model);
 
         // When
@@ -1010,11 +1093,11 @@ class PromptAssemblerTest {
         // Then：fork 是一次真实、计费的调用，参数必须与父请求一致——否则同一个前缀会有两种问法
         assertEquals(parent.getTemperature(), fork.getTemperature());
         assertEquals(parent.getTopP(), fork.getTopP());
-        assertEquals(parent.getExtraBody(), fork.getExtraBody());
+        assertEquals(parent.getVendorBody(), fork.getVendorBody());
     }
 
     @Test
-    void buildKeepAlive_should_carrySamplingAndExtraBody_fromParent() {
+    void buildKeepAlive_should_carrySamplingAndVendorBody_fromParent() {
         // Given
         SessionManager sessions = newSessionManager();
         Session session = sessions.createDefault();
@@ -1025,7 +1108,7 @@ class PromptAssemblerTest {
         Provider provider = new Provider("openai", "openai", null, null, null, new ProviderCacheSettings(),
                 new SamplingSettings(0.2d, null, null), providerBody, null);
         ResolvedModel resolved = new ResolvedModel(provider,
-                new Model("gpt-4o", "gpt-4o", 128_000, 4096, null, null));
+                new Model("gpt-4o", "gpt-4o", 128_000, 4096, null, null, null));
 
         // When：先装一次父请求（保活复用的就是它），再构造保活请求
         LlmRequest parent = assembler.buildRequest(session, resolved);
@@ -1034,7 +1117,7 @@ class PromptAssemblerTest {
         // Then
         assertNotNull(keepAlive);
         assertEquals(parent.getTemperature(), keepAlive.getTemperature());
-        assertEquals(parent.getExtraBody(), keepAlive.getExtraBody());
+        assertEquals(parent.getVendorBody(), keepAlive.getVendorBody());
         // 「不需要输出」这一点仍然由内核声明，不受采样与直通字段影响
         assertTrue(keepAlive.isMinimalOutput());
     }

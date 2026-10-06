@@ -90,6 +90,10 @@ import java.util.Set;
  * 分支），不需要第二套界面。壳内唯一的硬约束是「不要假设当前会话一定存在」——
  * 补全、候选查询、命令分发都可能在首页发生。
  * <p>
+ * <b>命令输出在消息区之外</b>：它进输入框上方那块 {@code DOCK} 面板（{@link ShellOutput}），
+ * 只留最近一次、{@code Esc} 关闭、可滚动。这是为了让首页的字标不被逐条输出顶走、也不会让命令输出
+ * 插进会话中间——而插件通知与状态反馈仍按时间戳进消息流。
+ * <p>
  * <b>回合为什么是异步的</b>：{@code ConversationService.submit} 起回合后立即返回
  * {@link ReActTurn} 句柄，回合在专用线程池里推进，界面在自己的事件循环里继续跑。
  * <b>本类不得调 {@code await()}</b>：那会让界面在整个回合期间冻住，连 {@code Esc} 都收不到。
@@ -186,6 +190,15 @@ public final class TuiApp extends ToolkitApp {
 
     /** 视图状态。 */
     private final ChatState chatState = new ChatState();
+
+    /**
+     * 命令输出面板：显示最近一次命令结果，{@code Esc} 关闭，可滚动。
+     * <p>
+     * 与 {@link ChatState} 同一线程契约（只由渲染线程读写），但它<b>不是</b>{@code ChatState} 的一部分：
+     * 前者管「会话投影的哪一段」，这里管「最近一次命令说了什么」。命令输出不进会话（见 {@link ShellNotice}），
+     * 因此也不该进那份滚动状态——否则翻消息区会顺带改掉命令面板的阅读位置。
+     */
+    private final ShellOutput shellOutput = new ShellOutput();
 
     /**
      * 面板落位状态：哪个插件的面板显示在哪个区域。
@@ -516,8 +529,10 @@ public final class TuiApp extends ToolkitApp {
         // 面板不再因为浮层而让位：它们照常显示，需要时由账本按纵向预算让它们变矮
         // （见 ChatLayout.allocateRows）——抽掉面板的代价每次交互都要付，而浮层与面板并不重叠
         Map<UiRegion, OwnedPanel> panels = declared;
+        // 命令输出面板想要多少行由它自己的内容决定（有上限），账本据此在纵向预算里分配；
+        // 它优先于插件 DOCK 面板，因此这里先算它，再把「本帧分到几行」交给渲染去切滚动窗口
         ChatLayout layout = ChatLayout.compute(size.width(), size.height(), input.panelRows(),
-                ChatShell.overlayRows(overlay), panels);
+                ChatShell.overlayRows(overlay), panels, shellOutput.desiredPanelRows(size.width()));
         logSidebarDrop(layout, size.width());
 
         ChatState.View view = chatState.view(sessionId, messages, layout.getMessageWidth(),
@@ -536,7 +551,8 @@ public final class TuiApp extends ToolkitApp {
             // 额外加一行会把最新的一行挤出可视区——而「跟随底部」时用户最想看的正是那一行
             status = status + "   " + hint;
         }
-        return shell.render(view, title(session), status, overlay, panels, layout);
+        DockPanel shellPanel = shellOutput.render(size.width(), layout.getDockRows() - ChatShell.BORDER_SIZE * 2);
+        return shell.render(view, title(session), status, overlay, shellPanel, panels, layout);
     }
 
     /**
@@ -817,6 +833,8 @@ public final class TuiApp extends ToolkitApp {
     private void syncSession(String sessionId) {
         if (!Objects.equals(renderedSessionId, sessionId)) {
             chatState.clearNotices();
+            // 命令输出同样属于「上一次交互的上下文」：换了会话还留着，用户会以为那是新会话里的东西
+            shellOutput.close();
             renderedSessionId = sessionId;
             // 插件贡献是按会话给的，换了会话必须重新问一遍（UiCache 自己也会比对 sessionId，这里是双保险）
             uiCache.invalidate();
@@ -845,6 +863,10 @@ public final class TuiApp extends ToolkitApp {
             return;
         }
         String text = input.takeText();
+        // 用户开始新的一轮交互：上一条命令的输出让位。命令面板回答的是「刚才那一句敲下去发生了什么」，
+        // 用户再度开口就说明那一轮已经翻篇；而新命令的结果会由 applyCommandResult 重新开面板，
+        // 因此这里先关不会丢东西
+        shellOutput.close();
         // 外壳自有命令必须先截胡：交给命令域只会得到 UNKNOWN，而外壳其实完全听得懂
         if (executeShellOwned(text)) {
             return;
@@ -933,6 +955,10 @@ public final class TuiApp extends ToolkitApp {
      * <p>
      * 与 {@link #executeCommand} 的分工：那条路是外壳自己发起的命令（插件快捷键、二级选择页确认），
      * 这条路是提交管线分流出来的命令。两者共用本方法，保证「命令结果长什么样」只有一个实现。
+     * <p>
+     * 落点是<b>命令输出面板</b>（{@link ShellOutput}）而不是消息区：命令结果有固定归属之后，
+     * 首页的字标不会因为连续敲几条命令而被顶走，会话页也不会被命令输出插进对话中间。
+     * 例外是「命令要求挑一个取值」——那种情况弹选择页，文本不重复贴。
      *
      * @param text   命令原文
      * @param result 命令结果，不可为 {@code null}
@@ -947,7 +973,9 @@ public final class TuiApp extends ToolkitApp {
             picker.open(text.trim(), result.getChoices());
             return;
         }
-        chatState.appendNotice(text, withShellUsage(text, result), kindOf(result.getKind()));
+        // 命令输出进 DOCK 面板而不是消息区：它是「对刚敲的那一下的回应」，有固定归属之后
+        // 首页的字标不再被逐条输出顶走，会话页也不会被命令输出插进对话中间（见 ShellOutput）
+        shellOutput.show(text, withShellUsage(text, result), kindOf(result.getKind()));
     }
 
     /**
@@ -964,7 +992,7 @@ public final class TuiApp extends ToolkitApp {
             applyCommandResult(text, commands.execute(text, sessionId));
         } catch (JellyfishException e) {
             LOG.warn("TUI 命令执行失败：{}", e.getMessage());
-            chatState.appendNotice(text, "命令执行失败：" + e.getMessage(), ShellNotice.Kind.ERROR);
+            shellOutput.show(text, "命令执行失败：" + e.getMessage(), ShellNotice.Kind.ERROR);
         } finally {
             // 命令的副作用写在各自的域服务里，插件可能因此改了自家状态：这是外壳能看到的兜底失效点之一
             uiCache.invalidate();
@@ -972,64 +1000,66 @@ public final class TuiApp extends ToolkitApp {
     }
 
     /**
-     * 切换思考过程展开状态，并把新状态贴成一条外壳提示。
+     * 切换思考过程展开状态（{@code Ctrl+T} / {@code /thinking}）。
      * <p>
-     * <b>为什么要回一条提示</b>：折叠态与展开态在屏幕上的差别是「一行的还是一片」，
-     * 而当前屏幕可能压根<em>没有</em>思考块（比如刚启动）——那时候按 {@code Ctrl+T} 屏幕毫无变化，
-     * 没有提示就与「按键没生效」无法区分。
+     * <b>为什么不再回执</b>：开关回执本身也是一条「贴出来的东西」，而它回答的问题
+     * （「刚才那下生效了吗」）在屏幕上已经有答案——展开后思考块从一行变成一片；折叠后反之。
+     * 每按一次就往屏幕上加一行噪音，比它带来的确定性更贵。
      * <p>
-     * 提示不进会话，因此不会污染发给模型的历史；它也<b>不建会话</b>，在首页上按也一样能用。
+     * 状态仍不进会话，因此不会污染发给模型的历史；它也<b>不建会话</b>，在首页上按一样能用。
      */
     private void toggleThinking() {
-        boolean expanded = chatState.toggleThinking();
-        chatState.appendNotice("思考过程：" + (expanded ? "已展开" : "已折叠"), ShellNotice.Kind.INFO);
+        chatState.toggleThinking();
     }
 
     /**
-     * 切换工具调用参数展开状态，并把新状态贴成一条外壳提示。
+     * 切换工具调用参数展开状态（{@code Ctrl+E} / {@code /toolargs}）。
      * <p>
-     * <b>为什么要回一条提示</b>：折叠态与展开态在屏幕上的差别只在「长参数占几行」，而屏幕上可能
-     * 压根没有工具调用（刚启动、或当前参数本来就不长）——那时按 {@code Ctrl+E} 屏幕毫无变化，
-     * 没有提示就与「按键没生效」无法区分。
-     * <p>
-     * 与 {@link #toggleThinking()} 一样：提示不进会话，也不建会话。
+     * 与 {@link #toggleThinking()} 同一口径：不回执。要确认当前状态时，
+     * 屏幕上的轨迹行本身（参数折成几行）就是判据。
      */
     private void toggleToolArguments() {
-        boolean expanded = chatState.toggleToolArguments();
-        chatState.appendNotice("工具参数：" + (expanded ? "已展开" : "已折叠"), ShellNotice.Kind.INFO);
+        chatState.toggleToolArguments();
     }
 
     /**
      * 执行一条 {@code /mouse} 命令：把鼠标交还终端或收回应用。
      * <p>
-     * 与 {@code /ui} 一样贴成外壳提示，但<b>不走 {@link CommandManager}</b>：鼠标捕获是终端能力，内核没有这个概念。
+     * 与 {@code /ui} 一样，但<b>不走 {@link CommandManager}</b>：鼠标捕获是终端能力，内核没有这个概念。
+     * 它是命令（用户主动敲的），因此结果进命令输出面板——与 {@code Ctrl+O} 形成对照：
+     * 后者只是一个开关，不产生输出。
      *
      * @param text 命令原文
      */
     private void executeMouse(String text) {
         Optional<Boolean> target = MouseCommand.targetOf(text, mouseCaptured);
         if (!target.isPresent()) {
-            chatState.appendNotice(text, MouseCommand.usageError(), ShellNotice.Kind.ERROR);
+            shellOutput.show(text, MouseCommand.usageError(), ShellNotice.Kind.ERROR);
             return;
         }
         boolean applied = setMouseCapture(target.get());
         // 提示按「实际生效的状态」给而不是按目标状态：终端写失败时状态没变，
         // 屏幕上却写着「已交还」会让用户对着不能选中的界面找问题
-        chatState.appendNotice(text, MouseCommand.notice(mouseCaptured),
+        shellOutput.show(text, MouseCommand.notice(mouseCaptured),
                 applied ? ShellNotice.Kind.INFO : ShellNotice.Kind.ERROR);
     }
 
     /**
      * 切换鼠标捕获（{@code Ctrl+O}）。
      * <p>
-     * <b>为什么要回一条提示</b>：两种状态在屏幕上的差别只在「鼠标归谁管」，
-     * 不按一下再拖选是看不出来的；而交还期间滚轮确实不工作，没有提示就与「界面卡住了」无法区分。
-     * 提示不进会话，因此不会污染发给模型的历史；它也不需要会话，在首页上按同样可用。
+     * <b>为什么可以静默</b>：与另外两个开关不同，鼠标捕获态本来就是「持续可见」的——
+     * 交还给终端后状态栏常驻一条 {@link MouseCommand#statusMarker(boolean)}，滚轮停用、
+     * 怎么收回都写在上面；收回后标记消失、滚轮立刻可用。回执是多余的。
+     * <p>
+     * 写终端失败仍然要说：那种情况下状态没有变化，而用户以为自己刚交出鼠标去拖选，
+     * 静默只会让他对着一份没法选中的界面找原因。
      */
     private void toggleMouseCapture() {
-        boolean applied = setMouseCapture(!mouseCaptured);
-        chatState.appendNotice(MouseCommand.notice(mouseCaptured),
-                applied ? ShellNotice.Kind.INFO : ShellNotice.Kind.ERROR);
+        if (setMouseCapture(!mouseCaptured)) {
+            return;
+        }
+        shellOutput.show(CommandManager.COMMAND_PREFIX + MouseCommand.NAME,
+                MouseCommand.notice(mouseCaptured), ShellNotice.Kind.ERROR);
     }
 
     /**
@@ -1115,7 +1145,7 @@ public final class TuiApp extends ToolkitApp {
             picker.open(text.trim(), result.getChoices());
             return;
         }
-        chatState.appendNotice(text, result.getText(),
+        shellOutput.show(text, result.getText(),
                 result.isError() ? ShellNotice.Kind.ERROR : ShellNotice.Kind.INFO);
     }
 
@@ -1147,13 +1177,15 @@ public final class TuiApp extends ToolkitApp {
      * <b>不直接回调插件</b>：这样插件不需要「被内核回调」这个新能力，而命令域已有的审计、
      * {@code sessionRequired} 判定与错误处理全部复用，快捷键的可发现性也顺带解决
      * （{@code /help} 里本来就有这条命令）。
+     * <p>
+     * <b>为什么不额外回显「快捷键 /xxx」</b>：命令输出面板的标题写的正是这条命令的原文，
+     * 再往消息区贴一行只会重复同一件事。而快捷键与手敲命令的表现在此完全一致——
+     * 这正是「快捷键 = 敲了那条命令」这句约定的字面含义。
      *
      * @param commandName 命令名（不含前缀斜杠）
      */
     private void runShortcut(String commandName) {
         String text = CommandManager.COMMAND_PREFIX + commandName;
-        // 回显：屏幕上看得到「这个键干了什么」，否则一次改动了状态的快捷键会显得像自己发生的
-        chatState.appendNotice(text, "快捷键 " + text, ShellNotice.Kind.INFO);
         executeCommand(text, currentSessionIdOrNull());
     }
 
@@ -1224,7 +1256,7 @@ public final class TuiApp extends ToolkitApp {
             executeCommand(text, currentSessionIdOrNull());
         } catch (JellyfishException e) {
             LOG.warn("选择页执行失败：{}", e.getMessage());
-            chatState.appendNotice(text, "命令执行失败：" + e.getMessage(), ShellNotice.Kind.ERROR);
+            shellOutput.show(text, "命令执行失败：" + e.getMessage(), ShellNotice.Kind.ERROR);
         }
     }
 
@@ -1627,9 +1659,15 @@ public final class TuiApp extends ToolkitApp {
                     submit();
                     return EventResult.HANDLED;
                 case CANCEL:
-                    // 先收起浮层再谈中断：无进行中工作时时 cancelCurrentWork 是空操作，两者可以共存
+                    // 先收起浮层再谈其它：无进行中工作时时 cancelCurrentWork 是空操作，两者可以共存
                     completion.dismiss();
                     referenceCompletion.dismiss();
+                    // 一次一层：命令面板开着时 Esc 只关它，不动回合——否则用户想收起一块输出，
+                    // 代价却是把正在生成的回答掐掉，而这不可逆
+                    if (shellOutput.isVisible()) {
+                        shellOutput.close();
+                        return EventResult.HANDLED;
+                    }
                     cancelCurrentWork();
                     return EventResult.HANDLED;
                 case TOGGLE_THINKING:
@@ -2020,11 +2058,18 @@ public final class TuiApp extends ToolkitApp {
      * 键盘路径（{@link InputKeys} / {@link ScrollFallback}）与鼠标路径（{@link MouseScrollMapper}）
      * 共用这里，因此「翻页 / 滚轮 / 回底」的语义只有一份：全部落在 {@link ChatState} 的滚动状态上，
      * 跟随与回底的行为天然一致。
+     * <p>
+     * <b>命令面板可见时滚动键归它</b>：屏幕上同时有两处可滚的内容时，「焦点在哪」必须有一个判据，
+     * 否则同一个 PageUp 的含义会随用户看不见的状态而变。判据取「最上层、最近打开」——
+     * 命令面板正是用户刚敲出来的那一块，而它一关，滚动立刻回到消息区。
      *
      * @param action 按键或滚轮判定出的动作
      * @return 动作归滚动管返回 {@code true}；其余动作返回 {@code false} 且无副作用
      */
     private boolean applyScroll(InputAction action) {
+        if (shellOutput.isVisible() && applyShellOutputScroll(action)) {
+            return true;
+        }
         switch (action) {
             case PAGE_UP:
                 chatState.pageUp();
@@ -2040,6 +2085,34 @@ public final class TuiApp extends ToolkitApp {
                 return true;
             case TO_BOTTOM:
                 chatState.toBottom();
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    /**
+     * 把一条滚动动作作用到命令输出面板上。
+     *
+     * @param action 按键或滚轮判定出的动作
+     * @return 动作归命令面板管返回 {@code true}；其余返回 {@code false}
+     */
+    private boolean applyShellOutputScroll(InputAction action) {
+        switch (action) {
+            case PAGE_UP:
+                shellOutput.pageUp();
+                return true;
+            case PAGE_DOWN:
+                shellOutput.pageDown();
+                return true;
+            case SCROLL_UP:
+                shellOutput.scrollBy(-MouseScrollMapper.WHEEL_STEP_ROWS);
+                return true;
+            case SCROLL_DOWN:
+                shellOutput.scrollBy(MouseScrollMapper.WHEEL_STEP_ROWS);
+                return true;
+            case TO_BOTTOM:
+                shellOutput.toBottom();
                 return true;
             default:
                 return false;

@@ -97,8 +97,8 @@ class ChatShellTest {
 
         // 用 202 列（实测终端）：窄于 minWidthForBothSidebars() 时右栏本来就会因为宽度被舍掉，
         // 那是另一条判据，会把这个用例想验的「浮层导致的差别」盖住
-        ChatLayout without = ChatLayout.compute(202, 40, 5, 0, declared);
-        ChatLayout with = ChatLayout.compute(202, 40, 5, overlayRows, declared);
+        ChatLayout without = ChatLayout.compute(202, 40, 5, 0, declared, 0);
+        ChatLayout with = ChatLayout.compute(202, 40, 5, overlayRows, declared, 0);
 
         assertTrue(with.getRightWidth() > 0, "右栏必须还在——这正是「不消失」");
         assertEquals(without.getRightWidth(), with.getRightWidth(), "浮层只影响高度，不该动侧栏宽度");
@@ -112,14 +112,29 @@ class ChatShellTest {
         Map<UiRegion, OwnedPanel> declared = docked();
         int desired = ChatLayout.panelRows(declared.get(UiRegion.DOCK));
 
-        ChatLayout without = ChatLayout.compute(100, 30, 5, 0, declared);
-        ChatLayout with = ChatLayout.compute(100, 30, 5, ChatShell.overlayRows(overlay()), declared);
+        ChatLayout without = ChatLayout.compute(100, 30, 5, 0, declared, 0);
+        ChatLayout with = ChatLayout.compute(100, 30, 5, ChatShell.overlayRows(overlay()), declared, 0);
 
         assertEquals(desired, without.getDockRows(), "没有浮层时按内容占满");
         assertEquals(desired, with.getDockRows(),
                 "高 30 的终端装得下：浮层出现时 DOCK 不该被抽掉");
         assertEquals(ChatShell.overlayRows(overlay()), without.getMessageRows() - with.getMessageRows(),
                 "浮层占的行数从消息区里出，DOCK 的高度不跟着变");
+    }
+
+    @Test
+    @DisplayName("命令输出面板撑高时同样从消息区里出：两者共用 DOCK 这一格")
+    void layout_should_accountShellOutputPanel() {
+        Map<UiRegion, OwnedPanel> declared = docked();
+        int shellRows = ShellOutput.MAX_CONTENT_ROWS + ChatShell.BORDER_SIZE * 2;
+
+        ChatLayout without = ChatLayout.compute(100, 30, 5, 0, declared, 0);
+        ChatLayout with = ChatLayout.compute(100, 30, 5, 0, declared, shellRows);
+
+        assertTrue(with.getDockRows() > without.getDockRows(),
+                "命令输出面板比那块一行内容的插件面板高");
+        assertEquals(with.getDockRows() - without.getDockRows(),
+                without.getMessageRows() - with.getMessageRows(), "多占的行数从消息区里出");
     }
 
     @Test

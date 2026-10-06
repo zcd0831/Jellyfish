@@ -171,7 +171,7 @@ public final class TranscriptProjector {
      * 外壳提示正文样式。
      * <p>
      * 刻意<b>不用</b> {@link #TRACE_STYLE}：暗色是为「不想细读的工具轨迹」设的，
-     * 而命令输出是用户主动要的结果（{@code /help} 的列表、{@code /status} 的当前态），应当与正文同权重。
+     * 而这些提示是用户需要读到的东西（插件的进度与告警、外壳的状态反馈），应当与正文同权重。
      */
     private static final Style SHELL_STYLE = Style.EMPTY;
 
@@ -186,12 +186,17 @@ public final class TranscriptProjector {
      * <p>
      * 三类内容，自上而下：字标（{@link HomeSplash}）、引导提示（{@link HomeHints}）、外壳提示。
      * 首页上还没有会话，自然没有消息可投影，也没有「进行中回合」。
-     * 保留外壳提示是因为首页上仍可能发生「命令报错」这类反馈（例如 {@code /resume} 指向不存在的会话、
-     * {@code /delete} 删不掉），它必须在首页上看得见，否则用户会以为按键没生效。
+     * <p>
+     * <b>首页还有哪些外壳提示</b>：命令结果已经改走 {@code DOCK} 面板（见 {@code ShellOutput}），
+     * 因此这里剩下的主要是插件通知与少数状态反馈（「回合进行中」这类）。它们仍然必须在这里可见——
+     * 否则用户会以为按键没生效。
      * <p>
      * <b>整块内容按视口高度垂直居中</b>：首页的内容天然不足一屏，全部顶在上边框会留下一大片
      * 只能算「空」的空白。留白必须在这里补而不是在 {@link HomeSplash} 里补——
      * 提示也要参与排版，只按字标居中会在有提示时整体偏上。
+     * <p>
+     * <b>这也是命令输出必须搬走的理由</b>：命令输出曾经走这条路，于是每贴一条就少一半留白，
+     * 字标被逐条顶上去；而现在首页的字标位置只由「终端有多高」决定。
      *
      * @param notices      外壳提示列表（按插入顺序，时间戳非递减），可为 {@code null}（当作空）
      * @param width        可用列数，小于 1 时按 1 处理
@@ -239,9 +244,12 @@ public final class TranscriptProjector {
     /**
      * 投影出完整视觉行序列。
      * <p>
-     * <b>外壳提示按时间戳归并进消息流</b>：命令输出是外壳状态而不是会话消息（见 {@link ShellNotice}），
-     * 但它发生在一个确定的时刻上，因此它应当出现在那个时刻对应的消息之间。此前「投影完再整体拼接」的做法
+     * <b>外壳提示按时间戳归并进消息流</b>：插件通知与状态反馈是外壳状态而不是会话消息（见 {@link ShellNotice}），
+     * 但它们发生在一个确定的时刻上，因此应当出现在那个时刻对应的消息之间。此前「投影完再整体拼接」的做法
      * 会让它永远贴在屏幕最底部，后发生的对话反而显示在它上面。
+     * <p>
+     * <b>命令结果不在这里</b>：它走 {@code ShellOutput}（命令输出面板，只留最近一次），
+     * 因为「用户敲的那一下得到了什么」需要固定归属，而不是随时间漂在消息流里。
      * <p>
      * 归并规则：提示插在「第一条时间戳严格大于它的消息」之前（同毫秒时消息在前，提示排在触发它的那条之后）。
      * <b>比投影窗口更旧的提示直接丢弃</b>：它们的位置在「已折叠」行之前，显示出来只会错位。
@@ -384,7 +392,7 @@ public final class TranscriptProjector {
     }
 
     /**
-     * 投影一条外壳提示（命令结果 / 状态反馈）。
+     * 投影一条外壳提示（插件通知 / 状态反馈）。
      * <p>
      * <b>为什么提示行不进会话</b>：命令的副作用写回各自的域服务，「命令输出文本」不是会话消息。
      * 把它塞进会话会污染发给模型的历史（模型会以为自己说过 {@code /help} 的返回值）。
@@ -418,10 +426,30 @@ public final class TranscriptProjector {
             out.addAll(LineWrapper.wrap(new StyledSegment(SHELL_COMMAND_PREFIX, USER_PREFIX_STYLE),
                     wrapBody(command, USER_STYLE), width));
         }
-        String marker = markerOf(notice.getKind());
-        Style style = styleOf(notice.getKind());
+        out.addAll(noticeBody(notice.getText(), notice.getKind(), width));
+        return out;
+    }
+
+    /**
+     * 投影一条外壳提示的正文块（不含命令回显与块前空行）。
+     * <p>
+     * <b>为什么要有这条「只有正文」的入口</b>：命令输出现在显示在 {@code DOCK} 面板里
+     * （见 {@code ShellOutput}），面板标题已经写着命令原文，再回显一行是重复；而块前的空行
+     * 在框内是白占一行——面板的每一行都比消息区的行珍贵。前缀、悬挂缩进、行首空格的处理
+     * 与消息区<b>必须</b>是同一份实现，否则同一个 {@code /help} 在两处会长得不一样。
+     *
+     * @param text  提示文本，可为 {@code null}（当作空）
+     * @param kind  提示语义，不可为 {@code null}
+     * @param width 可用列数
+     * @return 视觉行列表，保证非 {@code null}
+     */
+    public static List<VisualLine> noticeBody(String text, ShellNotice.Kind kind, int width) {
+        List<VisualLine> out = new ArrayList<VisualLine>();
+        String content = text == null ? "" : text;
+        String marker = markerOf(kind);
+        Style style = styleOf(kind);
         boolean first = true;
-        for (String rawLine : notice.getText().split("\n", -1)) {
+        for (String rawLine : content.split("\n", -1)) {
             String lead = leadingSpaces(rawLine);
             String prefix = (first ? marker : SHELL_INDENT) + lead;
             out.addAll(LineWrapper.wrap(new StyledSegment(prefix, style),

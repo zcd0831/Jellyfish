@@ -95,7 +95,12 @@ public final class ChatState {
     /** 最近一次投影的结果，作为「什么都没变」时的复用对象。 */
     private List<VisualLine> projected = Collections.emptyList();
 
-    /** 外壳提示缓冲（命令结果等），参与投影时按时间戳与会话消息归并。 */
+    /**
+     * 外壳提示缓冲（插件通知与状态反馈），参与投影时按时间戳与会话消息归并。
+     * <p>
+     * <b>命令结果不在这里</b>：它走 {@code ShellOutput}（命令输出面板）。两者分开是因为生命周期不同——
+     * 面板只留最近一次、可关可滚；而这里是「按时间发生的事」，要按时间戳插进消息流。
+     */
     private final List<ShellNotice> notices = new ArrayList<ShellNotice>();
 
     /**
@@ -135,12 +140,15 @@ public final class ChatState {
     static final int MAX_NOTICES_PER_PLUGIN = 3;
 
     /**
-     * 追加一条带命令原文的外壳提示（命令结果）。
+     * 追加一条带原文回显的外壳提示。
      * <p>
      * 只由渲染线程调用。提示不进会话（见 {@link ShellNotice}），但带自己的时间戳参与投影：
      * 它因此出现在实际发生的时刻上，而不是永远贴在屏幕底部。
+     * <p>
+     * <b>命令结果不走这里</b>：它进 {@code ShellOutput}（命令输出面板）。这里剩下的是状态反馈——
+     * 「回合进行中」这类「对刚发生的事的说明」。
      *
-     * @param command 触发本提示的命令原文，可为 {@code null} 或空白（不回显命令）
+     * @param command 触发本提示的原文，可为 {@code null} 或空白（不回显）
      * @param text    提示文本，{@code null} 或空白忽略
      * @param kind    提示语义，不可为 {@code null}
      */
@@ -168,7 +176,7 @@ public final class ChatState {
     /**
      * 追加一条插件来源的外壳提示。
      * <p>
-     * 与命令结果走同一个缓冲区（因此同样按时间戳参与投影），区别只在两条纪律：
+     * 与状态反馈走同一个缓冲区（因此同样按时间戳参与投影），区别只在两条纪律：
      * <ul>
      *     <li><b>按来源封顶</b>：同一 owner 已显示满 {@link #MAX_NOTICES_PER_PLUGIN} 条时，
      *     先把它最早的那一条挤掉——否则一个插件就能把屏幕刷满；</li>

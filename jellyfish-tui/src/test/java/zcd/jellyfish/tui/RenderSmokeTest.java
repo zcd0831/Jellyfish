@@ -208,7 +208,7 @@ class RenderSmokeTest {
 
         // When：把整帧画进缓冲区
         new ChatShell(new ChatInputView(keys -> EventResult.HANDLED))
-                .render(view, "会话", "状态栏", Overlay.none(), Collections.emptyMap(), layout)
+                .render(view, "会话", "状态栏", Overlay.none(), null, Collections.emptyMap(), layout)
                 .render(frame, frame.area(), RenderContext.empty());
 
         // Then：硬件光标在输入区那一行，而不是终端右下角的状态栏末列
@@ -216,6 +216,41 @@ class RenderSmokeTest {
         assertNotNull(cursor, "整屏渲染后必须有硬件光标位置，否则 IME 预编辑串无处可画");
         assertTrue(cursor.y() >= layout.getMessageRows(), "光标应在消息区下方的输入区：" + cursor);
         assertTrue(cursor.y() < TERMINAL_HEIGHT - 1, "光标不得落在状态栏那一行：" + cursor);
+    }
+
+    @Test
+    @DisplayName("命令输出面板真的画到屏幕上，且整帧仍正好一屏")
+    void render_should_paintShellOutputPanel_withinOneFrame() {
+        // Given：一条多行的命令输出（/help 那种清单的形态）
+        ShellOutput output = new ShellOutput();
+        output.show("/help", "可用命令：\n  /help [命令]  显示命令帮助\n  /status      显示当前会话概要",
+                ShellNotice.Kind.INFO);
+        ChatLayout layout = ChatLayout.compute(TERMINAL_WIDTH, TERMINAL_HEIGHT, inputRows(),
+                ChatShell.overlayRows(null), Collections.emptyMap(),
+                output.desiredPanelRows(TERMINAL_WIDTH));
+        ChatState state = new ChatState();
+        // 首页：没有会话，消息区只剩字标
+        ChatState.View view = state.view(null, null, layout.getMessageWidth(), layout.getMessageRows(),
+                TranscriptProjector.DEFAULT_MAX_MESSAGES, Collections.<String, ToolRenderHint>emptyMap());
+        DockPanel panel = output.render(TERMINAL_WIDTH, layout.getDockRows() - ChatShell.BORDER_SIZE * 2);
+
+        // When
+        Buffer buffer = Buffer.empty(Rect.of(TERMINAL_WIDTH, TERMINAL_HEIGHT));
+        Frame frame = Frame.forTesting(buffer);
+        new ChatShell(new ChatInputView(keys -> EventResult.HANDLED))
+                .render(view, null, "状态栏", Overlay.none(), panel, Collections.emptyMap(), layout)
+                .render(frame, frame.area(), RenderContext.empty());
+
+        // Then：面板内容出现在屏幕上，标题带命令原文与关闭键位，且整帧高度正好等于终端高度——
+        // 账本与框架任何一个多占一行，都会把输入框或状态栏挤出屏幕
+        List<String> screen = lines(buffer);
+        assertEquals(TERMINAL_HEIGHT, screen.size());
+        assertTrue(screen.stream().anyMatch(line -> line.contains("/help")), screen.toString());
+        assertTrue(screen.stream().anyMatch(line -> line.contains("Esc 关闭")), screen.toString());
+        assertTrue(screen.stream().anyMatch(line -> line.contains("显示当前会话概要")), screen.toString());
+        for (String line : screen) {
+            assertTrue(DisplayWidth.of(line) <= TERMINAL_WIDTH, line);
+        }
     }
 
     /**
@@ -237,7 +272,7 @@ class RenderSmokeTest {
      */
     private static List<String> paint(List<SessionMessage> messages, int width) {
         ChatLayout layout = ChatLayout.compute(width, TERMINAL_HEIGHT, inputRows(),
-                ChatShell.overlayRows(null), Collections.emptyMap());
+                ChatShell.overlayRows(null), Collections.emptyMap(), 0);
         ChatState state = new ChatState();
         ChatState.View view = state.view("s-1", messages, layout.getMessageWidth(),
                 layout.getMessageRows(), TranscriptProjector.DEFAULT_MAX_MESSAGES,
@@ -260,7 +295,7 @@ class RenderSmokeTest {
         Buffer buffer = Buffer.empty(Rect.of(width, TERMINAL_HEIGHT));
         Frame frame = Frame.forTesting(buffer);
         ChatShell shell = new ChatShell(new ChatInputView(keys -> EventResult.HANDLED));
-        shell.render(view, "会话", "状态栏", Overlay.none(), Collections.emptyMap(), layout)
+        shell.render(view, "会话", "状态栏", Overlay.none(), null, Collections.emptyMap(), layout)
                 .render(frame, frame.area(), RenderContext.empty());
         return lines(buffer);
     }
@@ -286,7 +321,7 @@ class RenderSmokeTest {
      */
     private static ChatLayout layout() {
         return ChatLayout.compute(TERMINAL_WIDTH, TERMINAL_HEIGHT, inputRows(),
-                ChatShell.overlayRows(null), Collections.emptyMap());
+                ChatShell.overlayRows(null), Collections.emptyMap(), 0);
     }
 
     /**

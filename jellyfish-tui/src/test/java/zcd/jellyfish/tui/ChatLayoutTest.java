@@ -32,6 +32,9 @@ class ChatLayoutTest {
     /** 终端尺寸取定值时的输入面板行数（3 行内容 + 2 边框）。 */
     private static final int INPUT_ROWS = 5;
 
+    /** 命令输出面板按内容上限想要的总行数（含边框）。 */
+    private static final int SHELL_PANEL_ROWS = ShellOutput.MAX_CONTENT_ROWS + ChatLayout.BORDER * 2;
+
     /**
      * 构造一个面板。
      *
@@ -81,7 +84,7 @@ class ChatLayoutTest {
     @Test
     @DisplayName("没有面板时退化成既有版式：底部只有输入区与状态栏")
     void compute_should_degradeToLegacyLayout_when_noPanels() {
-        ChatLayout layout = ChatLayout.compute(100, 30, INPUT_ROWS, 0, null);
+        ChatLayout layout = ChatLayout.compute(100, 30, INPUT_ROWS, 0, null, 0);
 
         assertEquals(ChatLayout.STATUS_ROWS + INPUT_ROWS, layout.getBottomRows());
         assertEquals(0, layout.getTopRows());
@@ -97,11 +100,35 @@ class ChatLayoutTest {
     void compute_should_reserveRowsForDockPanel() {
         Map<UiRegion, OwnedPanel> visible = visibleOf(UiRegion.DOCK, panelOf("p", 3, UiRegion.DOCK));
 
-        ChatLayout layout = ChatLayout.compute(100, 30, INPUT_ROWS, 0, visible);
+        ChatLayout layout = ChatLayout.compute(100, 30, INPUT_ROWS, 0, visible, 0);
 
         assertEquals(3 + ChatLayout.BORDER * 2, layout.getDockRows());
         assertEquals(3 + ChatLayout.BORDER * 2 + INPUT_ROWS + ChatLayout.STATUS_ROWS, layout.getBottomRows());
         assertEquals(30 - ChatLayout.BORDER * 2 - layout.getBottomRows(), layout.getMessageRows());
+    }
+
+    @Test
+    @DisplayName("命令输出面板与插件停靠面板互斥：它在场时按它的高度算，不给插件面板留行")
+    void compute_should_preferShellOutputPanel_overPluginDockPanel() {
+        Map<UiRegion, OwnedPanel> visible = visibleOf(UiRegion.DOCK, panelOf("plugin", 3, UiRegion.DOCK));
+
+        ChatLayout layout = ChatLayout.compute(100, 30, INPUT_ROWS, 0, visible, SHELL_PANEL_ROWS);
+
+        assertEquals(SHELL_PANEL_ROWS, layout.getDockRows(),
+                "命令输出是用户刚敲下那一下的回应，优先级高于常驻的插件面板");
+    }
+
+    @Test
+    @DisplayName("命令输出面板同样受纵向预算约束：分不够就变矮，消息区下限不许被挤穿")
+    void compute_should_boundShellOutputPanel_by_verticalBudget() {
+        // 高 18：区域上限 min(6,12)=6，而扣除消息区下限（5+2 边框）与底部固定段（输入 5 + 状态栏 1）
+        // 之后只剩 5 行可分——面板必须接着变矮，而不是把整帧撑出终端
+        ChatLayout layout = ChatLayout.compute(100, 18, INPUT_ROWS, 0, null, SHELL_PANEL_ROWS);
+
+        assertTrue(layout.getDockRows() < SHELL_PANEL_ROWS, "面板按预算变矮");
+        assertEquals(ChatLayout.MIN_MESSAGE_ROWS, layout.getMessageRows());
+        assertEquals(18, layout.getTopRows() + layout.getMessageRows() + ChatLayout.BORDER * 2
+                + layout.getBottomRows(), "整帧必须正好等于终端高度");
     }
 
     @Test
@@ -110,7 +137,7 @@ class ChatLayoutTest {
         Map<UiRegion, OwnedPanel> visible =
                 visibleOf(UiRegion.DOCK, panelOf("greedy", 100, UiRegion.DOCK));
 
-        ChatLayout layout = ChatLayout.compute(100, 40, INPUT_ROWS, 0, visible);
+        ChatLayout layout = ChatLayout.compute(100, 40, INPUT_ROWS, 0, visible, 0);
 
         assertEquals(ChatLayout.PANEL_MAX_ROWS + ChatLayout.BORDER * 2, layout.getDockRows());
     }
@@ -124,7 +151,7 @@ class ChatLayoutTest {
 
         // 终端高 30：区域上限 min(10,12)=10，两者各想要 10；扣除消息区下限（5+2 边框）
         // 与底部固定段（输入 5 + 状态栏 1）后，面板只分得到 17 行
-        ChatLayout layout = ChatLayout.compute(100, 30, INPUT_ROWS, 0, visible);
+        ChatLayout layout = ChatLayout.compute(100, 30, INPUT_ROWS, 0, visible, 0);
 
         assertEquals(10, layout.getDockRows(), "DOCK 优先，拿到自己的上限");
         assertEquals(7, layout.getTopRows(), "TOP 拿剩下的——分不够就变矮，而不是把它抽掉");
@@ -139,7 +166,7 @@ class ChatLayoutTest {
     void compute_should_keepMinMessageRows() {
         Map<UiRegion, OwnedPanel> visible = visibleOf(UiRegion.DOCK, panelOf("d", 8, UiRegion.DOCK));
 
-        ChatLayout layout = ChatLayout.compute(100, 12, INPUT_ROWS, 0, visible);
+        ChatLayout layout = ChatLayout.compute(100, 12, INPUT_ROWS, 0, visible, 0);
 
         assertEquals(0, layout.getDockRows(), "高 12 装不下任何面板：归零而不是画一条边框");
         assertEquals(ChatLayout.MIN_MESSAGE_ROWS, layout.getMessageRows());
@@ -148,8 +175,8 @@ class ChatLayoutTest {
     @Test
     @DisplayName("浮层高度也算进底部：面板出现时不能把消息区内容顶掉一行")
     void compute_should_countOverlayRows() {
-        ChatLayout without = ChatLayout.compute(100, 30, INPUT_ROWS, 0, null);
-        ChatLayout with = ChatLayout.compute(100, 30, INPUT_ROWS, 4, null);
+        ChatLayout without = ChatLayout.compute(100, 30, INPUT_ROWS, 0, null, 0);
+        ChatLayout with = ChatLayout.compute(100, 30, INPUT_ROWS, 4, null, 0);
 
         assertEquals(4, with.getBottomRows() - without.getBottomRows());
         assertEquals(4, without.getMessageRows() - with.getMessageRows());
@@ -159,7 +186,7 @@ class ChatLayoutTest {
     @DisplayName("侧栏宽度按内容取宽并夹进 [20, W/4]")
     void compute_should_clampSidebarWidth() {
         Map<UiRegion, OwnedPanel> narrow = visibleOf(UiRegion.LEFT, panelOf("n", 1, UiRegion.LEFT));
-        ChatLayout layout = ChatLayout.compute(100, 30, INPUT_ROWS, 0, narrow);
+        ChatLayout layout = ChatLayout.compute(100, 30, INPUT_ROWS, 0, narrow, 0);
 
         // 内容很窄也要给到下限
         assertEquals(ChatLayout.SIDEBAR_MIN_WIDTH, layout.getLeftWidth());
@@ -173,7 +200,7 @@ class ChatLayoutTest {
         Map<UiRegion, OwnedPanel> visible = new EnumMap<UiRegion, OwnedPanel>(UiRegion.class);
         visible.put(UiRegion.LEFT, new OwnedPanel("w", PanelContribution.of("标题", wide, UiRegion.LEFT)));
 
-        ChatLayout layout = ChatLayout.compute(200, 30, INPUT_ROWS, 0, visible);
+        ChatLayout layout = ChatLayout.compute(200, 30, INPUT_ROWS, 0, visible, 0);
 
         assertEquals(200 / ChatLayout.SIDEBAR_MAX_DIVISOR, layout.getLeftWidth());
     }
@@ -185,7 +212,7 @@ class ChatLayoutTest {
                 UiRegion.LEFT, panelOf("l", 1, UiRegion.LEFT),
                 UiRegion.RIGHT, panelOf("r", 1, UiRegion.RIGHT));
 
-        ChatLayout layout = ChatLayout.compute(70, 30, INPUT_ROWS, 0, visible);
+        ChatLayout layout = ChatLayout.compute(70, 30, INPUT_ROWS, 0, visible, 0);
 
         assertEquals(0, layout.getLeftWidth());
         assertEquals(0, layout.getRightWidth());
@@ -200,7 +227,7 @@ class ChatLayoutTest {
                 UiRegion.RIGHT, panelOf("r", 1, UiRegion.RIGHT));
 
         // W=100：单侧上限 25，合计上限 33；两个下限 20+20=40 > 33 → 放不下，只能舍右栏
-        ChatLayout layout = ChatLayout.compute(100, 30, INPUT_ROWS, 0, visible);
+        ChatLayout layout = ChatLayout.compute(100, 30, INPUT_ROWS, 0, visible, 0);
 
         assertEquals(ChatLayout.SIDEBAR_MIN_WIDTH, layout.getLeftWidth());
         assertEquals(0, layout.getRightWidth());
@@ -215,7 +242,7 @@ class ChatLayoutTest {
                 UiRegion.LEFT, widePanelOf("todo", 60, UiRegion.LEFT),
                 UiRegion.RIGHT, panelOf("stock", 1, UiRegion.RIGHT));
 
-        ChatLayout layout = ChatLayout.compute(202, 30, INPUT_ROWS, 0, visible);
+        ChatLayout layout = ChatLayout.compute(202, 30, INPUT_ROWS, 0, visible, 0);
 
         assertEquals(202 / ChatLayout.SIDEBAR_TOTAL_DIVISOR - ChatLayout.SIDEBAR_MIN_WIDTH,
                 layout.getLeftWidth(), "右栏保到下限，余下给左栏");
@@ -230,7 +257,7 @@ class ChatLayoutTest {
         Map<UiRegion, OwnedPanel> visible =
                 visibleOf(UiRegion.LEFT, widePanelOf("todo", 60, UiRegion.LEFT));
 
-        ChatLayout layout = ChatLayout.compute(202, 30, INPUT_ROWS, 0, visible);
+        ChatLayout layout = ChatLayout.compute(202, 30, INPUT_ROWS, 0, visible, 0);
 
         assertEquals(202 / ChatLayout.SIDEBAR_MAX_DIVISOR, layout.getLeftWidth(),
                 "右栏空着时左栏应当能用到自己的上限");
@@ -246,12 +273,12 @@ class ChatLayoutTest {
 
         // W=80 恰好达到侧栏下限门槛：单侧 20、合计 26 < 40 → 放不下两个下限，舍右栏；
         // 消息区 = 80-2-20 = 58 ≥ 20
-        ChatLayout layout = ChatLayout.compute(80, 30, INPUT_ROWS, 0, visible);
+        ChatLayout layout = ChatLayout.compute(80, 30, INPUT_ROWS, 0, visible, 0);
         assertEquals(ChatLayout.SIDEBAR_MIN_WIDTH, layout.getLeftWidth());
         assertEquals(0, layout.getRightWidth());
 
         // W=79：侧栏整体隐藏，消息区回到满宽
-        ChatLayout narrow = ChatLayout.compute(79, 30, INPUT_ROWS, 0, visible);
+        ChatLayout narrow = ChatLayout.compute(79, 30, INPUT_ROWS, 0, visible, 0);
         assertEquals(0, narrow.getLeftWidth());
         assertEquals(79 - ChatLayout.BORDER * 2, narrow.getMessageWidth());
     }
@@ -261,9 +288,9 @@ class ChatLayoutTest {
     void messageWidth_should_matchCompute() {
         Map<UiRegion, OwnedPanel> visible = visibleOf(UiRegion.LEFT, panelOf("l", 1, UiRegion.LEFT));
 
-        assertEquals(ChatLayout.compute(100, 30, INPUT_ROWS, 0, visible).getMessageWidth(),
+        assertEquals(ChatLayout.compute(100, 30, INPUT_ROWS, 0, visible, 0).getMessageWidth(),
                 ChatLayout.messageWidth(100, visible));
-        assertEquals(ChatLayout.compute(100, 30, INPUT_ROWS, 0, null).getMessageWidth(),
+        assertEquals(ChatLayout.compute(100, 30, INPUT_ROWS, 0, null, 0).getMessageWidth(),
                 ChatLayout.messageWidth(100, null));
     }
 
@@ -271,7 +298,7 @@ class ChatLayoutTest {
     @DisplayName("极端尺寸不产生非正数：1 列 1 行的终端也要能渲染")
     void compute_should_neverReturnNonPositiveSizes() {
         ChatLayout layout = ChatLayout.compute(1, 1, 0, 0,
-                visibleOf(UiRegion.DOCK, panelOf("d", 8, UiRegion.DOCK)));
+                visibleOf(UiRegion.DOCK, panelOf("d", 8, UiRegion.DOCK)), SHELL_PANEL_ROWS);
 
         assertTrue(layout.getMessageWidth() >= 1);
         assertTrue(layout.getMessageRows() >= 1);
@@ -285,18 +312,18 @@ class ChatLayoutTest {
                 UiRegion.RIGHT, panelOf("r", 1, UiRegion.RIGHT));
 
         // W=100：两个下限 40 > 合计上限 33，舍右栏 → 要报出来
-        assertTrue(ChatLayout.compute(100, 30, INPUT_ROWS, 0, both).isRightSidebarDropped());
+        assertTrue(ChatLayout.compute(100, 30, INPUT_ROWS, 0, both, 0).isRightSidebarDropped());
 
         // W=202：两栏共存 → 不报
         Map<UiRegion, OwnedPanel> wide = visibleOf(
                 UiRegion.LEFT, widePanelOf("todo", 60, UiRegion.LEFT),
                 UiRegion.RIGHT, panelOf("stock", 1, UiRegion.RIGHT));
-        assertFalse(ChatLayout.compute(202, 30, INPUT_ROWS, 0, wide).isRightSidebarDropped());
+        assertFalse(ChatLayout.compute(202, 30, INPUT_ROWS, 0, wide, 0).isRightSidebarDropped());
 
         // 只有一块侧栏时右栏本就是空的，不算「被舍掉」
         Map<UiRegion, OwnedPanel> single =
                 visibleOf(UiRegion.LEFT, panelOf("l", 1, UiRegion.LEFT));
-        assertFalse(ChatLayout.compute(100, 30, INPUT_ROWS, 0, single).isRightSidebarDropped(),
+        assertFalse(ChatLayout.compute(100, 30, INPUT_ROWS, 0, single, 0).isRightSidebarDropped(),
                 "右栏本来就没有面板，不该被报成降级");
     }
 
@@ -308,9 +335,9 @@ class ChatLayoutTest {
                 UiRegion.LEFT, panelOf("l", 1, UiRegion.LEFT),
                 UiRegion.RIGHT, panelOf("r", 1, UiRegion.RIGHT));
 
-        assertTrue(ChatLayout.compute(threshold, 30, INPUT_ROWS, 0, both).getRightWidth() > 0,
+        assertTrue(ChatLayout.compute(threshold, 30, INPUT_ROWS, 0, both, 0).getRightWidth() > 0,
                 "恰好达到阈值时右栏就应当在");
-        assertTrue(ChatLayout.compute(threshold - 1, 30, INPUT_ROWS, 0, both).isRightSidebarDropped(),
+        assertTrue(ChatLayout.compute(threshold - 1, 30, INPUT_ROWS, 0, both, 0).isRightSidebarDropped(),
                 "差一列就应当退化——否则日志里那个建议宽度是错的");
     }
 

@@ -36,13 +36,14 @@ import static dev.tamboui.toolkit.Toolkit.text;
  * │          ┌ 右栏 ┐                    │
  * │          │ RIGHT│                    │
  * │          └──────┘                    │
- * ├ 停靠面板（DOCK，可无）───────────────┤
+ * ├ 停靠面板（DOCK：命令输出优先，其次插件面板，可无）──┤
  * ├ 浮层面板（补全 / 选择页，可无）──────┤
  * ├ 输入框（圆角边框，多行）─────────────┤
  * └ 状态栏（一行）───────────────────────┘
  * </pre>
  * <b>底部各段的顺序是固定的</b>：{@code [停靠面板, 浮层?, 输入区, 状态栏]}。停靠面板在浮层之上，
  * 因为浮层与输入内容强相关、必须贴着输入框；状态栏永远在最后一行，它是一行扫读指标。
+ * 停靠面板这一格由<b>命令输出与插件贡献共用</b>：命令输出是用户刚敲下那一下的回应，优先显示。
  * <p>
  * <b>为什么消息区是「一个 RichText」而不是「每条消息一个元素」</b>：冒烟实测布局容器的子元素
  * 在 120～180 个处出现断崖（38ms/帧 → &gt;3000ms/帧），而单个 {@code richText} 承载 3000 行
@@ -136,12 +137,13 @@ public final class ChatShell {
      * @param title      消息区标题文本，可为 {@code null}
      * @param statusLine 状态栏文本，可为 {@code null}
      * @param overlay    输入框上方的浮层面板，可为 {@code null} 或空（不显示）
+     * @param shellPanel 命令输出面板，可为 {@code null} 或空（不显示）；非空时顶掉插件 {@code DOCK} 面板
      * @param panels     每个区域当前选中的插件面板，可为 {@code null} 或空
      * @param layout     本帧版式账本，不可为 {@code null}
      * @return 根元素，保证非 {@code null}
      */
     public Element render(ChatState.View view, String title, String statusLine, Overlay overlay,
-                          Map<UiRegion, OwnedPanel> panels, ChatLayout layout) {
+                          DockPanel shellPanel, Map<UiRegion, OwnedPanel> panels, ChatLayout layout) {
         Element messagePanel = messagePanel(view, title);
         DockElement root = dock();
 
@@ -160,7 +162,8 @@ public final class ChatShell {
         if (right != null) {
             root.right(right, length(layout.getRightWidth()));
         }
-        root.bottom(bottomParts(panels, overlay, statusLine, layout), length(layout.getBottomRows()));
+        root.bottom(bottomParts(panels, shellPanel, overlay, statusLine, layout),
+                length(layout.getBottomRows()));
         return root.center(messagePanel);
     }
 
@@ -184,16 +187,22 @@ public final class ChatShell {
      * 状态栏永远压在最后一行。
      *
      * @param panels     区域面板
+     * @param shellPanel 命令输出面板，可为 {@code null} 或空；非空时顶掉插件 {@code DOCK} 面板
      * @param overlay    浮层，可为 {@code null} 或空
      * @param statusLine 状态栏文本，可为 {@code null}
      * @param layout     版式账本
      * @return 底部元素
      */
-    private Element bottomParts(Map<UiRegion, OwnedPanel> panels, Overlay overlay,
+    private Element bottomParts(Map<UiRegion, OwnedPanel> panels, DockPanel shellPanel, Overlay overlay,
                                 String statusLine, ChatLayout layout) {
         List<Element> parts = new ArrayList<Element>(4);
-        Element dockPanel = panelElement(panels, UiRegion.DOCK,
-                contentWidth(layout.getTerminalWidth()), layout.getDockRows() - BORDER_SIZE * 2);
+        // 命令输出与插件面板共用 DOCK 这个槽位：一块区域同时只能放一个（见 UiRegion 的注释），
+        // 而用户刚敲下那一下的回应比常驻面板更急，因此它在前
+        Element dockPanel = dockElement(shellPanel, layout.getDockRows() - BORDER_SIZE * 2);
+        if (dockPanel == null) {
+            dockPanel = panelElement(panels, UiRegion.DOCK,
+                    contentWidth(layout.getTerminalWidth()), layout.getDockRows() - BORDER_SIZE * 2);
+        }
         if (dockPanel != null) {
             parts.add(dockPanel);
         }
@@ -208,6 +217,33 @@ public final class ChatShell {
         parts.add(panel(INPUT_TITLE, input).rounded());
         parts.add(text(statusLine == null ? "" : statusLine).dim());
         return column(parts.toArray(new Element[0]));
+    }
+
+    /**
+     * 构造命令输出面板元素。
+     * <p>
+     * <b>为什么不像插件面板那样调 {@code UiRender.toVisualLines}</b>：那一步要按本帧宽度重新折行、
+     * 并按可用行数截断，而命令输出的折行与滚动切片已经由 {@code ShellOutput} 完成——滚动偏移只在那里，
+     * 在这里再截一次会把「翻到第 2 页」的结果切回第 1 页。这里只兜住「账本给的行数少于内容行数」
+     * 这一种情况（面板绝不能画得比账本高一行，见 {@link ChatLayout} 的整帧高度约束）。
+     *
+     * @param panel       命令输出面板，可为 {@code null}
+     * @param contentRows 本帧可用内容行数（不含边框）
+     * @return 面板元素；无内容或没分到行数时返回 {@code null}
+     */
+    private static Element dockElement(DockPanel panel, int contentRows) {
+        if (panel == null || panel.isEmpty() || contentRows < 1) {
+            return null;
+        }
+        List<VisualLine> lines = panel.getLines();
+        if (lines.size() > contentRows) {
+            lines = lines.subList(0, contentRows);
+        }
+        Element body = richText(Text.from(toLines(lines, null)));
+        String title = panel.getTitle();
+        return title == null || title.trim().isEmpty()
+                ? panel(body).rounded()
+                : panel(title, body).rounded();
     }
 
     /**

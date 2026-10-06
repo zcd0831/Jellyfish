@@ -134,10 +134,12 @@ public final class ChatLayout {
      * @param inputPanelRows 输入面板占用行数（含边框）
      * @param overlayRows    模态浮层占用行数（含边框），无浮层时为 0
      * @param visible        每个区域当前选中的面板，可为 {@code null} 或空
+     * @param shellDockRows  外壳命令输出面板想要的总行数（含边框），不可见时为 0
      * @return 账本，保证非 {@code null}
      */
     public static ChatLayout compute(int terminalWidth, int terminalHeight, int inputPanelRows,
-                                     int overlayRows, Map<UiRegion, OwnedPanel> visible) {
+                                     int overlayRows, Map<UiRegion, OwnedPanel> visible,
+                                     int shellDockRows) {
         int width = Math.max(1, terminalWidth);
         int height = Math.max(1, terminalHeight);
         // 纵向区域的总高上限：终端很矮时进一步收紧，避免面板把消息区挤到只剩 MIN_MESSAGE_ROWS
@@ -148,7 +150,10 @@ public final class ChatLayout {
         // 面板可分的纵向预算 = 总高 − 消息区下限（含它自己的边框）− 不可让位的底部。
         // 面板只许在这里面分，因此消息区永远不会被挤到下限以下。
         int panelBudget = Math.max(0, height - (MIN_MESSAGE_ROWS + BORDER * 2) - fixedBottom);
-        int dockRows = allocateRows(panelRows(panelIn(visible, UiRegion.DOCK)), regionLimit, panelBudget);
+        // 命令输出面板优先于插件面板：它是用户刚敲下那一下的直接回应，看不到就等于「命令没执行」；
+        // 而插件面板是常驻内容，晚一帧出现不构成困惑。两者互斥——一块区域同时只能放一个（见 UiRegion）
+        int dockDesired = shellDockRows > 0 ? shellDockRows : panelRows(panelIn(visible, UiRegion.DOCK));
+        int dockRows = allocateRows(dockDesired, regionLimit, panelBudget);
         int topRows = allocateRows(panelRows(panelIn(visible, UiRegion.TOP)), regionLimit,
                 panelBudget - dockRows);
         int bottomRows = fixedBottom + dockRows;
@@ -163,9 +168,9 @@ public final class ChatLayout {
      * 在一个纵向区域的可用预算里分配行数。
      * <p>
      * <b>为什么需要这个预算</b>：{@code DOCK} / {@code TOP} 的高度由内容决定
-     * （{@code min(内容行, 8) + 边框}），不像侧栏那样跟着消息区自动变矮。于是「浮层 + 两个满面板 +
-     * 输入区 + 状态栏」在矮终端上会超过总高，而 {@code messageRows} 的 {@code max(下限)} 只是把账本
-     * 撑成自相矛盾的数字——框架该占几行还是几行，现场表现是底部被裁掉（审批框的键位提示或输入框
+     * （{@code min(内容行, 8) + 边框}，命令输出面板同理但有它自己的上限），不像侧栏那样跟着消息区自动变矮。
+     * 于是「浮层 + 两个满面板 + 输入区 + 状态栏」在矮终端上会超过总高，而 {@code messageRows} 的 {@code max(下限)}
+     * 只是把账本撑成自相矛盾的数字——框架该占几行还是几行，现场表现是底部被裁掉（审批框的键位提示或输入框
      * 看不见）。让它们<b>变矮</b>而不是让整帧溢出，与横向「两栏各保下限」是同一条原则。
      * <p>
      * 分配按优先级先到先得，不按比例：{@code DOCK} 是工作面板实际落的地方（待办的回退落位、

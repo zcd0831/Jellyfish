@@ -574,11 +574,17 @@ Gemini 的生成参数固定住在 `generationConfig.maxOutputTokens`，两者�
 
 **三个已知的「配了不生效」**（都是厂商侧行为，内核不替它判断，只在这里写明）：
 
-1. **思考模式下采样参数会被忽略**——DeepSeek 官方写明思考模式不支持 `temperature` / `top_p` /
-   `frequency_penalty` / `presence_penalty`，「设置参数不会报错，但也不会生效」，而它的 V4 系列**思考默认开启**。
-   想让温度生效，先在 `vendorBody` 里关掉思考（见下）。
-2. **推理模型不吃惩罚项**——OpenAI 的新推理模型对 `frequency_penalty` / `presence_penalty` 等参数要么忽略要么拒绝。
+1. **思考模式与采样参数互相挑食**（DeepSeek，**思考默认开启**）——官方「思考模式」页的原文是：思考模式不支持
+   `temperature` / `presence_penalty` / `frequency_penalty`，「设置这些参数不会报错，但也不会有任何效果」；
+   而 `top_p` 恰好相反，**只在思考模式下生效**，且有效区间被夹到 `0.95–1.0`（低于 0.95 一律按 0.95 算），
+   非思考模式下它固定为 `1.0`、你配的值被忽略。因此：想让温度生效就先关掉思考，想精确控 `topP` 则反而要开着。
+2. **推理模型对温度挑食**（OpenAI 系）——旧的 GPT-5 系（`gpt-5` / `gpt-5-mini` 等）只接受缺省值 1，
+   设非缺省的 `temperature` / `top_p` 会被 400 拒（`Unsupported value: … Only the default (1) value is supported`）；
+   gpt-5.1 及之后**仅在 `reasoning_effort: "none"` 时**才接受这两个参数。
 3. `seed` **不保证可复现**：厂商文档都只说「尽力而为」，别拿它当确定性输出的开关。
+
+**思考强度本身怎么配**（四家的键名与取值、它怎样反过来压制上面这些参数）见
+[「思考强度（推理控制）」](#思考强度推理控制怎么配)一节。
 
 **不属于这里的参数**：`seed` 之外的候选数（`n` / `candidateCount`）与内核「一个候选对应一条 assistant 消息」
 的流式与工具调用逻辑直接冲突，因此被列为保留键；`reasoning_effort` / `thinking` / `response_format` /
@@ -619,6 +625,83 @@ provider 级与 `models[]` 级**深合并**（对象递归、数组与标量整�
 键名**大小写敏感**，因此 `generationConfig.temperature`、`generationConfig.topK` 一样会被挡。
 **已知代价**：字段名打错就是**静默无效**——厂商多半忽略不认识的字段，内核也不会替你校验字段名（那正是直通的定义）。
 排查办法：`vendorBody` 生效时会在 **DEBUG 日志**里打一行键名（不打值，值可能含凭据），把日志级别调低就能看到实际下发了哪些键。
+
+#### 思考强度（推理控制）怎么配
+
+内核**没有** `thinkLevel` / `reasoningEffort` 这类字段，这不是漏做：思考控制的**形状与取值四家全不通约**
+（开关是一个键还是两个键、强度叫什么、有哪几档，各写各的），而 `sampling` 的收录标准是「多家厂商有**同名同义**的
+对应物」。因此它和其它厂商私有字段一样**走 `vendorBody`**：键名与取值逐字抄厂商文档，内核只搬运、不解释。
+**代价与所有直通一致**：写错键名、或用了这个模型不认的取值，多半是静默无效或一次 400，内核不替你校验。
+
+四家的形状如下（**取自各家官方文档，这类接口换代很快**，照抄前建议再对一遍，尤其是模型名与可用档位）：
+
+| 厂商 | 开关 | 强度 | 强度取值 | 缺省 |
+| --- | --- | --- | --- | --- |
+| OpenAI 系 | —（没有独立开关） | `reasoning_effort` | `none` `minimal` `low` `medium` `high` `xhigh` `max`（**可用集合随模型**） | 随模型：gpt-5.1 系缺省 `none`，更早的缺省 `medium`，`gpt-5-pro` 只认 `high` |
+| DeepSeek | `thinking.type` | `reasoning_effort` | 开关 `enabled` / `disabled`；强度 `low` `high` `max` | **思考默认开**，强度缺省 `high` |
+| Claude | `thinking.type` | `output_config.effort` | 开关 `adaptive`（当前推荐）/ `enabled` + `budget_tokens`（老代际）/ `disabled`；强度 `low` `medium` `high` `xhigh` `max` | 多数新模型思考默认开，强度缺省 `high`（Opus 5.5 缺省 `medium`） |
+| Gemini | —（用 `thinkingLevel: "minimal"` 近似「尽量不思考」） | `generationConfig.thinkingConfig.thinkingLevel` | `minimal` `low` `medium` `high`（**可用集合随模型**）；2.5 系改用整数 `thinkingBudget`（token，各模型的下限与能否关闭不同） | 随模型：3.x 多为 `high` 或 `medium`，Flash-Lite 系为 `minimal` |
+
+可直接抄的六份（把 `type` 与模型换成自己的）：
+
+```jsonc
+// OpenAI 系（openai）：没有单独的开关，强度直接写在 reasoning_effort 上
+//   注意：只有把它设成 none（且模型支持该档位），temperature / top_p 才会被接受
+{ "vendorBody": { "reasoning_effort": "high" } }
+```
+
+```jsonc
+// DeepSeek：思考默认开启；关掉它，temperature 与两个惩罚项才生效
+{ "vendorBody": { "thinking": { "type": "disabled" } } }
+```
+
+```jsonc
+// DeepSeek：开着思考但降强度（low / high / max；medium 与 xhigh 都会映射成 high）
+{ "vendorBody": { "thinking": { "type": "enabled" }, "reasoning_effort": "low" } }
+```
+
+```jsonc
+// Claude：adaptive + effort 是当前推荐写法
+//   display 不加，新模型不回思考文本（界面上就什么也看不到）
+{ "vendorBody": {
+    "thinking": { "type": "adaptive", "display": "summarized" },
+    "output_config": { "effort": "high" }
+} }
+```
+
+```jsonc
+// Claude 老代际（4.5 及之前）只有显式预算这一种写法，
+//   budget_tokens 必须小于当次下发的 max_tokens（4.6 已弃用、4.7 及之后直接 400）
+{ "vendorBody": { "thinking": { "type": "enabled", "budget_tokens": 4096 } } }
+```
+
+```jsonc
+// Gemini：生成参数全在 generationConfig 里（直通是深合并，不会挤掉内核生成的 temperature 等）
+{ "vendorBody": { "generationConfig": {
+    "thinkingConfig": { "thinkingLevel": "low", "includeThoughts": true } } } }
+```
+
+**三条与其它配置互相牵制的约束**：
+
+1. **它会改变 `sampling` 的生效情况**（细节见 `sampling` 一节的「配了不生效」三条）：DeepSeek 思考模式下 `temperature` 与两个惩罚项
+   完全无效，而 `top_p` 反过来只在该模式下生效、且被夹到 `0.95–1.0`；OpenAI 旧 GPT-5 系对非缺省温度直接 400，
+   gpt-5.1 之后的模型只在 `reasoning_effort: "none"` 时才接受温度。**「温度没反应」先查这里**。
+2. **Claude 的显式预算与输出上限是一对约束**：`budget_tokens` 必须**严格小于**当次请求下发的 `max_tokens`
+   （官方原文 "`budget_tokens` must always be less than the `max_tokens` specified"），违反时报错是
+   `max_tokens must be greater than thinking.budget_tokens`——**报错里不会提 `maxOutputTokens`**，
+   所以排查时先看这个数。未配 `maxOutputTokens`（或它 ≤ 0）时 Claude 客户端发的是默认 4096，
+   此时 `budget_tokens` 必须小于 4096。
+   另外缓存保活请求按「最省输出」下发 `max_tokens: 0`（见 `providers.<name>.cache` 一节），与
+   `enabled` + `budget_tokens` 天然互斥：两者同时配上会被 400 拒，而保活失败只记 DEBUG 日志，
+   症状是「配了保活但命中率没改善」。
+3. **想看见思考文本，配置只是一半**：厂商侧还要 Claude 的 `display: "summarized"`、Gemini 的
+   `includeThoughts: true`（OpenAI 系则取决于端点是否在增量里给 `reasoning` 字段）；外壳侧还要
+   `-cli` 的 `--show-thinking`（打到 stderr）或 TUI 的 `Ctrl+T` / `/thinking`。两边都开了才看得见，
+   只开外壳那一边什么也看不到。
+
+**排查顺序**：先把日志级别调低——`vendorBody` 生效时会打一行**下发的键名**（不打值，值可能含凭据），
+用它确认键真的发出去了；再回厂商文档核对**这个模型**认哪些取值（同一家不同代的可用档位并不一样）。
+本节的表只是索引，键名与取值都随厂商接口演进，以官方文档为准。
 
 #### `vendorHeaders`（可选）：自定义请求头
 
@@ -665,13 +748,13 @@ DeepSeek 默认按前缀缓存、且磁盘缓存要几小时到几天才清理�
 `sampling` 覆盖的只是**各家同义**的那七个参数；各家**专有**的一律写进 `vendorBody`。
 下面按厂商列出眼下最常配的几条，可以直接抄（模型名与 `apiKey` 换成自己的）。
 **键名就是该端点请求体里的键名**——拼错不会报错、也不会生效，这是直通的固有代价。
+**思考强度（`reasoning_effort` / `thinking` / `thinkingLevel`）已单列一节**（见上），这里不再重复。
 
 **OpenAI 系**（`type` 为 `openai` / `deepseek` / `minimax`——这三个 type 的请求体现在归一为同一套字段）
 
 ```jsonc
 {
   "vendorBody": {
-    "reasoning_effort": "high",                       // 推理强度；仅推理模型认
     "service_tier": "flex",                           // auto / default / flex / priority
     "response_format": { "type": "json_object" },      // 强制 JSON 输出（需在提示词里也说明要 JSON）
     "parallel_tool_calls": false                       // 关掉并行工具调用
@@ -679,41 +762,13 @@ DeepSeek 默认按前缀缓存、且磁盘缓存要几小时到几天才清理�
 }
 ```
 
-**DeepSeek**（V4 系列**思考模式默认开启**，所以这条最要紧）
-
-```jsonc
-// 关掉思考——之后 temperature / topP / 两个惩罚项才生效
-// （思考模式下这几个参数被静默忽略：官方文档写明「设置参数不会报错，但也不会生效」）
-{ "vendorBody": { "thinking": { "type": "disabled" } } }
-```
-
-```jsonc
-// 开着思考，但把强度降下来：low / high / max（low 与 medium 会映射成 high）
-{ "vendorBody": { "thinking": { "type": "enabled" }, "reasoning_effort": "high" } }
-```
-
+**DeepSeek** 的思考开关与强度（思考默认开启，它直接决定 `temperature` 与 `top_p` 生不生效）见
+「思考强度（推理控制）」一节——**这是 DeepSeek 上最要紧的一条配置**。
 它另有一个 **Anthropic 格式端点**（`https://api.deepseek.com/anthropic`）：写成 `type: "claude"` + 那个 `baseUrl`
-就能走 Claude 客户端，此时思考控制变成 `{"reasoning": {"effort": "none"}}`。
+就能走 Claude 客户端，只是强度改由 Anthropic 侧那套键名承载（`output_config.effort`，不是 `reasoning_effort`）。
 
-**Claude**
-
-```jsonc
-// 4.7 及之后：自适应思考 + 强度（没有 budget_tokens 了）
-{ "vendorBody": { "thinking": { "type": "adaptive" }, "output_config": { "effort": "high" } } }
-```
-
-```jsonc
-// 4.6 及之前：显式预算（budget_tokens 必须小于模型的 maxOutputTokens，否则 400）
-{ "vendorBody": { "thinking": { "type": "enabled", "budget_tokens": 4096 } } }
-```
-
-> ⚠️ **`budget_tokens` 与输出上限是一对约束**：Anthropic 要求前者**严格小于**当次请求下发的
-> `max_tokens`（官方原文 "`budget_tokens` must always be less than the `max_tokens` specified"），
-> 违反时报错是 `max_tokens must be greater than thinking.budget_tokens` —— **报错里不会提
-> `maxOutputTokens`**，因此排查时先看这个数。例如 `budget_tokens: 4096` 就要求该模型的
-> `maxOutputTokens` 至少 4097。注意**未配 `maxOutputTokens`（或它 ≤ 0）时，Claude 客户端发的是
-> 默认的 4096**，此时 `budget_tokens` 必须小于 4096。
-> 另外注意缓存保活请求发的是 `max_tokens: 0`（非流式下「只要 prefill、不生成」，见上），与 `thinking` 天然互斥。
+**Claude** 的思考开关与强度（含 `budget_tokens` 与输出上限那条约束、以及它与缓存保活的互斥）见
+「思考强度（推理控制）」一节。
 
 `{"metadata": {"user_id": "…"}}` 用于滥用检测（**别放能定位到人的信息**）、`{"service_tier": "standard_only"}` 也在这一层。
 
@@ -725,7 +780,6 @@ DeepSeek 默认按前缀缓存、且磁盘缓存要几小时到几天才清理�
   // 不会挤掉内核刚生成的 temperature / maxOutputTokens 等（详见 vendorBody 一节）
   "vendorBody": {
     "generationConfig": {
-      "thinkingConfig": { "thinkingLevel": "low" },   // 新模型用 thinkingLevel；旧模型是整数 thinkingBudget
       "responseMimeType": "application/json"
     }
   }
@@ -1089,6 +1143,15 @@ SSE 事件名、鉴权细节与会话语义见 [docs/constraints.md](docs/constr
 滚轮依赖鼠标捕获（默认开），而捕获后终端本地的鼠标选择归应用：想复制时按 `Ctrl+O`（或敲 `/mouse`）把鼠标交还终端，
 拖选 + `⌘C` 即可，期间滚轮停用、消息区滚动改用 `PageUp` / `PageDown` / `End`，复制完再按一下收回。
 若整体不要鼠标捕获，用 `-Djellyfish.tui.mouseCapture=false` 退回滚轮换取原生选择。
+
+**配了思考强度却没反应，怎么排查？**
+先确认键真的发出去了：把日志级别调低，`vendorBody` 生效时会打一行**下发的键名**（不打值）。
+然后按四类高频原因排查——① 键名写错、或用了**这个模型**不认的档位（前者多半静默无效，后者可能 400）；
+② 你以为「没生效」，其实是**采样参数**被思考模式吃掉了（DeepSeek 的 `temperature`、OpenAI 旧 GPT-5 系的非缺省温度）；
+③ 配置生效了但**界面看不到思考文本**：Claude 要 `display: "summarized"`、Gemini 要 `includeThoughts: true`，
+`-cli` 要 `--show-thinking`、TUI 要 `Ctrl+T` / `/thinking`；
+④ Claude 用了老代际的 `budget_tokens` 而模型已是新代际（直接 400）。
+逐家的键名、取值与缺省见「思考强度（推理控制）」一节。
 
 **改了配置不生效？**
 三个配置文件敲 `/reload`；`config.json`、新增 / 删除插件 jar 需要重启进程。

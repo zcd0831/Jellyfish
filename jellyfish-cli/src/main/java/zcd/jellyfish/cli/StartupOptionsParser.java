@@ -12,8 +12,11 @@ import java.util.List;
  * <b>为什么手写</b>：参数表只有十几个，且都是简单取值 / 开关；为此引入命令行框架收益很低，
  * 反而给 JDK 1.8 的构建引入新依赖。手写解析无状态、无 IO，可独立单测。
  * <p>
- * <b>为什么「不猜模式」</b>：没有模式旗标就是用法错误，刻意不做「默认 -cli」——那会让
- * 单独一条 {@code jellyfish} 卡在「等 stdin EOF」上，比直接报错更难排查。
+ * <b>为什么「只给裸跑兜底、其余不猜」</b>：一个参数都不带的 {@code jellyfish} 默认 {@code -tui}——
+ * 交互界面是最顺手的入口，不该逼用户先记住 {@code -tui} 怎么拼。但兜底只此一处：<b>只要带了参数
+ * （哪怕只是一个 {@code --verbose}），就不再替用户猜意图</b>，仍旧报「请指定启动模式」。
+ * 刻意不做「默认 {@code -cli}」：那会让「参数写错了」这种情形悄悄退化成「卡在等 stdin EOF」，
+ * 比一条明说的用法错误难排查得多。
  * <p>
  * <b>为什么失败走异常</b>：解析失败属于「用户输入错误」，需要把「哪里错了」原样带给调用方；
  * 统一抛 {@link JellyfishException}（仓库约定），由 {@code main} 打印用法后退
@@ -84,7 +87,7 @@ public final class StartupOptionsParser {
     private static final String USAGE = ""
             + "用法：jellyfish <模式> [选项]\n"
             + "\n"
-            + "模式（三选一，必填）：\n"
+            + "模式（三选一；一个参数都不带时默认 -tui）：\n"
             + "  -cli                  单次调用、不交互：进一个输入，出一次结果后退出\n"
             + "  -tui                  交互式终端界面\n"
             + "  -server [端口]        以 HTTP 服务运行，端口缺省 "
@@ -126,14 +129,20 @@ public final class StartupOptionsParser {
      * <p>
      * {@code -h} / {@code -V} 优先于其它校验：只要请求了帮助或版本，就不再追究「模式没给」这类问题，
      * 让 {@code jellyfish -h} 永远能出帮助。
+     * <p>
+     * <b>裸跑兜底</b>：{@code args} 为空（含 {@code null}）时模式取 {@link StartupOptions.Mode#TUI}。
+     * 这是唯一一处「替用户选模式」，判据只有「参数个数为零」这一个事实，不掺任何内容推断。
      *
      * @param args 命令行参数，可为 {@code null}
      * @return 启动参数，保证非 {@code null}
      * @throws JellyfishException 参数缺失、未知、重复或取值非法时抛出
      */
     public static StartupOptions parse(String[] args) {
-        Cursor cursor = new Cursor(args == null ? new String[0] : args);
-        StartupOptions.Mode mode = null;
+        String[] raw = args == null ? new String[0] : args;
+        Cursor cursor = new Cursor(raw);
+        // 裸跑默认进交互界面：敲一下程序名就该能用，而不是先吃到一条用法错误再去查 -tui 怎么拼。
+        // 只兜底「零参数」这一种情形——判据写死在参数个数上，以后也不会因为多认出一个开关而悄悄放宽。
+        StartupOptions.Mode mode = raw.length == 0 ? StartupOptions.Mode.TUI : null;
         String prompt = null;
         String sessionId = null;
         String agentId = null;

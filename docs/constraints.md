@@ -700,6 +700,10 @@ handler 抛错**按放行处理**。它只管「结束运行态、保留快照�
 ### 三个外壳的共同约定
 
 - **三种启动模式、一个内核**：共用 main、DI、`AgentHarness`、`CommandManager`，差异收在 `RunMode`。
+- **裸跑兜底只有一处，且判据只有「参数个数为零」**：`args` 为空（含 `null`）时 `StartupOptionsParser`
+  把模式定为 `-tui`，等价于显式 `jellyfish -tui`。**不许扩成内容推断**——带了参数却没给模式一律
+  「请指定启动模式」退 `2`（`jellyfish --verbose` 亦然），这样「敲了没反应」与「悄悄挂在等 stdin」
+  两头都不会发生。兜底收在解析器里，因此 `Launcher` 与各 `RunMode` 只面对「模式已定」的世界。
 - **分流顺序由内核统一，外壳不再自己排**：提交入口是
   `ConversationService.submit(sessionId, text, source, SubmissionPolicy, listener)`，顺序固定为
   **命令判定 → 输入改写 → 输入指令 → 起回合**。外壳只声明自己的 `SubmissionPolicy`，
@@ -758,9 +762,9 @@ handler 抛错**按放行处理**。它只管「结束运行态、保留快照�
   硬件光标会停在上一帧最后写入的那一格，输入法预编辑串会把整屏顶上去，之后所有差量重绘错位。
   因此 `ChatInputView` 自带定位，且**显示行判定必须与 `TextArea` 同口径**。
 - **键位反转：`Enter` 换行、`Ctrl+S` 发送，不要改成修饰键方案**（框架不解析修饰键编码）。
-- **TUI 日志必须与终端隔离**：`-tui` 在参数解析后、DI 装配前把 `log4j.configurationFile` 切到
+- **TUI 日志必须与终端隔离**：`-tui`（裸跑同属 TUI 模式）在参数解析后、DI 装配前把 `log4j.configurationFile` 切到
   `log4j2-tui.xml`，**必须赶在第一个 `Logger` 创建之前**。
-- **TUI 启动前必须做终端前置检查**，**不满足退 3**；逃生门 `-Djellyfish.tui.skipTerminalCheck=true`。
+- **TUI 启动前必须做终端前置检查**，**不满足退 3**（裸跑因此也退 `3`，不会挂住）；逃生门 `-Djellyfish.tui.skipTerminalCheck=true`。
 - **鼠标捕获默认开，且可在运行期交还终端**；**非滚轮鼠标事件一律吞掉以保住焦点**；
   **退回前若与启动配置不一致必须自己关掉上报**。**括号粘贴必须保持打开**。
 

@@ -14,7 +14,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * {@link StartupOptionsParser} 的单元测试：验证三种模式旗标、取值选项、开关、非法组合与帮助优先级。
+ * {@link StartupOptionsParser} 的单元测试：验证三种模式旗标、裸跑兜底、取值选项、开关、非法组合与帮助优先级。
  *
  * @author zcd
  */
@@ -38,6 +38,25 @@ class StartupOptionsParserTest {
                 () -> StartupOptionsParser.parse(new String[] {"-p", "你好"}));
 
         assertTrue(error.getMessage().contains("请指定启动模式"));
+    }
+
+    @Test
+    void parse_should_fail_when_mode_missing_even_for_switch_only_given() {
+        // 兜底只认「零参数」，带一个通用开关同样要求显式给模式：
+        // 边界写死在参数个数上，就不会因为多认出一个开关而悄悄放宽。
+        JellyfishException error = assertThrows(JellyfishException.class,
+                () -> StartupOptionsParser.parse(new String[] {"--verbose"}));
+
+        assertTrue(error.getMessage().contains("请指定启动模式"));
+    }
+
+    @Test
+    void parse_should_default_to_tui_when_no_args_given() {
+        StartupOptions options = StartupOptionsParser.parse(new String[0]);
+
+        assertEquals(StartupOptions.Mode.TUI, options.getMode());
+        assertNull(options.getPrompt());
+        assertNull(options.getSessionId());
     }
 
     @Test
@@ -400,8 +419,9 @@ class StartupOptionsParserTest {
     }
 
     @Test
-    void parse_should_accept_null_args_and_fail_on_missing_mode() {
-        assertThrows(JellyfishException.class, () -> StartupOptionsParser.parse(null));
+    void parse_should_default_to_tui_when_args_null() {
+        // args 为 null 与空数组同义：都没有「用户意图」可循，因此走同一条兜底
+        assertEquals(StartupOptions.Mode.TUI, StartupOptionsParser.parse(null).getMode());
     }
 
     @Test
@@ -414,5 +434,11 @@ class StartupOptionsParserTest {
         assertTrue(usage.contains("stdout"));
         assertTrue(usage.contains("stderr"));
         assertTrue(usage.contains("退出码"));
+    }
+
+    @Test
+    void usage_should_mention_bare_run_defaults_to_tui() {
+        // 用法文本里不写这一条，用户就没有任何地方能发现「不给模式也行」
+        assertTrue(StartupOptionsParser.usage().contains("默认 -tui"), StartupOptionsParser.usage());
     }
 }

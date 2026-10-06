@@ -265,6 +265,20 @@ conversationCompactor = new ConversationCompactor(sessions, models, runtimeConfi
     }
 
     @Test
+    void launch_should_take_tui_path_when_options_parsed_from_no_args() {
+        // 裸跑（零参数）的落点必须真是 TUI：这里串起「解析器兜底」与「Launcher 分发」两段，
+        // 只看各自那一段都验不出断层——解析器给了 TUI、分发却不认，两边单测依然全绿。
+        assumeTrue(System.console() == null, "当前测试 JVM 有可交互终端，无法验证无终端场景");
+        givenTuiCollaborators();
+
+        int code = launcher.launch(StartupOptionsParser.parse(new String[0]));
+
+        assertEquals(ExitCodes.STARTUP_ERROR, code);
+        assertTrue(console.err().contains("-cli"));
+        verify(harness, never()).bootstrap();
+    }
+
+    @Test
     void launch_should_bootstrap_run_and_shutdown_when_cli_given() {
         givenComponentCollaborators();
         when(conversations.submit(eq(session.getSessionId()), eq("/help"), any(), any()))

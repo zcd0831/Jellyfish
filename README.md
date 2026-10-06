@@ -99,25 +99,28 @@ export OPENAI_API_KEY=sk-...
 ### 3. 问第一句话
 
 ```bash
+java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar                    # 不带参数 = 交互界面（-tui）
 java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -cli -p "总结一下这个项目"
 java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -tui
 ```
 
 ## 三种运行模式
 
-三种模式共享同一个入口与同一份装配，只靠启动参数区分：
+三种模式共享同一个入口与同一份装配，只靠启动参数区分。**一个参数都不带直接运行 = `-tui`**——
+交互界面是最常用的入口，不必先把旗标背下来。但兜底只此一处：**只要带了任何参数，模式就必须显式给**
+（`jellyfish --verbose` 一样报「请指定启动模式」并退 `2`），这样「敲了没反应」和「悄悄挂在等 stdin」都不会发生。
 
 | 模式 | 形态 | 示例 |
 | --- | --- | --- |
 | `-cli` | 单次调用、不交互：进一个输入，出一次结果后退出 | `jellyfish -cli -p "今天天气怎么样？"` |
-| `-tui` | 交互式终端界面（TamboUI）：消息区 + 输入框 + 状态栏 | `jellyfish -tui` |
+| `-tui` | 交互式终端界面（TamboUI）：消息区 + 输入框 + 状态栏 | `jellyfish -tui`（等价于裸跑 `jellyfish`） |
 | `-server` | HTTP 服务（Undertow），对外暴露 REST + SSE 接口 | `jellyfish -server 9096` |
 
 ### 参数
 
 | 参数 | 说明 |
 | --- | --- |
-| `-cli` / `-tui` / `-server` | 模式旗标，三选一且必填；`-server` 可带位置端口 |
+| `-cli` / `-tui` / `-server` | 模式旗标，三选一；**一个参数都不带时默认 `-tui`**，否则必填；`-server` 可带位置端口 |
 | `-p, --print <输入>` | 单次模式的输入；缺省时从 stdin 读到 EOF（管道可用） |
 | `--session <会话>` | 切换到已有会话（需安装 `jellyfish-plugin-session-file` 等持久化插件；会话不存在时按用法错误退出 `2`） |
 | `--agent <agentId>` | 新建会话时绑定 agent |
@@ -801,6 +804,10 @@ SSE 事件名、鉴权细节与会话语义见 [docs/constraints.md](docs/constr
 **没配模型会怎样？**
 命令照常能用（`/help` `/session` `/status` `/model` `/compact preview` 都不需要模型），一发对话就会提示没有可用模型。
 先按「快速开始」建一份 `models.json`。
+
+**裸跑 `jellyfish`（不带任何参数）会干什么？**
+等价于 `-tui`，因此同样需要可交互终端，在管道 / CI 里一样退 `3`。想跑单次问答请显式写 `-cli -p "..."`：
+兜底只认「一个参数都不带」，带了参数却没给模式（如 `jellyfish --verbose`）仍判用法错误退 `2`。
 
 **`-tui` 启动就退出 3？**
 它在管道、CI、被重定向的 shell 或 IDE 的非真终端控制台里都会这样（这是有意的：否则 TamboUI 会永久挂住）。

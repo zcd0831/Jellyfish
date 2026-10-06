@@ -273,7 +273,7 @@ public final class StartupOptions {
      */
     public static final class Builder {
 
-        /** 启动模式（必填）。 */
+        /** 启动模式（不可为 {@code null}；裸跑时由 {@link StartupOptionsParser} 填为 {@code TUI}）。 */
         private final Mode mode;
 
         /** 单次模式输入。 */

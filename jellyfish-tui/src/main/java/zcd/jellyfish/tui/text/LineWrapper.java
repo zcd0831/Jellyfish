@@ -40,13 +40,31 @@ public final class LineWrapper {
      * @return 视觉行列表，至少一个元素（正文为空时返回仅含前缀的一行）
      */
     public static List<VisualLine> wrap(StyledSegment prefix, List<StyledSegment> body, int width) {
+        return wrap(prefix, body, width, Style.EMPTY);
+    }
+
+    /**
+     * 按宽度展开一条逻辑行，并指定续行缩进的样式。
+     * <p>
+     * <b>为什么需要这个重载</b>：整块选中/高亮的内容（如提问浮层里展开的选中项）要求
+     * 连续行缩进一起着色，否则高亮会在第二行断开，看起来像两条不同的条目。缩进样式
+     * 因此不能写死——而换行算法本身只有这一份，调用方不需要自己再实现一遍宽度账本。
+     *
+     * @param prefix      行首前缀，不可为 {@code null}；不参与换行
+     * @param body        正文样式段，不可为 {@code null}；其中的 {@code '\n'} 触发强制换行
+     * @param width       可用总列数；小于 1 时按 1 处理
+     * @param indentStyle 续行缩进的样式，不可为 {@code null}
+     * @return 视觉行列表，至少一个元素（正文为空时返回仅含前缀的一行）
+     */
+    public static List<VisualLine> wrap(StyledSegment prefix, List<StyledSegment> body, int width,
+                                        Style indentStyle) {
         int totalWidth = Math.max(1, width);
         int prefixWidth = Math.min(prefix.width(), totalWidth - MIN_BODY_WIDTH);
         if (prefixWidth < 0) {
             prefixWidth = 0;
         }
         int available = Math.max(MIN_BODY_WIDTH, totalWidth - prefixWidth);
-        StyledSegment indent = new StyledSegment(spaces(prefixWidth), Style.EMPTY);
+        StyledSegment indent = new StyledSegment(spaces(prefixWidth), indentStyle);
 
         List<VisualLine> lines = new ArrayList<VisualLine>();
         Accumulator acc = new Accumulator();

@@ -16,6 +16,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -168,6 +169,197 @@ class AskPromptTest {
         assertTrue(AskPrompt.render(null, activePicker(), WIDTH, false).isEmpty());
     }
 
+    @Test
+    @DisplayName("选中项的长标签完整折行展示，不再被 30 列硬上限截断")
+    void render_should_showSelectedLongLabelInFull() {
+        // Given：一条远超旧的 30 列标签上限的选项（无空格，便于逐字核对折行没有丢字）
+        String longLabel = "先把内核通道做完再补三个外壳这样每加一个外壳都不必回头改通道";
+        AskRequest request = AskRequest.of("ask_user", "s1", "选哪套？", Arrays.asList(
+                AskOption.of("a", longLabel, null),
+                AskOption.of("b", "一次做完", null)));
+
+        // When
+        List<String> body = texts(AskPrompt.render(pending(request), activePicker(request), WIDTH, false));
+
+        // Then：折行之后全文逐字可见，且没有出现省略号
+        String joined = visible(body);
+        assertTrue(joined.contains(longLabel), joined);
+        assertFalse(visibleOptionText(body).contains("\u2026"), "选中项不该被截断：" + body);
+    }
+
+    @Test
+    @DisplayName("选中项的说明也一起完整展示")
+    void render_should_showSelectedDescriptionInFull() {
+        // Given
+        String description = "这样每加一个外壳都不必回头改通道";
+        AskRequest request = AskRequest.of("ask_user", "s1", "选哪套？", Arrays.asList(
+                AskOption.of("a", "方案 A", description),
+                AskOption.of("b", "方案 B", null)));
+
+        // When
+        String joined = visible(texts(AskPrompt.render(pending(request), activePicker(request),
+                WIDTH, false)));
+
+        // Then
+        assertTrue(joined.contains(description), joined);
+    }
+
+    @Test
+    @DisplayName("未选中的长标签仍是单行截断——反正移动光标就能看全")
+    void render_should_truncateUnselectedLongLabel() {
+        // Given：选中第一项，第二项很长
+        String longLabel = "先把内核通道做完再补三个外壳这样每加一个外壳都不必回头改通道";
+        AskRequest request = AskRequest.of("ask_user", "s1", "选哪套？", Arrays.asList(
+                AskOption.of("a", "方案 A", null),
+                AskOption.of("b", longLabel, null)));
+
+        // When
+        List<String> body = texts(AskPrompt.render(pending(request), activePicker(request), WIDTH, false));
+
+        // Then：第二项占一行且带省略号，全文不在这一帧里
+        assertFalse(visible(body).contains(longLabel), body.toString());
+        assertTrue(body.stream().anyMatch(line -> line.endsWith("\u2026")), body.toString());
+    }
+
+    @Test
+    @DisplayName("光标移到长选项上之后，它的全文立刻可见")
+    void render_should_revealFullText_afterMovingCursor() {
+        // Given：长选项在第二项，初始选中第一项
+        String longLabel = "先把内核通道做完再补三个外壳这样每加一个外壳都不必回头改通道";
+        AskRequest request = AskRequest.of("ask_user", "s1", "选哪套？", Arrays.asList(
+                AskOption.of("a", "方案 A", null),
+                AskOption.of("b", longLabel, null)));
+        CommandChoicePicker picker = activePicker(request);
+
+        // When：把光标移到长选项上
+        picker.moveDown();
+
+        // Then：这一项现在完整可读——这是本设计的核心保证
+        String joined = visible(texts(AskPrompt.render(pending(request), picker, WIDTH, false)));
+        assertTrue(joined.contains(longLabel), joined);
+    }
+
+    @Test
+    @DisplayName("任何一行都不超过可用列数（含选中项折行与高亮补白）")
+    void render_should_neverExceedAvailableWidth() {
+        // Given：长标签 + 长说明 + 多个选项
+        AskRequest request = AskRequest.of("ask_user", "s1", "选哪套方案？", Arrays.asList(
+                AskOption.of("a", "方案 A：先把内核通道做完再补三个外壳这样每加一个外壳都不必回头改通道",
+                        "这样就不必在每次加外壳时回头改通道了，代价是通道要先落地"),
+                AskOption.of("b", "方案 B：一次做完但每加一个外壳都要回头改通道", "省事但返工多"),
+                AskOption.of("c", "方案 C", null)));
+
+        // When / Then：三个候选宽度下逐行核对
+        for (int width : new int[] {24, 60, 100, 160}) {
+            List<VisualLine> lines = AskPrompt.render(pending(request), activePicker(request), width, false);
+            assertFalse(lines.isEmpty());
+            for (VisualLine line : lines) {
+                assertTrue(line.width() <= width,
+                        "宽度 " + width + " 下超宽：" + line.text() + "（实际 " + line.width() + "）");
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("选中项过长时限量并明确写出省略了几行，总行数有界")
+    void render_should_limitSelectedOptionRows_whenVeryLong() {
+        // Given：一条远超上限的选项（选中它，于是它要走折行 + 限量那条路）
+        StringBuilder longLabel = new StringBuilder();
+        for (int i = 0; i < 200; i++) {
+            longLabel.append("长");
+        }
+        AskRequest request = AskRequest.of("ask_user", "s1", "选哪套？", Arrays.asList(
+                AskOption.of("a", longLabel.toString(), null),
+                AskOption.of("b", "短", null)));
+
+        // When
+        List<String> body = texts(AskPrompt.render(pending(request), activePicker(request), WIDTH, false));
+
+        // Then：提示出现，且总行数 = 问题(1) + 空行(1) + 选中项(≤6) + 其余选项(2) + 提示(1)
+        assertTrue(body.stream().anyMatch(line -> line.contains("已省略")), body.toString());
+        assertTrue(body.size() <= 11, "总行数应当有界，实际 " + body.size() + "：" + body);
+    }
+
+    @Test
+    @DisplayName("选中行与未选中行的标签起点对齐（前缀按显示列等宽）")
+    void render_should_alignOptionText() {
+        // Given：三项，选中第一项
+        AskRequest request = AskRequest.of("ask_user", "s1", "选哪套？", Arrays.asList(
+                AskOption.of("a", "甲", null),
+                AskOption.of("b", "乙", null),
+                AskOption.of("c", "丙", null)));
+
+        // When
+        List<String> body = texts(AskPrompt.render(pending(request), activePicker(request), WIDTH, false));
+
+        // Then：每个选项的标签之前那段前缀，显示宽度必须一致
+        // （选中行是「 ❯ 」，未选中行是等宽空格；两者不等宽就会看起来错位）
+        List<Integer> starts = new ArrayList<Integer>();
+        for (String label : Arrays.asList("甲", "乙", "丙")) {
+            String line = null;
+            for (String candidate : body) {
+                if (candidate.contains(label)) {
+                    line = trimTrailing(candidate);
+                    break;
+                }
+            }
+            assertNotNull(line, "找不到选项 " + label + "：" + body);
+            starts.add(DisplayWidth.of(line.substring(0, line.indexOf(label))));
+        }
+        for (Integer start : starts) {
+            assertEquals(starts.get(0), start, "标签起点不一致：" + body);
+            assertTrue(start > 0, "标签之前应当有前缀：" + body);
+        }
+    }
+
+    /**
+     * 取「可见文本」：每行去掉首尾空白后拼接。
+     * <p>
+     * 两端的空白都不是内容：行尾有选中行的高亮补白，行首有折行续行的悬挂缩进
+     * （等于前缀宽度）。断言「全文可见」之前必须把这两者都去掉。
+     *
+     * @param lines 各行的纯文本
+     * @return 去掉首尾空白后拼接的文本
+     */
+    private static String visible(List<String> lines) {
+        StringBuilder sb = new StringBuilder();
+        for (String line : lines) {
+            sb.append(line.trim());
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 取选项区可见文本：去掉底部键位提示之后的部分。
+     *
+     * @param lines 各行的纯文本
+     * @return 选项区文本
+     */
+    private static String visibleOptionText(List<String> lines) {
+        StringBuilder sb = new StringBuilder();
+        for (String line : lines) {
+            if (line.trim().startsWith("\u2191")) {
+                continue;
+            }
+            sb.append(line.trim());
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 去掉行尾的空白（JDK 8 没有 stripTrailing）。
+     *
+     * @param text 文本
+     * @return 去掉尾部空白后的文本
+     */
+    private static String trimTrailing(String text) {
+        int end = text.length();
+        while (end > 0 && text.charAt(end - 1) == ' ') {
+            end--;
+        }
+        return text.substring(0, end);
+    }
+
     /**
      * 渲染一帧。
      *
@@ -185,8 +377,18 @@ class AskPromptTest {
      * @return 选项状态
      */
     private static CommandChoicePicker activePicker() {
+        return activePicker(request());
+    }
+
+    /**
+     * 构造一个已打开、承载指定提问的选项状态。
+     *
+     * @param request 提问请求
+     * @return 选项状态
+     */
+    private static CommandChoicePicker activePicker(AskRequest request) {
         CommandChoicePicker picker = new CommandChoicePicker();
-        picker.open("", AskPrompt.choices(request()));
+        picker.open("", AskPrompt.choices(request));
         return picker;
     }
 

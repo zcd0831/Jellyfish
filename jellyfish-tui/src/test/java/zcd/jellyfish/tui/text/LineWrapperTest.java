@@ -47,6 +47,40 @@ class LineWrapperTest {
     }
 
     @Test
+    @DisplayName("续行缩进的样式可指定，让整块高亮不在第二行断开")
+    void wrap_should_use_given_indent_style_when_specified() {
+        // Given：前缀与正文都带上高亮样式（调用方负责——本重载管的是续行缩进那一段）
+        Style reversed = Style.EMPTY.reversed();
+        StyledSegment prefix = new StyledSegment("  \u276f ", reversed);
+
+        List<VisualLine> lines = LineWrapper.wrap(prefix,
+                Collections.singletonList(new StyledSegment("abcdefghij", reversed)), 9, reversed);
+
+        // 前缀占 4 列，正文每行可用 5 列 → 10 个字符正好两行
+        assertEquals(2, lines.size());
+        assertEquals("  \u276f abcde", lines.get(0).text());
+        assertEquals("    fghij", lines.get(1).text());
+        // 续行的缩进空白也必须带着同一个样式，否则高亮块会缺一段
+        for (VisualLine line : lines) {
+            for (StyledSegment segment : line.getSegments()) {
+                assertEquals(reversed, segment.getStyle(), "整行都应当是高亮样式：" + line.text());
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("不指定缩进样式时，续行缩进沿用无样式（原有行为不变）")
+    void wrap_should_use_plain_indent_when_style_absent() {
+        List<VisualLine> lines = LineWrapper.wrap(PREFIX,
+                Collections.singletonList(StyledSegment.of("abcdefghij")), 9);
+
+        assertEquals(2, lines.size());
+        for (StyledSegment segment : lines.get(1).getSegments()) {
+            assertEquals(Style.EMPTY, segment.getStyle());
+        }
+    }
+
+    @Test
     @DisplayName("中文按 2 列计算，不会被挤出行宽")
     void wrap_should_respect_display_width_when_cjk() {
         // 前缀 4 列，总宽 10 → 正文每行 6 列 = 3 个汉字

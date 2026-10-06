@@ -2,10 +2,13 @@ package zcd.jellyfish.infra.config;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import zcd.jellyfish.infra.support.ExtraBody;
+import zcd.jellyfish.infra.support.ExtraHeaders;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 一个 LLM 服务商定义，对应配置文件 {@code providers} 中的一个条目。
@@ -14,6 +17,10 @@ import java.util.List;
  * 模型列表也可能被目录发现整体替换（{@link #withModels(java.util.List)}）。
  * {@code name} 由配置文件中该条目的 key 回填（见 {@code RuntimeConfig} 的合并逻辑）；合并时同一 key
  * 的项目级定义<b>整对象替换</b>全局级定义，不同 key 视为新增 provider。
+ * <p>
+ * 除类型与凭据之外还有三组「怎么跟这家端点说话」的配置，边界见各自字段：{@link #cache}（影响命中率）、
+ * {@link #sampling}（内核认得的采样参数）、{@link #extraBody} / {@link #extraHeaders}（内核不解释、
+ * 原样透传的厂商私有字段）。
  *
  * @author zcd
  */
@@ -37,11 +44,25 @@ public class Provider {
     /** 缓存治理段，不可为 {@code null}。 */
     private final ProviderCacheSettings cache;
 
+    /** 采样参数基线，不可为 {@code null}（未配置时三项都不表态）。 */
+    private final SamplingSettings sampling;
+
     /**
-     * 兼容旧调用点的便捷构造器：缓存段按缺省值处理。
+     * 直通请求体字段，不可变；未配置时为空映射。
      * <p>
-     * 保留它是因为绝大多数调用点（测试与运行期）不关心 {@code cache}，而它的缺省值恰好就是
-     * 「两项都关」，因此让它们多写一个 {@code null} 只是噪音。
+     * 它在<b>解析配置时</b>就已清洗过（见 {@link ExtraBody#sanitize}）：保留键、超深子树与非法值
+     * 都已被丢弃，因此读取方拿到的一定是可安全下发的结构。
+     */
+    private final Map<String, Object> extraBody;
+
+    /** 直通请求头，不可变；未配置时为空映射。清洗规则见 {@link ExtraHeaders#sanitize}。 */
+    private final Map<String, String> extraHeaders;
+
+    /**
+     * 兼容旧调用点的便捷构造器：缓存段与三个直通段都按缺省值处理。
+     * <p>
+     * 保留它是因为绝大多数调用点（测试与运行期）不关心 {@code cache} 与直通段，而它们的缺省值恰好就是
+     * 「都关、都空」，因此让它们多写一串 {@code null} 只是噪音。
      *
      * @param name    provider 名，可为 {@code null}（由合并阶段按配置 key 回填）
      * @param type    provider 类型
@@ -54,7 +75,7 @@ public class Provider {
     }
 
     /**
-     * 反序列化与合并共用的构造器。
+     * 兼容旧调用点的便捷构造器：三个直通段按缺省值处理。
      *
      * @param name    provider 名，可为 {@code null}（由合并阶段按配置 key 回填）
      * @param type    provider 类型
@@ -63,13 +84,37 @@ public class Provider {
      * @param models  模型列表，可为 {@code null}
      * @param cache   缓存治理段，{@code null} 按缺省值处理
      */
+    public Provider(String name, String type, String apiKey, String baseUrl, List<Model> models,
+                    ProviderCacheSettings cache) {
+        this(name, type, apiKey, baseUrl, models, cache, null, null, null);
+    }
+
+    /**
+     * 反序列化与合并共用的构造器。
+     * <p>
+     * <b>直通段在这里就被清洗</b>，不留给请求期：配置问题要能在 {@code /reload} 时一次说清，
+     * 而请求期是热路径（每次组装请求都走），把校验放那里只会变成日志噪音或静默丢弃。
+     *
+     * @param name         provider 名，可为 {@code null}（由合并阶段按配置 key 回填）
+     * @param type         provider 类型
+     * @param apiKey       访问密钥
+     * @param baseUrl      服务地址
+     * @param models       模型列表，可为 {@code null}
+     * @param cache        缓存治理段，{@code null} 按缺省值处理
+     * @param sampling     采样参数基线，{@code null} 按「三项都不表态」处理
+     * @param extraBody    直通请求体字段，{@code null} 按空处理
+     * @param extraHeaders 直通请求头，{@code null} 按空处理
+     */
     @JsonCreator
     public Provider(@JsonProperty("name") String name,
                     @JsonProperty("type") String type,
                     @JsonProperty("apiKey") String apiKey,
                     @JsonProperty("baseUrl") String baseUrl,
                     @JsonProperty("models") List<Model> models,
-                    @JsonProperty("cache") ProviderCacheSettings cache) {
+                    @JsonProperty("cache") ProviderCacheSettings cache,
+                    @JsonProperty("sampling") SamplingSettings sampling,
+                    @JsonProperty("extraBody") Map<String, Object> extraBody,
+                    @JsonProperty("extraHeaders") Map<String, String> extraHeaders) {
         this.name = name;
         this.type = type;
         this.apiKey = apiKey;
@@ -78,6 +123,9 @@ public class Provider {
                 ? Collections.<Model>emptyList()
                 : Collections.unmodifiableList(new ArrayList<>(models));
         this.cache = cache == null ? new ProviderCacheSettings() : cache;
+        this.sampling = sampling == null ? new SamplingSettings() : sampling;
+        this.extraBody = ExtraBody.sanitize(extraBody, "provider[" + (name == null ? "?" : name) + "]");
+        this.extraHeaders = ExtraHeaders.sanitize(extraHeaders, "provider[" + (name == null ? "?" : name) + "]");
     }
 
     /**
@@ -135,13 +183,45 @@ public class Provider {
     }
 
     /**
+     * 获取采样参数基线。
+     *
+     * @return 采样设置，保证非 {@code null}（未配置时三项都不表态）
+     */
+    public SamplingSettings getSampling() {
+        return sampling;
+    }
+
+    /**
+     * 获取直通请求体字段。
+     * <p>
+     * <b>内核不解释这里任何键的含义</b>：它们原样进入请求体，是否被目标端点认识由用户负责。
+     * 取值时请只做「合并 / 透传」，不要按厂商语义分支——那会让这层退化成内核重新开始认识厂商。
+     *
+     * @return 只读映射，可能为空但不会为 {@code null}
+     */
+    public Map<String, Object> getExtraBody() {
+        return extraBody;
+    }
+
+    /**
+     * 获取直通请求头。
+     * <p>
+     * <b>值可能与密钥同级敏感</b>（自定义鉴权头就是密钥），不得写进日志或事件载荷。
+     *
+     * @return 只读映射，可能为空但不会为 {@code null}
+     */
+    public Map<String, String> getExtraHeaders() {
+        return extraHeaders;
+    }
+
+    /**
      * 用给定的 provider 名产生一个副本，用于把配置文件的 key 回填为 provider 名而不改动原对象。
      *
      * @param newName 新的 provider 名
      * @return 除 name 外与当前对象完全一致的新实例
      */
     public Provider withName(String newName) {
-        return new Provider(newName, type, apiKey, baseUrl, models, cache);
+        return new Provider(newName, type, apiKey, baseUrl, models, cache, sampling, extraBody, extraHeaders);
     }
 
     /**
@@ -155,6 +235,6 @@ public class Provider {
      * @return 除模型列表外与当前对象完全一致的新实例
      */
     public Provider withModels(List<Model> newModels) {
-        return new Provider(name, type, apiKey, baseUrl, newModels, cache);
+        return new Provider(name, type, apiKey, baseUrl, newModels, cache, sampling, extraBody, extraHeaders);
     }
 }

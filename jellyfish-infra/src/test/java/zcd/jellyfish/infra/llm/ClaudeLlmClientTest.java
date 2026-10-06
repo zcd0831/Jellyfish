@@ -4,10 +4,13 @@ import com.fasterxml.jackson.databind.JsonNode;
 import okhttp3.Request;
 import org.junit.jupiter.api.Test;
 import zcd.jellyfish.api.JellyfishException;
+import zcd.jellyfish.infra.config.Provider;
 
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -671,6 +674,31 @@ class ClaudeLlmClientTest {
         assertEquals(1003, listener.completed.getUsage().getPromptTokens());
         assertEquals(900, listener.completed.getUsage().getCacheReadTokens());
         assertEquals(100, listener.completed.getUsage().getCacheWriteTokens());
+    }
+
+    @Test
+    void chat_should_send_extraBody_and_custom_headers_when_configured() throws IOException {
+        // Given：Anthropic 的 thinking / metadata 都是消息体里的私有字段，网关则常要自定义头
+        // （直通字段由 PromptAssembler 从 provider + model 合成后挂在请求上，请求头只有 provider 级）
+        StubInterceptor stub = jsonStub("{\"content\":[]}");
+        Map<String, Object> thinking = new LinkedHashMap<String, Object>();
+        thinking.put("type", "enabled");
+        thinking.put("budget_tokens", 2048);
+        Provider custom = new Provider("claude", "claude", "key", BASE_URL, Collections.emptyList(),
+                null, null, null, Collections.singletonMap("x-tenant", "t-1"));
+        ClaudeLlmClient customClient = new ClaudeLlmClient(custom, stub.client(), directExecutor());
+
+        // When
+        customClient.chat(LlmRequest.builder("claude-3-5-sonnet")
+                .message(LlmMessage.user("hi"))
+                .extraBody(Collections.<String, Object>singletonMap("thinking", thinking))
+                .build());
+
+        // Then：私有字段原样送出（含嵌套对象），自定义头也带上
+        JsonNode body = json(requestBody(stub.lastRequest()));
+        assertEquals("enabled", body.path("thinking").path("type").asText());
+        assertEquals(2048, body.path("thinking").path("budget_tokens").asInt());
+        assertEquals("t-1", stub.lastRequest().header("x-tenant"));
     }
 
     /**

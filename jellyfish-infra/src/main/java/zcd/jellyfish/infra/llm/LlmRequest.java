@@ -4,7 +4,9 @@ import zcd.jellyfish.api.JellyfishException;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 与各厂商接口无关的统一请求模型。不可变，通过 {@link #builder(String)} 构建。
@@ -79,6 +81,19 @@ public final class LlmRequest {
     private final boolean minimalOutput;
 
     /**
+     * 直通请求体字段：原样合并进请求体的厂商私有参数，内核不解释其含义。
+     * <p>
+     * 它已经在配置期清洗过（保留键与超深子树已丢弃，见 {@code ExtraBody}），且是 provider 级与
+     * model 级合并后的结果（见 {@code ModelTuning}）——**请求层不再做任何取舍判断**，
+     * 只负责把它交给客户端。
+     * <p>
+     * <b>为什么请求头不在这里</b>：请求头是端点属性，没有模型级的那一份，因此由客户端直接读 provider
+     * （见 {@code Provider#getExtraHeaders()}）。这也让「模型列表」这类没有请求对象的调用自然带上它，
+     * 否则需要自定义鉴权头的网关会在发现模型那一步就失败。
+     */
+    private final Map<String, Object> extraBody;
+
+    /**
      * 由 builder 构造请求，并对所有集合做防御性拷贝。
      *
      * @param builder 请求构建器
@@ -101,6 +116,9 @@ public final class LlmRequest {
         this.cacheRetention = builder.cacheRetention;
         this.cacheBreakpoints = builder.cacheBreakpoints;
         this.minimalOutput = builder.minimalOutput;
+        this.extraBody = builder.extraBody == null
+                ? Collections.<String, Object>emptyMap()
+                : Collections.unmodifiableMap(new LinkedHashMap<>(builder.extraBody));
     }
 
     /**
@@ -240,6 +258,15 @@ public final class LlmRequest {
     }
 
     /**
+     * 获取直通请求体字段。
+     *
+     * @return 只读映射，可能为空但不会为 {@code null}
+     */
+    public Map<String, Object> getExtraBody() {
+        return extraBody;
+    }
+
+    /**
      * 请求构建器。除 {@code model} 外均可选，链式调用后通过 {@link #build()} 生成不可变请求。
      *
      * @author zcd
@@ -284,6 +311,9 @@ public final class LlmRequest {
 
         /** 是否只要求厂商允许的最省输出。 */
         private boolean minimalOutput;
+
+        /** 直通请求体字段。 */
+        private Map<String, Object> extraBody;
 
         /**
          * 构造构建器。
@@ -444,6 +474,20 @@ public final class LlmRequest {
          */
         public Builder minimalOutput() {
             this.minimalOutput = true;
+            return this;
+        }
+
+        /**
+         * 设置直通请求体字段：原样合并进请求体的厂商私有参数。
+         * <p>
+         * <b>内核不解释这里任何键的含义</b>，也不在这里做校验——清洗已在配置期完成
+         * （见 {@code ExtraBody}）。这里只搬不改，是「厂商知识不进内核」这条边界的落点。
+         *
+         * @param extraBody 直通字段，可为 {@code null}（等价空）
+         * @return 当前构建器
+         */
+        public Builder extraBody(Map<String, Object> extraBody) {
+            this.extraBody = extraBody;
             return this;
         }
 

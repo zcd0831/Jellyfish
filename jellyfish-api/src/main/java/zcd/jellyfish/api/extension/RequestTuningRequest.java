@@ -11,6 +11,10 @@ package zcd.jellyfish.api.extension;
  *     <li><b>按模型/按会话决定</b>——「这个模型前缀本来就每次在变，别打断点」这类判断需要看运行期状态，
  *     配置文件做不到。</li>
  * </ul>
+ * <b>与 {@code models.json} 的 {@code extraBody} 如何分工</b>：<b>静态的</b>厂商私有字段（用户已知端点认什么）
+ * 走配置文件的透传段，不必为它装插件；本扩展点负责的是<b>要看运行期状态才决定得了</b>的那部分，
+ * 以及下面三个缓存字段——它们不属于透传范围（{@code prompt_cache_key} 之类是内核保留键），
+ * 只能由 provider 的 {@code cache} 段给基线、插件逐请求调整。
  * <p>
  * <b>能改的只有缓存参数</b>：返回的 {@link RequestTuning} 在<b>类型上</b>就没有
  * {@code systemPrompt} / {@code messages} / {@code tools} / {@code model} 这类字段，插件编译期即无法

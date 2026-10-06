@@ -5,14 +5,21 @@ import zcd.jellyfish.api.extension.CancellationToken;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 一次调用的传输层请求：厂商无关的字段 + 目标端点信息 + 取消令牌。
  * <p>
  * <b>为什么是「厂商无关的字段」而不是厂商格式的请求体</b>：插件接管的是「把这份归一化的意图翻成
  * 我家协议并发出去」，不是「内核的序列化逻辑改由插件写」。因此这里只出现各家都有对应物的字段
- * （模型、系统提示词、消息、工具、采样参数），没有厂商专属字段的位置。
+ * （模型、系统提示词、消息、工具、采样参数）。
+ * <p>
+ * <b>但厂商私有字段有一个受控的入口</b>：{@link #getExtraBody()} 与 {@link #getExtraHeaders()}——
+ * 用户在 {@code models.json} 里配的、内核<b>不解释其含义</b>的键值。它们是「原样搬运」而不是
+ * 「内核也开始认识厂商协议」：内核不按厂商语义分支、不校验字段名，只保证内核自己生成的那些键
+ * （{@code model} / {@code messages} / {@code tools} …）不会被人从这条路覆盖掉。
  * <p>
  * <b>{@code apiKey} 是内核已经解析好的最终值</b>（配置里的 {@code ${ENV_VAR}} 已插值、双源合并已完成），
  * 插件<b>不需要也不允许</b>自己去读配置文件——那会让「用户只需要维护一处凭据」失效。相应地，
@@ -88,6 +95,32 @@ public final class LlmTransportRequest {
     /** 是否只要求最省输出。 */
     private final boolean minimalOutput;
 
+    /**
+     * 直通请求体字段：用户在 {@code models.json} 里写的厂商私有参数，内核<b>不解释其含义</b>。
+     * <p>
+     * <b>为什么把它交给插件</b>：接管某个 provider 类型的插件若看不到它，用户会遇到
+     * 「换了 type 之后配的 reasoning_effort 就不再生效」——同一个配置段，行为却取决于谁实现了传输，
+     * 那不是可解释的约定。插件可以选择忽略（它自己的协议可能根本没有这些字段），
+     * 但忽略必须是插件的决定，而不是内核没告诉它。
+     * <p>
+     * <b>键已清洗</b>：内核自己生成的那些键（{@code model} / {@code messages} / {@code tools} …）
+     * 在解析配置时就被挡掉了，{@code temperature} 这类已有正式入口的也一样。
+     * <b>插件不得再往里塞内核的字段</b>：那是内核的保留键，插件的立场由 {@code LlmRequest} 的正式字段表达。
+     */
+    private final Map<String, Object> extraBody;
+
+    /**
+     * 直通请求头：用户在 {@code models.json} 的 provider 段里写的自定义头部。
+     * <p>
+     * 与 {@link #extraBody} 同一立场：内核不解释，插件照发即可。协议头
+     * （{@code Content-Type} / {@code Accept} / {@code Host} / {@code Content-Length}）已在内核侧挡掉，
+     * 因为它们由传输实现自己决定，用户写死会造成请求与连接不自洽。
+     * <p>
+     * <b>值可能与密钥同级敏感</b>（自定义鉴权头就是密钥），与 {@link #getApiKey()} 同一口径：
+     * 不得写进日志、事件载荷或错误信息。
+     */
+    private final Map<String, String> extraHeaders;
+
     /** 取消令牌。 */
     private final CancellationToken cancellationToken;
 
@@ -119,6 +152,12 @@ public final class LlmTransportRequest {
         this.cacheRetention = builder.cacheRetention;
         this.cacheBreakpoints = builder.cacheBreakpoints;
         this.minimalOutput = builder.minimalOutput;
+        this.extraBody = builder.extraBody == null
+                ? Collections.<String, Object>emptyMap()
+                : Collections.unmodifiableMap(new LinkedHashMap<String, Object>(builder.extraBody));
+        this.extraHeaders = builder.extraHeaders == null
+                ? Collections.<String, String>emptyMap()
+                : Collections.unmodifiableMap(new LinkedHashMap<String, String>(builder.extraHeaders));
         this.cancellationToken = builder.cancellationToken == null
                 ? CancellationToken.NONE : builder.cancellationToken;
     }
@@ -223,6 +262,27 @@ public final class LlmTransportRequest {
     }
 
     /**
+     * 获取直通请求体字段。
+     *
+     * @return 只读映射，可能为空但不会为 {@code null}
+     */
+    public Map<String, Object> getExtraBody() {
+        return extraBody;
+    }
+
+    /**
+     * 获取直通请求头。
+     * <p>
+     * <b>这是可能含凭据的数据</b>（自定义鉴权头就是密钥），与 {@link #getApiKey()} 同一口径：
+     * 只能用于构造发往 {@link #getBaseUrl()} 的请求。
+     *
+     * @return 只读映射，可能为空但不会为 {@code null}
+     */
+    public Map<String, String> getExtraHeaders() {
+        return extraHeaders;
+    }
+
+    /**
      * 判断本次调用了声明工具。
      *
      * @return 声明了工具时返回 {@code true}
@@ -307,6 +367,12 @@ public final class LlmTransportRequest {
 
         /** 是否只要求最省输出。 */
         private boolean minimalOutput;
+
+        /** 直通请求体字段。 */
+        private Map<String, Object> extraBody;
+
+        /** 直通请求头。 */
+        private Map<String, String> extraHeaders;
 
         /** 取消令牌。 */
         private CancellationToken cancellationToken;
@@ -436,6 +502,28 @@ public final class LlmTransportRequest {
          */
         public Builder minimalOutput() {
             this.minimalOutput = true;
+            return this;
+        }
+
+        /**
+         * 设置直通请求体字段。
+         *
+         * @param extraBody 直通字段，可为 {@code null}（等价空）
+         * @return 当前构建器
+         */
+        public Builder extraBody(Map<String, Object> extraBody) {
+            this.extraBody = extraBody;
+            return this;
+        }
+
+        /**
+         * 设置直通请求头。
+         *
+         * @param extraHeaders 直通头部，可为 {@code null}（等价空）
+         * @return 当前构建器
+         */
+        public Builder extraHeaders(Map<String, String> extraHeaders) {
+            this.extraHeaders = extraHeaders;
             return this;
         }
 

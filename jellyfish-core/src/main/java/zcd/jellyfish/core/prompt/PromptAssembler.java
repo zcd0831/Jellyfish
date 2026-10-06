@@ -18,6 +18,7 @@ import zcd.jellyfish.infra.extension.HandlerBinding;
 import zcd.jellyfish.infra.llm.LlmMessage;
 import zcd.jellyfish.infra.llm.LlmRequest;
 import zcd.jellyfish.infra.llm.LlmTool;
+import zcd.jellyfish.infra.model.ModelTuning;
 import zcd.jellyfish.infra.model.ResolvedModel;
 import zcd.jellyfish.infra.session.Session;
 import zcd.jellyfish.infra.session.SessionCompaction;
@@ -263,7 +264,14 @@ public class PromptAssembler {
                 // 而它们决定缓存落在哪、能不能写、写多久。丢掉任何一个，那次调用可能就白花了
                 .cacheKey(base.getCacheKey())
                 .cacheRetention(base.getCacheRetention())
-                .cacheBreakpoints(base.getCacheBreakpoints());
+                .cacheBreakpoints(base.getCacheBreakpoints())
+                // 采样参数与直通字段同样跟着父请求：两者各自是一次真实、计费的调用，
+                // 用另一套参数发出去等于「同一个前缀、两种问法」——命中与计费口径都会变，
+                // 而用户从配置里看不出发生过这件事
+                .temperature(base.getTemperature())
+                .topP(base.getTopP())
+                .stop(base.getStop().isEmpty() ? null : base.getStop())
+                .extraBody(base.getExtraBody());
         Integer output = base.getMaxTokens();
         if (minimalOutput) {
             builder.minimalOutput();
@@ -320,6 +328,10 @@ public class PromptAssembler {
         builder.cacheKey(tuning.getCacheKey() == null ? defaultCacheKey : tuning.getCacheKey())
                 .cacheRetention(tuning.getCacheRetention())
                 .cacheBreakpoints(clampBreakpoints(tuning.getCacheBreakpoints()));
+        // 采样参数与直通字段：provider 级基线 + model 级覆盖<b>合成一次</b>再下发。
+        // 不做「谁有值用谁」的现场判断：几个消费者的合并规则必须一模一样，
+        // 否则会出现「采样参数按继承算、直通字段按替换算」这种没人验证得出来的差异
+        ModelTuning.of(resolvedModel.getProvider(), resolvedModel.getModel()).applyTo(builder);
         int maxOutputTokens = resolvedModel.getModel().getMaxOutputTokens();
         if (maxOutputTokens > 0) {
             builder.maxTokens(maxOutputTokens);

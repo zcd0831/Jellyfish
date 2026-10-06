@@ -407,6 +407,17 @@ class PluginLlmClientAdapterTest {
     }
 
     /**
+     * 构造绑定指定 provider 的被测适配器。
+     *
+     * @param provider  provider 配置
+     * @param transport 插件传输实现
+     * @return 适配器
+     */
+    private PluginLlmClientAdapter adapter(Provider provider, LlmTransport transport) {
+        return new PluginLlmClientAdapter(provider, contribution(transport), directExecutor);
+    }
+
+    /**
      * 包装传输实现为「接管」的贡献。
      *
      * @param transport 传输实现
@@ -414,6 +425,26 @@ class PluginLlmClientAdapterTest {
      */
     private static ProviderContribution contribution(LlmTransport transport) {
         return ProviderContribution.of("测试插件", transport);
+    }
+
+    @Test
+    void chat_should_pass_extraBody_and_extraHeaders_to_transport() {
+        // Given：provider 配了自定义头，请求里带上直通字段
+        PluginLlmClientAdapter pluginAdapter = adapter(providerWithPassthrough(), (request, listener) -> {
+            captured = request;
+            listener.onComplete(LlmTransportResponse.text("ok"));
+        });
+        LlmRequest passthrough = LlmRequest.builder("gpt-4o")
+                .message(LlmMessage.user("你好"))
+                .extraBody(Collections.<String, Object>singletonMap("service_tier", "flex"))
+                .build();
+
+        // When
+        pluginAdapter.chat(passthrough);
+
+        // Then：两项都要交到插件手上——否则用户会遇到「换了 type 之后配的字段就不生效」
+        assertEquals("flex", captured.getExtraBody().get("service_tier"));
+        assertEquals("t-1", captured.getExtraHeaders().get("x-tenant"));
     }
 
     /**
@@ -424,6 +455,17 @@ class PluginLlmClientAdapterTest {
     private static Provider provider() {
         return new Provider("my-gateway", "my-type", SENTINEL_KEY, "https://gateway.example.com",
                 Arrays.asList(new Model("m-id", "m", 1000, 100)));
+    }
+
+    /**
+     * 构造同时带自定义请求头的 provider。
+     *
+     * @return provider
+     */
+    private static Provider providerWithPassthrough() {
+        return new Provider("my-gateway", "my-type", SENTINEL_KEY, "https://gateway.example.com",
+                Arrays.asList(new Model("m-id", "m", 1000, 100)), null, null, null,
+                Collections.singletonMap("x-tenant", "t-1"));
     }
 
     /**

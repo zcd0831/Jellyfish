@@ -256,6 +256,11 @@ public class LlmClientFactory {
 
     /**
      * 计算 provider 的缓存签名。type / name / apiKey / baseUrl 任一变化都会产生新签名。
+     * <p>
+     * <b>签名不含 {@code sampling} / {@code extraBody} / {@code extraHeaders}</b>：前两项随请求下发
+     * （每次组装时从配置现取），改了就生效；{@code extraHeaders} 由客户端在构造时扣下，
+     * 因此它依赖 {@code /reload} 路径上的 {@code clearCache()}——配置热更新一定会清缓存，
+     * 手工构造的调用点若要改头必须自己清。
      *
      * @param provider       provider 配置
      * @param normalizedType 已规范化的 provider type

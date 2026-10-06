@@ -19,6 +19,7 @@ import zcd.jellyfish.infra.llm.LlmClientFactory;
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -173,13 +174,25 @@ public class ModelManager {
         if (catalog == null || !catalog.isPresent()) {
             return provider;
         }
+        Map<String, Model> configured = new LinkedHashMap<String, Model>();
+        for (Model model : provider.getModels()) {
+            if (model != null && StringUtils.isNotBlank(model.getId())) {
+                configured.put(model.getId(), model);
+            }
+        }
         List<Model> models = new ArrayList<Model>();
         for (ModelDescriptor descriptor : catalog.getModels()) {
             if (descriptor == null || StringUtils.isBlank(descriptor.getId())) {
                 continue;
             }
+            // 发现结果只回答「有哪些模型、规格是多少」；采样与直通参数是<b>用户写的</b>，
+            // 与规格无关，因此按 id 带过来。不这样做的话，一次元数据刷新会把用户配的
+            // reasoning_effort / 温度悄悄清掉，而配置里明明还写着
+            Model existing = configured.get(descriptor.getId());
             models.add(new Model(descriptor.getId(), descriptor.getName(),
-                    descriptor.getContextLength(), descriptor.getMaxOutputTokens()));
+                    descriptor.getContextLength(), descriptor.getMaxOutputTokens(),
+                    existing == null ? null : existing.getSampling(),
+                    existing == null ? null : existing.getExtraBody()));
         }
         if (models.isEmpty()) {
             return provider;

@@ -5,6 +5,8 @@ import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.infra.config.Provider;
+import zcd.jellyfish.infra.support.ExtraBody;
+import zcd.jellyfish.infra.support.ExtraHeaders;
 import zcd.jellyfish.infra.support.LlmClients;
 import zcd.jellyfish.infra.support.ObjectMapperWrapper;
 
@@ -92,10 +94,12 @@ public class GeminiLlmClient extends AbstractHttpLlmClient {
      */
     @Override
     public List<String> listModels() {
-        Request request = jsonRequest(LlmClients.appendVersion(baseUrl(), API_VERSION, "/models?pageSize=1000"))
-                .header("x-goog-api-key", LlmClients.requireApiKey(provider))
-                .get()
-                .build();
+        Request.Builder builder = jsonRequest(
+                LlmClients.appendVersion(baseUrl(), API_VERSION, "/models?pageSize=1000"))
+                .header("x-goog-api-key", LlmClients.requireApiKey(provider));
+        // 发现模型也要带用户头：网关要求的自定义鉴权头缺了，这一步会先于对话失败
+        ExtraHeaders.applyTo(builder, provider.getExtraHeaders());
+        Request request = builder.get().build();
         JsonNode root = executeForJson(request, JsonNode.class, "list models request");
         JsonNode models = root.path("models");
         if (!models.isArray()) {
@@ -168,7 +172,11 @@ public class GeminiLlmClient extends AbstractHttpLlmClient {
     private Request geminiRequest(String model, String methodSuffix) {
         String url = LlmClients.appendVersion(baseUrl(), API_VERSION,
                 "/models/" + stripModelPrefix(model) + methodSuffix);
-        return jsonRequest(url).header("x-goog-api-key", LlmClients.requireApiKey(provider)).build();
+        Request.Builder builder = jsonRequest(url)
+                .header("x-goog-api-key", LlmClients.requireApiKey(provider));
+        // 用户自定义请求头仅 provider 级，直接读 provider（与 OpenAI 系、Claude 同一口径）
+        ExtraHeaders.applyTo(builder, provider.getExtraHeaders());
+        return builder.build();
     }
 
     /**
@@ -207,6 +215,10 @@ public class GeminiLlmClient extends AbstractHttpLlmClient {
                 body.put("toolConfig", toolConfig);
             }
         }
+        // 直通字段<b>深合并</b>最后落：Gemini 的生成参数全在 generationConfig 这个容器里，
+        // 用户写 generationConfig.thinkingConfig 时不能把内核刚生成的 temperature / maxOutputTokens
+        // 整块挤掉——浅合并下这正是会发生的事，且不报错（见 ExtraBody#merge）
+        ExtraBody.applyTo(body, request.getExtraBody());
         return body;
     }
 

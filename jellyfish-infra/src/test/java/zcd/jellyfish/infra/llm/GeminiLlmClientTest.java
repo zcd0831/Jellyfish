@@ -4,10 +4,13 @@ import com.fasterxml.jackson.databind.JsonNode;
 import okhttp3.Request;
 import org.junit.jupiter.api.Test;
 import zcd.jellyfish.api.JellyfishException;
+import zcd.jellyfish.infra.config.Provider;
 
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -272,6 +275,48 @@ class GeminiLlmClientTest {
         // Then
         assertEquals(1024, response.getUsage().getPromptTokens());
         assertEquals(768, response.getUsage().getCacheReadTokens());
+    }
+
+    @Test
+    void chat_should_deep_merge_extraBody_into_generationConfig_when_configured() throws IOException {
+        // Given：用户在 generationConfig 里加思考预算，同时采样参数走内核字段
+        StubInterceptor stub = jsonStub("{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ok\"}]}}]}");
+        GeminiLlmClient client = client(stub);
+        Map<String, Object> thinkingConfig = new LinkedHashMap<String, Object>();
+        thinkingConfig.put("thinkingBudget", 2048);
+        Map<String, Object> generationConfig = new LinkedHashMap<String, Object>();
+        generationConfig.put("thinkingConfig", thinkingConfig);
+        LlmRequest request = LlmRequest.builder("gemini-1.5-pro")
+                .message(LlmMessage.user("hi"))
+                .temperature(0.5)
+                .maxTokens(128)
+                .extraBody(Collections.<String, Object>singletonMap("generationConfig", generationConfig))
+                .build();
+
+        // When
+        client.chat(request);
+
+        // Then：浅合并会把内核生成的 temperature / maxOutputTokens 整块挤掉且不报错，
+        // 因此这里必须深合并——两者都得在
+        JsonNode config = json(requestBody(stub.lastRequest())).path("generationConfig");
+        assertEquals(2048, config.path("thinkingConfig").path("thinkingBudget").asInt());
+        assertEquals(0.5, config.path("temperature").asDouble());
+        assertEquals(128, config.path("maxOutputTokens").asInt());
+    }
+
+    @Test
+    void listModels_should_send_custom_headers_when_configured() {
+        // Given：网关要求自定义鉴权头时，发现模型这一步会先于对话失败
+        StubInterceptor stub = jsonStub("{\"models\":[{\"name\":\"models/gemini-1.5-pro\"}]}");
+        Provider custom = new Provider("gemini", "gemini", "key", BASE_URL, Collections.emptyList(),
+                null, null, null, Collections.singletonMap("x-tenant", "t-1"));
+        GeminiLlmClient customClient = new GeminiLlmClient(custom, stub.client(), directExecutor());
+
+        // When
+        customClient.listModels();
+
+        // Then
+        assertEquals("t-1", stub.lastRequest().header("x-tenant"));
     }
 
     /**

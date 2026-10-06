@@ -481,7 +481,14 @@ mkdir -p ~/.jellyfish/plugins
         "promptCacheKey": false,
         "keepAliveSeconds": 0
       },
-      "models": [{ "id": "gpt-4o", "name": "gpt-4o", "contextLength": 128000, "maxOutputTokens": 4096 }]
+      "sampling": { "temperature": 0.2, "topP": 0.95, "stop": ["</done>"] },
+      "extraBody": { "service_tier": "flex" },
+      "extraHeaders": { "x-tenant": "team-a" },
+      "models": [{
+        "id": "gpt-5", "name": "gpt-5", "contextLength": 400000, "maxOutputTokens": 8192,
+        "sampling": { "temperature": 1 },
+        "extraBody": { "reasoning_effort": "low" }
+      }]
     }
   }
 }
@@ -493,6 +500,9 @@ mkdir -p ~/.jellyfish/plugins
 | `providers.<name>.type` | 用哪套 provider 实现（`openai` / `claude` / `deepseek` / `gemini` / `minimax` 及其别名） |
 | `providers.<name>.apiKey` | 建议写成 `${ENV_VAR}`，由环境变量注入 |
 | `providers.<name>.models[]` | `id`（`/model` 里 `provider/model` 的后半段）/ `name` / `contextLength` / `maxOutputTokens` |
+| `providers.<name>.sampling` + `models[].sampling` | 采样参数，见下 |
+| `providers.<name>.extraBody` + `models[].extraBody` | 原样透传到请求体的厂商私有字段，见下 |
+| `providers.<name>.extraHeaders` | 原样加进出站请求的自定义头（**只有 provider 级**） |
 
 **`type` 可以由插件提供**：插件能为一个内核不认识的新类型提供传输实现（本地 llama.cpp、企业自建网关、私有协议、
 自定义鉴权），用户只需在这里写一个指向该类型的 provider。两条硬规则：
@@ -504,6 +514,66 @@ mkdir -p ~/.jellyfish/plugins
 
 传一个不存在的 `type` 时，报错会列出内核认识的类型与可执行的下一步。
 
+#### `sampling`（可选，三项缺省都不下发）
+
+只放**各家都有对应物、内核也有正式字段**的采样参数：`temperature` / `topP` / `stop`。
+provider 级给基线、`models[]` 里逐字段覆盖（没写的沿用 provider 级）。
+
+| 字段 | 校验 | 含义 |
+| --- | --- | --- |
+| `temperature` | 非负且有限，否则丢弃并告警 | 采样温度 |
+| `topP` | 落在 `(0, 1]`，否则丢弃并告警 | 核采样概率 |
+| `stop` | 空白项丢弃，其余原样（含空格换行） | 停止序列 |
+
+**「没写」与「写了 0」是两回事**：没写的字段**不下发**，厂商自己的缺省才是缺省（内核不替厂商猜缺省值——猜错就是一次
+400）。温度上限各家不同（OpenAI 系 0–2、Anthropic 0–1），内核只校验它确定的那部分，越界由厂商拒绝。
+
+**`seed` / `frequency_penalty` / `reasoning_effort` / `thinking` 这类不在 `sampling` 里**：它们要么各家有的没有，
+要么连语义与单位都不一致（OpenAI 用枚举 `reasoning_effort`、Anthropic 用整数 `budget_tokens`、Gemini 用
+`thinkingConfig.thinkingBudget`）。它们走 `extraBody`——边界就是「内核有没有一个厂商无关的字段」。
+
+#### `extraBody`（可选）：厂商私有字段原样透传
+
+内核**不解释**这里的任何键，也不校验它是否被目标端点认识：`reasoning_effort`、`service_tier`、
+Anthropic 的 `thinking`、Gemini 的 `generationConfig.thinkingConfig` 都是这么配的。
+provider 级与 `models[]` 级**深合并**（对象递归、数组与标量整体替换、model 级优先）。
+
+```jsonc
+// 落到各家请求体的位置由各家协议决定：OpenAI 系与 Claude 在顶层，Gemini 要钻进 generationConfig
+"extraBody": { "generationConfig": { "thinkingConfig": { "thinkingBudget": 2048 } } }
+```
+
+**下面这些写了也不会生效**（在解析配置时丢弃并告警，不会阻断启动）：
+
+1. **结构性键**——`model` `messages` `contents` `system` `systemInstruction` `tools` `toolConfig`
+   `tool_choice` `stream` `stream_options` `prompt_cache_key` `prompt_cache_retention`。它们决定请求形状与缓存前缀，
+   不能由配置文件改写；
+2. **采样类键**——`temperature` `top_p` `topP` `stop` `stop_sequences` `stopSequences` `max_tokens`
+   `maxOutputTokens`（三家对同一批参数的拼法各算一个键）。它们已经有 `sampling` 与 `maxOutputTokens` 两个正式入口，
+   同一参数两个入口迟早会出现「两处都配了、行为却不是任何一处」；
+3. **超过 8 层的嵌套**——整棵子树丢弃（真需要嵌套的字段只有两三层，写超了多半是配错了层级）。
+
+键名**大小写敏感**，因此 `generationConfig.temperature`、`generationConfig.stopSequences` 一样会被挡。
+**已知代价**：字段名打错就是**静默无效**——厂商多半忽略不认识的字段，内核也不会替你校验字段名（那正是直通的定义）。
+排查办法：`extraBody` 生效时会在 **DEBUG 日志**里打一行键名（不打值，值可能含凭据），把日志级别调低就能看到实际下发了哪些键。
+
+#### `extraHeaders`（可选）：自定义请求头
+
+给企业网关、自建代理要求的额外头部用：自定义鉴权、租户标识、路由标签。**用户头覆盖内核同名头**（写
+`anthropic-version` 就能试新版本，写 `Authorization` 就能走网关自己的鉴权）。
+
+六个头**写了会被丢弃并告警**：`Content-Type`、`Accept`、`Host`、`Content-Length`、`Accept-Encoding`、`Range`——
+前两个写错会让厂商拒收请求体或让流式响应按普通 JSON 解析；后四个由 HTTP 客户端按实际连接、实体与自身机制计算，
+其中 `Accept-Encoding` / `Range` 尤其隐蔽：一旦由用户自带，传输层就不再走**透明解压**那条路径，
+响应体将以压缩字节送进 JSON 解析，症状是「配了个看起来无害的头，所有请求开始报解析错误」。
+
+**头名与头值按 HTTP 规则校验**：头名须为 token、头值只允许可见 ASCII 与制表符（换行、中文都不行），
+不合规的条目在解析配置时丢弃并只记头名——不这么做的话，它会在**每次请求**时由 HTTP 客户端抛一个带**值原文**的异常，
+而那个值可能就是密钥。
+
+**值可能与密钥同级敏感**（自定义鉴权头就是密钥），内核不把它写进任何日志。模型列表发现（Gemini 的 `listModels`）
+同样带上这些头——否则网关要求的鉴权头缺了，发现模型那一步会先于对话失败。
+
 #### `providers.<name>.cache`（可选，两项缺省都关）
 
 两个旋钮都只影响**命中率**、不影响正确性，且都与具体厂商的缓存实现绑死，因此挂在 provider 上。
@@ -513,14 +583,19 @@ mkdir -p ~/.jellyfish/plugins
 | `promptCacheKey` | `false` | 把会话标识作为缓存路由键下发（OpenAI 系为 `prompt_cache_key`），让同一会话的请求尽量落到持有相同前缀的机器上。缺省关闭：老模型 / 老端点收到不认识的字段可能直接报错 |
 | `keepAliveSeconds` | `0` | 空闲时每隔这么多秒重发一次「复用同一前缀、且不要求生成内容」的请求，把缓存 TTL 续上。`0` 关闭。**它是要花钱的**（上限 1 小时，超出回退到关闭；每个空闲期最多续 3 次） |
 
-**这一层只是基线**：厂商协议字段与缓存策略还能由插件经 `RequestTuningRequest` 逐请求调整——「目标端点认哪些字段」
-是厂商知识，不是内核知识。**Anthropic 必须显式用 `cache_control` 标出断点，不标就一个字节都不缓存**，
+**这一层只是基线**：缓存策略还能由插件经 `RequestTuningRequest` 逐请求调整——「这个会话要不要打断点」这类判断
+要看运行期状态，配置文件做不到。**厂商协议字段的静态透传走 `extraBody` / `extraHeaders`**（用户已知端点认什么），
+按运行期状态决定发什么则是插件的事。**Anthropic 必须显式用 `cache_control` 标出断点，不标就一个字节都不缓存**，
 因此 Claude 客户端**默认标注两个断点**；想退回去由插件接管，用 `RequestTuningRequest` 把断点数声明为 `0`。
 DeepSeek 默认按前缀缓存、且磁盘缓存要几小时到几天才清理，按分钟级续它没有意义，`keepAliveSeconds` 保持 `0` 即可。
 
 `keepAliveSeconds` 花掉的 token 照常进 `/usage`，也进 `llm.*` 指标。**调参提示**：按厂商文档的 TTL 开一个略小于它的
 间隔试一段（OpenAI 内存缓存约 5–10 分钟，`240` 是个合理起点），看 `/usage` 的命中率有没有抬上去；
 **没抬上去就关掉它**。
+
+**它和 Anthropic 的 `thinking` 互斥**：保活请求按「最省输出」下发 `max_tokens: 0`，而 Anthropic 要求
+`max_tokens` 大于 `thinking.budget_tokens`，两者同时配上会被 400 拒。保活失败只记 DEBUG 日志，因此症状是
+「配了保活但命中率没改善」而不是一条明显的报错——排查时先看 `extraBody` 里有没有 `thinking`。
 
 ### `agents.json`
 

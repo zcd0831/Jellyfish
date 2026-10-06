@@ -28,6 +28,7 @@ import zcd.jellyfish.infra.config.ProviderCacheSettings;
 import zcd.jellyfish.infra.config.ReactCacheSettings;
 import zcd.jellyfish.infra.config.ReactSettings;
 import zcd.jellyfish.infra.config.RuntimeConfig;
+import zcd.jellyfish.infra.config.SamplingSettings;
 import zcd.jellyfish.infra.config.ToolOutputSettings;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.llm.LlmMessage;
@@ -42,7 +43,9 @@ import zcd.jellyfish.infra.session.SessionDefaults;
 import zcd.jellyfish.infra.tooloutput.ToolOutputEnvelope;
 
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -929,6 +932,111 @@ class PromptAssemblerTest {
 
         // Then：不下发——老模型/老端点收到不认识的字段可能直接报错
         assertNull(request.getCacheKey());
+    }
+
+    @Test
+    void buildRequest_should_applySampling_fromProviderAndModel() {
+        // Given：provider 给基线三项，model 只表一个温度
+        Session session = newSession();
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        Provider provider = new Provider("openai", "openai", null, null, null, new ProviderCacheSettings(),
+                new SamplingSettings(0.2d, 0.9d, Collections.singletonList("</done>")), null, null);
+        Model model = new Model("gpt-4o", "gpt-4o", 128_000, 4096,
+                new SamplingSettings(1d, null, null), null);
+
+        // When
+        LlmRequest request = assembler.buildRequest(session, new ResolvedModel(provider, model));
+
+        // Then：逐字段覆盖——model 表了态的那项被换掉，其余沿用 provider，而不是整段抹掉
+        assertEquals(1d, request.getTemperature());
+        assertEquals(0.9d, request.getTopP());
+        assertEquals(Collections.singletonList("</done>"), request.getStop());
+    }
+
+    @Test
+    void buildRequest_should_omitSampling_whenNotConfigured() {
+        // Given：一个什么都不配的 provider 与 model
+        Session session = newSession();
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+
+        // When
+        LlmRequest request = assembler.buildRequest(session, resolvedModel(128_000, 4096));
+
+        // Then：不下发——采样参数一旦下发就覆盖厂商缺省，而「没配」与「配了某个数」是两回事
+        assertNull(request.getTemperature());
+        assertNull(request.getTopP());
+        assertTrue(request.getStop().isEmpty());
+    }
+
+    @Test
+    void buildRequest_should_applyExtraBody_mergedFromProviderAndModel() {
+        // Given：provider 级与 model 级各写一个厂商私有字段
+        Session session = newSession();
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        Map<String, Object> providerBody = new LinkedHashMap<String, Object>();
+        providerBody.put("service_tier", "flex");
+        Map<String, Object> modelBody = new LinkedHashMap<String, Object>();
+        modelBody.put("reasoning_effort", "low");
+        Provider provider = new Provider("openai", "openai", null, null, null, new ProviderCacheSettings(),
+                null, providerBody, null);
+        Model model = new Model("gpt-4o", "gpt-4o", 128_000, 4096, null, modelBody);
+
+        // When
+        LlmRequest request = assembler.buildRequest(session, new ResolvedModel(provider, model));
+
+        // Then：两级都带上，内核不解释它们的含义
+        assertEquals("flex", request.getExtraBody().get("service_tier"));
+        assertEquals("low", request.getExtraBody().get("reasoning_effort"));
+    }
+
+    @Test
+    void buildFork_should_carrySamplingAndExtraBody_fromParent() {
+        // Given：配齐采样与直通字段
+        SessionManager sessions = newSessionManager();
+        Session session = sessions.createDefault();
+        sessions.appendMessage(session.getSessionId(), LlmMessage.user("一"), null);
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        Map<String, Object> providerBody = new LinkedHashMap<String, Object>();
+        providerBody.put("service_tier", "flex");
+        Provider provider = new Provider("openai", "openai", null, null, null, new ProviderCacheSettings(),
+                new SamplingSettings(0.2d, 0.9d, null), providerBody, null);
+        Model model = new Model("gpt-4o", "gpt-4o", 128_000, 4096, null, null);
+        ResolvedModel resolved = new ResolvedModel(provider, model);
+
+        // When
+        LlmRequest parent = assembler.buildRequest(session, resolved);
+        LlmRequest fork = assembler.buildFork(session, resolved, 0, 0, "写摘要");
+
+        // Then：fork 是一次真实、计费的调用，参数必须与父请求一致——否则同一个前缀会有两种问法
+        assertEquals(parent.getTemperature(), fork.getTemperature());
+        assertEquals(parent.getTopP(), fork.getTopP());
+        assertEquals(parent.getExtraBody(), fork.getExtraBody());
+    }
+
+    @Test
+    void buildKeepAlive_should_carrySamplingAndExtraBody_fromParent() {
+        // Given
+        SessionManager sessions = newSessionManager();
+        Session session = sessions.createDefault();
+        sessions.appendMessage(session.getSessionId(), LlmMessage.user("一"), null);
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        Map<String, Object> providerBody = new LinkedHashMap<String, Object>();
+        providerBody.put("service_tier", "flex");
+        Provider provider = new Provider("openai", "openai", null, null, null, new ProviderCacheSettings(),
+                new SamplingSettings(0.2d, null, null), providerBody, null);
+        ResolvedModel resolved = new ResolvedModel(provider,
+                new Model("gpt-4o", "gpt-4o", 128_000, 4096, null, null));
+
+        // When：先装一次父请求（保活复用的就是它），再构造保活请求
+        LlmRequest parent = assembler.buildRequest(session, resolved);
+        LlmRequest keepAlive = assembler.buildKeepAlive(session, resolved, "保活");
+
+        // Then
+        assertNotNull(keepAlive);
+        assertEquals(parent.getTemperature(), keepAlive.getTemperature());
+        assertEquals(parent.getExtraBody(), keepAlive.getExtraBody());
+        // 「不需要输出」这一点仍然由内核声明，不受采样与直通字段影响
+        assertTrue(keepAlive.isMinimalOutput());
     }
 
     @Test

@@ -28,6 +28,7 @@ import zcd.jellyfish.infra.config.Model;
 import zcd.jellyfish.infra.config.Provider;
 import zcd.jellyfish.infra.config.ReactSettings;
 import zcd.jellyfish.infra.config.RuntimeConfig;
+import zcd.jellyfish.infra.config.SamplingSettings;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.llm.LlmClient;
 import zcd.jellyfish.infra.llm.LlmMessage;
@@ -247,6 +248,28 @@ class ConversationCompactorTest {
         assertEquals(1, plan.getRequest().getMessages().size());
         assertEquals(3, plan.getCompressedCount());
         assertFalse(plan.isForked());
+    }
+
+    @Test
+    @DisplayName("回退路径也带上采样与直通参数：走哪条路只该影响钱，不该换参数")
+    void plan_should_carryTuning_when_fallingBack() {
+        sessionWithMessages(6);
+        // 用真实 Provider/Model：调优参数来自配置，mock 掉就测不到合成规则
+        Provider provider = new Provider("openai", "openai", "key", "https://api.openai.com",
+                Collections.<Model>emptyList(), null, new SamplingSettings(0.2d, null, null),
+                Collections.<String, Object>singletonMap("service_tier", "flex"), null);
+        ResolvedModel resolved = new ResolvedModel(provider, new Model("gpt-4o", "gpt-4o", 128_000, 4_000));
+        when(modelManager.resolveDefault()).thenReturn(resolved);
+        lenient().when(modelManager.getClient(resolved)).thenReturn(client);
+        applyKeepRecent(3);
+        when(promptAssembler.buildFork(any(Session.class), any(ResolvedModel.class), anyInt(), anyInt(),
+                anyString())).thenReturn(null);
+
+        CompactionPlan plan = compactor.plan(createdSessionId);
+
+        // 少落一项的后果不对称：fork 那条路是「命中率与钱」，这条路上却可能是「端点直接拒掉这次摘要」
+        assertEquals(0.2d, plan.getRequest().getTemperature());
+        assertEquals("flex", plan.getRequest().getExtraBody().get("service_tier"));
     }
 
     @Test

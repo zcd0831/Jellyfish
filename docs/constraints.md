@@ -855,6 +855,16 @@ handler 抛错**按放行处理**。它只管「结束运行态、保留快照�
 
 - **异常**统一抛 `JellyfishException`；**序列化**统一走 `ObjectMapperWrapper`，**不要直接 `new ObjectMapper`**。
 - **请求 / 消息模型**：`LlmRequest` / `LlmMessage` / `LlmTool` 是与厂商无关的统一模型，`LlmRequest` 用 builder 构建。
+- **厂商私有字段只有一条受控入口**：`models.json` 的 `providers.<name>.extraBody` / `models[].extraBody`（请求体）与
+  `extraHeaders`（请求头），经 `ExtraBody` / `ExtraHeaders` 清洗后由 `PromptAssembler` 挂在 `LlmRequest` 上。
+  内核**不解释键含义、不校验字段名**，只保证四件事：保留键（结构性键 + 采样类键，三家拼法各算一个）在**任意深度**
+  被丢弃并告警；头名/头值按 HTTP 字符集校验（不然非法配置会在每次请求时由 HTTP 客户端抛一个带值原文的异常）；
+  清洗在**解析配置时**完成（请求期只做纯函数深合并，不刷日志）；规则**只有一处**——`ModelTuning.applyTo(builder)`，
+  正常组装、cache-safe fork、缓存保活、压缩回退四条构造请求的路径都调它。
+  **采样参数不走这条路**：`temperature` / `topP` / `stop` 有正式入口（`sampling` 段），一个参数只能有一个入口。
+  请求头只有 provider 级（端点是 provider 的属性），因此客户端直接读 `Provider`，模型列表这类没有请求对象的调用也带上它。
+  **模型目录发现只换规格**：插件报回的目录按 id 覆盖 `contextLength` / `maxOutputTokens`，用户写的 `sampling` /
+  `extraBody` 按 id 带过来（否则一次元数据刷新会悄悄清掉配置里还写着的参数）。
 - **配置类型命名**：项目内部配置类用 `Config` 结尾，暴露给用户的配置类用 `Settings` 结尾。
 
 ## Server 接口契约
@@ -965,6 +975,9 @@ handler 抛错**按放行处理**。它只管「结束运行态、保留快照�
 - **模型厂商可插拔明确不做**：OAuth / 登录命令、插件重写内核的序列化逻辑、
   插件提供 provider 实例（只加 type，实例一律来自 `models.json`）。
   **已知边界**：插件停止后不等待在途调用结束。
+  **厂商私有字段的边界**：可以透传（`extraBody` / `extraHeaders`），但内核不会因此认识厂商语义——
+  它不做按字段名的分支、不校验字段名是否被端点认识（**打错就是静默无效**），也不替厂商维护「哪些模型认哪些字段」。
+  需要按模型 / 按运行期状态决定发什么，那仍然是插件的事（`RequestTuningRequest`）。
 - **出站消息序列的工具调用配对已知边界**：**中段**的配对缺失不做归一化
   （修它要拆掉一个已存在、且可能被后续消息引用到的工具调用）；两端的异常已被兜住。
 - **实时输出已知边界**：`-server` 的丢弃计数只在服务端可观测，没有推给客户端。

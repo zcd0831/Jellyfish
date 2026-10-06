@@ -11,6 +11,7 @@ import zcd.jellyfish.api.event.notification.ModelsLoadedEvent;
 import zcd.jellyfish.infra.config.Model;
 import zcd.jellyfish.infra.config.Provider;
 import zcd.jellyfish.infra.config.RuntimeConfig;
+import zcd.jellyfish.infra.config.SamplingSettings;
 import zcd.jellyfish.infra.llm.LlmClient;
 import zcd.jellyfish.api.extension.ModelCatalogRequest;
 import zcd.jellyfish.api.extension.ModelCatalogResult;
@@ -543,6 +544,55 @@ class ModelManagerTest {
         // 替换走的是副本：配置里那份 provider 对象本身一个字段都没被改
         assertEquals(1, provider.getModels().size());
         assertEquals("gpt-4o-id", provider.getModels().get(0).getId());
+    }
+
+    @Test
+    void refreshCatalogs_should_carryConfiguredTuning_when_replacing_models() {
+        // Given：配置里给这个模型配了采样与直通字段，插件报回来的目录里也有同一个 id
+        Provider provider = new Provider(PROVIDER, "my-type", "api-key", "https://api.example.com",
+                Arrays.asList(new Model("llama-3", "Llama 3", 128000, 4096,
+                        new SamplingSettings(0.2d, null, null),
+                        Collections.<String, Object>singletonMap("reasoning_effort", "low"))));
+        when(runtimeConfig.getProviders()).thenReturn(Collections.singletonList(provider));
+        when(llmClientFactory.isBuiltinType("my-type")).thenReturn(false);
+        extensions.handle("plugin-a", ModelCatalogRequest.class, PROVIDER, null, request -> ModelCatalogResult.of(
+                Arrays.asList(new ModelDescriptor("llama-3", "Llama 3", 8192, 2048))),
+                RegisterOptions.DEFAULT);
+        ModelManager manager = newModelManager();
+
+        // When
+        manager.refreshCatalogs();
+
+        // Then：规格以发现结果为准，用户写的调优参数按 id 带过来——
+        // 否则一次元数据刷新会把配置里明明还写着的参数悄悄清掉
+        ArgumentCaptor<List<Provider>> captor = ArgumentCaptor.forClass(List.class);
+        verify(modelRegistry, times(2)).refresh(captor.capture());
+        Model indexed = captor.getValue().get(0).getModels().get(0);
+        assertEquals(8192, indexed.getContextLength());
+        assertEquals(0.2d, indexed.getSampling().getTemperature());
+        assertEquals("low", indexed.getExtraBody().get("reasoning_effort"));
+    }
+
+    @Test
+    void refreshCatalogs_should_leave_tuningEmpty_when_model_is_not_configured() {
+        // Given：目录里的模型配置里没写过（新发现的），它不该凭空继承别人的调优
+        Provider provider = pluginProvider();
+        when(runtimeConfig.getProviders()).thenReturn(Collections.singletonList(provider));
+        when(llmClientFactory.isBuiltinType("my-type")).thenReturn(false);
+        extensions.handle("plugin-a", ModelCatalogRequest.class, PROVIDER, null, request -> ModelCatalogResult.of(
+                Arrays.asList(new ModelDescriptor("brand-new", "Brand New", 8192, 2048))),
+                RegisterOptions.DEFAULT);
+        ModelManager manager = newModelManager();
+
+        // When
+        manager.refreshCatalogs();
+
+        // Then
+        ArgumentCaptor<List<Provider>> captor = ArgumentCaptor.forClass(List.class);
+        verify(modelRegistry, times(2)).refresh(captor.capture());
+        Model indexed = captor.getValue().get(0).getModels().get(0);
+        assertTrue(indexed.getSampling().isEmpty());
+        assertTrue(indexed.getExtraBody().isEmpty());
     }
 
     @Test

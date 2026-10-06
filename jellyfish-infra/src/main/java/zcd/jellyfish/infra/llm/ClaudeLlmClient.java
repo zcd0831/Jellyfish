@@ -6,6 +6,8 @@ import okhttp3.Request;
 import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.extension.RequestTuning;
 import zcd.jellyfish.infra.config.Provider;
+import zcd.jellyfish.infra.support.ExtraBody;
+import zcd.jellyfish.infra.support.ExtraHeaders;
 import zcd.jellyfish.infra.support.LlmClients;
 import zcd.jellyfish.infra.support.ObjectMapperWrapper;
 
@@ -97,13 +99,20 @@ public class ClaudeLlmClient extends AbstractHttpLlmClient {
 
     /**
      * 构造带 x-api-key 与 anthropic-version 头的请求构建器。
+     * <p>
+     * <b>用户自定义请求头在这里落上</b>（{@code provider.extraHeaders}，仅 provider 级）：
+     * 常见用途是企业网关要求的额外鉴权 / 租户头，以及覆盖 {@code anthropic-version} 去试新版本。
+     * 用户头排在最后，因此同名头以用户为准；协议头（{@code Content-Type} / {@code Accept} 等）
+     * 已在配置期被挡掉，见 {@code ExtraHeaders}。
      *
-     * @return 已带鉴权头的请求构建器
+     * @return 已带鉴权头与用户自定义头的请求构建器
      */
     private Request.Builder authorizedRequest() {
-        return jsonRequest(messagesUrl())
+        Request.Builder builder = jsonRequest(messagesUrl())
                 .header("x-api-key", LlmClients.requireApiKey(provider))
                 .header("anthropic-version", ANTHROPIC_VERSION);
+        ExtraHeaders.applyTo(builder, provider.getExtraHeaders());
+        return builder;
     }
 
     /**
@@ -191,6 +200,10 @@ public class ClaudeLlmClient extends AbstractHttpLlmClient {
                 body.put("tool_choice", toolChoice);
             }
         }
+        // 直通字段最后落：thinking / metadata / service_tier 这类 Anthropic 私有字段由内核原样送出。
+        // system / messages / tools 等内核键已在配置期挡住（见 ExtraBody 的保留键），
+        // 否则用户能通过直通把整段对话换掉、并顺带毁掉缓存前缀
+        ExtraBody.applyTo(body, request.getExtraBody());
         return body;
     }
 

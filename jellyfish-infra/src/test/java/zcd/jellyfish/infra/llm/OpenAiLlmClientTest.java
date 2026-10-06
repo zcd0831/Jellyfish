@@ -5,10 +5,13 @@ import okhttp3.Request;
 import org.junit.jupiter.api.Test;
 import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.LlmHttpException;
+import zcd.jellyfish.infra.config.Provider;
 
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -371,6 +374,40 @@ class OpenAiLlmClientTest {
     }
 
     @Test
+    void chat_should_send_extraBody_when_configured() throws IOException {
+        // Given
+        StubInterceptor stub = jsonStub("{\"choices\":[{\"message\":{\"content\":\"ok\"}}]}");
+        OpenAiLlmClient client = client(stub);
+        LlmRequest request = LlmRequest.builder("gpt-4o")
+                .message(LlmMessage.user("hello"))
+                .extraBody(Collections.<String, Object>singletonMap("service_tier", "flex"))
+                .build();
+
+        // When
+        client.chat(request);
+
+        // Then：厂商私有参数原样进入请求体，内核不解释
+        assertEquals("flex", json(requestBody(stub.lastRequest())).path("service_tier").asText());
+    }
+
+    @Test
+    void chat_should_send_extraHeaders_and_let_them_win_over_kernel_header() throws IOException {
+        // Given：provider 配了自定义头，其中一个与内核鉴权头同名
+        StubInterceptor stub = jsonStub("{\"choices\":[{\"message\":{\"content\":\"ok\"}}]}");
+        Provider custom = new Provider("openai", "openai", "key", BASE_URL, Collections.emptyList(),
+                null, null, null, headers());
+        OpenAiLlmClient client = new OpenAiLlmClient(custom, stub.client(), directExecutor());
+
+        // When
+        client.chat(LlmRequest.builder("gpt-4o").message(LlmMessage.user("hello")).build());
+
+        // Then：网关要求的自定义头带上；同名头以用户为准（网关的鉴权头正是这条路的正经用途）
+        Request httpRequest = stub.lastRequest();
+        assertEquals("t-1", httpRequest.header("x-tenant"));
+        assertEquals("Bearer custom", httpRequest.header("Authorization"));
+    }
+
+    @Test
     void chat_should_parse_cached_tokens_from_prompt_tokens_details() throws IOException {
         // Given：OpenAI 把命中数放在 prompt_tokens_details.cached_tokens，且 prompt_tokens 已含它
         StubInterceptor stub = jsonStub("{\"choices\":[{\"message\":{\"role\":\"assistant\","
@@ -396,5 +433,17 @@ class OpenAiLlmClientTest {
      */
     private static OpenAiLlmClient client(StubInterceptor stub) {
         return new OpenAiLlmClient(provider("openai", "key", BASE_URL), stub.client(), directExecutor());
+    }
+
+    /**
+     * 构造一组用户自定义请求头，其中一个是与内核同名、故意要覆盖的鉴权头。
+     *
+     * @return 自定义请求头
+     */
+    private static Map<String, String> headers() {
+        Map<String, String> headers = new LinkedHashMap<String, String>();
+        headers.put("x-tenant", "t-1");
+        headers.put("Authorization", "Bearer custom");
+        return headers;
     }
 }

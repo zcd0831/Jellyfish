@@ -878,7 +878,7 @@ handler 抛错**按放行处理**。它只管「结束运行态、保留快照�
   **采样参数不走这条路**：`sampling` 段的七个字段（`temperature` / `topP` / `topK` / `seed` /
   `frequencyPenalty` / `presencePenalty` / `stop`）各有正式入口，一个参数只能有一个入口。
   **内核只声明意图、客户端判断「自家认不认」**（如 `top_k` 不下发给 OpenAI 系、`seed` 不下发给 Claude）；
-  「同一家不同代际认不认」（Claude 4.7+ 移除温度类参数、DeepSeek 思考模式忽略采样参数）属于厂商知识，
+  「同一家不同代际认不认」（Claude 4.7+ 移除温度类参数、DeepSeek 的思考模式与采样参数互相挑食）属于厂商知识，
   内核不按模型名猜，只在 README 写明。
   **唯一由配置决定的「内核自己写的字段名」是输出上限**：`Model.maxTokensField` 决定下发 `max_tokens`
   还是 `max_completion_tokens`（OpenAI 的推理模型与 gpt-5 之后拒收前者，DeepSeek / OpenRouter 只认前者）。

@@ -469,6 +469,9 @@ mkdir -p ~/.jellyfish/plugins
 
 ### `models.json`
 
+要配的只有三件事：**每个 provider 怎么访问**（`type` / `apiKey` / `baseUrl`）、**它有哪些模型**、**按需调参**。
+下面先给一份完整示例，再按层列表；表的顺序与字段的嵌套层级一致。
+
 ```json
 {
   "defaultProvider": "openai",
@@ -495,298 +498,131 @@ mkdir -p ~/.jellyfish/plugins
 }
 ```
 
+**表里没列出的字段就是不支持的**：本文件关掉了「未知字段」的报错，多写一个键既不会有提示、也不会有任何效果。
+本文件可以是全局级（`~/.jellyfish/`）与项目级（`<工作目录>/.jellyfish/`）两份，同名 `provider` / 模型以项目级**整对象**覆盖；
+改完敲 `/reload` 生效，不用重启进程。
+
+#### 字段：`providers.<name>`
+
+`<name>` 是自取的名字（`/model` 里 `provider/model` 的前半段）。
+
 | 字段 | 说明 |
 | --- | --- |
-| `defaultProvider` / `defaultModel` | 全局默认模型。模型解析顺序是**会话显式选定 → `agent.model` → 这里** |
-| `providers.<name>.type` | 用哪套 provider 实现（`openai` / `claude` / `deepseek` / `gemini` / `minimax` 及其别名） |
-| `providers.<name>.apiKey` | 建议写成 `${ENV_VAR}`，由环境变量注入 |
-| `providers.<name>.models[]` | `id`（`/model` 里 `provider/model` 的后半段）/ `name` / `contextLength` / `maxOutputTokens` |
-| `providers.<name>.models[].maxTokensField` | 输出上限用哪个请求体字段名，见下（**只有模型级**） |
-| `providers.<name>.sampling` + `models[].sampling` | 采样参数，见下 |
-| `providers.<name>.vendorBody` + `models[].vendorBody` | 原样透传到请求体的厂商私有字段，见下 |
-| `providers.<name>.vendorHeaders` | 原样加进出站请求的自定义头（**只有 provider 级**） |
+| `type` | 用哪套传输实现：`openai` / `claude` / `deepseek` / `gemini` / `minimax` 及其别名。写错会报错并列出内核认识的类型 |
+| `apiKey` | 访问密钥。建议写 `${ENV_VAR}` 由环境变量注入（**不要把密钥写进配置文件**） |
+| `baseUrl` | 服务地址，缺省用该 `type` 的官方地址 |
+| `models` | 该 provider 下的模型清单，见下 |
+| `cache` | 缓存治理，两项：`promptCacheKey`（缺省 `false`）/ `keepAliveSeconds`（缺省 `0`）。只影响命中率，见「坑」 |
+| `sampling` | 采样参数基线，见下 |
+| `vendorBody` | 原样透传进请求体的厂商私有字段，见下 |
+| `vendorHeaders` | 原样加进出站请求的自定义请求头，见下 |
 
-**`type` 可以由插件提供**：插件能为一个内核不认识的新类型提供传输实现（本地 llama.cpp、企业自建网关、私有协议、
-自定义鉴权），用户只需在这里写一个指向该类型的 provider。两条硬规则：
+**`type` 也可以由插件提供**（自建网关、私有协议、本地 llama.cpp）：插件注册一个新类型，这里写一个指向它的 provider 即可。
+两条硬规则：
 
-- **内核自带的 `type` 不能被插件覆盖**。这不是优先级问题：传输请求里带的是已解析好的 `apiKey`，
+- **内核自带的 `type` 不能被插件顶替**。这不是优先级问题：传输请求里带的是已解析好的 `apiKey`，
   能顶替 `openai` 的插件等于把密钥转发出去。
-- **`models` 可以由插件动态发现**：插件接管的 provider 会被问一次「现在有哪些模型」，非空时**整体替换**这里写的
+- **`models` 可以由插件动态发现**：被插件接管的 provider 会被问一次「现在有哪些模型」，非空时**整体替换**这里写的
   `models`。发现结果**不落盘**——本文件始终是模型的唯一持久事实，删掉插件后配置里那份依旧有效。
 
-传一个不存在的 `type` 时，报错会列出内核认识的类型与可执行的下一步。
+#### 字段：`models[]`
 
-**段名是有分工的**：`sampling` 里的键由**内核**定义并校验（内核认识它们、知道合法范围，非法值会被挡下并告警）；
-`vendorBody` / `vendorHeaders` 里的键由**厂商**定义（内核只搬运、不解释、不校验）。因此：
-
-- 看到 **`vendor*`** → 这一段是「厂商支持的特殊配置」。配了不生效时先怀疑字段名或取值与厂商文档不符
-  （内核不会替你检查，拼错就是静默无效）。
-- 看到 **`sampling`** → 这一段是内核认得的采样参数，写错键名或超出范围会被丢弃并告警。
-
-#### `models[].maxTokensField`（可选，缺省 `max_tokens`）
-
-`maxOutputTokens` 由内核下发，但**承载它的字段名各家不同、同一家不同代际也不同**，写错就是一次 400：
-
-| 取值 | 谁认它 |
+| 字段 | 说明 |
 | --- | --- |
-| `max_tokens`（缺省） | DeepSeek、MiniMax、OpenRouter 等 OpenAI 兼容端点；OpenAI 的 GPT-4 系 |
-| `max_completion_tokens` | **OpenAI 的推理模型（o1 / o3 / o4-mini）与 gpt-5 及之后**——它们对 `max_tokens` 直接报 `Unsupported parameter` |
+| `id` | 模型标识，`/model` 里 `provider/model` 的后半段，也是发给厂商的模型名 |
+| `name` | 展示名，缺省与 `id` 相同 |
+| `contextLength` | 上下文窗口（token），内核用它算压缩预算 |
+| `maxOutputTokens` | 单次最大输出 token，内核按次下发 |
+| `maxTokensField` | 承载输出上限的**请求体字段名**：`max_tokens`（缺省）或 `max_completion_tokens`。写别的值会在加载时告警并回退 |
+| `sampling` | 在这个模型上覆盖 provider 的采样基线（逐字段覆盖，没写的沿用 provider 级） |
+| `vendorBody` | 在这个模型上覆盖 provider 的直通字段（**深合并**，model 级优先） |
 
-```jsonc
-"models": [
-  { "id": "deepseek-flash", "contextLength": 1000000, "maxOutputTokens": 384000 },
-  // 推理模型必须显式声明，否则 maxOutputTokens 一发出去就被 400 拒
-  { "id": "gpt-5", "contextLength": 400000, "maxOutputTokens": 8192,
-    "maxTokensField": "max_completion_tokens" }
-]
-```
+`maxTokensField` **只有模型级**：同一个端点下 `gpt-4o` 与 `gpt-5` 认的字段名就不一样，端点级给不出一个成立的缺省。
+**OpenAI 的推理模型（o 系）与 gpt-5 及之后只认 `max_completion_tokens`**，用错就是一次
+`Unsupported parameter` 400；DeepSeek / MiniMax / OpenRouter 这类兼容端点只认 `max_tokens`。
 
-它**只在模型级**（不像 `sampling` 有 provider 基线）：同一个端点下 `gpt-4o` 与 `gpt-5` 认的字段名就不一样，
-端点级给不出一个成立的缺省。**只有 OpenAI 兼容客户端读它**——Claude 的 `max_tokens` 是协议固定的（且必填），
-Gemini 的生成参数固定住在 `generationConfig.maxOutputTokens`，两者都不受影响。填了不认识的取值会在
-**启动或 `/reload` 时**告警并回退到 `max_tokens`。
+#### 字段：`sampling`（provider 级给基线，model 级逐字段覆盖）
 
-> **一个已知边界**：缓存保活请求按「最省输出」只发 1 个 token，而部分新模型（如 GPT-5）对该字段有**最小值要求**
-> （文档写的是 16）。因此在那些模型上开 `keepAliveSeconds` 可能被 400 拒。保活失败只记 DEBUG 日志，
-> 症状是「配了保活但命中率没改善」——怀疑它时先把 `keepAliveSeconds` 关掉验证。
-
-#### `sampling`（可选，七项缺省都不下发）
-
-放**多家厂商有「同名同义」对应物**的采样参数：内核只声明意图，**由各客户端翻成自家协议字段**，
-不认这项的厂商不会下发它。provider 级给基线、`models[]` 里逐字段覆盖（没写的沿用 provider 级）。
+只放**多家厂商同名同义**的参数：内核只声明意图，**由各客户端翻成自家协议字段**，不认这项的客户端不下发它。
 
 | 字段 | 校验 | OpenAI 系 | Claude | Gemini |
 | --- | --- | --- | --- | --- |
-| `temperature` | 非负且有限 | `temperature` | `temperature` ⚠️ | `generationConfig.temperature` |
-| `topP` | `(0, 1]` | `top_p` | `top_p` ⚠️ | `generationConfig.topP` |
-| `topK` | 正整数 | —（不下发） | `top_k` ⚠️ | `generationConfig.topK` |
-| `seed` | 任意整数 | `seed` | —（不下发） | `generationConfig.seed` |
-| `frequencyPenalty` | `[-2, 2]` | `frequency_penalty` | —（不下发） | `generationConfig.frequencyPenalty` |
-| `presencePenalty` | `[-2, 2]` | `presence_penalty` | —（不下发） | `generationConfig.presencePenalty` |
+| `temperature` | 非负且有限 | `temperature` | `temperature` | `generationConfig.temperature` |
+| `topP` | `(0, 1]` | `top_p` | `top_p` | `generationConfig.topP` |
+| `topK` | 正整数 | — | `top_k` | `generationConfig.topK` |
+| `seed` | 任意整数 | `seed` | — | `generationConfig.seed` |
+| `frequencyPenalty` | `[-2, 2]` | `frequency_penalty` | — | `generationConfig.frequencyPenalty` |
+| `presencePenalty` | `[-2, 2]` | `presence_penalty` | — | `generationConfig.presencePenalty` |
 | `stop` | 丢弃空白项 | `stop` | `stop_sequences` | `generationConfig.stopSequences` |
 
-⚠️ **Claude 4.7 及之后的模型不再接受这三个参数**（设非缺省值会被 400 拒）。那是「同一家不同代际的差异」，
-内核不按模型名猜，需要时按 **model 级** `sampling` 分别配——比如给 `claude-3-5-sonnet` 配温度、
-`claude-opus-4-7` 一个都不配。
+「—」= 该家没有这个字段，配了也不会下发（**不报错**）。**没写的字段不下发**：厂商自己的缺省才是缺省
+（内核不替厂商猜缺省值——猜错就是一次 400）。非法值丢弃并告警，不阻断启动。
 
-**「没写」与「写了 0」是两回事**：没写的字段**不下发**，厂商自己的缺省才是缺省（内核不替厂商猜缺省值——猜错就是一次
-400）。温度上限各家不同（OpenAI 系 0–2、Anthropic 0–1），内核只校验它确定的那部分，越界由厂商拒绝。
+其余参数**不在这里**：推理控制（`reasoning_effort` / `thinking` / `thinkingLevel`）各家形状与取值全不通约，
+候选数（`n` / `candidateCount`）与内核「一个候选对应一条 assistant 消息」的逻辑冲突——前者走 `vendorBody`，
+后者被列为保留键（见下）。
 
-**三个已知的「配了不生效」**（都是厂商侧行为，内核不替它判断，只在这里写明）：
+#### 字段：`vendorBody` / `vendorHeaders`
 
-1. **思考模式与采样参数互相挑食**（DeepSeek，**思考默认开启**）——官方「思考模式」页的原文是：思考模式不支持
-   `temperature` / `presence_penalty` / `frequency_penalty`，「设置这些参数不会报错，但也不会有任何效果」；
-   而 `top_p` 恰好相反，**只在思考模式下生效**，且有效区间被夹到 `0.95–1.0`（低于 0.95 一律按 0.95 算），
-   非思考模式下它固定为 `1.0`、你配的值被忽略。因此：想让温度生效就先关掉思考，想精确控 `topP` 则反而要开着。
-2. **推理模型对温度挑食**（OpenAI 系）——旧的 GPT-5 系（`gpt-5` / `gpt-5-mini` 等）只接受缺省值 1，
-   设非缺省的 `temperature` / `top_p` 会被 400 拒（`Unsupported value: … Only the default (1) value is supported`）；
-   gpt-5.1 及之后**仅在 `reasoning_effort: "none"` 时**才接受这两个参数。
-3. `seed` **不保证可复现**：厂商文档都只说「尽力而为」，别拿它当确定性输出的开关。
+这两段里的键**由厂商定义**，内核只搬运、不解释、不校验：`reasoning_effort`、`thinking`、`service_tier`、
+`generationConfig.*` 这些各家专有的东西都从这儿走。**键名逐字抄厂商文档、大小写敏感**——拼错就是静默无效
+（厂商多半忽略不认识的字段）。排查办法：`vendorBody` 生效时会在 **DEBUG 日志**里打一行实际下发的键名（不打值）。
 
-**思考强度本身怎么配**（四家的键名与取值、它怎样反过来压制上面这些参数）见
-[「思考强度（推理控制）」](#思考强度推理控制怎么配)一节。
+`vendorBody` 在 provider 级与 model 级**深合并**（对象递归、数组与标量整体替换，model 级优先），因此
+Gemini 那种 `generationConfig` 容器不会被挤掉；`vendorHeaders` **只有 provider 级**，同名时覆盖内核的头。
 
-**不属于这里的参数**：`seed` 之外的候选数（`n` / `candidateCount`）与内核「一个候选对应一条 assistant 消息」
-的流式与工具调用逻辑直接冲突，因此被列为保留键；`reasoning_effort` / `thinking` / `response_format` /
-`service_tier` / `logit_bias` 这些是单家能力或各家语义不通约——它们走 `vendorBody`。
+**思考强度就从这里配**（内核没有 `thinkLevel` / `reasoningEffort` 这类字段——四家的形状与取值全不通约，
+不符合 `sampling` 的收录标准）：
 
-#### `vendorBody`（可选）：厂商私有字段原样透传
-
-内核**不解释**这里的任何键，也不校验它是否被目标端点认识：`reasoning_effort`、`service_tier`、
-Anthropic 的 `thinking`、Gemini 的 `generationConfig.thinkingConfig` 都是这么配的。
-provider 级与 `models[]` 级**深合并**（对象递归、数组与标量整体替换、model 级优先）。
-
-```jsonc
-// 落到各家请求体的位置由各家协议决定：OpenAI 系与 Claude 在顶层，Gemini 要钻进 generationConfig
-"vendorBody": { "generationConfig": { "thinkingConfig": { "thinkingBudget": 2048 } } }
-```
-
-**下面这些写了也不会生效**（在解析配置时丢弃并告警，不会阻断启动）：
-
-1. **结构性键**——`model` `messages` `contents` `system` `systemInstruction` `tools` `toolConfig`
-   `tool_choice` `stream` `stream_options` `prompt_cache_key` `prompt_cache_retention`。它们决定请求形状与缓存前缀，
-   不能由配置文件改写；
-2. **候选数键**——`n`、`candidateCount`。内核只解析第一个候选（`choices.get(0)` / `candidates.get(0)`），
-   配了只会让计费翻倍而多出来的候选被丢掉；
-3. **采样类键**——`temperature` `top_p` `topP` `top_k` `topK` `seed` `frequency_penalty` `frequencyPenalty`
-   `presence_penalty` `presencePenalty` `stop` `stop_sequences` `stopSequences` `max_tokens`
-   `max_completion_tokens` `maxOutputTokens`（四家对同一批参数的拼法各算一个键，输出上限的两种拼法也算两个）。
-   它们已经有 `sampling`、`maxOutputTokens` 与 `maxTokensField` 这几个正式入口，
-   同一参数两个入口迟早会出现「两处都配了、行为却不是任何一处」；
-4. **Anthropic 的缓存断点标记 `cache_control`**——内核按 `cacheBreakpoints` 决定打几个断点、按
-   `cacheRetention` 决定 TTL，并在 `system` / `messages` / `tools` 块上显式标注。用户从顶层再标一份
-   会与块级标记的 TTL 冲突（Anthropic 对不一致的 TTL 直接 400）。
-   **这两个旋钮只在插件契约里**（`RequestTuning` 的 `cacheRetention` / `cacheBreakpoints`，
-   由插件经 `RequestTuningRequest` 逐请求返回）：配置文件**没有**对应的字段，在 `vendorBody` 里写
-   `cacheRetention` 只会被当成未知键静默忽略。配置文件侧能调的只有 `providers.<name>.cache` 的
-   `promptCacheKey` 与 `keepAliveSeconds`（见下），因此想按会话决定 TTL / 断点数需要装一个插件；
-5. **超过 8 层的嵌套**——整棵子树丢弃（真需要嵌套的字段只有两三层，写超了多半是配错了层级）。
-
-键名**大小写敏感**，因此 `generationConfig.temperature`、`generationConfig.topK` 一样会被挡。
-**已知代价**：字段名打错就是**静默无效**——厂商多半忽略不认识的字段，内核也不会替你校验字段名（那正是直通的定义）。
-排查办法：`vendorBody` 生效时会在 **DEBUG 日志**里打一行键名（不打值，值可能含凭据），把日志级别调低就能看到实际下发了哪些键。
-
-#### 思考强度（推理控制）怎么配
-
-内核**没有** `thinkLevel` / `reasoningEffort` 这类字段，这不是漏做：思考控制的**形状与取值四家全不通约**
-（开关是一个键还是两个键、强度叫什么、有哪几档，各写各的），而 `sampling` 的收录标准是「多家厂商有**同名同义**的
-对应物」。因此它和其它厂商私有字段一样**走 `vendorBody`**：键名与取值逐字抄厂商文档，内核只搬运、不解释。
-**代价与所有直通一致**：写错键名、或用了这个模型不认的取值，多半是静默无效或一次 400，内核不替你校验。
-
-四家的形状如下（**取自各家官方文档，这类接口换代很快**，照抄前建议再对一遍，尤其是模型名与可用档位）：
-
-| 厂商 | 开关 | 强度 | 强度取值 | 缺省 |
-| --- | --- | --- | --- | --- |
-| OpenAI 系 | —（没有独立开关） | `reasoning_effort` | `none` `minimal` `low` `medium` `high` `xhigh` `max`（**可用集合随模型**） | 随模型：gpt-5.1 系缺省 `none`，更早的缺省 `medium`，`gpt-5-pro` 只认 `high` |
-| DeepSeek | `thinking.type` | `reasoning_effort` | 开关 `enabled` / `disabled`；强度 `low` `high` `max` | **思考默认开**，强度缺省 `high` |
-| Claude | `thinking.type` | `output_config.effort` | 开关 `adaptive`（当前推荐）/ `enabled` + `budget_tokens`（老代际）/ `disabled`；强度 `low` `medium` `high` `xhigh` `max` | 多数新模型思考默认开，强度缺省 `high`（Opus 5.5 缺省 `medium`） |
-| Gemini | —（用 `thinkingLevel: "minimal"` 近似「尽量不思考」） | `generationConfig.thinkingConfig.thinkingLevel` | `minimal` `low` `medium` `high`（**可用集合随模型**）；2.5 系改用整数 `thinkingBudget`（token，各模型的下限与能否关闭不同） | 随模型：3.x 多为 `high` 或 `medium`，Flash-Lite 系为 `minimal` |
-
-可直接抄的六份（把 `type` 与模型换成自己的）：
-
-```jsonc
-// OpenAI 系（openai）：没有单独的开关，强度直接写在 reasoning_effort 上
-//   注意：只有把它设成 none（且模型支持该档位），temperature / top_p 才会被接受
-{ "vendorBody": { "reasoning_effort": "high" } }
-```
-
-```jsonc
-// DeepSeek：思考默认开启；关掉它，temperature 与两个惩罚项才生效
-{ "vendorBody": { "thinking": { "type": "disabled" } } }
-```
-
-```jsonc
-// DeepSeek：开着思考但降强度（low / high / max；medium 与 xhigh 都会映射成 high）
-{ "vendorBody": { "thinking": { "type": "enabled" }, "reasoning_effort": "low" } }
-```
-
-```jsonc
-// Claude：adaptive + effort 是当前推荐写法
-//   display 不加，新模型不回思考文本（界面上就什么也看不到）
-{ "vendorBody": {
-    "thinking": { "type": "adaptive", "display": "summarized" },
-    "output_config": { "effort": "high" }
-} }
-```
-
-```jsonc
-// Claude 老代际（4.5 及之前）只有显式预算这一种写法，
-//   budget_tokens 必须小于当次下发的 max_tokens（4.6 已弃用、4.7 及之后直接 400）
-{ "vendorBody": { "thinking": { "type": "enabled", "budget_tokens": 4096 } } }
-```
-
-```jsonc
-// Gemini：生成参数全在 generationConfig 里（直通是深合并，不会挤掉内核生成的 temperature 等）
-{ "vendorBody": { "generationConfig": {
-    "thinkingConfig": { "thinkingLevel": "low", "includeThoughts": true } } } }
-```
-
-**三条与其它配置互相牵制的约束**：
-
-1. **它会改变 `sampling` 的生效情况**（细节见 `sampling` 一节的「配了不生效」三条）：DeepSeek 思考模式下 `temperature` 与两个惩罚项
-   完全无效，而 `top_p` 反过来只在该模式下生效、且被夹到 `0.95–1.0`；OpenAI 旧 GPT-5 系对非缺省温度直接 400，
-   gpt-5.1 之后的模型只在 `reasoning_effort: "none"` 时才接受温度。**「温度没反应」先查这里**。
-2. **Claude 的显式预算与输出上限是一对约束**：`budget_tokens` 必须**严格小于**当次请求下发的 `max_tokens`
-   （官方原文 "`budget_tokens` must always be less than the `max_tokens` specified"），违反时报错是
-   `max_tokens must be greater than thinking.budget_tokens`——**报错里不会提 `maxOutputTokens`**，
-   所以排查时先看这个数。未配 `maxOutputTokens`（或它 ≤ 0）时 Claude 客户端发的是默认 4096，
-   此时 `budget_tokens` 必须小于 4096。
-   另外缓存保活请求按「最省输出」下发 `max_tokens: 0`（见 `providers.<name>.cache` 一节），与
-   `enabled` + `budget_tokens` 天然互斥：两者同时配上会被 400 拒，而保活失败只记 DEBUG 日志，
-   症状是「配了保活但命中率没改善」。
-3. **想看见思考文本，配置只是一半**：厂商侧还要 Claude 的 `display: "summarized"`、Gemini 的
-   `includeThoughts: true`（OpenAI 系则取决于端点是否在增量里给 `reasoning` 字段）；外壳侧还要
-   `-cli` 的 `--show-thinking`（打到 stderr）或 TUI 的 `Ctrl+T` / `/thinking`。两边都开了才看得见，
-   只开外壳那一边什么也看不到。
-
-**排查顺序**：先把日志级别调低——`vendorBody` 生效时会打一行**下发的键名**（不打值，值可能含凭据），
-用它确认键真的发出去了；再回厂商文档核对**这个模型**认哪些取值（同一家不同代的可用档位并不一样）。
-本节的表只是索引，键名与取值都随厂商接口演进，以官方文档为准。
-
-#### `vendorHeaders`（可选）：自定义请求头
-
-给企业网关、自建代理要求的额外头部用：自定义鉴权、租户标识、路由标签。**用户头覆盖内核同名头**（写
-`anthropic-version` 就能试新版本，写 `Authorization` 就能走网关自己的鉴权）。
-
-六个头**写了会被丢弃并告警**：`Content-Type`、`Accept`、`Host`、`Content-Length`、`Accept-Encoding`、`Range`——
-前两个写错会让厂商拒收请求体或让流式响应按普通 JSON 解析；后四个由 HTTP 客户端按实际连接、实体与自身机制计算，
-其中 `Accept-Encoding` / `Range` 尤其隐蔽：一旦由用户自带，传输层就不再走**透明解压**那条路径，
-响应体将以压缩字节送进 JSON 解析，症状是「配了个看起来无害的头，所有请求开始报解析错误」。
-
-**头名与头值按 HTTP 规则校验**：头名须为 token、头值只允许可见 ASCII 与制表符（换行、中文都不行），
-不合规的条目在解析配置时丢弃并只记头名——不这么做的话，它会在**每次请求**时由 HTTP 客户端抛一个带**值原文**的异常，
-而那个值可能就是密钥。
-
-**值可能与密钥同级敏感**（自定义鉴权头就是密钥），内核不把它写进任何日志。模型列表发现（Gemini 的 `listModels`）
-同样带上这些头——否则网关要求的鉴权头缺了，发现模型那一步会先于对话失败。
-
-#### `providers.<name>.cache`（可选，两项缺省都关）
-
-两个旋钮都只影响**命中率**、不影响正确性，且都与具体厂商的缓存实现绑死，因此挂在 provider 上。
-
-| 字段 | 缺省 | 含义 |
+| 厂商 | 键 | 取值（**可用集合随模型，以官方文档为准**） |
 | --- | --- | --- |
-| `promptCacheKey` | `false` | 把会话标识作为缓存路由键下发（OpenAI 系为 `prompt_cache_key`），让同一会话的请求尽量落到持有相同前缀的机器上。缺省关闭：老模型 / 老端点收到不认识的字段可能直接报错 |
-| `keepAliveSeconds` | `0` | 空闲时每隔这么多秒重发一次「复用同一前缀、且不要求生成内容」的请求，把缓存 TTL 续上。`0` 关闭。**它是要花钱的**（上限 1 小时，超出回退到关闭；每个空闲期最多续 3 次） |
-
-**这一层只是基线**：缓存策略还能由插件经 `RequestTuningRequest` 逐请求调整——「这个会话要不要打断点」这类判断
-要看运行期状态，配置文件做不到。**厂商协议字段的静态透传走 `vendorBody` / `vendorHeaders`**（用户已知端点认什么），
-按运行期状态决定发什么则是插件的事。**Anthropic 必须显式用 `cache_control` 标出断点，不标就一个字节都不缓存**，
-因此 Claude 客户端**默认标注两个断点**；想退回去由插件接管，用 `RequestTuningRequest` 把断点数声明为 `0`。
-DeepSeek 默认按前缀缓存、且磁盘缓存要几小时到几天才清理，按分钟级续它没有意义，`keepAliveSeconds` 保持 `0` 即可。
-
-`keepAliveSeconds` 花掉的 token 照常进 `/usage`，也进 `llm.*` 指标。**调参提示**：按厂商文档的 TTL 开一个略小于它的
-间隔试一段（OpenAI 内存缓存约 5–10 分钟，`240` 是个合理起点），看 `/usage` 的命中率有没有抬上去；
-**没抬上去就关掉它**。
-
-**它和 Anthropic 的 `thinking` 互斥**：保活请求按「最省输出」下发 `max_tokens: 0`，而 Anthropic 要求
-`max_tokens` 大于 `thinking.budget_tokens`，两者同时配上会被 400 拒。保活失败只记 DEBUG 日志，因此症状是
-「配了保活但命中率没改善」而不是一条明显的报错——排查时先看 `vendorBody` 里有没有 `thinking`。
-
-#### 各厂商参数速查：`vendorBody` 常配什么
-
-`sampling` 覆盖的只是**各家同义**的那七个参数；各家**专有**的一律写进 `vendorBody`。
-下面按厂商列出眼下最常配的几条，可以直接抄（模型名与 `apiKey` 换成自己的）。
-**键名就是该端点请求体里的键名**——拼错不会报错、也不会生效，这是直通的固有代价。
-**思考强度（`reasoning_effort` / `thinking` / `thinkingLevel`）已单列一节**（见上），这里不再重复。
-
-**OpenAI 系**（`type` 为 `openai` / `deepseek` / `minimax`——这三个 type 的请求体现在归一为同一套字段）
+| OpenAI 系 | `reasoning_effort` | `none` `minimal` `low` `medium` `high` `xhigh` `max` |
+| DeepSeek | `thinking.type` + `reasoning_effort` | 开关 `enabled`（缺省）/ `disabled`；强度 `low` `high` `max` |
+| Claude | `thinking.type` + `output_config.effort` | `adaptive`（当前推荐）；老代际用 `enabled` + `budget_tokens`；强度 `low`–`max` |
+| Gemini | `generationConfig.thinkingConfig.thinkingLevel` | `minimal` `low` `medium` `high`；2.5 系改用整数 `thinkingBudget` |
 
 ```jsonc
-{
-  "vendorBody": {
-    "service_tier": "flex",                           // auto / default / flex / priority
-    "response_format": { "type": "json_object" },      // 强制 JSON 输出（需在提示词里也说明要 JSON）
-    "parallel_tool_calls": false                       // 关掉并行工具调用
-  }
-}
+// 各厂商最小写法（键名与取值都随厂商接口演进，抄前对一遍官方文档）
+OpenAI 系   { "vendorBody": { "reasoning_effort": "high" } }
+DeepSeek    { "vendorBody": { "thinking": { "type": "disabled" } } }    // 关掉思考；开着则再加 "reasoning_effort": "low"
+Claude      { "vendorBody": { "thinking": { "type": "adaptive" }, "output_config": { "effort": "high" } } }
+Gemini      { "vendorBody": { "generationConfig": { "thinkingConfig": { "thinkingLevel": "low" } } } }
 ```
 
-**DeepSeek** 的思考开关与强度（思考默认开启，它直接决定 `temperature` 与 `top_p` 生不生效）见
-「思考强度（推理控制）」一节——**这是 DeepSeek 上最要紧的一条配置**。
-它另有一个 **Anthropic 格式端点**（`https://api.deepseek.com/anthropic`）：写成 `type: "claude"` + 那个 `baseUrl`
-就能走 Claude 客户端，只是强度改由 Anthropic 侧那套键名承载（`output_config.effort`，不是 `reasoning_effort`）。
+**下面这些键写了会被丢弃并告警**（不阻断启动）——它们要么决定请求形状，要么已经有正式入口：
 
-**Claude** 的思考开关与强度（含 `budget_tokens` 与输出上限那条约束、以及它与缓存保活的互斥）见
-「思考强度（推理控制）」一节。
+| 类别 | 键 | 为什么挡住 |
+| --- | --- | --- |
+| 请求形状与缓存前缀 | `model` `messages` `contents` `system` `systemInstruction` `tools` `toolConfig` `tool_choice` `stream` `stream_options` `prompt_cache_key` `prompt_cache_retention` | 覆盖 `messages` 等于换一份对话发出去 |
+| 候选数 | `n` `candidateCount` | 内核只解析第一个候选，配了只会让计费翻倍 |
+| 采样类 | `temperature` `top_p` `topP` `top_k` `topK` `seed` `frequency_penalty` `frequencyPenalty` `presence_penalty` `presencePenalty` `stop` `stop_sequences` `stopSequences` `max_tokens` `max_completion_tokens` `maxOutputTokens` | 已有正式入口（`sampling` / `maxOutputTokens` / `maxTokensField`），两个入口迟早起冲突 |
+| Anthropic 缓存断点 | `cache_control` | 内核按断点数与 TTL 在 `system` / `messages` / `tools` 块上标注，用户再标一份会与块级 TTL 冲突（Anthropic 对不一致的 TTL 直接 400） |
+| 过深嵌套 | —（超过 8 层） | 整棵子树丢弃。真需要嵌套的字段只有两三层，写超了多半是配错了层级 |
 
-`{"metadata": {"user_id": "…"}}` 用于滥用检测（**别放能定位到人的信息**）、`{"service_tier": "standard_only"}` 也在这一层。
+`vendorHeaders` 另有六个头会被丢弃并告警：`Content-Type` `Accept` `Host` `Content-Length` `Accept-Encoding` `Range`。
+头名须为 HTTP token、头值只允许可见 ASCII 与制表符；不合规的条目丢弃且**日志只记头名**（头值可能就是密钥）。
+自定义鉴权、租户标识、路由标签都从这儿走，同名时覆盖内核的头（写 `anthropic-version` 就能试新版本）。
 
-**Gemini**
+#### 坑
 
-```jsonc
-{
-  // Gemini 的生成参数全住在 generationConfig 里；直通是深合并，
-  // 不会挤掉内核刚生成的 temperature / maxOutputTokens 等（详见 vendorBody 一节）
-  "vendorBody": {
-    "generationConfig": {
-      "responseMimeType": "application/json"
-    }
-  }
-}
-```
-
-**MiniMax** 同样走 OpenAI 兼容协议，`sampling` 与 OpenAI 系一模一样；它自家的私有键按官方文档的键名写进 `vendorBody`。
+1. **表里没有的字段 = 不支持**：不报错、也不生效（未知键是静默忽略的）。`vendorBody` 同理——键名拼错就是静默无效，
+   排查靠把日志级别调低，看它实际下发了哪些**键名**（不打值，值可能含凭据）。
+2. **采样参数与思考模式互相挑食**：DeepSeek 思考模式下 `temperature` 与两个惩罚项完全无效（不报错），
+   而 `top_p` 反过来**只在**思考模式下生效、且被夹到 `0.95–1.0`；OpenAI 旧 GPT-5 系对非缺省温度直接 400，
+   gpt-5.1 之后只在 `reasoning_effort` 为 `none` 时才接受。「温度没反应」先查这一条。
+3. **Claude 的两处代际差异**：新代际不再接受 `temperature` / `top_p` / `top_k`（设非缺省值 400），这类参数要按
+   **model 级** `sampling` 分开配；老代际用 `thinking.budget_tokens` 时它必须**小于**当次下发的 `max_tokens`
+   （未配 `maxOutputTokens` 时内核发的是 4096），而报错只提 `max_tokens`，不会提 `maxOutputTokens`。
+4. **`keepAliveSeconds` 是要花钱的，还会踩两个坑**：保活请求按「最省输出」只发极小输出（Claude 发 `max_tokens: 0`），
+   因此与 Claude 的 `thinking.budget_tokens` 互斥（会被 400 拒）；部分新模型对输出上限有最小值要求（如 GPT-5 是 16）。
+   保活失败只记 DEBUG 日志，症状是「配了保活但命中率没改善」——怀疑时先关掉它。另外 Anthropic **不标 `cache_control`
+   就一个字节都不缓存**，内核默认替它标两个断点（插件可用 `RequestTuningRequest` 接管）。
+5. **想看见思考文本要两边都开**：厂商侧（Claude 要 `display: "summarized"`、Gemini 要 `includeThoughts: true`）
+   + 外壳侧（`-cli` 的 `--show-thinking` 打到 stderr，或 TUI 的 `Ctrl+T` / `/thinking`）。
+6. **`sampling` 里「没写」与「写了 0」是两回事**：没写就不下发（厂商自己的缺省才是缺省），写了 0 就发 0。
+   温度上限各家不同（OpenAI 系 0–2、Anthropic 0–1），内核只校验它确定的那部分，越界由厂商拒。
+7. **密钥一律走环境变量**：`"apiKey": "${DEEPSEEK_API_KEY}"`。注意 `${VAR}` 缺失会让整份配置加载失败，
+   想容错就写 `${VAR:-默认值}`。
 
 ### `agents.json`
 
@@ -1151,7 +987,7 @@ SSE 事件名、鉴权细节与会话语义见 [docs/constraints.md](docs/constr
 ③ 配置生效了但**界面看不到思考文本**：Claude 要 `display: "summarized"`、Gemini 要 `includeThoughts: true`，
 `-cli` 要 `--show-thinking`、TUI 要 `Ctrl+T` / `/thinking`；
 ④ Claude 用了老代际的 `budget_tokens` 而模型已是新代际（直接 400）。
-逐家的键名、取值与缺省见「思考强度（推理控制）」一节。
+思考强度的键名与取值见「`models.json`」一节的 `vendorBody` 表。
 
 **改了配置不生效？**
 三个配置文件敲 `/reload`；`config.json`、新增 / 删除插件 jar 需要重启进程。

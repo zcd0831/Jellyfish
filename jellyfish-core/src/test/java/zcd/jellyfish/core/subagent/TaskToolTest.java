@@ -120,6 +120,49 @@ class TaskToolTest {
     }
 
     @Test
+    void handle_should_append_archive_path_when_truncated() {
+        // Given：未收敛时回灌的只是「原因 + 最后一段正文」，更早的轮次没有出口
+        when(launcher.run(any(SubAgentCall.class), any(ReActListener.class)))
+                .thenReturn(SubAgentOutcome.truncated("已达轮数上限\n只查了一半", 8, usage(10L), "已达轮数上限")
+                        .withArchivePath("/tmp/subagent-runs/run-1.json"));
+
+        // When
+        ToolCallResult result = tool.handle(request("scout", "查一下"));
+
+        // Then：给出可回看的完整记录，让「它到底做了什么」有出口
+        assertTrue(result.getOutput().toString()
+                        .endsWith("[完整记录见 /tmp/subagent-runs/run-1.json（可用 read_file 读取）]"),
+                result.getOutput().toString());
+    }
+
+    @Test
+    void handle_should_omit_archive_path_when_completed() {
+        // Given：正常完成时回灌的就是完整结论
+        when(launcher.run(any(SubAgentCall.class), any(ReActListener.class)))
+                .thenReturn(SubAgentOutcome.completed("结论", 2, SessionUsage.EMPTY)
+                        .withArchivePath("/tmp/subagent-runs/run-1.json"));
+
+        // When
+        ToolCallResult result = tool.handle(request("scout", "查一下"));
+
+        // Then：附路径只会诱导主模型去读一份并不需要的文件，白花一轮与一笔 token
+        assertFalse(result.getOutput().toString().contains("完整记录见"), result.getOutput().toString());
+    }
+
+    @Test
+    void handle_should_omit_archive_path_when_archive_missing() {
+        // Given：归档可能失败或被上限清理掉，那时拿不到路径
+        when(launcher.run(any(SubAgentCall.class), any(ReActListener.class)))
+                .thenReturn(SubAgentOutcome.truncated("已达轮数上限\n只查了一半", 8, usage(10L), "已达轮数上限"));
+
+        // When
+        ToolCallResult result = tool.handle(request("scout", "查一下"));
+
+        // Then：没有路径就什么都不说，不编一个
+        assertFalse(result.getOutput().toString().contains("完整记录见"), result.getOutput().toString());
+    }
+
+    @Test
     void handle_should_write_token_count_in_summary() {
         // Given
         when(launcher.run(any(SubAgentCall.class), any(ReActListener.class)))

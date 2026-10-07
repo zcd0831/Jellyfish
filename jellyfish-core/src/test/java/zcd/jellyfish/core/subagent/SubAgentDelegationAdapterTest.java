@@ -8,6 +8,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import zcd.jellyfish.api.extension.CancellationToken;
 import zcd.jellyfish.api.subagent.DelegationHandle;
+import zcd.jellyfish.api.subagent.DelegationQuota;
 import zcd.jellyfish.api.subagent.DelegationRequest;
 import zcd.jellyfish.api.subagent.DelegationResult;
 import zcd.jellyfish.api.subagent.DelegationStatus;
@@ -135,6 +136,16 @@ class SubAgentDelegationAdapterTest {
         assertEquals("已达轮数上限", truncated.getText());
         assertEquals(DelegationStatus.CANCELLED, cancelled.getStatus());
         assertEquals(2, cancelled.getRounds());
+    }
+
+    @Test
+    void quota_should_delegate_to_launcher() {
+        // Given：额度判定只有一份实现，适配器只搬运
+        DelegationQuota expected = DelegationQuota.of(7);
+        when(launcher.quota()).thenReturn(expected);
+
+        // When / Then
+        assertSame(expected, adapter.quota());
     }
 
     @Test

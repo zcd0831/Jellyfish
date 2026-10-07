@@ -586,6 +586,17 @@ handler 抛错**按放行处理**。它只管「结束运行态、保留快照�
 - **三道上限 + 一道授权 + 一套预算**：`maxDepth` / `maxSpawnsPerTurn` / `maxConcurrentRuns` 三者正交，
   叠加单 run 墙钟 / 单 run token / 树 token 三个预算。「子代理能不能再委派」由它自己的 `allowedTools`
   是否含 `task`（未声明 = 不限制）叠加在深度上。
+- **树 token 预算不是独立的限制，而是「所有子代理都跑满」的封顶**：缺省刻意等于
+  `maxSpawnsPerTurn` × `runTokenBudget`（12 × 50 万）。比这个乘积小时它会先于单 run 预算生效，
+  那时个别子代理没触到自己的上限却被截断，而表现是「某几个步骤失败了」——看不出真正的原因。
+  因此**调大 `maxSpawnsPerTurn` 时必须一起调大它**。（写 {@code 0} 表示不限制。）
+  只有子代理 run 计入树账（顶层回合 `runId == null`，`budgetExceededReason` 直接返回），
+  每轮把该轮响应的 totalTokens 累加进去（`RunTree.treeTokens` 跨线程共享）。
+- **`maxSpawnsPerTurn` 是「一个顶层回合里累计派多少个」，不是「一层扇出多少」**：`spawnCount` 只增不减，
+  在 `ReActLooper.execute` 开的那棵树上记账，**整个回合的累计额**、且与 `task` 等别的调用方共享。
+  缺省 12 是为了让一次编排（步骤数以十几计）开箱可用；取 3 会让第 4 个派生就被拒，而那个失败长得像
+  「某几个步骤坏了」。**额度可以查**（`SubAgentPort.quota()` → `DelegationQuota`）：编排方据此在派生
+  任何子代理之前整份拒绝，而不是派到一半才发现——查询与 `spawn` 的拒绝理由共用 `limitReason`，只有一份说法。
 - **扇出多于并发不是错误**：超出 `maxConcurrentRuns` 的 run 进 `maxQueuedRuns` 的等待区排队等许可，
   只有「线程 + 等待区」都满才当场失败（`FAILED`，理由里带上该调的键）。
 - **上下文是一回合一账，不是一次委派一账**：`RunContext` 由 `ReActLooper.execute` 在顶层回合开闭；
@@ -595,6 +606,9 @@ handler 抛错**按放行处理**。它只管「结束运行态、保留快照�
 - **用量归集到父会话且在 `finally` 里只记日志**（子会话马上被关掉，那些 token 是真花掉的）。
 - **归档与工具输出不共用配额**：run 归档写到 `<toolOutput.dir>/subagent-runs/`（独立命名空间 + 独立上限）；
   归档在 `finally` 里、**先于 `runtime.remove`** 发生；写失败只记 WARN。
+  **归档路径会一路带回调用方**（`SubAgentOutcome.getArchivePath()` → `DelegationResult.getArchivePath()`，
+  收尾的 `finally` 覆盖全部四个终局），因为归档的用处正是让「它到底做了什么」有出口——路径不交出去，
+  全文写在磁盘上却没有任何指针。它可能缺席（归档失败、被上限清理、run 未开始），调用方必须容忍。
 - **run 事件不挂 `ShellTurnEvent`**：走运行时自持的 `RunEventBus`（`core.runtime`），外壳订阅。
 - **广播终态必须早于 `handle.complete`**；run 起跑时要先把状态置为运行中。
 - 呈现：轨迹行上的标识走 `ToolMetadata.KEY_SUMMARY`（`子代理 scout · 3 轮 · 123456 tok`），**不是靠界面认工具名**；
@@ -605,6 +619,9 @@ handler 抛错**按放行处理**。它只管「结束运行态、保留快照�
   而工具侧的首行只写中性措辞「未收敛」——在首行里挑一种来源写死，就会把另外两种说成错的那种。
   **原因同时留在结果的 `error` 上**（`SubAgentOutcome.getError()`），供调用方原样转述而不是去解析文本。
   **截断提示按语境指向不同的配置键**（顶层读 `react.maxRounds`，嵌套读 `subAgent.maxRounds`）。
+  **只有 `TRUNCATED` 才在回灌文本末尾附上归档路径**（`[完整记录见 <path>]`）：正常完成时回灌的就是完整结论，
+  附路径只会诱导主模型去读一份并不需要的文件；而未收敛时确实有更早的轮次没有出口。它与工具输出落盘互补
+  而不重叠——后者管「文本太长」，前者管「文本不长但进程没跑完」。
 
 ## 工具执行、输入指令与命令域
 

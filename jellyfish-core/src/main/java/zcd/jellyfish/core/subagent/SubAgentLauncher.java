@@ -3,6 +3,7 @@ package zcd.jellyfish.core.subagent;
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import zcd.jellyfish.api.subagent.DelegationQuota;
 import zcd.jellyfish.core.ReActListener;
 import zcd.jellyfish.core.ReActLooper;
 import zcd.jellyfish.core.ReActResult;
@@ -208,6 +209,32 @@ public class SubAgentLauncher {
     }
 
     /**
+     * 查询此刻的派生额度：还能派出几个子代理。
+     * <p>
+     * <b>四项准入条件里只有三项能在这里回答</b>：开关、回合作用域、深度与额度。类型是否可委派、
+     * 模型能否解析、任务是否为空都是<b>每次请求</b>才成立的条件，不属于「此刻还剩多少额度」。
+     * <p>
+     * <b>「为什么派不了」复用 {@link #limitReason(RunContext)}</b>：同一份额度被两处描述
+     * （查询与 {@code spawn} 的拒绝理由）时，各写一句话就等于给了两份会漂移的答案。
+     *
+     * @return 额度，保证非 {@code null}
+     */
+    public DelegationQuota quota() {
+        SubAgentSettings settings = runtimeConfig.getSubAgentSettings();
+        if (!settings.isEnabled()) {
+            return DelegationQuota.blocked("子代理委派已被禁用（jellyfish.json 的 subAgent.enabled）");
+        }
+        RunContext scope = runContexts.current();
+        if (scope == null) {
+            return DelegationQuota.blocked("当前没有进行中的回合，无法委派子代理");
+        }
+        if (!scope.canDelegate()) {
+            return DelegationQuota.blocked(limitReason(scope));
+        }
+        return DelegationQuota.of(scope.getMaxSpawnsPerTurn() - scope.getSpawnCount());
+    }
+
+    /**
      * 等终态并收尾：归集用量 → 归档 → 关子会话 → 摘登记表。
      * <p>
      * <b>阻塞在调用方线程上</b>，这是本方法存在的意义之一：等待既不占 {@code react} 池，
@@ -228,6 +255,7 @@ public class SubAgentLauncher {
         }
         Session child = handle.getChild();
         SubAgentOutcome outcome;
+        String archivePath = null;
         try {
             outcome = handle.getSettled() != null
                     ? handle.getSettled()
@@ -237,7 +265,7 @@ public class SubAgentLauncher {
             outcome = SubAgentOutcome.failed(messageOf(e));
         } finally {
             forwardUsage(handle.getParentSessionId(), child);
-            archiveQuietly(handle.getRunId(), child);
+            archivePath = archiveQuietly(handle.getRunId(), child);
             closeQuietly(child);
             // 终态条目不留着：run 的身份与终态已经写进归档，留在内存里只会随会话运行时间线性增长。
             // 顺序不能反——归档要读快照，移除之后就再也拿不到了
@@ -245,6 +273,9 @@ public class SubAgentLauncher {
                 runtime.remove(handle.getRunId());
             }
         }
+        // 归档路径补进结果：拿到它，编排方才能把「完整记录在哪」交给下游。
+        // 归档发生在上面的 finally 里（此刻才有终结后的完整快照），因此只能在这里补，不能在 toOutcome 里造
+        outcome = outcome.withArchivePath(archivePath);
         handle.settle(outcome);
         return outcome;
     }
@@ -294,19 +325,25 @@ public class SubAgentLauncher {
      * <p>
      * <b>为什么在收尾里做而不是在主流程里</b>：归档是每一个终局（成功 / 失败 / 取消 / 超时）
      * 都该留下的痕迹，而 {@code finally} 是唯一覆盖全部这四个出口的位置。
+     * <p>
+     * <b>为什么把路径返回出去</b>：归档里是子会话的完整 transcript，调用方（{@code task} 或面向插件的
+     * 委派端口）可能想把它交给别人按需自取。以前这里把返回值丢掉了，于是全文写在磁盘上却没有任何指针，
+     * 「内容在哪」在委派结束后无人知道——拿不到路径时返回 {@code null}，调用方必须容忍它缺席。
      *
      * @param runId run 标识，可为 {@code null}（未派生成功）
      * @param child 子会话，可为 {@code null}
+     * @return 归档文件的绝对路径；跳过或失败时返回 {@code null}
      */
-    private void archiveQuietly(String runId, Session child) {
+    private String archiveQuietly(String runId, Session child) {
         if (runId == null) {
-            return;
+            return null;
         }
         try {
-            archive.archive(runtime.snapshot(runId).orElse(null), child);
+            return archive.archive(runtime.snapshot(runId).orElse(null), child);
         } catch (RuntimeException e) {
             // 归档失败不该把一次委派升级成失败，但也不该静默：这是“过程没有留下痕迹”的唯一线索
             LOG.warn("run 归档异常: runId={} reason={}", runId, e.toString());
+            return null;
         }
     }
 

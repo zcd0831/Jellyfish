@@ -436,7 +436,8 @@ java -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=5005 \
 ```
 
 它花掉的 token **计入父会话**（`/usage` 看得到），但子代理的会话不留痕（不落盘、不进 `/session` 列表）。
-递归有两道上限：`subAgent.maxDepth`（一条链多深）与 `subAgent.maxSpawnsPerTurn`（一层扇出多少）。
+递归有两道上限：`subAgent.maxDepth`（一条链多深）与 `subAgent.maxSpawnsPerTurn`（一个顶层回合里累计能派多少个，
+**不是「一层扇出多少」**——派生一个少一个，与并发无关）。
 
 ## 插件
 
@@ -772,13 +773,13 @@ Gemini      { "vendorBody": { "generationConfig": { "thinkingConfig": { "thinkin
   "subAgent": {
     "enabled": true,
     "maxDepth": 1,
-    "maxSpawnsPerTurn": 3,
+    "maxSpawnsPerTurn": 12,
     "maxRounds": 8,
     "maxConcurrentRuns": 3,
     "maxQueuedRuns": 64,
     "runTimeoutMillis": 300000,
     "runTokenBudget": 500000,
-    "treeTokenBudget": 1500000,
+    "treeTokenBudget": 6000000,
     "archiveKeepFiles": 200,
     "archiveMaxBytes": 104857600
   }
@@ -885,17 +886,17 @@ stderr、SSE 的 `notice`），**都不会被拼进正文**——拼进去会让
 | --- | --- | --- |
 | `enabled` | `true` | 全局开关。**关掉后 `task` 工具直接不再注册**，模型看不到它；`/reload` 即可生效、不用重启 |
 | `maxDepth` | `1` | 允许的最大委派层数（主会话 → 子代理 → 孙代理），写 `0` 表示禁止委派 |
-| `maxSpawnsPerTurn` | `3` | 单个顶层回合内允许派生的子代理总数 |
+| `maxSpawnsPerTurn` | `12` | **单个顶层回合内允许派生的子代理总数**（累计、派生一个少一个，**不是并发数**）。取 12 是为了让一次编排（步骤数以十几计）开箱可用；调大它只放宽「一个回合能问多少个子代理」 |
 | `maxRounds` | `8` | 子代理自己那个回合的最大轮数，**不跟随** `react.maxRounds` |
 | `maxConcurrentRuns` | `3` | **全局同时运行的子代理 run 数上限**（不含父回合）。它只管「同时跑多少」，超出的 run 进等待区（见下一项）；run 跑在独立的 `agent-run` 线程池上，父回合等待子 run 时会让出并发许可 |
 | `maxQueuedRuns` | `64` | 等待区容量：并发满员时最多允许多少个 run 排队等许可。**它不提高并行度**——调大只会把「当场失败」推迟到更晚的积压点；写 `0` 或负数按缺省值处理（不允许无界） |
 | `runTimeoutMillis` | `300000` | 单个 run 的墙钟上限（毫秒），**从它真正开始执行起算**（排队等许可的时间不算它跑的时间）。到点取消该 run 并记为「截断」，原因会写进回灌文本的首行 |
-| `runTokenBudget` | `500000` | 单个 run 的累计 token 上限；写 `0` 表示不限制 |
-| `treeTokenBudget` | `1500000` | 一棵 run 树的累计 token 上限；写 `0` 表示不限制 |
+| `runTokenBudget` | `500000` | 单个 run 的累计 token 上限；写 `0` 表示不限制。**它通常比树预算先撞上**：预算是累计口径，「带着大材料又跑很多轮」的子代理会先触到它 |
+| `treeTokenBudget` | `6000000` | 一棵 run 树的累计 token 上限；写 `0` 表示不限制。缺省刻意等于 `maxSpawnsPerTurn` × `runTokenBudget`（12 × 50 万），**它不是一道独立的限制，而是「所有子代理都跑满各自上限」的封顶**：比这个乘积小，树预算会先于单 run 预算生效，那时个别子代理没触到自己的上限却被截断，表现成「某几个步骤失败了」。可以写小来主动收紧总花费，但调大 `maxSpawnsPerTurn` 时要一起调大 |
 | `archiveKeepFiles` | `200` | run 归档目录（`<toolOutput.dir>/subagent-runs`）最多保留的文件数；写 `0` 表示不清理 |
 | `archiveMaxBytes` | `104857600` | run 归档目录最多占用的字节数（100 MiB）；写 `0` 表示不清理 |
 
-`maxDepth` 挡「一条链多深」，`maxSpawnsPerTurn` 挡「一层扇出多少」，`maxConcurrentRuns` 挡「全局同时在跑多少」，
+`maxDepth` 挡「一条链多深」，`maxSpawnsPerTurn` 挡「一个顶层回合里累计派多少个」，`maxConcurrentRuns` 挡「全局同时在跑多少」，
 三者正交；三个 token / 时间上限挡的是「跑飞了也停得下来」。除 `enabled` 外非法值一律回退缺省值。
 **「这一批派得比并发多」不等于失败**：超出的 run 进等待区排队等许可，只有「线程 + 等待区都满」才当场失败并说明原因。
 排队中的 run 不计入墙钟，因此「一直排不上」不会被超时兜住——兜底的是上面那三道上限，以及中止回合时的级联取消

@@ -36,6 +36,20 @@ public interface SubAgentPort {
     DelegationHandle spawn(DelegationRequest request);
 
     /**
+     * 查询此刻的派生额度：还能派出几个子代理。
+     * <p>
+     * <b>它在 {@code spawn} 之前给你一个后悔的机会</b>：一次编排要派几个子代理是自己算得出来的，
+     * 而「还能派几个」只有内核知道。不查就派，会在派到一半时才发现额度用尽——那时钱已经花了，
+     * 而且失败长得像「某几个步骤坏了」，而不是「这份编排超出了本回合的额度」。
+     * <p>
+     * <b>额度按顶层回合累计</b>，与并发上限无关（超出的 run 排队等待，不算失败）。同一回合里
+     * 别的调用方也会占用它，因此它是一个快照，只适合支撑「该不该开始」的判断。
+     *
+     * @return 额度，保证非 {@code null}
+     */
+    DelegationQuota quota();
+
+    /**
      * 取一个「永远拒绝」的端口实现。
      * <p>
      * 每次调用都返回同一个实例（无状态）；拒绝理由是固定的一句中文，说明当前内核没有提供这个能力。
@@ -66,6 +80,12 @@ public interface SubAgentPort {
         @Override
         public DelegationHandle spawn(DelegationRequest request) {
             return DelegationHandle.settled(DelegationResult.rejected(REASON));
+        }
+
+        @Override
+        public DelegationQuota quota() {
+            // 能力缺失时额度恒为零：调用方据此在派生之前停下，而不是派一个被拒一个
+            return DelegationQuota.blocked(REASON);
         }
     }
 }

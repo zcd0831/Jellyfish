@@ -10,6 +10,8 @@ import zcd.jellyfish.api.ask.AskPort;
 import zcd.jellyfish.api.plugin.PluginContext;
 import zcd.jellyfish.api.plugin.PluginDeclaration;
 import zcd.jellyfish.api.subagent.DelegationHandle;
+import zcd.jellyfish.api.subagent.DelegationQuota;
+import zcd.jellyfish.api.subagent.DelegationRequest;
 import zcd.jellyfish.api.subagent.DelegationResult;
 import zcd.jellyfish.api.subagent.SubAgentPort;
 import zcd.jellyfish.core.subagent.SubAgentDelegationAdapter;
@@ -154,8 +156,17 @@ class PluginModuleTest {
     @DisplayName("装配出来的插件上下文拿到的就是绑定的那个端口")
     void providePluginContextFactory_shouldHandThePortToPlugins() {
         // Given：一个可辨认的端口实现
-        SubAgentPort port = request -> DelegationHandle.settled(
-                DelegationResult.completed("run-1", "x", 1, 1L));
+        SubAgentPort port = new SubAgentPort() {
+            @Override
+            public DelegationHandle spawn(DelegationRequest request) {
+                return DelegationHandle.settled(DelegationResult.completed("run-1", "x", 1, 1L));
+            }
+
+            @Override
+            public DelegationQuota quota() {
+                return DelegationQuota.of(1);
+            }
+        };
         PluginContextFactory factory = PluginModule.providePluginContextFactory(
                 new ExtensionRegistry(new TypeRegistry()),
                 new EventChannel(EventChannelOptions.defaults(), new TypeRegistry()),

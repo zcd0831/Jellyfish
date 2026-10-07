@@ -36,9 +36,19 @@ class SubAgentPortTest {
     }
 
     @Test
+    @DisplayName("能力缺失端口的额度恒为零：调用方在派生之前就停下")
+    void unavailable_shouldReportZeroQuota() {
+        DelegationQuota quota = SubAgentPort.unavailable().quota();
+
+        // 派一个被拒一个不如根本不派：额度为零加上原因，调用方就能给出可执行的话
+        assertTrue(quota.isBlocked());
+        assertEquals(0, quota.getRemainingSpawns());
+        assertTrue(quota.getBlockedReason().contains("没有提供"));
+    }
+
+    @Test
     @DisplayName("已终结的句柄重复等待返回同一个结果实例")
-    void settled_shouldBeIdempotent() {
-        DelegationResult result = DelegationResult.completed("run-1", "结论", 3, 30L);
+    void settled_shouldBeIdempotent() {        DelegationResult result = DelegationResult.completed("run-1", "结论", 3, 30L);
         DelegationHandle handle = DelegationHandle.settled(result);
 
         assertEquals("run-1", handle.runId());

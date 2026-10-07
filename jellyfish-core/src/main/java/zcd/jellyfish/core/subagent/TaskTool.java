@@ -129,7 +129,38 @@ public final class TaskTool implements ExtensionHandler<ToolCallRequest, ToolCal
         } else if (StringUtils.isNotBlank(outcome.getError())) {
             text.append('\n').append(outcome.getError());
         }
+        String trace = traceHintOf(outcome);
+        if (!trace.isEmpty()) {
+            text.append('\n').append(trace);
+        }
         return new ToolCallResult(NAME, text.toString(), metadataOf(outcome, agentId));
+    }
+
+    /**
+     * 组装「完整记录在哪」这一行；不需要时返回空串。
+     * <p>
+     * <b>为什么只在未收敛时给</b>：正常完成时回灌的就是子代理的最终结论，本身是完整的，
+     * 附一个路径只会诱导主模型去读一份并不需要的文件，白花一轮与一笔 token。而未收敛时回灌的
+     * 只是「原因 + 最后一段正文」（见 {@code SubAgentLauncher.truncatedText}），更早的轮次确实
+     * 没有出口——那正是归档存在的意义。
+     * <p>
+     * <b>它与内核的工具输出落盘互补，不重叠</b>：结论真的长到超出回灌上限时，
+     * {@code ToolOutputLimiter} 会把全文落盘并在信封里给出路径；这里补的是另一种缺失——
+     * 「文本不长、但进程本身没跑完」。两条合起来，主模型在两种情况下都能拿到回看线索。
+     *
+     * @param outcome 委派结果
+     * @return 一行提示；不需要时为 {@code null} 或空白
+     */
+    private static String traceHintOf(SubAgentOutcome outcome) {
+        if (outcome.getStatus() != SubAgentStatus.TRUNCATED) {
+            return "";
+        }
+        String path = outcome.getArchivePath();
+        if (StringUtils.isBlank(path)) {
+            // 归档可能失败或被上限清理掉：没有路径就什么都不说，不编一个
+            return "";
+        }
+        return "[完整记录见 " + path.trim() + "（可用 read_file 读取）]";
     }
 
     /**
@@ -272,7 +303,8 @@ public final class TaskTool implements ExtensionHandler<ToolCallRequest, ToolCal
                 + "\n适用：需要大量检索/翻查且只关心结论、需要第二双眼睛复核、或与当前任务无关的独立子任务。"
                 + "\n不适用：需要与用户来回确认的任务、依赖本次对话中已形成共识的任务、"
                 + "以及一两步就能做完的事——直接自己做更快也更省。"
-                + "\nprompt 必须自足：背景、目标、验收标准都要写进去。";
+                + "\nprompt 必须自足：背景、目标、验收标准都要写进去。"
+                + "\n未收敛（达到轮数/预算上限）时，回灌文本末尾会给出这次 run 的完整记录路径，可自行读取。";
     }
 
     /**

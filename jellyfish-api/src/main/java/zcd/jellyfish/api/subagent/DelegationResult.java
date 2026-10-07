@@ -36,6 +36,18 @@ public final class DelegationResult {
     private final String error;
 
     /**
+     * 本次 run 归档文件的绝对路径；没有归档时为 {@code null}。
+     * <p>
+     * <b>它是「正文之外还有什么」的那条线索</b>：{@link #getText()} 是有损的（未收敛时可能只含
+     * 最后一段），而归档里有子会话的完整 transcript。编排方据此可以在下游任务里附上
+     * 「完整记录见 &lt;路径&gt;」，让接收方按需自取——与工具结果落盘后在信封里留路径同一口径。
+     * <p>
+     * <b>随时可能缺席</b>：被拒 / 未开始、归档失败、拿不到 run 快照时都是 {@code null}；归档本身
+     * 还受文件数与字节数上限约束（最旧的会被清理），因此调用方必须容忍它读不到。
+     */
+    private final String archivePath;
+
+    /**
      * 构造结果。
      * <p>
      * 跨边界值类型只有这一个可见构造器（Jackson 反序列化要求）；日常构造请用静态工厂。
@@ -46,15 +58,17 @@ public final class DelegationResult {
      * @param rounds      实际轮数
      * @param totalTokens 累计 token 用量
      * @param error       失败或拒绝的原因，可为 {@code null}
+     * @param archivePath 归档文件路径，可为 {@code null}
      */
     public DelegationResult(String runId, DelegationStatus status, String text, int rounds, long totalTokens,
-                            String error) {
+                            String error, String archivePath) {
         this.runId = runId;
         this.status = status;
         this.text = text;
         this.rounds = rounds;
         this.totalTokens = totalTokens;
         this.error = error;
+        this.archivePath = archivePath;
     }
 
     /**
@@ -67,7 +81,7 @@ public final class DelegationResult {
      * @return 结果，保证非 {@code null}
      */
     public static DelegationResult completed(String runId, String text, int rounds, long totalTokens) {
-        return new DelegationResult(runId, DelegationStatus.COMPLETED, text, rounds, totalTokens, null);
+        return new DelegationResult(runId, DelegationStatus.COMPLETED, text, rounds, totalTokens, null, null);
     }
 
     /**
@@ -80,7 +94,7 @@ public final class DelegationResult {
      * @return 结果，保证非 {@code null}
      */
     public static DelegationResult truncated(String runId, String text, int rounds, long totalTokens) {
-        return new DelegationResult(runId, DelegationStatus.TRUNCATED, text, rounds, totalTokens, null);
+        return new DelegationResult(runId, DelegationStatus.TRUNCATED, text, rounds, totalTokens, null, null);
     }
 
     /**
@@ -92,7 +106,7 @@ public final class DelegationResult {
      * @return 结果，保证非 {@code null}
      */
     public static DelegationResult cancelled(String runId, int rounds, long totalTokens) {
-        return new DelegationResult(runId, DelegationStatus.CANCELLED, null, rounds, totalTokens, null);
+        return new DelegationResult(runId, DelegationStatus.CANCELLED, null, rounds, totalTokens, null, null);
     }
 
     /**
@@ -103,7 +117,7 @@ public final class DelegationResult {
      * @return 结果，保证非 {@code null}
      */
     public static DelegationResult failed(String runId, String error) {
-        return new DelegationResult(runId, DelegationStatus.FAILED, null, 0, 0L, error);
+        return new DelegationResult(runId, DelegationStatus.FAILED, null, 0, 0L, error, null);
     }
 
     /**
@@ -113,7 +127,7 @@ public final class DelegationResult {
      * @return 结果，保证非 {@code null}
      */
     public static DelegationResult rejected(String error) {
-        return new DelegationResult(null, DelegationStatus.REJECTED, null, 0, 0L, error);
+        return new DelegationResult(null, DelegationStatus.REJECTED, null, 0, 0L, error, null);
     }
 
     /**
@@ -168,6 +182,26 @@ public final class DelegationResult {
      */
     public String getError() {
         return error;
+    }
+
+    /**
+     * 获取本次 run 的归档文件绝对路径。
+     *
+     * @return 归档路径；没有归档时为 {@code null}
+     */
+    public String getArchivePath() {
+        return archivePath;
+    }
+
+    /**
+     * 返回一个带着归档路径的副本。
+     *
+     * @param path 归档文件绝对路径，可为 {@code null}（等价于原样返回）
+     * @return 副本，保证非 {@code null}
+     */
+    public DelegationResult withArchivePath(String path) {
+        return path == null ? this
+                : new DelegationResult(runId, status, text, rounds, totalTokens, error, path);
     }
 
     /**

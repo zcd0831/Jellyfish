@@ -24,6 +24,7 @@ import zcd.jellyfish.api.extension.ToolCallResult;
 import zcd.jellyfish.api.plugin.PluginContext;
 import zcd.jellyfish.api.plugin.PluginDeclaration;
 import zcd.jellyfish.api.subagent.DelegationHandle;
+import zcd.jellyfish.api.subagent.DelegationQuota;
 import zcd.jellyfish.api.subagent.DelegationRequest;
 import zcd.jellyfish.api.subagent.DelegationResult;
 import zcd.jellyfish.api.subagent.DelegationStatus;
@@ -90,8 +91,17 @@ class PluginContextImplTest {
     @Test
     void delegations_should_expose_the_injected_port() {
         // Given：装配方注入了一个具体端口
-        SubAgentPort port = request -> DelegationHandle.settled(
-                DelegationResult.completed("run-1", "结论", 1, 1L));
+        SubAgentPort port = new SubAgentPort() {
+            @Override
+            public DelegationHandle spawn(DelegationRequest request) {
+                return DelegationHandle.settled(DelegationResult.completed("run-1", "结论", 1, 1L));
+            }
+
+            @Override
+            public DelegationQuota quota() {
+                return DelegationQuota.of(1);
+            }
+        };
 
         // When / Then：插件拿到的就是它
         assertSame(port, contextWithDelegations(port).delegations());

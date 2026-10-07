@@ -39,8 +39,18 @@ public class SubAgentSettings {
     /** 允许的最大委派层数。缺省 1 表示只允许一层子代理（保守，深度可调）。 */
     public static final int DEFAULT_MAX_DEPTH = 1;
 
-    /** 单个顶层回合内允许派生的子代理总数。 */
-    public static final int DEFAULT_MAX_SPAWNS_PER_TURN = 3;
+    /**
+     * 单个顶层回合内允许派生的子代理总数。
+     * <p>
+     * <b>它不是「一层扇出多少」，而是整个回合的累计额</b>：派生一个少一个，与并发上限
+     * （{@link #DEFAULT_MAX_CONCURRENT_RUNS}，超出的 run 排队等待而非失败）是两回事。
+     * <p>
+     * <b>取 12 是为了让编排类用法开箱可用</b>：一次声明式编排常见形状是「调研 → 几路并行 → 复核 → 汇总」，
+     * 步骤数以十几计；取 3 会让第 4 个派生就被拒，而失败长得像「某几个步骤坏了」。
+     * 并发仍然由 {@code maxConcurrentRuns} 门控，因此调大这个数只放宽「一个回合能问多少个子代理」，
+     * 不放宽「同时跑多少个」。
+     */
+    public static final int DEFAULT_MAX_SPAWNS_PER_TURN = 12;
 
     /** 子代理单个回合的最大循环轮数。 */
     public static final int DEFAULT_MAX_ROUNDS = 8;
@@ -69,11 +79,27 @@ public class SubAgentSettings {
     /** 单个 run 的墙钟上限（毫秒）。 */
     public static final long DEFAULT_RUN_TIMEOUT_MILLIS = 300_000L;
 
-    /** 单个 run 的累计 token 上限。 */
+    /**
+     * 单个 run 的累计 token 上限。
+     * <p>
+     * <b>它通常比树预算先撞上</b>：预算是累计口径（每轮的输入与输出都算进去），因此「上下文里带着
+     * 一份大材料、又跑很多轮」的子代理会先触到它。{@link #DEFAULT_TREE_TOKEN_BUDGET} 刻意是它的
+     * {@link #DEFAULT_MAX_SPAWNS_PER_TURN} 倍，只为「所有子代理都跑满各自上限」封顶。
+     */
     public static final long DEFAULT_RUN_TOKEN_BUDGET = 500_000L;
 
-    /** 一棵 run 树的累计 token 上限。 */
-    public static final long DEFAULT_TREE_TOKEN_BUDGET = 1_500_000L;
+    /**
+     * 一棵 run 树的累计 token 上限。
+     * <p>
+     * <b>它不是一道独立的限制，而是「所有子代理都跑满各自上限」的封顶</b>：缺省值刻意等于
+     * {@link #DEFAULT_MAX_SPAWNS_PER_TURN} × {@link #DEFAULT_RUN_TOKEN_BUDGET}（12 × 50 万）。
+     * 比这个乘积小时，树预算会先于单 run 预算生效——那时个别子代理明明没触到自己的上限却被截断，
+     * 而表现是「某几个步骤失败了」，看不出真正的原因。
+     * <p>
+     * 可以用它主动收紧总花费（写小是有意义的），但**调大派生上限时要一起调大**，否则那道限制会
+     * 悄悄回落到树上。写 {@code 0} 表示不限制（单 run 预算仍然各管各的）。
+     */
+    public static final long DEFAULT_TREE_TOKEN_BUDGET = 6_000_000L;
 
     /**
      * 归档目录下最多保留的 run 归档文件数。

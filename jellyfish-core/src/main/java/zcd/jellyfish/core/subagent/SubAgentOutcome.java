@@ -31,20 +31,36 @@ public final class SubAgentOutcome {
     private final String error;
 
     /**
+     * 本次 run 归档文件的绝对路径；没有归档时为 {@code null}。
+     * <p>
+     * <b>为什么把它交出来</b>：归档里是子会话的完整 transcript，而 {@link #text} 只是它的有损摘要
+     * （未收敛时甚至只有最后一段）。编排方拿到这个路径，就能在下游任务里附上一句「完整记录见
+     * &lt;路径&gt;」，让接收方按需自取——与工具结果落盘后在信封里留路径是同一个口径。
+     * <p>
+     * <b>它可能为 {@code null}</b>：归档失败、拿不到 run 快照，或这次委派压根没跑起来（被拒）时都没有。
+     * 归档是「可观测窗口」而不是不变量（受 {@code subAgent.archiveKeepFiles} /
+     * {@code archiveMaxBytes} 约束，最旧的会被清理），因此调用方必须容忍它缺席。
+     */
+    private final String archivePath;
+
+    /**
      * 构造结果。
      *
-     * @param status 终态
-     * @param text   最终文本，可为 {@code null}
-     * @param rounds 实际轮数
-     * @param usage  累计用量，可为 {@code null}（按零用量处理）
-     * @param error  失败或拒绝的原因，可为 {@code null}
+     * @param status      终态
+     * @param text        最终文本，可为 {@code null}
+     * @param rounds      实际轮数
+     * @param usage       累计用量，可为 {@code null}（按零用量处理）
+     * @param error       失败或拒绝的原因，可为 {@code null}
+     * @param archivePath 归档文件路径，可为 {@code null}
      */
-    private SubAgentOutcome(SubAgentStatus status, String text, int rounds, SessionUsage usage, String error) {
+    private SubAgentOutcome(SubAgentStatus status, String text, int rounds, SessionUsage usage, String error,
+                            String archivePath) {
         this.status = status;
         this.text = text;
         this.rounds = rounds;
         this.usage = usage == null ? SessionUsage.EMPTY : usage;
         this.error = error;
+        this.archivePath = archivePath;
     }
 
     /**
@@ -56,7 +72,7 @@ public final class SubAgentOutcome {
      * @return 结果
      */
     public static SubAgentOutcome completed(String text, int rounds, SessionUsage usage) {
-        return new SubAgentOutcome(SubAgentStatus.COMPLETED, text, rounds, usage, null);
+        return new SubAgentOutcome(SubAgentStatus.COMPLETED, text, rounds, usage, null, null);
     }
 
     /**
@@ -73,7 +89,7 @@ public final class SubAgentOutcome {
      * @return 结果
      */
     public static SubAgentOutcome truncated(String text, int rounds, SessionUsage usage, String reason) {
-        return new SubAgentOutcome(SubAgentStatus.TRUNCATED, text, rounds, usage, reason);
+        return new SubAgentOutcome(SubAgentStatus.TRUNCATED, text, rounds, usage, reason, null);
     }
 
     /**
@@ -84,7 +100,7 @@ public final class SubAgentOutcome {
      * @return 结果
      */
     public static SubAgentOutcome cancelled(int rounds, SessionUsage usage) {
-        return new SubAgentOutcome(SubAgentStatus.CANCELLED, null, rounds, usage, null);
+        return new SubAgentOutcome(SubAgentStatus.CANCELLED, null, rounds, usage, null, null);
     }
 
     /**
@@ -94,7 +110,7 @@ public final class SubAgentOutcome {
      * @return 结果
      */
     public static SubAgentOutcome failed(String error) {
-        return new SubAgentOutcome(SubAgentStatus.FAILED, null, 0, null, error);
+        return new SubAgentOutcome(SubAgentStatus.FAILED, null, 0, null, error, null);
     }
 
     /**
@@ -104,7 +120,7 @@ public final class SubAgentOutcome {
      * @return 结果
      */
     public static SubAgentOutcome rejected(String reason) {
-        return new SubAgentOutcome(SubAgentStatus.REJECTED, null, 0, null, reason);
+        return new SubAgentOutcome(SubAgentStatus.REJECTED, null, 0, null, reason, null);
     }
 
     /**
@@ -150,6 +166,30 @@ public final class SubAgentOutcome {
      */
     public String getError() {
         return error;
+    }
+
+    /**
+     * 获取本次 run 的归档文件绝对路径。
+     *
+     * @return 归档路径；没有归档时为 {@code null}
+     */
+    public String getArchivePath() {
+        return archivePath;
+    }
+
+    /**
+     * 返回一个带着归档路径的副本。
+     * <p>
+     * <b>为什么用追加而不是构造参数</b>：归档发生在结果算出来之后（{@code await} 的 {@code finally}
+     * 里），而这里不可变——让 {@code SubAgentLauncher} 在拿到路径后补上，比把归档提前（那时 run
+     * 还没终结、快照还是空的）更简单，也不改动五个工厂方法的签名。
+     *
+     * @param path 归档文件绝对路径，可为 {@code null}（等价于原样返回）
+     * @return 副本，保证非 {@code null}
+     */
+    public SubAgentOutcome withArchivePath(String path) {
+        return path == null ? this
+                : new SubAgentOutcome(status, text, rounds, usage, error, path);
     }
 
     /**

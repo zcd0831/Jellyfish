@@ -10,6 +10,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.event.EventPublisher;
 import zcd.jellyfish.api.extension.CancellationToken;
+import zcd.jellyfish.api.subagent.DelegationQuota;
 import zcd.jellyfish.core.ReActListener;
 import zcd.jellyfish.core.ReActLooper;
 import zcd.jellyfish.core.ReActResult;
@@ -188,6 +189,74 @@ class SubAgentLauncherTest {
         // Then：理由要指向预算而不是深度——两者的指导动作不同
         assertEquals(SubAgentStatus.REJECTED, outcome.getStatus());
         assertTrue(outcome.getError().contains("达到上限 1"));
+    }
+
+    @Test
+    void quota_should_report_remaining_spawns() {
+        // Given：上限 8，已派 2 个
+        runContexts.open(8, 8);
+        runContexts.current().tryAcquireSpawn();
+        runContexts.current().tryAcquireSpawn();
+
+        // When
+        DelegationQuota quota = launcher.quota();
+
+        // Then：编排方据此判断「这份 spec 装不装得下」
+        assertEquals(6, quota.getRemainingSpawns());
+        assertFalse(quota.isBlocked());
+    }
+
+    @Test
+    void quota_should_block_when_budget_exhausted() {
+        // Given：上限 1，已用掉
+        runContexts.open(8, 1);
+        runContexts.current().tryAcquireSpawn();
+
+        // When
+        DelegationQuota quota = launcher.quota();
+
+        // Then：原因与 spawn 的拒绝理由同源，不另编一句
+        assertTrue(quota.isBlocked());
+        assertTrue(quota.getBlockedReason().contains("达到上限 1"));
+    }
+
+    @Test
+    void quota_should_block_without_active_scope() {
+        // Given：不在任何回合里
+
+        // When
+        DelegationQuota quota = launcher.quota();
+
+        // Then：这时说「没有剩余名额」是误导——真正的原因是根本没有回合
+        assertTrue(quota.isBlocked());
+        assertTrue(quota.getBlockedReason().contains("没有进行中的回合"));
+    }
+
+    @Test
+    void quota_should_block_when_disabled() {
+        // Given：开关关掉
+        when(runtimeConfig.getSubAgentSettings())
+                .thenReturn(new SubAgentSettings(false, null, null, null, null, null, null, null));
+
+        // When
+        DelegationQuota quota = launcher.quota();
+
+        // Then
+        assertTrue(quota.isBlocked());
+        assertTrue(quota.getBlockedReason().contains("禁用"));
+    }
+
+    @Test
+    void quota_should_block_when_depth_limit_exhausted() {
+        // Given：层数上限 0（禁止委派）
+        runContexts.open(0, 8);
+
+        // When
+        DelegationQuota quota = launcher.quota();
+
+        // Then
+        assertTrue(quota.isBlocked());
+        assertTrue(quota.getBlockedReason().contains("层数上限"));
     }
 
     @Test

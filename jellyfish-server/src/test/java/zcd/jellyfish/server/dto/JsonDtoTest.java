@@ -1,6 +1,7 @@
 package zcd.jellyfish.server.dto;
 
 import org.junit.jupiter.api.Test;
+import zcd.jellyfish.api.extension.CommandResult;
 import zcd.jellyfish.api.extension.SessionUsageSnapshot;
 import zcd.jellyfish.infra.permission.ApprovalChannel;
 import zcd.jellyfish.infra.support.ObjectMapperWrapper;
@@ -107,13 +108,24 @@ class JsonDtoTest {
     @Test
     void commandResultDto_should_serialize_kind_and_choices_when_projected() {
         CommandResultDto dto = new CommandResultDto(CommandResultDto.KIND_OK, "可用模型：",
-                Collections.singletonList(new ChoiceDto("openai/gpt-4o", "gpt-4o", null, true)));
+                Collections.singletonList(new ChoiceDto("openai/gpt-4o", "gpt-4o", null, true)), null);
 
         String json = ObjectMapperWrapper.writeValueAsString(dto);
 
         assertTrue(json.contains("\"kind\":\"OK\""), json);
         assertTrue(json.contains("\"value\":\"openai/gpt-4o\""), json);
         assertTrue(json.contains("\"selected\":true"), json);
+    }
+
+    @Test
+    void commandResultDto_should_carry_handoff_when_command_requests_it() {
+        // When
+        CommandResultDto dto = CommandResultDto.of(CommandResult.handoff("请阅读当前仓库并写出 AGENTS.md"));
+
+        // Then：接力文本要能被客户端取到，且此时没有可渲染文本、没有候选
+        assertEquals("请阅读当前仓库并写出 AGENTS.md", dto.getHandoff());
+        assertNull(dto.getOutput());
+        assertTrue(dto.getChoices().isEmpty());
     }
 
     @Test

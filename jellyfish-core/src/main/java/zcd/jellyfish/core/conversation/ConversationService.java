@@ -39,6 +39,12 @@ import java.util.Optional;
  *     <li>{@code commands=false} 时「看起来像命令」的输入按普通文本处理（不报错、不静默丢）。</li>
  * </ol>
  * <p>
+ * <b>命令可以「接力」</b>：命令返回 {@link CommandResult#handoff(String)} 时，本类不把结果交给外壳，
+ * 而是<b>用接力文本替换本次输入</b>后继续往下走 2)~6)。这是「命令只声明、内核负责执行」的又一例
+ * （对标输入指令的 {@code InputDirectiveResult}）——插件因此获得了「替用户说一句话」的表达力，
+ * 而<b>没有</b>获得起回合的能力：回合仍然起在这一个方法里，仍然由调用方这次提交拥有。
+ * 接力文本与用户手敲的文本在下游逐字段一致（同样会被输入改写、同样进会话历史、同样过权限链）。
+ * <p>
  * <b>它不管渲染</b>：不缓冲任何输出，不决定任何格式；回合 / 指令的实时输出仍走调用方传入的
  * {@link ReActListener}（P2 之后改为可靠 lane 的订阅）。本类的返回值只回答「发生了什么」。
  * <p>
@@ -137,7 +143,14 @@ public class ConversationService {
         // 1) 命令判定先于输入改写：插件改不动用户显式敲下的命令
         if (policy.isCommands() && commands.shouldRunAsCommand(input, hasSession)) {
             CommandResult result = commands.execute(input, sessionId);
-            return Submission.command(sessionId, result);
+            if (!result.hasHandoff()) {
+                return Submission.command(sessionId, result);
+            }
+            // 命令接力：命令只声明「把这段文本当用户输入」，替换之后照旧走 2)~6) 那条路。
+            // 回合因此仍然起在这一处、由这一次提交拥有——插件只是替用户说了一句话，
+            // 既没拿到起回合的能力，也没绕过后面任何一道闸门（改写、指令、权限都照走）
+            LOG.debug("命令接力，本次输入已替换为命令给出的文本: source={}", source);
+            input = result.getHandoffText();
         }
 
         // 2)+3) 输入改写先于指令解析、先于建会话

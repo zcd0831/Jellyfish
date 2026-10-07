@@ -713,6 +713,17 @@ handler 抛错**按放行处理**。它只管「结束运行态、保留快照�
 - **`sessionRequired=false` 的命令分两类**：本来就不碰会话的（`/help` `/new` `/session` `/resume` `/delete` `/reload`），
   与**降级**的（`/model` `/agent` `/mode`：有会话时改当前会话，没会话时改 `SessionDefaults`）。
   **降级那一类必须保证「无会话时也真的能执行完」**，否则标志就在说谎。
+- **命令可以「接力」**：命令返回 `CommandResult.handoff(text)` 时，`ConversationService.submit` **不把结果交给外壳**，
+  而是用该文本替换本次输入，继续走输入改写 → 指令 → 建会话 → 起回合那条路。
+  - **它只声明，不执行**（与 `InputDirectiveResult.toolCall` 同一口径）：插件因此获得「替用户说一句话」的表达力，
+    而**没有**获得起回合的能力——回合仍然起在 `ConversationService.submit` 里，仍然由外壳那一次提交拥有，
+    因此 `PluginAction` 那条「只有顶层回合内才有投递窗口」的边界不受影响。
+  - **接力文本与用户手敲的文本下游逐字段一致**：同样过 `InputTransformRequest`、同样过 `TurnBeforeRequest`、
+    同样进会话历史、模型据此产生的工具调用同样过完整的权限与审批链。命令没有借此取得任何新权限。
+  - **接力结果没有 `output`**：屏幕上该出现的是「接力文本被当作你的输入」与模型的回答，再叠命令自己的输出
+    会让人分不清哪句是模型说的。命令要留反馈就走 `present`。
+  - **Server 只走半程**：`POST /sessions/{id}/commands` 是纯 JSON、与 `/chat` 的 SSE 契约分开，
+    因此起回合那一步由客户端补（拿 `CommandResultDto.handoff` 去 POST `/chat`）。TUI / CLI 由内核一次做完。
 
 ## 三种外壳与可观测性
 

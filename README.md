@@ -39,13 +39,13 @@ mvn -o clean package              # 全量构建 + 单测；-DskipTests 可跳�
 产物是**一个可执行 fat jar**，三种模式都用它启动：
 
 ```
-jellyfish-cli/target/jellyfish-cli-0.1.0.jar
+jellyfish-cli/target/jellyfish-cli-0.1.1.jar
 ```
 
 嫌路径长就设个别名：
 
 ```bash
-alias jellyfish='java -jar /绝对路径/jellyfish-cli/target/jellyfish-cli-0.1.0.jar'
+alias jellyfish='java -jar /绝对路径/jellyfish-cli/target/jellyfish-cli-0.1.1.jar'
 ```
 
 常用构建命令（开发向）：
@@ -64,7 +64,7 @@ mvn -q -Dtest=ChatStateTest test   # 单类单测
 **不需要模型配置**就能跑命令，用它确认 jar 起得来：
 
 ```bash
-java -jar jellyfish-cli/target/jellyfish-cli-0.1.0.jar -cli -p "/help"
+java -jar jellyfish-cli/target/jellyfish-cli-0.1.1.jar -cli -p "/help"
 ```
 
 看到命令清单就说明装好了。
@@ -99,9 +99,9 @@ export OPENAI_API_KEY=sk-...
 ### 3. 问第一句话
 
 ```bash
-java -jar jellyfish-cli/target/jellyfish-cli-0.1.0.jar                    # 不带参数 = 交互界面（-tui）
-java -jar jellyfish-cli/target/jellyfish-cli-0.1.0.jar -cli -p "总结一下这个项目"
-java -jar jellyfish-cli/target/jellyfish-cli-0.1.0.jar -tui
+java -jar jellyfish-cli/target/jellyfish-cli-0.1.1.jar                    # 不带参数 = 交互界面（-tui）
+java -jar jellyfish-cli/target/jellyfish-cli-0.1.1.jar -cli -p "总结一下这个项目"
+java -jar jellyfish-cli/target/jellyfish-cli-0.1.1.jar -tui
 ```
 
 ## 三种运行模式
@@ -140,8 +140,8 @@ java -jar jellyfish-cli/target/jellyfish-cli-0.1.0.jar -tui
 **回答与命令结果走 stdout，诊断、工具进度与日志走 stderr**，因此重定向是安全的：
 
 ```bash
-java -jar jellyfish-cli/target/jellyfish-cli-0.1.0.jar -cli -p "总结这个项目" > answer.txt 2> diag.txt
-echo "/help" | java -jar jellyfish-cli/target/jellyfish-cli-0.1.0.jar -cli
+java -jar jellyfish-cli/target/jellyfish-cli-0.1.1.jar -cli -p "总结这个项目" > answer.txt 2> diag.txt
+echo "/help" | java -jar jellyfish-cli/target/jellyfish-cli-0.1.1.jar -cli
 ```
 
 | 退出码 | 含义 |
@@ -164,7 +164,7 @@ echo "/help" | java -jar jellyfish-cli/target/jellyfish-cli-0.1.0.jar -cli
 ## TUI 用法
 
 ```bash
-java -jar jellyfish-cli/target/jellyfish-cli-0.1.0.jar -tui
+java -jar jellyfish-cli/target/jellyfish-cli-0.1.1.jar -tui
 ```
 
 需要**可交互终端**（备用屏 + raw 模式）。在管道、CI 或没有终端的环境里启动会**立刻报错并退出 3**，不会挂住。
@@ -346,7 +346,7 @@ IDEA 的运行控制台默认不是真终端，直接跑 `-tui` 会命中「需�
 ```bash
 mvn -o package -DskipTests
 java -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=5005 \
-     -jar jellyfish-cli/target/jellyfish-cli-0.1.0.jar -tui
+     -jar jellyfish-cli/target/jellyfish-cli-0.1.1.jar -tui
 ```
 
 然后 `Run → Edit Configurations → + → Remote JVM Debug`（默认就是 5005）→ 点 Debug。想在启动阶段（DI 装配、`bootstrap`）
@@ -373,6 +373,20 @@ java -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=5005 \
 
 `-tui` 另有五个由外壳处理的命令，不在 `/help` 列表里：`/exit`、`/ui`、`/thinking`、`/toolargs`、`/mouse`。
 **插件会带来更多命令**（例如待办插件的 `/todo`、skills 插件的 `/skills`、shell 的 `/shell`），装了就出现在 `/help` 里。
+
+### 命令「接力」：命令可以不把话说完
+
+命令通常以一句回执收尾，但有一类命令真正想做的事是**让模型接着干**（典型是「初始化项目约定文件」：
+
+读一遍仓库、写出 `AGENTS.md`）。这类命令返回 `CommandResult.handoff(text)`，内核**不呈现命令输出**，而是把
+`text` 当成你这一次敲下的输入接着走：输入改写、输入指令、建会话、起回合全都照旧，模型的回答照旧出现在消息区。
+
+- **你看到的就是一次普通对话**：那句 `text` 会成为会话里的一条用户消息（因此也会落盘、也会被压缩），
+  模型据此发起的读写工具调用**照旧过权限与审批**——命令没有借此取得任何新权限。
+- **命令起不了回合**：回合仍然由你这一次提交（外壳）拥有，命令只是「替你说了一句话」。
+- **`/init` 就是这么实现的**（`jellyfish-plugin-project`）：敲一下，模型自己去读仓库、自己写文件。
+- **Server 只走半程**：`POST /sessions/{id}/commands` 是纯 JSON，与 `/chat` 的 SSE 契约分开，
+  因此带 `handoff` 的命令需要客户端拿这段文本再 POST 一次 `/chat`。TUI / CLI 由内核一次做完。
 
 **离线可用**：`/help` `/session` `/status` `/model` `/compact preview` 这些命令**不需要模型配置**，
 可以拿来验证安装是否正常。
@@ -908,7 +922,7 @@ stderr、SSE 的 `notice`），**都不会被拼进正文**——拼进去会让
 ## Server 模式
 
 ```bash
-java -jar jellyfish-cli/target/jellyfish-cli-0.1.0.jar -server 9096
+java -jar jellyfish-cli/target/jellyfish-cli-0.1.1.jar -server 9096
 ```
 
 **默认只绑 `127.0.0.1`**，且**没配密钥时不鉴权**——对只绑回环的本地场景够用。对外开放必须显式 `--host 0.0.0.0`
@@ -1023,6 +1037,31 @@ SSE 事件名、鉴权细节与会话语义见 [docs/constraints.md](docs/constr
 
 使用中的规范与约束（跨模块约定、扩展层与插件运行时、会话与配置、权限与审批、ReAct 与压缩、工具与命令域、
 三种外壳、Server 接口契约）集中在 **[docs/constraints.md](docs/constraints.md)** 一份文档里。
+
+## 发布到 Maven Central
+
+内核的构件发布在中央仓库，坐标 `io.github.zcd0831:jellyfish`：父 POM 与 `jellyfish-api`、`jellyfish-infra`、
+`jellyfish-core`、`jellyfish-di` 五个。`jellyfish-tui` / `jellyfish-server` / `jellyfish-cli` 不发——
+tui 依赖 `dev.tamboui` 的 SNAPSHOT（Central 拒收），cli 是打好包的 fat jar。
+
+发布走 `release` profile：source / javadoc / GPG 签名 / Central 发布四个插件只在 `-P release` 时加载，
+日常 `mvn test`、`mvn install` 不会被 GPG 签名挡住。
+
+```bash
+mvn -P release -pl :jellyfish,:jellyfish-api,:jellyfish-infra,:jellyfish-core,:jellyfish-di deploy
+```
+
+父 POM 必须一起发：子模块的 `<parent>` 指向它，缺了它使用方连模型都构建不出来。
+
+三个前置，缺一个就发不出去：
+
+1. `~/.m2/settings.xml` 里有一个 id 为 `central` 的 server，用户名 / 密码填 Central Portal 生成的 token；
+2. `io.github.zcd0831` 命名空间已在 Central Portal 验证过（用 GitHub 账号登录时通常会自动授予）；
+3. 本机有 GPG 私钥，且公钥已推到 keyserver——`pom.asc`、`jar.asc`、`-sources.jar.asc`、`-javadoc.jar.asc`
+   全部由 `gpg:sign` 生成（POM 自己也要签名）。
+
+传完到 Central Portal 里确认校验通过再点发布：`autoPublish` 保持缺省 `false` 就是这个意思。
+正式发布别带 `-DskipTests`——Central 校验的是产物，单测与 javadoc 报错要在这之前暴露出来。
 
 ## License
 

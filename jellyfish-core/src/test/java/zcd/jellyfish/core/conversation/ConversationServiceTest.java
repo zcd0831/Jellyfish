@@ -131,6 +131,47 @@ class ConversationServiceTest {
     }
 
     @Test
+    void submit_should_relay_handoff_text_as_input_and_start_turn() {
+        // 命令接力：命令不返回结果，而是把自己的文本变成这一次的用户输入，
+        // 于是后面的改写 / 指令 / 起回合照旧走——回合仍起在这一处，由这次提交拥有
+        when(commands.shouldRunAsCommand("/init", true)).thenReturn(true);
+        when(commands.execute("/init", "s1"))
+                .thenReturn(CommandResult.handoff("请阅读当前仓库并写出 AGENTS.md"));
+        when(inputTransforms.transform("s1", "请阅读当前仓库并写出 AGENTS.md",
+                InputTransformRequest.Source.TUI))
+                .thenReturn(InputTransformResult.continueAsIs());
+        when(inputDirectives.submit(eq("s1"), eq("请阅读当前仓库并写出 AGENTS.md"), any()))
+                .thenReturn(Optional.empty());
+        when(harness.chat(eq("s1"), anyString(), eq("请阅读当前仓库并写出 AGENTS.md"), any()))
+                .thenReturn(turn);
+
+        Submission submission = service.submit("s1", "/init", InputTransformRequest.Source.TUI,
+                SubmissionPolicy.tui());
+
+        assertEquals(Submission.Kind.STARTED_TURN, submission.getKind());
+        assertNotNull(submission.getTurnId());
+        assertNull(submission.getCommandResult());
+    }
+
+    @Test
+    void submit_should_reject_relayed_input_without_session_when_policy_requires_existing() {
+        // 接力改的只是输入文本，不豁免任何既有闸门：REQUIRE_EXISTING 下无会话照样拒绝
+        when(commands.shouldRunAsCommand("/init", false)).thenReturn(true);
+        when(commands.execute("/init", null))
+                .thenReturn(CommandResult.handoff("请阅读当前仓库并写出 AGENTS.md"));
+        when(inputTransforms.transform(null, "请阅读当前仓库并写出 AGENTS.md",
+                InputTransformRequest.Source.SERVER))
+                .thenReturn(InputTransformResult.continueAsIs());
+
+        Submission submission = service.submit(null, "/init", InputTransformRequest.Source.SERVER,
+                SubmissionPolicy.of(true, false, SubmissionPolicy.SessionPolicy.REQUIRE_EXISTING));
+
+        assertEquals(Submission.RejectReason.NO_SESSION, submission.getRejectReason());
+        verify(sessions, never()).createDefault();
+        verify(harness, never()).chat(anyString(), anyString(), anyString(), any());
+    }
+
+    @Test
     void submit_should_not_execute_command_when_policy_disables_commands() {
         // 顺序 6：commands=false 时「看起来像命令」按普通文本处理，不报错也不静默丢
         when(inputTransforms.transform("s1", "/help", InputTransformRequest.Source.SERVER))

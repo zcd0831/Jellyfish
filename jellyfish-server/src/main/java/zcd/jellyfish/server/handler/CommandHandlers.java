@@ -38,6 +38,13 @@ import java.util.Map;
  * 对话走 {@code /chat}。把一段自然语言悄悄按命令处理（或反过来）会让调用方拿到莫名其妙的
  * {@code UNKNOWN} 文案。
  * <p>
+ * <b>「命令接力」在本端点上只能走半程</b>：命令返回 {@code CommandResult.handoff(...)} 时，
+ * 结果体里的 {@code handoff} 字段即「请接着把这段文本发去对话」的说明。
+ * TUI / CLI 上 {@code ConversationService} 会在同一次提交里完成接力（换掉输入、起回合），
+ * 而本端点是纯 JSON 返回、与 {@code /chat} 的 SSE 契约分开，因此起回合这一步必须由客户端补：
+ * 拿 {@code handoff} 去 {@code POST /sessions/{id}/chat}。本类刻意不在这里自己起回合——
+ * 那会把两个端点的响应形状混成一种，客户端从此必须靠猜。
+ * <p>
  * 无状态（只持有协作者），可安全跨线程调用。
  *
  * @author zcd

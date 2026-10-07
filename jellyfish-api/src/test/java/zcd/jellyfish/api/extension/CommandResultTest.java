@@ -74,6 +74,36 @@ class CommandResultTest {
     }
 
     @Test
+    void handoff_should_carry_text_without_output_or_choices() {
+        // When
+        CommandResult result = CommandResult.handoff("请阅读当前仓库并写出 AGENTS.md");
+
+        // Then：接力结果既是「已执行」，又刻意不给出可渲染文本与候选
+        assertEquals(CommandResult.Kind.OK, result.getKind());
+        assertFalse(result.isError());
+        assertTrue(result.hasHandoff());
+        assertEquals("请阅读当前仓库并写出 AGENTS.md", result.getHandoffText());
+        assertNull(result.getOutput());
+        assertFalse(result.hasChoices());
+    }
+
+    @Test
+    void handoff_should_reject_blank_text() {
+        // When / Then：空文本进了会话只会变成需要模型解释的东西，不是一次静默的无操作
+        assertThrows(JellyfishException.class, () -> CommandResult.handoff(null));
+        assertThrows(JellyfishException.class, () -> CommandResult.handoff("   "));
+    }
+
+    @Test
+    void ordinary_factories_should_have_no_handoff() {
+        // When / Then
+        assertFalse(CommandResult.ok("文本").hasHandoff());
+        assertFalse(CommandResult.error("文本").hasHandoff());
+        assertFalse(CommandResult.unknown("文本").hasHandoff());
+        assertFalse(CommandResult.choices("文本", null).hasHandoff());
+    }
+
+    @Test
     void choices_should_carry_output_and_choices() {
         // When
         CommandResult result = CommandResult.choices("可用 agent：",

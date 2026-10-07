@@ -14,7 +14,7 @@ Jellyfish 是一个用 Java 1.8 编写的轻量级 AI Agent 工具，通过 PF4J
 - **工具即能力**：模型能读写文件、跑命令、搜代码，工具全部由插件提供，每次调用都过权限判定。
 - **插件与内核无编译期依赖**：插件是独立打包的 PF4J jar，运行时经 `jellyfish-api` 的 SPI 接入。
 - **官方插件不在本仓库**：它们在 `Jellyfish-Plugins` 仓库（含插件开发教程）。
-- 坐标 `zcd:jellyfish:0.1.0`，构建用 Maven，运行环境 **JDK 1.8**（**不要使用 Java 9+ 的 API 或语法**）。
+- 坐标 `io.github.zcd0831:jellyfish:0.1.1`，构建用 Maven，运行环境 **JDK 1.8**（**不要使用 Java 9+ 的 API 或语法**）。
 
 ## 常用命令
 

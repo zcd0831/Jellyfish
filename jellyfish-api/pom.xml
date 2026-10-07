@@ -6,9 +6,9 @@
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
-        <groupId>zcd</groupId>
+        <groupId>io.github.zcd0831</groupId>
         <artifactId>jellyfish</artifactId>
-        <version>0.1.0</version>
+        <version>0.1.1</version>
     </parent>
 
     <artifactId>jellyfish-api</artifactId>

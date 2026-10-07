@@ -1,14 +1,44 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0"
+         child.project.url.inherit.append.path="false"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
          http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <groupId>zcd</groupId>
+    <groupId>io.github.zcd0831</groupId>
     <artifactId>jellyfish</artifactId>
-    <version>0.1.0</version>
+    <version>0.1.1</version>
     <name>Jellyfish</name>
+    <description>用 Java 8 编写的轻量级 AI Agent 工具：插件 SPI 与事件契约、内核实现与三种外壳。</description>
     <packaging>pom</packaging>
+
+    <!-- 发布到 Maven Central 的硬性元数据：url / licenses / developers / scm 缺一不可。
+         校验看的是「有效模型」，所以这里声明一次、子模块继承即可（父 POM 与子模块在同一批
+         上传，Central 能解析到它）。 -->
+    <url>https://github.com/zcd0831/Jellyfish</url>
+    <licenses>
+        <license>
+            <name>MIT License</name>
+            <url>https://www.opensource.org/licenses/mit-license.php</url>
+        </license>
+    </licenses>
+    <developers>
+        <developer>
+            <id>zcd0831</id>
+            <name>zcd</name>
+            <email>zcd0831@users.noreply.github.com</email>
+            <url>https://github.com/zcd0831</url>
+        </developer>
+    </developers>
+    <!-- scm 的三个字段与 url 一样会被子模块继承，并追加 artifactId（Maven 的缺省行为），
+         拼出来的地址是 404。三个 child.scm.*.inherit.append.path="false" 让子模块沿用同一个仓库地址。 -->
+    <scm child.scm.connection.inherit.append.path="false"
+         child.scm.developerConnection.inherit.append.path="false"
+         child.scm.url.inherit.append.path="false">
+        <connection>scm:git:git://github.com/zcd0831/Jellyfish.git</connection>
+        <developerConnection>scm:git:ssh://git@github.com/zcd0831/Jellyfish.git</developerConnection>
+        <url>https://github.com/zcd0831/Jellyfish</url>
+    </scm>
 
     <modules>
         <module>jellyfish-api</module>
@@ -24,6 +54,10 @@
         <java.version>1.8</java.version>
         <maven.compiler.source>${java.version}</maven.compiler.source>
         <maven.compiler.target>${java.version}</maven.compiler.target>
+        <!-- 源码与文档编码：javadoc 插件按它读源码，不写就按机器平台编码取，
+             在中文 Windows（GBK）上产出的 javadoc jar 会整篇乱码。 -->
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
         <dagger.version>2.16</dagger.version>
         <javax-inject.version>1</javax-inject.version>
         <!-- Undertow：2.2.39.Final 是 2.2.x（Java 8 维护线）的末版。
@@ -45,6 +79,12 @@
         <maven-compiler-plugin.version>3.11.0</maven-compiler-plugin.version>
         <!-- 打包：shade 3.5.x 是仍支持 JDK 8 + Maven 3.2.5 的版本线 -->
         <maven-shade-plugin.version>3.5.1</maven-shade-plugin.version>
+
+        <!-- 发布到 Maven Central：四个插件只在 release profile 里声明，版本集中在这里 -->
+        <maven-source-plugin.version>3.3.0</maven-source-plugin.version>
+        <maven-javadoc-plugin.version>3.6.3</maven-javadoc-plugin.version>
+        <maven-gpg-plugin.version>3.2.4</maven-gpg-plugin.version>
+        <central-publishing-maven-plugin.version>0.9.0</central-publishing-maven-plugin.version>
 
         <!-- 单元测试：JUnit5 + Mockito（Mockito 4.x 是最后一条支持 JDK8 的主线） -->
         <junit.version>5.10.2</junit.version>
@@ -256,5 +296,75 @@
             </plugin>
         </plugins>
     </build>
+
+    <!-- 发布到 Maven Central：只有显式 -P release 才加载。
+         不放进常驻的 <build><plugins>：gpg:sign 绑在 verify 上，常驻就等于「本机没有 GPG 私钥
+         就 mvn verify / install 都跑不动」，把日常构建和发布绑死在一起。
+         本次发布的构件（tui 依赖 SNAPSHOT、cli 是 fat jar，都不发）：
+         mvn -P release -pl :jellyfish,:jellyfish-api,:jellyfish-infra,:jellyfish-core,:jellyfish-di deploy
+         父 POM 必须一起发：子模块的 <parent> 指向它，缺了它使用方连模型都构建不出来。 -->
+    <profiles>
+        <profile>
+            <id>release</id>
+            <build>
+                <plugins>
+                    <!-- sources jar：Central 对 packaging != pom 的构件强制要求 -->
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-source-plugin</artifactId>
+                        <version>${maven-source-plugin.version}</version>
+                        <executions>
+                            <execution>
+                                <id>attach-sources</id>
+                                <goals>
+                                    <goal>jar-no-fork</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <!-- javadoc jar：同上 -->
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-javadoc-plugin</artifactId>
+                        <version>${maven-javadoc-plugin.version}</version>
+                        <executions>
+                            <execution>
+                                <id>attach-javadocs</id>
+                                <goals>
+                                    <goal>jar</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <!-- GPG 签名：每个上传的构件都要有对应 .asc，POM 自己也在其中 -->
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <version>${maven-gpg-plugin.version}</version>
+                        <executions>
+                            <execution>
+                                <id>sign-artifacts</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>sign</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <!-- Central 发布：整个 reactor 的构件打成一次 deployment 传到 Central Portal。
+                         autoPublish 缺省 false，即传完由你在 Portal 里确认校验结果再点发布。 -->
+                    <plugin>
+                        <groupId>org.sonatype.central</groupId>
+                        <artifactId>central-publishing-maven-plugin</artifactId>
+                        <version>${central-publishing-maven-plugin.version}</version>
+                        <extensions>true</extensions>
+                        <configuration>
+                            <publishingServerId>central</publishingServerId>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 
 </project>

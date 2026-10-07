@@ -49,8 +49,8 @@ public final class LlmClients {
     /**
      * 在 baseUrl 后拼接版本段和路径：
      * <pre>
-     *   https://api.openai.com            + v1 + /chat/completions -> https://api.openai.com/v1/chat/completions
-     *   https://api.openai.com/v1         + v1 + /chat/completions -> https://api.openai.com/v1/chat/completions
+     *   https://api.openai.com            + v1 + /chat/completions -&gt; https://api.openai.com/v1/chat/completions
+     *   https://api.openai.com/v1         + v1 + /chat/completions -&gt; https://api.openai.com/v1/chat/completions
      * </pre>
      * 即 baseUrl 已经包含目标版本段时不再重复拼接。
      */

@@ -33,7 +33,7 @@ public final class Submission {
         /** 输入是一条输入指令（{@code !} / {@code @}），已在专用线程上推进（句柄见 {@link #getDirectiveRun()}）。 */
         STARTED_DIRECTIVE,
 
-        /** 起了 ReAct 回合（句柄见 {@link #getTurn()}）。 */
+        /** 起了 ReAct 回合（句柄见 {@link #getTurnId()}）。 */
         STARTED_TURN,
 
         /** 什么都没起（空输入 / 无会话）。 */

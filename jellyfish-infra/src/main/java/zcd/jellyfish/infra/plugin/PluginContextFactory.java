@@ -104,7 +104,7 @@ public final class PluginContextFactory {
      * 「提问能力不存在」写分支——拿到的会是 {@link AskPort#unavailable()}。
      * <p>
      * <b>不会掩盖内核自己的装配遗漏</b>：两条真正的装配路径（{@code PluginModule} 的
-     * {@code @Provides} 与 {@link zcd.jellyfish.di.JellyfishAssembler}）都走下面那个全参构造器，
+     * {@code @Provides} 与 {@code zcd.jellyfish.di.JellyfishAssembler}）都走下面那个全参构造器，
      * 「少接一根线」在那里是编译错误；本重载影响不到它们。
      *
      * @param extensions   同步扩展点策略，不可为 {@code null}

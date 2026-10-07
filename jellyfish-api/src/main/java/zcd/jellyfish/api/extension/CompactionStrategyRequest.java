@@ -48,7 +48,7 @@ public final class CompactionStrategyRequest extends ExtensionRequest<Compaction
     /**
      * 构造压缩策略请求。
      * <p>
-     * <b>为什么带的是「缺省值」而不是「候选条数」</b>：候选条数取决于 {@link #getKeepRecentMessages()}
+     * <b>为什么带的是「缺省值」而不是「候选条数」</b>：候选条数取决于 {@link #getDefaultKeepRecentMessages()}
      * 之外的保留条数，而那个值正是本请求要问插件的东西——先算候选取值就只能用缺省保留条数算，
      * 插件据此做的判断立刻变成建立在另一个世界里的判断。给出缺省参数则没有这个循环：插件知道
      * 自己要覆盖的是什么，内核拿到答复后再算范围。

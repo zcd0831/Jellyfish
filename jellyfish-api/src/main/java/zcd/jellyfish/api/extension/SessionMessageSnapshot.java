@@ -100,7 +100,7 @@ public final class SessionMessageSnapshot {
      * 构造不含思考过程的快照（旧签名的兼容入口）。
      * <p>
      * 与构造器等价，只是不能写成构造器重载（见
-     * {@link #SessionMessageSnapshot(String, long, String, String, String, String, List, TokenUsageSnapshot, String)}）。
+     * {@link #of(String, long, String, String, String, String, List, TokenUsageSnapshot)}）。
      *
      * @param messageId  消息唯一标识，不可为空白
      * @param timestamp  消息产生时间戳（epoch millis）

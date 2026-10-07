@@ -1,11 +1,19 @@
 # 变更日志
 
-本文件记录 Jellyfish 内核（`zcd:jellyfish`）所有值得使用者知道的变更。
+本文件记录 Jellyfish 内核（`io.github.zcd0831:jellyfish`）所有值得使用者知道的变更。
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
 ## [Unreleased]
+
+### Changed
+
+- Maven 坐标由 `zcd` 改为 `io.github.zcd0831`，版本号 0.1.1；父 POM 与 `jellyfish-api` / `jellyfish-infra` /
+  `jellyfish-core` / `jellyfish-di` 已发布到 Maven Central，接入方不必再本地 `install`。
+  Java 包名仍是 `zcd.jellyfish.*`——坐标与包名不要求一致。
+- 新增 `release` profile（`-P release`）承载 source / javadoc / GPG 签名 / Central 发布四个插件，
+  日常构建不加载它们。
 
 ## [0.1.0] - 2026-10-07
 

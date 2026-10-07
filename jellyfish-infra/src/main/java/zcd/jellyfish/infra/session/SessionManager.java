@@ -631,7 +631,7 @@ public class SessionManager {
     /**
      * 关闭会话，并声明这次关闭是谁想要的。
      * <p>
-     * <b>为什么要把原因显式传进来</b>：它决定插件能不能拦。只有 {@link Reason#USER_REQUEST}
+     * <b>为什么要把原因显式传进来</b>：它决定插件能不能拦。只有 {@link SessionBeforeCloseRequest.Reason#USER_REQUEST}
      * 的否决会被采纳——进程收尾、配置重载与内部收尾都是一个必须完成的事实，
      * 在那里按插件的意愿留下一个「本该关掉的会话」只会变成资源泄漏。
      *

@@ -1,5 +1,6 @@
 package zcd.jellyfish.api.plugin;
 
+import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.RuntimeInfo;
 import zcd.jellyfish.api.action.ActionHandle;
 import zcd.jellyfish.api.ask.AskPort;
@@ -45,7 +46,7 @@ import java.util.function.Predicate;
  * 因此不存在第二份「工具清单」需要插件额外维护。
  * <p>
  * <b>注册与注销</b>：存活期内的任意时刻都可调 {@link #handle} / {@link #contribute} /
- * {@link #observe} / {@link #emit}（<b>不限于 </b>{@code start()} 之内），{@link #stop()} 之后则一律失败。
+ * {@link #observe} / {@link #emit}（<b>不限于 </b>{@code start()} 之内），{@link JellyfishPlugin#stop()} 之后则一律失败。
  * 需要主动解除某条注册时，用注册时拿到的 {@link Subscription#close()}；
  * 插件停止时框架仍会按 {@code pluginId} 一次性把剩下的收干净，因此注销是可选优化而不是必须动作。
  * <p>

@@ -7,8 +7,21 @@
 
 ## [Unreleased]
 
+### Added
+
+- `subAgent.maxQueuedRuns`：并发满员时允许排队的 run 数上限（缺省 64）。此前 `agent-run` 池没有等待队列，
+  一次派出的 run 多于 `maxConcurrentRuns` 时，多出来的当场以失败落终态；现在它们排队等许可，
+  只有「线程 + 等待区都满」才拒绝，且拒绝理由里说明该调哪个键。
+
 ### Changed
 
+- 子代理墙钟（`subAgent.runTimeoutMillis`）改为**从 run 真正开始执行起算**：排队等许可的时间不再计入它，
+  否则「一次派得多」会让排在后面的 run 一开头就被判超时（表现为「没跑一轮就被记为截断」）。
+- 子代理未收敛（`TRUNCATED`）时的回灌文本首行原样给出原因（轮数上限 / token 预算 / 墙钟），
+  工具侧首行改为中性的 `[子代理 x 未收敛 · N 轮]`：此前一律写成「达到轮数上限」，
+  与实际原因不符，也会把排查带到错误的方向。
+- `agent-run` 线程池改为按上界固定（`maxConcurrentRuns × (maxDepth + 1)`）并常驻、不再空闲回收：
+  引入队列后按需扩容不会发生（JDK 只在队列满时才扩线程），会把并发反过来压成一两条线程。
 - Maven 坐标由 `zcd` 改为 `io.github.zcd0831`，版本号 0.1.1；父 POM 与 `jellyfish-api` / `jellyfish-infra` /
   `jellyfish-core` / `jellyfish-di` 已发布到 Maven Central，接入方不必再本地 `install`。
   Java 包名仍是 `zcd.jellyfish.*`——坐标与包名不要求一致。

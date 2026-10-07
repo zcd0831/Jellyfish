@@ -775,6 +775,7 @@ Gemini      { "vendorBody": { "generationConfig": { "thinkingConfig": { "thinkin
     "maxSpawnsPerTurn": 3,
     "maxRounds": 8,
     "maxConcurrentRuns": 3,
+    "maxQueuedRuns": 64,
     "runTimeoutMillis": 300000,
     "runTokenBudget": 500000,
     "treeTokenBudget": 1500000,
@@ -886,8 +887,9 @@ stderr、SSE 的 `notice`），**都不会被拼进正文**——拼进去会让
 | `maxDepth` | `1` | 允许的最大委派层数（主会话 → 子代理 → 孙代理），写 `0` 表示禁止委派 |
 | `maxSpawnsPerTurn` | `3` | 单个顶层回合内允许派生的子代理总数 |
 | `maxRounds` | `8` | 子代理自己那个回合的最大轮数，**不跟随** `react.maxRounds` |
-| `maxConcurrentRuns` | `3` | **全局同时运行的子代理 run 数上限**（不含父回合）。超过的 run 排队；run 跑在独立的 `agent-run` 线程池上，父回合等待子 run 时会让出并发许可 |
-| `runTimeoutMillis` | `300000` | 单个 run 的墙钟上限（毫秒）。到点取消该 run 并记为「截断」 |
+| `maxConcurrentRuns` | `3` | **全局同时运行的子代理 run 数上限**（不含父回合）。它只管「同时跑多少」，超出的 run 进等待区（见下一项）；run 跑在独立的 `agent-run` 线程池上，父回合等待子 run 时会让出并发许可 |
+| `maxQueuedRuns` | `64` | 等待区容量：并发满员时最多允许多少个 run 排队等许可。**它不提高并行度**——调大只会把「当场失败」推迟到更晚的积压点；写 `0` 或负数按缺省值处理（不允许无界） |
+| `runTimeoutMillis` | `300000` | 单个 run 的墙钟上限（毫秒），**从它真正开始执行起算**（排队等许可的时间不算它跑的时间）。到点取消该 run 并记为「截断」，原因会写进回灌文本的首行 |
 | `runTokenBudget` | `500000` | 单个 run 的累计 token 上限；写 `0` 表示不限制 |
 | `treeTokenBudget` | `1500000` | 一棵 run 树的累计 token 上限；写 `0` 表示不限制 |
 | `archiveKeepFiles` | `200` | run 归档目录（`<toolOutput.dir>/subagent-runs`）最多保留的文件数；写 `0` 表示不清理 |
@@ -895,6 +897,9 @@ stderr、SSE 的 `notice`），**都不会被拼进正文**——拼进去会让
 
 `maxDepth` 挡「一条链多深」，`maxSpawnsPerTurn` 挡「一层扇出多少」，`maxConcurrentRuns` 挡「全局同时在跑多少」，
 三者正交；三个 token / 时间上限挡的是「跑飞了也停得下来」。除 `enabled` 外非法值一律回退缺省值。
+**「这一批派得比并发多」不等于失败**：超出的 run 进等待区排队等许可，只有「线程 + 等待区都满」才当场失败并说明原因。
+排队中的 run 不计入墙钟，因此「一直排不上」不会被超时兜住——兜底的是上面那三道上限，以及中止回合时的级联取消
+（等它的那个回合已经结束了，它就不会再跑）。
 归档配额与工具输出**分开算**（归档按 run 产生、含整份子会话 transcript，个体远大于一份工具结果），
 两者分居不同目录、各有各的上限，清理互不掏空对方的窗口。
 

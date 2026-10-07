@@ -39,13 +39,13 @@ mvn -o clean package              # 全量构建 + 单测；-DskipTests 可跳�
 产物是**一个可执行 fat jar**，三种模式都用它启动：
 
 ```
-jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar
+jellyfish-cli/target/jellyfish-cli-0.1.0.jar
 ```
 
 嫌路径长就设个别名：
 
 ```bash
-alias jellyfish='java -jar /绝对路径/jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar'
+alias jellyfish='java -jar /绝对路径/jellyfish-cli/target/jellyfish-cli-0.1.0.jar'
 ```
 
 常用构建命令（开发向）：
@@ -64,7 +64,7 @@ mvn -q -Dtest=ChatStateTest test   # 单类单测
 **不需要模型配置**就能跑命令，用它确认 jar 起得来：
 
 ```bash
-java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -cli -p "/help"
+java -jar jellyfish-cli/target/jellyfish-cli-0.1.0.jar -cli -p "/help"
 ```
 
 看到命令清单就说明装好了。
@@ -99,9 +99,9 @@ export OPENAI_API_KEY=sk-...
 ### 3. 问第一句话
 
 ```bash
-java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar                    # 不带参数 = 交互界面（-tui）
-java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -cli -p "总结一下这个项目"
-java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -tui
+java -jar jellyfish-cli/target/jellyfish-cli-0.1.0.jar                    # 不带参数 = 交互界面（-tui）
+java -jar jellyfish-cli/target/jellyfish-cli-0.1.0.jar -cli -p "总结一下这个项目"
+java -jar jellyfish-cli/target/jellyfish-cli-0.1.0.jar -tui
 ```
 
 ## 三种运行模式
@@ -140,8 +140,8 @@ java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -tui
 **回答与命令结果走 stdout，诊断、工具进度与日志走 stderr**，因此重定向是安全的：
 
 ```bash
-java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -cli -p "总结这个项目" > answer.txt 2> diag.txt
-echo "/help" | java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -cli
+java -jar jellyfish-cli/target/jellyfish-cli-0.1.0.jar -cli -p "总结这个项目" > answer.txt 2> diag.txt
+echo "/help" | java -jar jellyfish-cli/target/jellyfish-cli-0.1.0.jar -cli
 ```
 
 | 退出码 | 含义 |
@@ -164,7 +164,7 @@ echo "/help" | java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -
 ## TUI 用法
 
 ```bash
-java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -tui
+java -jar jellyfish-cli/target/jellyfish-cli-0.1.0.jar -tui
 ```
 
 需要**可交互终端**（备用屏 + raw 模式）。在管道、CI 或没有终端的环境里启动会**立刻报错并退出 3**，不会挂住。
@@ -346,7 +346,7 @@ IDEA 的运行控制台默认不是真终端，直接跑 `-tui` 会命中「需�
 ```bash
 mvn -o package -DskipTests
 java -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=5005 \
-     -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -tui
+     -jar jellyfish-cli/target/jellyfish-cli-0.1.0.jar -tui
 ```
 
 然后 `Run → Edit Configurations → + → Remote JVM Debug`（默认就是 5005）→ 点 Debug。想在启动阶段（DI 装配、`bootstrap`）
@@ -908,7 +908,7 @@ stderr、SSE 的 `notice`），**都不会被拼进正文**——拼进去会让
 ## Server 模式
 
 ```bash
-java -jar jellyfish-cli/target/jellyfish-cli-0.0.1-SNAPSHOT.jar -server 9096
+java -jar jellyfish-cli/target/jellyfish-cli-0.1.0.jar -server 9096
 ```
 
 **默认只绑 `127.0.0.1`**，且**没配密钥时不鉴权**——对只绑回环的本地场景够用。对外开放必须显式 `--host 0.0.0.0`

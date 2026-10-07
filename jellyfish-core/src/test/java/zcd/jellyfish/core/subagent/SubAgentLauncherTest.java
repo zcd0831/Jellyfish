@@ -2,12 +2,14 @@ package zcd.jellyfish.core.subagent;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.event.EventPublisher;
+import zcd.jellyfish.api.extension.CancellationToken;
 import zcd.jellyfish.core.ReActListener;
 import zcd.jellyfish.core.ReActLooper;
 import zcd.jellyfish.core.ReActResult;
@@ -547,6 +549,36 @@ class SubAgentLauncherTest {
     }
 
     @Test
+    @Timeout(20)
+    void run_should_carry_wall_clock_reason_when_run_is_killed_by_timeout() {
+        // Given：墙钟 100ms，子代理一直不收敛（调度器只在构造时读墙钟，因此要重建一套装配）
+        rebuildWithTimeout(100L);
+        when(agentManager.find(SCOUT)).thenReturn(definition(true));
+        when(sessionModelResolver.resolveByAgentOrDefault(SCOUT)).thenReturn(resolvedModel());
+        runContexts.open(8, 8);
+        Session parent = parent(null);
+        when(reActLooper.runNested(any(Session.class), any(), any(), any(), anyInt(), any()))
+                .thenAnswer(invocation -> {
+                    Session child = invocation.getArgument(0);
+                    CancellationToken token = invocation.getArgument(3);
+                    long deadline = System.currentTimeMillis() + 10_000L;
+                    while (!token.isCancelled() && System.currentTimeMillis() < deadline) {
+                        sleepQuietly();
+                    }
+                    return ReActResult.cancelled(child.getSessionId(), 1);
+                });
+
+        // When
+        SubAgentOutcome outcome = launcher.run(call(parent, SCOUT, "查一下"), null);
+
+        // Then：墙钟来源的原因既出现在结构化字段里，也出现在回灌文本的开头——
+        // 少了这一段，主会话只能看到「它最后说过的一句话」，无从知道是什么把它停下来的
+        assertEquals(SubAgentStatus.TRUNCATED, outcome.getStatus());
+        assertTrue(outcome.getError().contains("墙钟"), String.valueOf(outcome.getError()));
+        assertTrue(outcome.getText().startsWith("已达到单个子代理的墙钟上限"), outcome.getText());
+    }
+
+    @Test
     void run_should_map_cancelled_result() {
         // Given
         when(agentManager.find(SCOUT)).thenReturn(definition(true));
@@ -640,6 +672,34 @@ class SubAgentLauncherTest {
         // Then：清单过滤只认 agent 策略——按模式收窄（例如「只跑只读工具」）是插件在执行期表达的策略，
         // 它不在过滤判据里，否则同一个工具会在「清单里有、执行时被拒」之间反复横跳
         verify(permissionManager).usableTools(eq(SCOUT));
+    }
+
+    /**
+     * 用指定的墙钟上限重建一套调度装配。
+     * <p>
+     * 墙钟上限在 {@link RunScheduler} 构造时读一次（运行期不跟随热更新），因此想改它就得重建。
+     *
+     * @param runTimeoutMillis 单 run 墙钟上限（毫秒）
+     */
+    private void rebuildWithTimeout(long runTimeoutMillis) {
+        lenient().when(runtimeConfig.getSubAgentSettings()).thenReturn(new SubAgentSettings(
+                null, null, null, null, null, runTimeoutMillis, null, null));
+        RunRegistry registry = new RunRegistry();
+        RunScheduler scheduler = new RunScheduler(runContexts, registry, new RunEventBus(), runtimeConfig);
+        runtime = new AgentRuntime(registry, runContexts, scheduler);
+        launcher = new SubAgentLauncher(sessionManager, agentManager, sessionModelResolver, runtimeConfig,
+                reActLooper, runContexts, permissionManager, runtime, archive);
+    }
+
+    /**
+     * 短暂让出 CPU：等看门狗到点时用，避免忙等把测试机器跑满。
+     */
+    private static void sleepQuietly() {
+        try {
+            Thread.sleep(10L);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     /**

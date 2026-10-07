@@ -27,7 +27,7 @@ public final class SubAgentOutcome {
     /** 子代理回合的累计用量，保证非 {@code null}。 */
     private final SessionUsage usage;
 
-    /** 失败或拒绝的原因；成功时为 {@code null}。 */
+    /** 失败、拒绝或未收敛的原因；正常完成时为 {@code null}。 */
     private final String error;
 
     /**
@@ -60,15 +60,20 @@ public final class SubAgentOutcome {
     }
 
     /**
-     * 构造「达到轮数上限」结果。
+     * 构造「未收敛」结果。
+     * <p>
+     * <b>{@code text} 与 {@code reason} 为什么都要带</b>：文本是给模型与编排方读的完整交代
+     * （未收敛的原因 + 子代理最后一段已产出的正文），原因另存一份，好让调用方原样转述或做结构化
+     * 元数据，而不必从文本里猜哪一段是内核说的、哪一段是子代理自己说的。
      *
-     * @param text   内核提示，外加子代理最后一段已产出的正文（它往往已经翻查过几轮）
+     * @param text   未收敛的原因，外加子代理最后一段已产出的正文（它往往已经翻查过几轮）
      * @param rounds 实际轮数
      * @param usage  累计用量，可为 {@code null}
+     * @param reason 未收敛的原因，可为 {@code null}
      * @return 结果
      */
-    public static SubAgentOutcome truncated(String text, int rounds, SessionUsage usage) {
-        return new SubAgentOutcome(SubAgentStatus.TRUNCATED, text, rounds, usage, null);
+    public static SubAgentOutcome truncated(String text, int rounds, SessionUsage usage, String reason) {
+        return new SubAgentOutcome(SubAgentStatus.TRUNCATED, text, rounds, usage, reason);
     }
 
     /**
@@ -139,9 +144,9 @@ public final class SubAgentOutcome {
     }
 
     /**
-     * 获取失败或拒绝的原因。
+     * 获取失败、拒绝或未收敛的原因。
      *
-     * @return 原因；成功时为 {@code null}
+     * @return 原因；正常完成时为 {@code null}
      */
     public String getError() {
         return error;
@@ -150,7 +155,7 @@ public final class SubAgentOutcome {
     /**
      * 判断子代理是否给出了可用文本。
      * <p>
-     * {@code TRUNCATED} 也算「有文本」：达到轮数上限时，内核提示后面还接着子代理最后一段
+     * {@code TRUNCATED} 也算「有文本」：未收敛时，内核给出的原因后面还接着子代理最后一段
      * 已产出的正文，模型据此知道任务没做完、也知道它做到哪一步了，
      * 而不是以为子代理什么都没说。
      *

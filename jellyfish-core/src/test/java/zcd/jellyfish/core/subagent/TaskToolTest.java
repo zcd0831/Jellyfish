@@ -144,9 +144,11 @@ class TaskToolTest {
 
     @Test
     void handle_should_mark_incomplete_summary_when_truncated() {
-        // Given
+        // Given：内核在未收敛时回灌的是「原因 + 最后一段已产出的正文」（见 SubAgentLauncher）
         when(launcher.run(any(SubAgentCall.class), any(ReActListener.class)))
-                .thenReturn(SubAgentOutcome.truncated("只查了一半", 8, usage(10L)));
+                .thenReturn(SubAgentOutcome.truncated(
+                        "已达轮数上限\n（以下是它最后一段已产出的正文，更早的轮次未一并回灌）\n只查了一半",
+                        8, usage(10L), "已达轮数上限"));
 
         // When
         ToolCallResult result = tool.handle(request("scout", "查一下"));
@@ -154,6 +156,10 @@ class TaskToolTest {
         // Then：达到轮数上限是唯一一种「没跑好、却不算异常终止」的情形，没有警示后缀可用
         assertFalse(ToolMetadata.failed(result.getMetadata()), "截断不算异常终止");
         assertEquals("子代理 scout · 8 轮 · 10 tok · 结论不完整", summaryOf(result));
+        // 首行只写状态、原因原样跟在其后：未收敛有三种来源（轮数 / token 预算 / 墙钟），
+        // 各自该调的配置键不同，在首行里挑一个写死就会把另外两种说成错的那种
+        assertTrue(result.getOutput().toString().startsWith("[子代理 scout 未收敛 · 8 轮]\n已达轮数上限"),
+                result.getOutput().toString());
     }
 
     @Test

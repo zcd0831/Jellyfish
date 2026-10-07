@@ -68,6 +68,9 @@ public class SubAgentLauncher {
     /** 日志。 */
     private static final Logger LOG = LoggerFactory.getLogger(SubAgentLauncher.class);
 
+    /** 未收敛且两条来源都没给出原因时的兜底说明：宁可说「不知道」，也不要编一个原因。 */
+    private static final String UNKNOWN_TRUNCATION_REASON = "子代理未收敛（内核未给出原因）";
+
     /** 会话域服务：开瞬时会话、归集用量、收尾。 */
     private final SessionManager sessionManager;
 
@@ -360,8 +363,9 @@ public class SubAgentLauncher {
             case CANCELLED:
                 return SubAgentOutcome.cancelled(result.getRounds(), child.getUsage());
             case TRUNCATED:
-                return SubAgentOutcome.truncated(truncatedText(result.getText(), child), result.getRounds(),
-                        child.getUsage());
+                String reason = truncationReasonOf(result);
+                return SubAgentOutcome.truncated(truncatedText(reason, child), result.getRounds(),
+                        child.getUsage(), reason);
             case FAILED:
                 return SubAgentOutcome.failed(result.getError());
             default:
@@ -371,7 +375,11 @@ public class SubAgentLauncher {
     }
 
     /**
-     * 组装「达到轮数上限」时的回灌文本：内核提示 + 子代理最后一段已产出的正文。
+     * 组装未收敛时的回灌文本：原因 + 子代理最后一段已产出的正文。
+     * <p>
+     * <b>为什么原因必须打头</b>：未收敛有两种形状完全一样的来源——被墙钟掐断与被轮数/预算截断，
+     * 它们下一步该做什么完全不同（延长墙钟 vs 拆小任务）。原因句本身就是「该调哪个键」，
+     * 放在开头才能让主会话（以及读这一行的人）不必读完正文就知道发生了什么。
      * <p>
      * <b>为什么要补上正文</b>：被截断意味着子代理还没写出结论，只回一句通知会让主会话对它做过什么
      * 一无所知——而它已经把好几轮花在翻查上了，那些过程本身就是此刻唯一可用的线索。
@@ -383,18 +391,39 @@ public class SubAgentLauncher {
      * <p>
      * <b>为什么明说只附了一段</b>：不说的话，主会话会把这段过程文本当成子代理的全部交代。
      *
-     * @param content 子代理回合的最终文本（截断时为内核提示），可为 {@code null}
-     * @param child   子会话运行态
+     * @param reason 未收敛的原因，可为 {@code null}
+     * @param child  子会话运行态
      * @return 回灌文本，保证非 {@code null}
      */
-    private static String truncatedText(String content, Session child) {
-        String hint = content == null ? "" : content.trim();
+    private static String truncatedText(String reason, Session child) {
+        String hint = reason == null ? "" : reason.trim();
         String text = lastAssistantText(child);
         if (StringUtils.isBlank(text)) {
-            // 一句正文都没写：只留内核提示，不为「空内容」另编一句说明
+            // 一句正文都没写：只留原因，不为「空内容」另编一句说明
             return hint;
         }
         return hint + "\n（以下是它最后一段已产出的正文，更早的轮次未一并回灌）\n" + text;
+    }
+
+    /**
+     * 取未收敛的原因。
+     * <p>
+     * <b>两条来源都要看</b>：墙钟到点由调度器把原因写在 {@code error} 上——那时回合是被取消的，
+     * 既没有正文、也没有循环器给的内核提示；而轮数上限与 token 预算由循环器写在 {@code text} 上
+     * （它本来就是那句「请调大哪个键」的提示）。只看其中之一，就会有一半的未收敛说不出为什么，
+     * 而「为什么停的」正是主会话决定下一步该怎么做的唯一依据。
+     *
+     * @param result run 的终态结果，不可为 {@code null}
+     * @return 原因文本，保证非空
+     */
+    private static String truncationReasonOf(AgentRunResult result) {
+        if (StringUtils.isNotBlank(result.getError())) {
+            return result.getError().trim();
+        }
+        if (StringUtils.isNotBlank(result.getText())) {
+            return result.getText().trim();
+        }
+        return UNKNOWN_TRUNCATION_REASON;
     }
 
     /**

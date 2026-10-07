@@ -125,7 +125,7 @@ class SubAgentDelegationAdapterTest {
         when(launcher.spawn(any(SubAgentCall.class), isNull())).thenReturn(runHandle);
         when(runHandle.getRunId()).thenReturn("run-1");
         when(launcher.await(runHandle)).thenReturn(
-                SubAgentOutcome.truncated("已达轮数上限", 8, SessionUsage.EMPTY),
+                SubAgentOutcome.truncated("已达轮数上限", 8, SessionUsage.EMPTY, "已达轮数上限"),
                 SubAgentOutcome.cancelled(2, SessionUsage.EMPTY));
 
         DelegationResult truncated = adapter.spawn(DelegationRequest.of("s-1", "scout", "a")).await();

@@ -134,6 +134,9 @@ public final class TaskTool implements ExtensionHandler<ToolCallRequest, ToolCal
 
     /**
      * 组装回灌文本的首行结论。
+     * <p>
+     * <b>未收敛只写状态，不写原因</b>：未收敛有三种来源（轮数上限、token 预算、墙钟），它们各自该调
+     * 哪个配置键只有正文首行那句原因说得准；在首行里挑一个写死，就会把另外两种说成错的那种。
      *
      * @param outcome 委派结果
      * @param agentId 子代理类型
@@ -144,7 +147,7 @@ public final class TaskTool implements ExtensionHandler<ToolCallRequest, ToolCal
             case COMPLETED:
                 return "[子代理 " + agentId + " 已完成 · " + outcome.getRounds() + " 轮]";
             case TRUNCATED:
-                return "[子代理 " + agentId + " 达到轮数上限 · " + outcome.getRounds() + " 轮，结论不完整]";
+                return "[子代理 " + agentId + " 未收敛 · " + outcome.getRounds() + " 轮]";
             case CANCELLED:
                 return "[子代理 " + agentId + " 已取消]";
             case FAILED:

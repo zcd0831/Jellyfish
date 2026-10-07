@@ -8,11 +8,11 @@ import zcd.jellyfish.infra.config.SubAgentSettings;
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.Semaphore;
-import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -30,10 +30,20 @@ import java.util.concurrent.atomic.AtomicInteger;
  * 「正在等孩子的父」占满而自锁死。等待窗口里让出许可由 {@code AgentRuntime.await} 配合
  * {@link RunPermit} 完成。
  * <p>
- * <b>池为什么用 cached 而不是固定大小</b>：固定大小会把「等待中的父」也算进并发度。这里用
- * {@code corePoolSize = 0} 的按需线程池，上界取 {@code maxConcurrentRuns × (maxDepth + 1)}——
- * 每一层最多这么多 run 在飞，再加父层，就是「活跃 + 等待中的父」的上界。提交被拒（池满）时 run 以
- * 失败落终态并回报原因，不静默丢弃。
+ * <b>池为什么按上界固定、而不是 {@code corePoolSize = 0} 的按需池</b>：线程数与并发许可是两件事——
+ * 「活跃的 run」最多 {@code maxConcurrentRuns} 个，但「正在等孩子的父 run」也占着线程，所以线程数
+ * 上界取 {@code maxConcurrentRuns × (maxDepth + 1)}。这个上界<b>一次建满并常驻</b>：按需扩容在有队列时
+ * 根本不会发生——JDK 只在<b>队列满</b>时才把线程数从 core 扩到 max，于是「队列里还有空位」反而会让
+ * 并发退化成一两条线程，比没有队列更慢。常驻的是守护线程，空闲时阻塞在队列上，代价是几条线程栈。
+ * <p>
+ * <b>队列为什么有界</b>：并发是硬上限（它守的是模型调用配额与机器负载），但「这一批派得比并发多」
+ * 不该等于「多出来的当场失败」——一次扇出 8 个而并发是 3 是常见情形。于是超出的 run 进队列等许可，
+ * 积压上限由 {@code maxQueuedRuns} 给定；只有「线程满 + 队列也满」才当场失败。无界队列会把「编排跑飞」
+ * 放大成内存问题，因此这个上界不允许配 0。
+ * <p>
+ * <b>墙钟为什么从「开始执行」起算</b>：{@code runTimeoutMillis} 约束的是「这个 run 跑了多久」，而排队
+ * 等许可的时间不是它跑的时间——从提交时刻起算会让「扇得多」直接变成「排在后面的被判超时」，那正是
+ * 队列要解决的那个问题。代价是排队本身不受任何超时约束，兜底是积压上限与用户中止回合时的级联取消。
  * <p>
  * <b>墙钟看门狗为什么独立于执行池</b>：到点要动用的是「取消」而不是「再跑一个任务」；把定时器放在
  * 执行池里，池一旦被在途 run 占满，超时处理本身就会被饿死，于是最需要它的时刻它反而不工作。
@@ -55,8 +65,11 @@ public final class RunScheduler {
     /** 全局并发许可。 */
     private final Semaphore permits;
 
-    /** 执行 run 的专用线程池。 */
+    /** 执行 run 的专用线程池：线程数按上界固定，积压交给有界队列。 */
     private final ThreadPoolExecutor executor;
+
+    /** 队列容量：提交被拒时要把这个值如实说出来，否则用户不知道该调哪个键。 */
+    private final int queueCapacity;
 
     /** 墙钟看门狗：到点取消在途 run。 */
     private final ScheduledExecutorService watchdog;
@@ -76,7 +89,7 @@ public final class RunScheduler {
     /**
      * 构造调度器。
      * <p>
-     * 池大小、许可数与墙钟上限在构造时按当前配置确定；配置热更新不会重建它们（改动需重启），
+     * 池大小、队列容量、许可数与墙钟上限在构造时按当前配置确定；配置热更新不会重建它们（改动需重启），
      * 这是刻意的——重建一个正在跑任务的池意味着要么丢弃在途 run，要么放弃旧池，
      * 两者都比「下次重启生效」更糟。
      *
@@ -93,11 +106,12 @@ public final class RunScheduler {
         this.events = events;
         SubAgentSettings settings = runtimeConfig.getSubAgentSettings();
         int concurrent = Math.max(1, settings.getMaxConcurrentRuns());
-        int poolMax = concurrent * (Math.max(0, settings.getMaxDepth()) + 1);
+        int poolSize = concurrent * (Math.max(0, settings.getMaxDepth()) + 1);
+        this.queueCapacity = Math.max(1, settings.getMaxQueuedRuns());
         this.permits = new Semaphore(concurrent);
-        this.executor = new ThreadPoolExecutor(0, poolMax, 60L, TimeUnit.SECONDS,
-                new SynchronousQueue<Runnable>(), threadFactory("agent-run-"), new ThreadPoolExecutor.AbortPolicy());
-        this.executor.allowCoreThreadTimeOut(true);
+        this.executor = new ThreadPoolExecutor(poolSize, poolSize, 0L, TimeUnit.MILLISECONDS,
+                new LinkedBlockingQueue<Runnable>(queueCapacity), threadFactory("agent-run-"),
+                new ThreadPoolExecutor.AbortPolicy());
         this.runTimeoutMillis = settings.getRunTimeoutMillis();
         this.watchdog = Executors.newSingleThreadScheduledExecutor(threadFactory("agent-run-watchdog-"));
     }
@@ -105,8 +119,9 @@ public final class RunScheduler {
     /**
      * 提交一个 run 供调度执行。
      * <p>
-     * 本方法不阻塞：它只负责把任务交给线程池并登记墙钟看门狗。拿不到并发许可时 run 会在执行线程上
-     * 先等许可（等待中的 run 不占许可，见类注释），池满则当场以失败落终态。
+     * 本方法不阻塞：它只负责把任务交给线程池。线程满时任务进队列等一个空闲线程，拿到线程后若并发
+     * 许可已被占满则在线程上等许可（等待中的 run 不占许可，见类注释）——只有「线程满且队列也满」才
+     * 当场以失败落终态。
      *
      * @param runId       run 标识
      * @param body        执行体
@@ -117,20 +132,29 @@ public final class RunScheduler {
      */
     void submit(String runId, AgentRunBody body, RunTree tree, int parentDepth, String rootRunId,
                 AgentRunHandle handle) {
-        ScheduledFuture<?> timeout = scheduleTimeout(runId, handle);
         try {
-            executor.execute(() -> runTask(runId, body, tree, parentDepth, rootRunId, handle, timeout));
+            executor.execute(() -> runTask(runId, body, tree, parentDepth, rootRunId, handle));
         } catch (RejectedExecutionException e) {
-            cancelTimeout(timeout);
-            LOG.warn("run 提交被拒（agent-run 线程池已满）: runId={}", runId);
-            AgentRunResult result = AgentRunResult.failed(
-                    "agent-run 线程池已满，无法派生更多子代理（可稍后重试或调小 subAgent.maxConcurrentRuns）");
-            registry.finish(runId, result.getStatus(), result.getRounds(), result.getUsage());
-            // 先广播终态再开闸：订阅者应当在等待方恢复之前就看到 FINISHED，
-            // 否则「await 返回后事件还没到」会变成一条难复现的竞态
-            publishFinished(runId);
-            handle.complete(result);
+            LOG.warn("run 提交被拒（排队已满）: runId={} queueCapacity={}", runId, queueCapacity);
+            finishNow(runId, AgentRunResult.failed("子代理排队已满（subAgent.maxQueuedRuns=" + queueCapacity
+                    + "）：在途与排队的 run 已占满等待区，可稍后重试或调大 subAgent.maxQueuedRuns"), handle);
         }
+    }
+
+    /**
+     * 落终态、广播并开闸：三条终结路径（正常跑完、排队被拒、排队中被取消）共用同一个收尾顺序。
+     * <p>
+     * <b>先广播终态再开闸</b>：订阅者应当在等待方恢复之前就看到 FINISHED，否则「await 返回后事件
+     * 还没到」会变成一条难复现的竞态。
+     *
+     * @param runId  run 标识
+     * @param result 终态结果，不可为 {@code null}
+     * @param handle run 句柄，不可为 {@code null}
+     */
+    private void finishNow(String runId, AgentRunResult result, AgentRunHandle handle) {
+        registry.finish(runId, result.getStatus(), result.getRounds(), result.getUsage());
+        publishFinished(runId);
+        handle.complete(result);
     }
 
     /**
@@ -163,7 +187,10 @@ public final class RunScheduler {
     }
 
     /**
-     * 执行线程上的任务体：取许可 → 装载上下文 → 跑执行体 → 落终态 → 还许可。
+     * 执行线程上的任务体：查取消 → 取许可 → 装载上下文 → 起墙钟 → 跑执行体 → 落终态 → 还许可。
+     * <p>
+     * <b>排到队尾也得先查一次取消</b>：run 可能在队列里等了很久，而等它的那个回合早就结束了
+     * （用户中止回合、或父 run 失败触发级联取消）。那时再跑一轮既没人要结果，又要占一份许可与 token。
      *
      * @param runId       run 标识
      * @param body        执行体
@@ -171,15 +198,21 @@ public final class RunScheduler {
      * @param parentDepth 父路径深度快照
      * @param rootRunId   树根标识
      * @param handle      run 句柄
-     * @param timeout     墙钟看门狗句柄，可为 {@code null}
      */
     private void runTask(String runId, AgentRunBody body, RunTree tree, int parentDepth, String rootRunId,
-                         AgentRunHandle handle, ScheduledFuture<?> timeout) {
+                         AgentRunHandle handle) {
+        if (handle.isCancelled()) {
+            LOG.debug("run 在排队期间被取消，跳过执行: runId={}", runId);
+            finishNow(runId, AgentRunResult.of(AgentRunStatus.CANCELLED, null, 0, null, null), handle);
+            return;
+        }
         permits.acquireUninterruptibly();
         RunPermit permit = new RunPermit(permits);
         contexts.set(new RunContext(tree, parentDepth, runId, rootRunId, permit));
         registry.markRunning(runId);
         publishStarted(runId);
+        // 墙钟从拿到许可、真正开跑的这一刻起算：排队等许可的时间不是这个 run 跑的时间
+        ScheduledFuture<?> timeout = scheduleTimeout(runId, handle);
         AgentRunResult result;
         try {
             result = body.run(handle);
@@ -200,10 +233,7 @@ public final class RunScheduler {
             terminal = terminal.asTruncated("已达到单个子代理的墙钟上限（" + runTimeoutMillis
                     + " ms）：如需继续请调大 subAgent.runTimeoutMillis。");
         }
-        registry.finish(runId, terminal.getStatus(), terminal.getRounds(), terminal.getUsage());
-        // 先广播终态再开闸，理由同 submit 的被拒路径
-        publishFinished(runId);
-        handle.complete(terminal);
+        finishNow(runId, terminal, handle);
     }
 
     /**

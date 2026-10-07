@@ -27,6 +27,7 @@ class SubAgentSettingsTest {
         assertEquals(SubAgentSettings.DEFAULT_MAX_DEPTH, settings.getMaxDepth());
         assertEquals(SubAgentSettings.DEFAULT_MAX_SPAWNS_PER_TURN, settings.getMaxSpawnsPerTurn());
         assertEquals(SubAgentSettings.DEFAULT_MAX_ROUNDS, settings.getMaxRounds());
+        assertEquals(SubAgentSettings.DEFAULT_MAX_QUEUED_RUNS, settings.getMaxQueuedRuns());
         assertTrue(settings.isDefault());
     }
 
@@ -80,9 +81,23 @@ class SubAgentSettingsTest {
     }
 
     @Test
+    void constructor_should_fall_back_when_max_queued_not_positive() {
+        // When：0 不能表示「无界」——那会把编排跑飞从「一批失败」放大成内存问题
+        SubAgentSettings zero = ObjectMapperWrapper.readValue("{\"maxQueuedRuns\":0}",
+                SubAgentSettings.class);
+        SubAgentSettings negative = ObjectMapperWrapper.readValue("{\"maxQueuedRuns\":-5}",
+                SubAgentSettings.class);
+
+        // Then
+        assertEquals(SubAgentSettings.DEFAULT_MAX_QUEUED_RUNS, zero.getMaxQueuedRuns());
+        assertEquals(SubAgentSettings.DEFAULT_MAX_QUEUED_RUNS, negative.getMaxQueuedRuns());
+    }
+
+    @Test
     void deserialization_should_bind_all_fields() {
         // Given
-        String json = "{\"enabled\":false,\"maxDepth\":1,\"maxSpawnsPerTurn\":4,\"maxRounds\":3}";
+        String json = "{\"enabled\":false,\"maxDepth\":1,\"maxSpawnsPerTurn\":4,\"maxRounds\":3,"
+                + "\"maxConcurrentRuns\":5,\"maxQueuedRuns\":16}";
 
         // When
         SubAgentSettings settings = ObjectMapperWrapper.readValue(json, SubAgentSettings.class);
@@ -92,6 +107,8 @@ class SubAgentSettingsTest {
         assertEquals(1, settings.getMaxDepth());
         assertEquals(4, settings.getMaxSpawnsPerTurn());
         assertEquals(3, settings.getMaxRounds());
+        assertEquals(5, settings.getMaxConcurrentRuns());
+        assertEquals(16, settings.getMaxQueuedRuns());
     }
 
     @Test

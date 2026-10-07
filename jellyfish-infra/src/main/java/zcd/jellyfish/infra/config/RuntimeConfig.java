@@ -488,7 +488,7 @@ public class RuntimeConfig {
      * <p>
      * 与 provider / agent / react / permission 同口径的「整对象覆盖」：项目级非空则整体替换全局级，
      * 否则回退全局级，两者都缺省时由 {@link JellyfishSettings} 的构造器落到缺省值。
-     * 不做逐字段合并：四个参数互相牵制（关掉开关时其余三项无意义），
+     * 不做逐字段合并：这些参数互相牵制（关掉开关时其余各项无意义），
      * 「一半来自全局、一半来自项目」会让「这个项目到底允许多深的委派」无法从任何单份文件看出来。
      *
      * @param global  全局级子代理段，可为 {@code null}

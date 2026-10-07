@@ -6,13 +6,14 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 /**
  * {@code jellyfish.json} 的 {@code subAgent} 段：子代理委派的运行期参数与预算（governor）。
  * <p>
- * 这是<b>用户可见</b>的配置结构（以 {@code Settings} 结尾）。七个字段分三类：
+ * 这是<b>用户可见</b>的配置结构（以 {@code Settings} 结尾）。字段分三类：
  * <ul>
  *     <li><b>能不能委派</b>：{@code enabled} 是全局开关。关掉即不注册 {@code task} 工具——它服务于
  *     {@code -server} 这类多租户场景，那里不能让任意一个客户端把整机拖进一串模型调用；</li>
- *     <li><b>能走多远</b>：{@code maxDepth} 挡「一条链多深」，{@code maxSpawnsPerTurn} 挡
+ *     <li><b>能走多远、挤不下怎么办</b>：{@code maxDepth} 挡「一条链多深」，{@code maxSpawnsPerTurn} 挡
  *     「一层扇出多少」，{@code maxConcurrentRuns} 挡「全局同时在跑多少」——三者正交，
- *     缺任何一个都能被另一种方式绕过；</li>
+ *     缺任何一个都能被另一种方式绕过；{@code maxQueuedRuns} 是并发满员后的等待区，让超出的 run
+ *     <b>排队而不是当场失败</b>（代价见该字段的说明：排队期间不受墙钟约束）；</li>
  *     <li><b>跑多久、烧多少</b>：{@code runTimeoutMillis}（单 run 墙钟）、{@code runTokenBudget}
  *     （单 run 累计 token）、{@code treeTokenBudget}（一棵 run 树累计 token）、{@code maxRounds}
  *     （单 run 轮数）。它们<b>不</b>跟随 {@code react.maxRounds}：子代理被设计来干一件窄活，
@@ -46,6 +47,24 @@ public class SubAgentSettings {
 
     /** 全局同时运行的子代理 run 数上限。 */
     public static final int DEFAULT_MAX_CONCURRENT_RUNS = 3;
+
+    /**
+     * 并发满员后允许积压的 run 数上限。
+     * <p>
+     * <b>它为什么存在</b>：并发是硬上限（它保护的是模型调用配额与机器负载），但「这一批派得比并发多」
+     * 不该等于「多出来的当场失败」——一次扇出 8 个而并发是 3 就是常见情形，失败会让编排方被迫自己
+     * 手工分批。有这一截等待区，超出的 run 排队等许可，扇出多少由 {@code maxSpawnsPerTurn} 与
+     * {@code maxDepth} 负责约束。
+     * <p>
+     * <b>为什么必须有界且不允许 0 表示无界</b>：无界队列会把「编排跑飞」从「一批失败」放大成
+     * 「内存被排队任务吃光」，而每个排队任务都捏着一份执行体与子会话句柄；有界队列满时仍然当场失败，
+     * 保留这条兜底。
+     * <p>
+     * <b>排队代价</b>：排队中的 run <b>不计入墙钟</b>（{@code runTimeoutMillis} 从真正开始执行起算），
+     * 因此「一直排不上」不会被任何超时兜住——靠的是能派多少由上面的三道上限约束，以及用户中止回合
+     * 时的级联取消。
+     */
+    public static final int DEFAULT_MAX_QUEUED_RUNS = 64;
 
     /** 单个 run 的墙钟上限（毫秒）。 */
     public static final long DEFAULT_RUN_TIMEOUT_MILLIS = 300_000L;
@@ -88,6 +107,9 @@ public class SubAgentSettings {
     /** 全局同时运行的子代理 run 数上限。 */
     private final int maxConcurrentRuns;
 
+    /** 并发满员后允许积压的 run 数上限。 */
+    private final int maxQueuedRuns;
+
     /** 单个 run 的墙钟上限（毫秒）。 */
     private final long runTimeoutMillis;
 
@@ -107,7 +129,7 @@ public class SubAgentSettings {
      * 构造缺省子代理设置。
      */
     public SubAgentSettings() {
-        this(null, null, null, null, null, null, null, null, null, null);
+        this(null, null, null, null, null, null, null, null, null, null, null);
     }
 
     /**
@@ -128,8 +150,8 @@ public class SubAgentSettings {
     public SubAgentSettings(Boolean enabled, Integer maxDepth, Integer maxSpawnsPerTurn, Integer maxRounds,
                             Integer maxConcurrentRuns, Long runTimeoutMillis, Long runTokenBudget,
                             Long treeTokenBudget) {
-        this(enabled, maxDepth, maxSpawnsPerTurn, maxRounds, maxConcurrentRuns, runTimeoutMillis, runTokenBudget,
-                treeTokenBudget, null, null);
+        this(enabled, maxDepth, maxSpawnsPerTurn, maxRounds, maxConcurrentRuns, null, runTimeoutMillis,
+                runTokenBudget, treeTokenBudget, null, null);
     }
 
     /**
@@ -140,6 +162,7 @@ public class SubAgentSettings {
      * @param maxSpawnsPerTurn  单回合子代理总数上限，非正数或 {@code null} 按缺省值处理
      * @param maxRounds         子代理回合最大轮数，非正数或 {@code null} 按缺省值处理
      * @param maxConcurrentRuns 全局同时运行的子代理 run 数上限，非正数或 {@code null} 按缺省值处理
+     * @param maxQueuedRuns     并发满员后允许积压的 run 数上限，非正数或 {@code null} 按缺省值处理
      * @param runTimeoutMillis  单 run 墙钟上限（毫秒），非正数或 {@code null} 按缺省值处理
      * @param runTokenBudget    单 run 累计 token 上限，{@code null} 按缺省值处理，{@code 0} 表示不限制
      * @param treeTokenBudget   一棵 run 树累计 token 上限，{@code null} 按缺省值处理，{@code 0} 表示不限制
@@ -154,6 +177,7 @@ public class SubAgentSettings {
                             @JsonProperty("maxSpawnsPerTurn") Integer maxSpawnsPerTurn,
                             @JsonProperty("maxRounds") Integer maxRounds,
                             @JsonProperty("maxConcurrentRuns") Integer maxConcurrentRuns,
+                            @JsonProperty("maxQueuedRuns") Integer maxQueuedRuns,
                             @JsonProperty("runTimeoutMillis") Long runTimeoutMillis,
                             @JsonProperty("runTokenBudget") Long runTokenBudget,
                             @JsonProperty("treeTokenBudget") Long treeTokenBudget,
@@ -166,6 +190,8 @@ public class SubAgentSettings {
         this.maxRounds = maxRounds != null && maxRounds > 0 ? maxRounds : DEFAULT_MAX_ROUNDS;
         this.maxConcurrentRuns = maxConcurrentRuns != null && maxConcurrentRuns > 0
                 ? maxConcurrentRuns : DEFAULT_MAX_CONCURRENT_RUNS;
+        this.maxQueuedRuns = maxQueuedRuns != null && maxQueuedRuns > 0
+                ? maxQueuedRuns : DEFAULT_MAX_QUEUED_RUNS;
         this.runTimeoutMillis = runTimeoutMillis != null && runTimeoutMillis > 0L
                 ? runTimeoutMillis : DEFAULT_RUN_TIMEOUT_MILLIS;
         this.runTokenBudget = runTokenBudget == null ? DEFAULT_RUN_TOKEN_BUDGET
@@ -221,6 +247,19 @@ public class SubAgentSettings {
      */
     public int getMaxConcurrentRuns() {
         return maxConcurrentRuns;
+    }
+
+    /**
+     * 获取并发满员后允许积压的 run 数上限。
+     * <p>
+     * <b>它不参与并发控制</b>：能同时跑多少只由 {@link #getMaxConcurrentRuns()} 决定，本值只回答
+     * 「挤不下时允许多少个在后面等」。因此调大它不会让更多 run 并行，只会把「当场失败」推迟到
+     * 更晚的积压点。
+     *
+     * @return 排队上限，保证为正
+     */
+    public int getMaxQueuedRuns() {
+        return maxQueuedRuns;
     }
 
     /**
@@ -282,6 +321,7 @@ public class SubAgentSettings {
                 && maxSpawnsPerTurn == DEFAULT_MAX_SPAWNS_PER_TURN
                 && maxRounds == DEFAULT_MAX_ROUNDS
                 && maxConcurrentRuns == DEFAULT_MAX_CONCURRENT_RUNS
+                && maxQueuedRuns == DEFAULT_MAX_QUEUED_RUNS
                 && runTimeoutMillis == DEFAULT_RUN_TIMEOUT_MILLIS
                 && runTokenBudget == DEFAULT_RUN_TOKEN_BUDGET
                 && treeTokenBudget == DEFAULT_TREE_TOKEN_BUDGET
@@ -294,6 +334,7 @@ public class SubAgentSettings {
         return "SubAgentSettings{enabled=" + enabled + ", maxDepth=" + maxDepth
                 + ", maxSpawnsPerTurn=" + maxSpawnsPerTurn + ", maxRounds=" + maxRounds
                 + ", maxConcurrentRuns=" + maxConcurrentRuns
+                + ", maxQueuedRuns=" + maxQueuedRuns
                 + ", runTimeoutMillis=" + runTimeoutMillis
                 + ", runTokenBudget=" + runTokenBudget
                 + ", treeTokenBudget=" + treeTokenBudget + '}';

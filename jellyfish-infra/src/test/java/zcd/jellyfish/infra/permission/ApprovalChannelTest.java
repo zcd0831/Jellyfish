@@ -257,6 +257,36 @@ class ApprovalChannelTest {
     }
 
     @Test
+    @DisplayName("排队满时只拒新请求：已排队的那些仍留在队列里，不会变成谁也裁决不了的幽灵")
+    void request_should_keepQueuedRequests_when_queue_is_full() throws Exception {
+        // Given：头槽位 + 填满排队区
+        channel.attach();
+        AtomicReference<PermissionDecision> ignored = new AtomicReference<PermissionDecision>();
+        List<Thread> holders = new ArrayList<Thread>();
+        holders.add(requestInBackground(pending(), TIMEOUT, ignored));
+        awaitPending();
+        for (int i = 0; i < ApprovalChannel.MAX_WAITING; i++) {
+            holders.add(requestInBackground(pending(), TIMEOUT, ignored));
+            awaitWaiting(i + 1);
+        }
+
+        // When
+        PermissionDecision overflow = channel.request(pending(), TIMEOUT);
+
+        // Then：被拒的只有这一条
+        assertEquals(ApprovalChannel.QUEUE_FULL, overflow.getReason());
+        // Then：已排队的 8 条仍在队列里。原先这里会把整个排队区摘掉，它们既排不到头
+        // （resolve 只认头槽位）又留在 pendingById 里 —— 用户点了批准也无效，只能等满超时
+        assertEquals(ApprovalChannel.MAX_WAITING + 1, channel.pendingApprovals("session-1").size());
+
+        // 收尾：关闭通道把所有等待线程放行，避免测试进程挂住
+        channel.detach();
+        for (Thread holder : holders) {
+            holder.join(TimeUnit.SECONDS.toMillis(5));
+        }
+    }
+
+    @Test
     @DisplayName("Pending 防御性拷贝参数，外部改动不影响已挂起的请求")
     void pending_should_copy_arguments_defensively() {
         // Given

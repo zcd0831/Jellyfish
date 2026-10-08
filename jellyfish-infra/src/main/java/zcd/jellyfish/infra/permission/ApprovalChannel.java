@@ -311,12 +311,15 @@ public class ApprovalChannel {
             if (waiter == null) {
                 return false;
             }
+            // decision 在锁内赋值：输给竞态的那一方会在自己 finish 失败前获取过同一把锁，
+            // 因此它随后读到的一定是已发布的值（锁提供 happens-before），不会是 null。
+            // 原先写在锁外，超时与裁决同时发生时会读到 null，而调用方按「保证非 null」处理它
+            waiter.decision = decision;
             Pending pending = pendingById.remove(id);
             if (pending != null) {
                 advance(pending);
             }
         }
-        waiter.decision = decision;
         waiter.latch.countDown();
         return true;
     }
@@ -375,13 +378,15 @@ public class ApprovalChannel {
             Deque<Pending> queue = waiting.get(key);
             if (queue == null) {
                 queue = new ArrayDeque<Pending>();
-                waiting.put(key, queue);
             }
             if (queue.size() >= MAX_WAITING) {
-                waiting.remove(key);
+                // 只拒绝这一条新请求：已排队的那些仍在队列里、仍会被逐个提为头槽位。
+                // 原先这里连整个队列一起摘掉，于是它们既排不到头、又留在 pendingById 里，
+                // 用户点了批准也无效（resolve 只认头槽位），只能各自等满超时被拒
                 return false;
             }
             queue.addLast(request);
+            waiting.put(key, queue);
             pendingById.put(request.getId(), request);
             waiters.put(request.getId(), waiter);
             return true;

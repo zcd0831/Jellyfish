@@ -186,6 +186,13 @@ public final class PluginContextImpl implements PluginContext {
     }
 
     @Override
+    public String ownerSessionId(String sessionId) {
+        // 不做异常包装：那条规则（沿父链只穿临时会话）在 SessionManager 里，而它自己已经
+        // 定好了「会话查不到 / 父链走不动」的口径——在这里再包一层只会多一处会漂移的判断
+        return sessions.ownerSessionId(sessionId);
+    }
+
+    @Override
     public Map<String, Object> configuration() {
         return declaration.getConfiguration();
     }

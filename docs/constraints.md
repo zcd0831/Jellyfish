@@ -324,6 +324,11 @@ handler 抛错**按放行处理**。它只管「结束运行态、保留快照�
   `parentSessionId` 降级为追溯信息，**不得再用它做判定**。
 - `EPHEMERAL`：在会话表里（可追消息、发事件），但**不进 `all()`、不落盘**、不参与恢复；收尾走 `close()`。
 - `FORKED`：**与普通会话同等对待**（进 `all()`、落盘、可 `/resume` 与 `/delete`）。
+- **「这份东西归哪个会话」用 `SessionManager.ownerSessionId`（插件侧 `PluginContext.ownerSessionId`）**：
+  沿父链只穿 `EPHEMERAL`，遇到用户会话就停。三类会话的答案分别是「自己」/「派它的用户会话」
+  （可穿多层，`maxDepth ≥ 2` 时**不能**只看直接父）/「自己」（分支会话也是用户会话）。
+  **不要在调用侧重写这条规则**：按 `parentSessionId != null` 判归属会在 `FORKED` 上得到错误结论，
+  而按「直接父」判归属会在嵌套委派上落到中间的临时会话上。
 - fork 四条硬规则：① 切点必须落在工具调用组边界上且**向「后」推，不得往前退**；② 不复制 `usage`；
   ③ 压缩摘要只在 `indexOf(boundaryMessageId) <= 切点` 时带上，判定在配对对齐之后；④ 扩展条目照带。
   `SessionBeforeForkRequest` 的否决**一定被采纳**，请求里给的是**对齐之后的切点**。

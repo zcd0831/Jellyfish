@@ -119,6 +119,23 @@ class PluginContextImplTest {
     }
 
     @Test
+    void ownerSessionId_should_delegate_toSessionDomain() {
+        // Given：归属规则（沿父链只穿临时会话）住在会话域里，不在这里重写一遍
+        when(sessions.ownerSessionId("grand-child")).thenReturn("root");
+
+        // Then
+        assertEquals("root", context.ownerSessionId("grand-child"));
+    }
+
+    @Test
+    void ownerSessionId_should_tolerateBlankInput() {
+        // When / Then：不在插件上下文这一层加第二套判断，直接问会话域（它自己定好了空标识的口径）
+        context.ownerSessionId(null);
+
+        verify(sessions).ownerSessionId(null);
+    }
+
+    @Test
     void delegations_should_expose_the_injected_port() {
         // Given：装配方注入了一个具体端口
         SubAgentPort port = new SubAgentPort() {

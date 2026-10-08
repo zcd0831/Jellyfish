@@ -8,6 +8,7 @@ import zcd.jellyfish.server.dto.RunStartedEvent;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.function.Consumer;
+import java.util.function.UnaryOperator;
 
 /**
  * 把 agent run 的生命周期事件翻译成 SSE 事件并投进队列。
@@ -17,8 +18,14 @@ import java.util.function.Consumer;
  * {@link zcd.jellyfish.core.runtime.RunEventBus}。三者都只往队列里投，写出仍只有
  * {@link zcd.jellyfish.server.handler.ChatHandler} 的写循环一个写者——多一个来源不改变这条纪律。
  * <p>
- * <b>为什么按父会话过滤</b>：总线是进程级的，而每条 SSE 流只该看到自己这条会话里的子代理。
+ * <b>为什么按「归属会话」过滤</b>：总线是进程级的，而每条 SSE 流只该看到自己这条会话里的子代理。
  * 不过滤的话，A 会话的客户端会看到 B 会话的子代理在跑。
+ * <p>
+ * <b>过滤用的是归属而不是直接父</b>：直接父只是「谁派了它」，而委派可以嵌套——{@code maxDepth ≥ 2}
+ * 时孙代理的直接父是另一个子代理的临时会话，按直接父过滤会把它们<b>全部丢掉</b>，表现是
+ * 「用户看到什么都没发生，而实际上有一批活在跑」。因此这里问内核要「这个 run 归哪个用户会话」
+ * （{@link zcd.jellyfish.infra.session.SessionManager#ownerSessionId(String)}），与插件按会话
+ * 归属数据时用的是同一条规则。
  * <p>
  * <b>为什么只映射 STARTED / FINISHED</b>：{@code STEP}（每轮推进）与输出流是另一档
  * （见 {@code design/subagent-runtime-p1.md} D-P1-5），前者要内核 {@code loop} 的进度钩子，
@@ -43,16 +50,21 @@ public final class SseRunListener implements Consumer<AgentRunEvent> {
     /** 待写出的 SSE 事件队列。 */
     private final BlockingQueue<SseEvent> queue = new LinkedBlockingQueue<SseEvent>();
 
-    /** 本流对应的会话标识：只有以此会话为父的 run 才发往本流。 */
+    /** 本流对应的会话标识：只有归属本会话的 run 才发往本流。 */
     private final String sessionId;
+
+    /** 归属解析：run 的直接父会话 → 它归属的用户会话。 */
+    private final UnaryOperator<String> ownerOf;
 
     /**
      * 构造监听器。
      *
      * @param sessionId 会话标识，不可为空白
+     * @param ownerOf   归属解析：run 的直接父会话 → 它归属的用户会话，不可为 {@code null}
      */
-    public SseRunListener(String sessionId) {
+    public SseRunListener(String sessionId, UnaryOperator<String> ownerOf) {
         this.sessionId = sessionId;
+        this.ownerOf = ownerOf;
     }
 
     /**
@@ -67,7 +79,7 @@ public final class SseRunListener implements Consumer<AgentRunEvent> {
     @Override
     public void accept(AgentRunEvent event) {
         AgentRunSnapshot run = event.getRun();
-        if (!sessionId.equals(run.getParentSessionId())) {
+        if (!isOurs(run)) {
             return;
         }
         switch (event.getKind()) {
@@ -86,5 +98,19 @@ public final class SseRunListener implements Consumer<AgentRunEvent> {
                 // STEP / 输出流：待内核 loop 进度钩子与可丢通道，见类注释
                 break;
         }
+    }
+
+    /**
+     * 判断一个 run 是不是本流的。
+     * <p>
+     * 空父会话按「不是本流的」处理：{@code RunRegistry} 已经不允许登记没有父会话的 run，
+     * 因此这条判断只是不让 {@code null} 变成 NPE——发出去则会让别的会话看到不属于自己的东西。
+     *
+     * @param run run 快照
+     * @return 归属本会话返回 {@code true}
+     */
+    private boolean isOurs(AgentRunSnapshot run) {
+        String parent = run.getParentSessionId();
+        return parent != null && sessionId.equals(ownerOf.apply(parent));
     }
 }

@@ -7,6 +7,7 @@ import zcd.jellyfish.api.ask.AskPort;
 import zcd.jellyfish.api.action.PluginAction;
 import zcd.jellyfish.api.event.JellyfishEvent;
 import zcd.jellyfish.api.extension.SessionExtensionEntry;
+import zcd.jellyfish.api.extension.SessionKind;
 import zcd.jellyfish.api.event.RegisterOptions;
 import zcd.jellyfish.api.event.Subscription;
 import zcd.jellyfish.api.extension.ExtensionHandler;
@@ -377,6 +378,34 @@ public interface PluginContext {
      */
     default String parentSessionId(String sessionId) {
         return null;
+    }
+
+    /**
+     * 取「这份数据 / 这次调用该归属」的用户会话标识。
+     * <p>
+     * <b>它与 {@link #parentSessionId(String)} 是两个问题</b>：那个回答「派生自哪个会话」（追溯），
+     * 这个回答「归谁所有」（判定）。会话种类决定了两者何时不同：
+     * <ul>
+     *     <li>{@code EPHEMERAL}（子代理的临时会话）<b>不是用户会话</b>，它上面的东西都该归到派它的
+     *     那个用户会话——而且委派可以嵌套（{@code maxDepth ≥ 2}），因此要<b>沿链穿过多层临时会话</b>，
+     *     不能只看直接父；</li>
+     *     <li>{@code FORKED}（用户自己分出来的分支会话）<b>是用户会话</b>，它的父标识只是「从哪分出来的」
+     *     ——把它归到源会话上会让两个会话的数据串在一起。</li>
+     * </ul>
+     * <p>
+     * <b>为什么这条规则必须由内核给</b>：判定依据是会话种类，而种类只有内核知道。插件若自己拿
+     * {@code parentSessionId != null} 去猜，会在分支会话上得到「这是子代理会话」的错误结论——
+     * 这条歧义正是 {@link SessionKind} 存在的理由。多个消费者（插件按会话归属的数据、外壳按会话
+     * 过滤的 run 事件）也因此不必各自实现一遍。
+     * <p>
+     * <b>默认实现返回入参本身</b>（= 「它自己就是归属会话」）：为不实现本方法的容器留的兼容口，
+     * 与改造前的行为一致；内核的实现会如实向上归。
+     *
+     * @param sessionId 目标会话标识，可为 {@code null}
+     * @return 归属会话标识；标识为空时返回 {@code null}
+     */
+    default String ownerSessionId(String sessionId) {
+        return sessionId == null || sessionId.trim().isEmpty() ? null : sessionId;
     }
 
     /**

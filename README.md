@@ -442,6 +442,11 @@ java -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=5005 \
 递归有两道上限：`subAgent.maxDepth`（一条链多深）与 `subAgent.maxSpawnsPerTurn`（一个顶层回合里累计能派多少个，
 **不是「一层扇出多少」**——派生一个少一个，与并发无关）。
 
+**子代理的会话是临时的，而「归谁所有」由内核统一回答**：插件按会话归属数据、`-server` 按会话过滤子代理的
+`run_started` / `run_finished` 事件，用的都是同一条规则——沿父链只穿临时会话，遇到用户会话就停
+（`SessionKind`；插件侧入口是 `PluginContext.ownerSessionId`）。因此嵌套委派（`maxDepth ≥ 2`）时
+孙代理的活照样算在**你所在的会话**上，而分支（fork）会话是**你自己的会话**、不会与源会话串数据。
+
 ## 插件
 
 Jellyfish 通过 PF4J 插件扩展能力。插件是**独立打包的 PF4J jar**，由内核扫描加载，与内核之间**没有编译期依赖**。

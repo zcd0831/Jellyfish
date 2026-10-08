@@ -85,8 +85,76 @@ class SessionManagerTest {
     }
 
     @Test
-    void create_should_bind_default_agent_when_agent_id_blank() {
+    void ownerSessionId_should_returnSelf_when_normal() {
         // Given
+        SessionManager manager = manager();
+        Session session = manager.create(null, null, null);
+
+        // When / Then
+        assertEquals(session.getSessionId(), manager.ownerSessionId(session.getSessionId()));
+    }
+
+    @Test
+    void ownerSessionId_should_returnParent_when_ephemeral() {
+        // Given
+        SessionManager manager = manager();
+        Session root = manager.create(null, null, null);
+        Session child = manager.createEphemeral(root.getSessionId(), CODER, null, null);
+
+        // When / Then
+        assertEquals(root.getSessionId(), manager.ownerSessionId(child.getSessionId()));
+    }
+
+    @Test
+    void ownerSessionId_should_walkThroughNestedEphemeral() {
+        // Given：根 → 子代理 → 孙代理（maxDepth ≥ 2 时才会出现）
+        SessionManager manager = manager();
+        Session root = manager.create(null, null, null);
+        Session child = manager.createEphemeral(root.getSessionId(), CODER, null, null);
+        Session grandChild = manager.createEphemeral(child.getSessionId(), CODER, null, null);
+
+        // When / Then：只看直接父会落在中间那个临时会话上，那正是待办分裂的地方
+        assertEquals(root.getSessionId(), manager.ownerSessionId(grandChild.getSessionId()));
+    }
+
+    @Test
+    void ownerSessionId_should_returnSelf_when_forked() {
+        // Given
+        SessionManager manager = manager();
+        Session source = conversation(manager);
+        Session forked = manager.fork(source.getSessionId(),
+                source.getMessages().get(0).getMessageId(), null);
+
+        // When / Then：按父标识判归属会把分支会话的数据写进源会话，两个会话就此串在一起
+        assertNotNull(forked.getParentSessionId(), "前置条件：分支会话确实带着父标识");
+        assertEquals(forked.getSessionId(), manager.ownerSessionId(forked.getSessionId()));
+    }
+
+    @Test
+    void ownerSessionId_should_stopAtBrokenChain() {
+        // Given：中间那层临时会话被删掉（用户中途删了会话之类的边角情形）
+        SessionManager manager = manager();
+        Session root = manager.create(null, null, null);
+        Session child = manager.createEphemeral(root.getSessionId(), CODER, null, null);
+        Session grandChild = manager.createEphemeral(child.getSessionId(), CODER, null, null);
+        manager.delete(child.getSessionId());
+
+        // When / Then：父不在表里 → 只能说它归父所有，而不是抛错或声称它归自己
+        assertEquals(child.getSessionId(), manager.ownerSessionId(grandChild.getSessionId()));
+    }
+
+    @Test
+    void ownerSessionId_should_tolerateMissingSession() {
+        // Given
+        SessionManager manager = manager();
+
+        // When / Then
+        assertNull(manager.ownerSessionId(null));
+        assertEquals("ghost", manager.ownerSessionId("ghost"));
+    }
+
+    @Test
+    void create_should_bind_default_agent_when_agent_id_blank() {        // Given
         when(agentManager.resolveDefault()).thenReturn(definition(CODER));
 
         // When

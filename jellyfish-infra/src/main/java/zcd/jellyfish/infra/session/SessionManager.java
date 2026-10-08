@@ -108,6 +108,14 @@ public class SessionManager {
     /** 扩展条目 key 长度上限（字符）。 */
     public static final int EXTENSION_KEY_MAX_CHARS = 256;
 
+    /**
+     * 归属查询向上回溯的层数上限。
+     * <p>
+     * 正常深度由 {@code subAgent.maxDepth} 约束在个位数，这个上限只为挡住「父链成环」——不可能，
+     * 但比在一条查询路径上写 {@code while (true)} 便宜。
+     */
+    private static final int MAX_OWNER_DEPTH = 16;
+
     /** agent 门面，仅用于会话创建时解析默认 agent。 */
     private final AgentManager agentManager;
 
@@ -243,6 +251,56 @@ public class SessionManager {
         sessions.put(session.getSessionId(), session);
         publish(new SessionCreatedEvent(boundAgentId, session.getSessionId(), parentSessionId));
         return session;
+    }
+
+    /**
+     * 取「归属于哪个用户会话」。
+     * <p>
+     * <b>与 {@link Session#getParentSessionId()} 是两个问题</b>：那是「从哪派生出来的」，
+     * 这是「归谁所有」。规则只有一条：<b>沿父链向上走，只穿过 {@link SessionKind#EPHEMERAL}
+     * （子代理的临时会话），遇到用户会话就停</b>。
+     * <ul>
+     *     <li>普通会话（{@link SessionKind#NORMAL}）归自己；</li>
+     *     <li>子代理会话归派它的那个用户会话——委派可以嵌套，因此要穿过多层，不能只看直接父
+     *     （{@code maxDepth ≥ 2} 时直接父是另一个临时会话）；</li>
+     *     <li>分支会话（{@link SessionKind#FORKED}）<b>归自己</b>：它也是用户会话，把它的数据归到源会话
+     *     会让两个会话串在一起——而它同样带着父标识，这正是「按父标识判归属」错得最隐蔽的一处。</li>
+     * </ul>
+     * <p>
+     * <b>走不动时就停在能走到的那一层</b>：父标识为空（不该发生，临时会话必须有父）或父会话已不在表里
+     * （用户中途删掉了根会话）都按「到此为止」处理，返回最后一层可解析到的标识。这样做的取舍是
+     * 「宁可退化到改造前的行为，也不新增一条会抛错的查询路径」——归属查询出现在工具调用与事件过滤上，
+     * 那些地方抛错只会把「算不出来」放大成「整件事做不了」。
+     *
+     * @param sessionId 目标会话标识，可为 {@code null}
+     * @return 归属会话标识；标识为空或会话不存在时返回入参本身
+     */
+    public String ownerSessionId(String sessionId) {
+        if (StringUtils.isBlank(sessionId)) {
+            return sessionId;
+        }
+        Session current = sessions.get(sessionId);
+        if (current == null) {
+            return sessionId;
+        }
+        // 层数上限只为挡住「父链成环」这种不可能却便宜的自保：正常深度由 maxDepth 约束在个位数
+        for (int depth = 0; depth < MAX_OWNER_DEPTH; depth++) {
+            if (current.getKind() != SessionKind.EPHEMERAL) {
+                return current.getSessionId();
+            }
+            String parentId = current.getParentSessionId();
+            if (StringUtils.isBlank(parentId)) {
+                return current.getSessionId();
+            }
+            Session parent = sessions.get(parentId);
+            if (parent == null) {
+                return parentId;
+            }
+            current = parent;
+        }
+        LOG.warn("会话父链超过归属回溯上限: sessionId={} depth={}", sessionId,
+                Integer.valueOf(MAX_OWNER_DEPTH));
+        return current.getSessionId();
     }
 
     /**

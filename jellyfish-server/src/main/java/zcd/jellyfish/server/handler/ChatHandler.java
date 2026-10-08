@@ -162,8 +162,10 @@ public final class ChatHandler {
         SseContributionListener contributions = new SseContributionListener(sessionId);
         Subscription contributionSubscription = streams.subscribeShell(contributions);
         // run 事件来自运行时总线，不是 lane：一个回合可以派生多个子代理，
-        // 客户端该看到它们「在跑」，而不是只在工具结果里看到终点
-        SseRunListener runs = new SseRunListener(sessionId);
+        // 客户端该看到它们「在跑」，而不是只在工具结果里看到终点。
+        // 过滤用「归属会话」而不是「直接父」：委派可以嵌套，孙代理的直接父是另一个子代理的临时会话，
+        // 按直接父过滤会让它们一条都不显示
+        SseRunListener runs = new SseRunListener(sessionId, sessions::ownerSessionId);
         Subscription runSubscription = runEvents.subscribe(runs);
         Submission submission;
         try {

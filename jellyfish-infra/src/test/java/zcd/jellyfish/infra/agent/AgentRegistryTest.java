@@ -28,6 +28,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
@@ -212,8 +213,71 @@ class AgentRegistryTest {
         assertTrue(registry.all().isEmpty());
         assertTrue(registry.policyOf("ghost").isEmpty());
         ArgumentCaptor<ConfigWarningEvent> captor = ArgumentCaptor.forClass(ConfigWarningEvent.class);
+        // 两条：一条说这个条目被跳过，一条说 policyOf 撞上了没声明的标识（见 policyOf_should_warn_once_*）
+        verify(events, times(2)).publish(captor.capture());
+        assertEquals("ghost", captor.getAllValues().get(0).getSource());
+        assertTrue(captor.getAllValues().get(0).getMessage().contains("null"));
+    }
+
+    @Test
+    void policyOf_should_warn_once_when_agent_not_declared() {
+        // Given
+        AgentRegistry registry = new AgentRegistry(events);
+        registry.refresh(settings(definition(CODER, null)), null);
+
+        // When：同一个未知标识被问两次——它跑在工具调用的同步路径上，每次调用都会问一遍
+        registry.policyOf("ghost");
+        registry.policyOf("ghost");
+
+        // Then：只报一条，否则事件流会被刷成噪音
+        ArgumentCaptor<ConfigWarningEvent> captor = ArgumentCaptor.forClass(ConfigWarningEvent.class);
         verify(events).publish(captor.capture());
         assertEquals("ghost", captor.getValue().getSource());
+        assertTrue(captor.getValue().getMessage().contains("不受限"));
+    }
+
+    @Test
+    void policyOf_should_not_warn_when_agent_id_null() {
+        // Given：null 是「没绑 agent」，不是「绑了一个不存在的 agent」
+        AgentRegistry registry = new AgentRegistry(events);
+        registry.refresh(settings(definition(CODER, null)), null);
+
+        // When
+        assertTrue(registry.policyOf(null).isEmpty());
+
+        // Then
+        verifyNoInteractions(events);
+    }
+
+    @Test
+    void refresh_should_reset_unknown_id_warning() {
+        // Given：先撞上一次未声明标识
+        AgentRegistry registry = new AgentRegistry(events);
+        registry.refresh(settings(definition(CODER, null)), null);
+        registry.policyOf("ghost");
+        verify(events).publish(any(ConfigWarningEvent.class));
+
+        // When：配置改过之后再问同一个标识
+        registry.refresh(settings(definition(CODER, null)), null);
+        registry.policyOf("ghost");
+
+        // Then：要再报一次——「上一轮报过」不能变成新一轮的免报理由
+        verify(events, times(2)).publish(any(ConfigWarningEvent.class));
+    }
+
+    @Test
+    void policyOf_should_stop_warning_per_id_when_tooMany_unknown_ids() {
+        // Given：未声明标识可以来自会话参数，去重表不能是一个可被外部推动增长的集合
+        AgentRegistry registry = new AgentRegistry(events);
+        registry.refresh(settings(definition(CODER, null)), null);
+
+        // When
+        for (int i = 0; i < 200; i++) {
+            registry.policyOf("ghost-" + i);
+        }
+
+        // Then：64 条逐条告警 + 1 条「其余不再逐条告警」
+        verify(events, times(65)).publish(any(ConfigWarningEvent.class));
     }
 
     @Test

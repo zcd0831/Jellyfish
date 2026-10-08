@@ -60,6 +60,14 @@
 - 新增 `release` profile（`-P release`）承载 source / javadoc / GPG 签名 / Central 发布四个插件，
   日常构建不加载它们。
 
+### Fixed
+
+- **「取不到 agent 策略」不再静默放行**：会话绑了一个从未声明的 `agentId` 时，`policyOf` 仍按不受限
+  处理（fail-open 口径不变），但会发一条 `ConfigWarningEvent` 说明这件事——此前这种会话享受着「无限制」
+  而外表上看不出任何异常，「agent 名写错了」与「权限本来就这么宽」完全长得一样。同一个标识只报一次
+  （它跑在每次工具调用的同步路径上），且逐条告警的标识数有上限（`agentId` 可来自会话参数），
+  配置刷新后重新计数。
+
 ## [0.1.0] - 2026-10-07
 
 ### Added

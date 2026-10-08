@@ -17,6 +17,8 @@ import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * agent 定义与权限策略的只读索引。
@@ -35,14 +37,28 @@ import java.util.Set;
  * <p>
  * <b>本类自己发配置告警</b>：索引的职责就是决定「哪些条目能成为索引项」，非法条目（空白 key）在这里
  * 被跳过并告警，与内核其它「配置可疑只告警、不中断启动」的处理一致。
+ * <p>
+ * <b>「查不到策略」也要告警一次</b>：{@link #policyOf(String)} 对未声明的 agentId 仍按不受限处理
+ * （fail-open 口径不变），但这种会话享受的是「无限制」而外表上看不出任何异常，因此第一次遇到
+ * 就发一条 {@link ConfigWarningEvent}；同一个标识只报一次，避免刷屏（去重表随刷新复位）。
  *
  * @author zcd
  */
 @Singleton
 public final class AgentRegistry {
 
+    /** 逐条告警的未声明标识条数上限：标识可来自会话参数，不给上限就是一个可被外部推动增长的集合。 */
+    private static final int MAX_UNKNOWN_ID_WARNINGS = 64;
+
     /** 事件发布入口，用于广播配置告警。 */
     private final EventPublisher events;
+
+    /** 已就「未声明」逐条告警过的 agentId，随每次刷新清空。 */
+    private final Set<String> warnedUnknownIds =
+            Collections.newSetFromMap(new ConcurrentHashMap<String, Boolean>());
+
+    /** 是否已经说过一条「未声明的 agentId 过多」，随每次刷新复位。 */
+    private final AtomicBoolean overflowWarned = new AtomicBoolean();
 
     /** agentId → 定义，顺序与配置一致。 */
     private volatile Map<String, AgentDefinition> definitionsById = Collections.emptyMap();
@@ -79,6 +95,9 @@ public final class AgentRegistry {
         // 先建完两张表再一次性发布：读取方要么看到新定义与新策略，要么看到旧定义与旧策略
         this.definitionsById = Collections.unmodifiableMap(definitions);
         this.policiesById = Collections.unmodifiableMap(policies);
+        // 告警去重随配置一起复位：刚改过配置，哪些标识还没声明需要重新判定
+        warnedUnknownIds.clear();
+        overflowWarned.set(false);
     }
 
     /**
@@ -130,6 +149,58 @@ public final class AgentRegistry {
     }
 
     /**
+     * 按 agentId 取权限策略。
+     * <p>
+     * <b>未命中仍然是 fail-open</b>：返回 {@link PermissionPolicy#unrestricted()}，与 permission 方案的
+     * 口径一致（见 {@code AgentManager} 的类注释）。但<b>不再静默</b>——一个非 {@code null} 的
+     * agentId 查不到策略，说明有会话绑了一个从未声明的身份，而它正享受着「不受限」，
+     * 这种情况必须让人看见，否则「配置写错了 agent 名」与「权限本来就这么宽」在外表上毫无区别。
+     * <p>
+     * {@code null} 不算：那是「没绑 agent」，不是「绑了一个不存在的 agent」。
+     *
+     * @param agentId agent 标识，可为 {@code null}
+     * @return 策略；未命中时返回 {@link PermissionPolicy#unrestricted()}，恒非 {@code null}
+     */
+    public PermissionPolicy policyOf(String agentId) {
+        if (agentId == null) {
+            return PermissionPolicy.unrestricted();
+        }
+        PermissionPolicy policy = policiesById.get(agentId);
+        if (policy != null) {
+            return policy;
+        }
+        warnUnknownOnce(agentId);
+        return PermissionPolicy.unrestricted();
+    }
+
+    /**
+     * 就「配置里没有这个 agentId」告警一次。
+     * <p>
+     * <b>为什么每个标识只报一次</b>：本方法在工具调用的同步路径上被调用（经
+     * {@code PermissionManager}），同一个会话里的每一次工具调用都会问到同一个标识；
+     * 逐次告警会把事件流冲成噪音，而问题本身一条就够。
+     * <p>
+     * <b>为什么要设上限</b>：agentId 可以来自会话参数（外壳的请求体），因此「见过的未声明标识」
+     * 是个外部可推动增长的集合。到上限之后不再逐条记，只留一条「其余不再逐条告警」。
+     * <p>
+     * <b>刷新之后重新计</b>：配置改过了就该再报一次——用户刚补上的 agent 不该因为
+     * 「上一轮已经报过」而静默通过，反过来刚被删掉的也该重新可见。
+     *
+     * @param agentId 未声明的 agentId
+     */
+    private void warnUnknownOnce(String agentId) {
+        if (warnedUnknownIds.size() >= MAX_UNKNOWN_ID_WARNINGS) {
+            if (overflowWarned.compareAndSet(false, true)) {
+                warn(null, "未声明的 agentId 过多，其余不再逐条告警");
+            }
+            return;
+        }
+        if (warnedUnknownIds.add(agentId)) {
+            warn(agentId, "未声明的 agentId，权限按不受限处理：" + agentId);
+        }
+    }
+
+    /**
      * 按 agentId 查找定义。
      *
      * @param agentId agent 标识，可为 {@code null}
@@ -137,17 +208,6 @@ public final class AgentRegistry {
      */
     public AgentDefinition find(String agentId) {
         return agentId == null ? null : definitionsById.get(agentId);
-    }
-
-    /**
-     * 按 agentId 取权限策略。
-     *
-     * @param agentId agent 标识，可为 {@code null}
-     * @return 策略；未命中时返回 {@link PermissionPolicy#unrestricted()}，恒非 {@code null}
-     */
-    public PermissionPolicy policyOf(String agentId) {
-        PermissionPolicy policy = agentId == null ? null : policiesById.get(agentId);
-        return policy == null ? PermissionPolicy.unrestricted() : policy;
     }
 
     /**

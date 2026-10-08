@@ -12,6 +12,15 @@ import zcd.jellyfish.api.JellyfishException;
  */
 public class ExtensionException extends JellyfishException {
 
+    /**
+     * 序列化版本号。
+     * <p>
+     * 与 {@link JellyfishException} 同一条理由：本内核不跨进程序列化异常，显式声明是为了满足可序列化
+     * 类的规范，并让「版本不同」在将来真出现时表现为一句可读的提示。它必须与父类各自声明——
+     * 序列化机制只看类<b>自身</b>声明的那个字段，不会继承。
+     */
+    private static final long serialVersionUID = 1L;
+
     /** 扩展点错误码。 */
     public enum Code {
 

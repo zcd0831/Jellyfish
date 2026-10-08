@@ -115,9 +115,12 @@ public final class SessionBootstrap {
         try {
             return sessions.switchTo(sessionId);
         } catch (JellyfishException e) {
-            // 说明「为什么不存在」：会话是纯内存态，跨进程没有痕迹，这是最容易误解的一点
-            throw new JellyfishException(
-                    "会话不存在：" + sessionId + "（会话不持久化，单次模式每次进程都是新会话）", e);
+            // 说明「为什么不存在」：能切的是**内存里的运行态会话**，而进程启动时它们来自持久化插件的
+            // 恢复（AgentHarness.bootstrap 的最后一步）。没装那个插件，本次进程里就没有任何历史会话可切——
+            // 这一点最容易误解成「会话丢了」，所以要写清楚是「本次进程里没有」而不是「不持久化」
+            throw new JellyfishException("会话不存在：" + sessionId
+                    + "（本次进程里没有这个会话；历史会话由会话持久化插件在启动时恢复，"
+                    + "未装它则每次进程都是全新的）", e);
         }
     }
 

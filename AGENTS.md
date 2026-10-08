@@ -55,7 +55,7 @@ jellyfish-infra/   registry/ extension/ event/ session/ agent/ command/ model/ l
                    permission/ ui/ shell/ metrics/ config/ tooloutput/ support/
 jellyfish-core/    prompt/ compact/ tool/ conversation/ input/ subagent/ runtime/ command/
                    + AgentHarness / ReActLooper / RunContext 等枢纽类
-jellyfish-di/      JellyfishRuntime / JellyfishAssembler / 9 个 Dagger Module
+jellyfish-di/      JellyfishRuntime / JellyfishAssembler / 10 个 Dagger Module
 jellyfish-cli/     JellyfishApplication（main）、console/、mode/
 jellyfish-tui/     TuiApp（唯一入口）、ChatShell / TranscriptProjector / text/
 jellyfish-server/  路由、SSE、审批桥

@@ -89,7 +89,8 @@ class SessionBootstrapTest {
         JellyfishException error = assertThrows(JellyfishException.class, () -> bootstrap.ensureCurrentSession(
                 StartupOptions.builder(StartupOptions.Mode.CLI).sessionId("missing").build()));
 
-        assertEquals("会话不存在：missing（会话不持久化，单次模式每次进程都是新会话）", error.getMessage());
+        assertEquals("会话不存在：missing（本次进程里没有这个会话；历史会话由会话持久化插件在启动时恢复，"
+                + "未装它则每次进程都是全新的）", error.getMessage());
     }
 
     @Test

@@ -2,6 +2,7 @@ package zcd.jellyfish.infra.llm;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import okhttp3.Call;
+import okhttp3.HttpUrl;
 import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -139,7 +140,8 @@ public abstract class AbstractHttpLlmClient implements LlmClient {
                 // 状态码是「该怎么应对」的第一个判据（400 该降级、429/5xx 该重试），
                 // 因此给它一个可下钻的类型，而不是只留在消息文本里
                 throw new LlmHttpException(action + " failed for provider: " + provider.getName()
-                        + " (HTTP " + response.code() + "): " + truncate(body), response.code());
+                        + " (HTTP " + response.code() + ")" + redirectHint(response) + ": "
+                        + truncate(body), response.code());
             }
             if (body.isEmpty()) {
                 throw new JellyfishException(action + " returned an empty body for provider: " + provider.getName());
@@ -150,6 +152,48 @@ public abstract class AbstractHttpLlmClient implements LlmClient {
         } catch (IOException e) {
             throw new JellyfishException(action + " failed for provider: " + provider.getName(), e);
         }
+    }
+
+    /**
+     * 对 3xx 响应补一句「重定向被禁止」的说明，其余状态码返回空串。
+     * <p>
+     * <b>为什么要专门解释这一类</b>：客户端刻意不跟随重定向（防密钥外流，见
+     * {@code LlmClients.newHttpClient()}），于是「上游要跳转」在这里表现为一条普通的 HTTP 错误。
+     * 不说清楚的话，用户看到的是「HTTP 301」而不是「你把 baseUrl 配上最终地址就好了」。
+     * <p>
+     * <b>只说主机与路径，不带 query 与 fragment</b>：跳转地址本身可能挂着 OAuth 之类的一次性凭据，
+     * 而这条消息会进日志、进异常、进界面——把整条 URL 贴出来等于换了个地方泄露。
+     *
+     * @param response HTTP 响应
+     * @return 提示文本；非 3xx 时为空串
+     */
+    private static String redirectHint(Response response) {
+        int code = response.code();
+        if (code < 300 || code >= 400) {
+            return "";
+        }
+        return "（重定向被禁止，避免把密钥发给别的站点；若上游确实要改地址，请把 baseUrl 配成 "
+                + safeLocation(response.header("Location")) + "）";
+    }
+
+    /**
+     * 把 {@code Location} 归一化成「不含凭据与查询串」的形式。
+     *
+     * @param location {@code Location} 头，可为 {@code null}
+     * @return 主机与路径；缺失时给一句说明，解析不出主机时原样返回（相对地址没有敏感信息）
+     */
+    private static String safeLocation(String location) {
+        if (location == null || location.trim().isEmpty()) {
+            return "上游给出的地址";
+        }
+        String trimmed = location.trim();
+        HttpUrl parsed = HttpUrl.parse(trimmed);
+        if (parsed == null) {
+            return trimmed;
+        }
+        String defaultPort = "https".equalsIgnoreCase(parsed.scheme()) ? ":443" : ":80";
+        String port = parsed.port() == HttpUrl.defaultPort(parsed.scheme()) ? "" : ":" + parsed.port();
+        return parsed.scheme() + "://" + parsed.host() + port + parsed.encodedPath();
     }
 
     // ------------------------------------------------------------------
@@ -198,8 +242,9 @@ public abstract class AbstractHttpLlmClient implements LlmClient {
         try (Response httpResponse = call.execute()) {
             if (!httpResponse.isSuccessful()) {
                 listener.onError(new LlmHttpException("stream request failed for provider: "
-                        + provider.getName() + " (HTTP " + httpResponse.code() + "): "
-                        + truncate(readBody(httpResponse)), httpResponse.code()));
+                        + provider.getName() + " (HTTP " + httpResponse.code() + ")"
+                        + redirectHint(httpResponse) + ": " + truncate(readBody(httpResponse)),
+                        httpResponse.code()));
                 return;
             }
             listener.onOpen();

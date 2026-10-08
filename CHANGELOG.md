@@ -62,6 +62,13 @@
 
 ### Fixed
 
+- **上游重定向不再能把密钥送去别的主机**：Claude 的密钥走 `x-api-key`、Gemini 走 `x-goog-api-key`，
+  而 OkHttp 在跨主机重定向时只剥 `Authorization`——一个上游 `302` 就足以把这两个头送到任意主机。
+  现在全局关掉重定向（`followRedirects` 与 `followSslRedirects` 都关，只关前者仍会跟 `http→https`）。
+  **这是破坏性变更**：上游若真回 `301/302`，请求会当场失败，错误信息里写明「重定向被禁止」与目标
+  主机与路径（不复制 `Location` 的 query，那里可能挂着一次性凭据），据此把 `baseUrl` 改成最终地址即可。
+  顺带把 OkHttpClient 的构造收敛到 `LlmClients.newHttpClient()` 一处：Dagger 侧与手写装配侧
+  原先各有一份逐字段相同的复制品，安全取舍不该有两个落点。
 - **「取不到 agent 策略」不再静默放行**：会话绑了一个从未声明的 `agentId` 时，`policyOf` 仍按不受限
   处理（fail-open 口径不变），但会发一条 `ConfigWarningEvent` 说明这件事——此前这种会话享受着「无限制」
   而外表上看不出任何异常，「agent 名写错了」与「权限本来就这么宽」完全长得一样。同一个标识只报一次

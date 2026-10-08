@@ -4,7 +4,6 @@ import dagger.Module;
 import dagger.Provides;
 import dagger.multibindings.IntoMap;
 import dagger.multibindings.StringKey;
-import okhttp3.ConnectionPool;
 import okhttp3.OkHttpClient;
 import zcd.jellyfish.infra.llm.ClaudeLlmClient;
 import zcd.jellyfish.infra.llm.DeepSeekLlmClient;
@@ -12,6 +11,7 @@ import zcd.jellyfish.infra.llm.GeminiLlmClient;
 import zcd.jellyfish.infra.llm.LlmClientCreator;
 import zcd.jellyfish.infra.llm.MiniMaxLlmClient;
 import zcd.jellyfish.infra.llm.OpenAiLlmClient;
+import zcd.jellyfish.infra.support.LlmClients;
 import zcd.jellyfish.infra.support.ProviderTypes;
 
 import javax.inject.Singleton;
@@ -35,10 +35,6 @@ import java.util.concurrent.TimeUnit;
 @Module
 public final class LlmModule {
 
-    private static final int MAX_IDLE_CONNECTIONS = 10;
-
-    private static final long KEEP_ALIVE_MINUTES = 5L;
-
     /** 流式线程池的线程数上限，即并发流式请求上限。 */
     private static final int STREAM_MAX_THREADS = 32;
 
@@ -53,19 +49,16 @@ public final class LlmModule {
 
     /**
      * 提供全局共享的 HTTP 客户端。
+     * <p>
+     * 构造细节（含「关掉重定向」的理由）在 {@code LlmClients.newHttpClient()}：
+     * 手写装配侧（{@code JellyfishAssembler}）也要交付同一份，因此只留一个落点。
      *
      * @return OkHttpClient
      */
     @Provides
     @Singleton
     static OkHttpClient provideOkHttpClient() {
-        return new OkHttpClient.Builder()
-                .connectTimeout(30, TimeUnit.SECONDS)
-                .writeTimeout(60, TimeUnit.SECONDS)
-                .readTimeout(120, TimeUnit.SECONDS)
-                .retryOnConnectionFailure(true)
-                .connectionPool(new ConnectionPool(MAX_IDLE_CONNECTIONS, KEEP_ALIVE_MINUTES, TimeUnit.MINUTES))
-                .build();
+        return LlmClients.newHttpClient();
     }
 
     /**

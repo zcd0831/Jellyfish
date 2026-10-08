@@ -542,7 +542,7 @@ mkdir -p ~/.jellyfish/plugins
 | --- | --- |
 | `type` | 用哪套传输实现：`openai` / `claude` / `deepseek` / `gemini` / `minimax` 及其别名。写错会报错并列出内核认识的类型 |
 | `apiKey` | 访问密钥。建议写 `${ENV_VAR}` 由环境变量注入（**不要把密钥写进配置文件**） |
-| `baseUrl` | 服务地址，缺省用该 `type` 的官方地址 |
+| `baseUrl` | 服务地址，缺省用该 `type` 的官方地址。**填最终地址**：客户端不跟随重定向（见下） |
 | `models` | 该 provider 下的模型清单，见下 |
 | `cache` | 缓存治理，两项：`promptCacheKey`（缺省 `false`）/ `keepAliveSeconds`（缺省 `0`）。只影响命中率，见「坑」 |
 | `sampling` | 采样参数基线，见下 |
@@ -556,6 +556,11 @@ mkdir -p ~/.jellyfish/plugins
   能顶替 `openai` 的插件等于把密钥转发出去。
 - **`models` 可以由插件动态发现**：被插件接管的 provider 会被问一次「现在有哪些模型」，非空时**整体替换**这里写的
   `models`。发现结果**不落盘**——本文件始终是模型的唯一持久事实，删掉插件后配置里那份依旧有效。
+
+**出站请求不跟随重定向**。Claude 的密钥走 `x-api-key`、Gemini 走 `x-goog-api-key`，而 OkHttp 在跨主机
+重定向时只剥 `Authorization`——跟随重定向就等于允许上游把一个我们的密钥头送到任意主机去。因此
+`baseUrl` 要填**最终地址**：真被上游回 `301/302` 时请求会失败，错误信息里写明「重定向被禁止」
+以及目标主机与路径（只给主机与路径，不复制 `Location` 的 query，那里可能挂着一次性凭据）。
 
 #### 字段：`models[]`
 

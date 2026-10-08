@@ -1,6 +1,5 @@
 package zcd.jellyfish.di;
 
-import okhttp3.ConnectionPool;
 import okhttp3.OkHttpClient;
 import zcd.jellyfish.api.event.EventPublisher;
 import zcd.jellyfish.api.subagent.SubAgentPort;
@@ -78,6 +77,7 @@ import zcd.jellyfish.infra.registry.TypeRegistry;
 import zcd.jellyfish.infra.session.SessionDefaults;
 import zcd.jellyfish.infra.session.SessionManager;
 import zcd.jellyfish.infra.shell.ShellIngress;
+import zcd.jellyfish.infra.support.LlmClients;
 import zcd.jellyfish.infra.support.ProviderTypes;
 import zcd.jellyfish.infra.tooloutput.ToolOutputLimiter;
 import zcd.jellyfish.infra.tooloutput.ToolOutputStore;
@@ -117,12 +117,6 @@ import java.util.concurrent.TimeUnit;
  * @author zcd
  */
 public final class JellyfishAssembler {
-
-    /** 空闲连接数上限，与 Dagger 侧的 {@code LlmModule} 保持一致。 */
-    private static final int MAX_IDLE_CONNECTIONS = 10;
-
-    /** 空闲连接保活时间（分钟）。 */
-    private static final long KEEP_ALIVE_MINUTES = 5L;
 
     /** 流式线程池的线程数上限，即并发流式请求上限。 */
     private static final int STREAM_MAX_THREADS = 32;
@@ -344,17 +338,14 @@ public final class JellyfishAssembler {
 
         /**
          * 构造全局共享的 HTTP 客户端：所有 LLM 客户端共用同一个连接池。
+         * <p>
+         * 与 Dagger 侧同源（都走 {@code LlmClients.newHttpClient()}），因此「关掉重定向」
+         * 这类安全取舍不会在两条装配路径上各说一套。
          *
          * @return HTTP 客户端，保证非 {@code null}
          */
         private static OkHttpClient okHttpClient() {
-            return new OkHttpClient.Builder()
-                    .connectTimeout(30, TimeUnit.SECONDS)
-                    .writeTimeout(60, TimeUnit.SECONDS)
-                    .readTimeout(120, TimeUnit.SECONDS)
-                    .retryOnConnectionFailure(true)
-                    .connectionPool(new ConnectionPool(MAX_IDLE_CONNECTIONS, KEEP_ALIVE_MINUTES, TimeUnit.MINUTES))
-                    .build();
+            return LlmClients.newHttpClient();
         }
 
         /**

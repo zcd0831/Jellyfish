@@ -211,6 +211,39 @@ class PermissionManagerTest {
     }
 
     @Test
+    void decide_should_deny_when_interceptor_throws() {
+        // Given：核心策略放行，但那条按模式收窄的拦截自己抛了错
+        when(policies.policyOf("agent-a")).thenReturn(PermissionPolicy.unrestricted());
+        ExtensionHandler<PermissionCheckRequest, PermissionVerdict> broken = request -> {
+            throw new IllegalStateException("脚本超时");
+        };
+        extensions.contribute("plan-guard", PermissionCheckRequest.class, null, broken, RegisterOptions.DEFAULT);
+
+        // When
+        PermissionDecision decision = manager.decide(new PermissionCheckRequest("agent-a", "write_file", null));
+
+        // Then：按拒绝——「没能表态」不能等价于「无异议」，否则这道收窄会静默消失且不留痕迹
+        assertTrue(decision.isDenied());
+        assertTrue(decision.getReason().contains("plan-guard"), decision.getReason());
+        assertEquals("plan-guard", captureEvent().getSource());
+    }
+
+    @Test
+    void decide_should_deny_when_interceptor_returnsNull() {
+        // Given：处理器坏了——契约要求返回三态之一，它什么都不返回
+        when(policies.policyOf("agent-a")).thenReturn(PermissionPolicy.unrestricted());
+        ExtensionHandler<PermissionCheckRequest, PermissionVerdict> silent = request -> null;
+        extensions.contribute("silent-guard", PermissionCheckRequest.class, null, silent, RegisterOptions.DEFAULT);
+
+        // When
+        PermissionDecision decision = manager.decide(new PermissionCheckRequest("agent-a", "write_file", null));
+
+        // Then：同样按拒绝，「没给结论」不是「没意见」
+        assertTrue(decision.isDenied());
+        assertTrue(decision.getReason().contains("silent-guard"), decision.getReason());
+    }
+
+    @Test
     void decide_should_deny_and_attribute_to_plugin_when_core_requires_approval() {
         // Given：核心要求审批，插件也拦截
         when(policies.policyOf("agent-a")).thenReturn(PermissionPolicy.of(null, toolSet("deploy"), null));
@@ -320,36 +353,6 @@ class PermissionManagerTest {
         // Then
         assertTrue(decision.isAllowed());
         assertEquals(PermissionManager.CORE_SOURCE, captureEvent().getSource());
-    }
-
-    @Test
-    void decide_should_ignore_null_veto_result() {
-        // Given：处理器允许返回 null（ExtensionRegistry 不做结果强制）
-        when(policies.policyOf("agent-a")).thenReturn(PermissionPolicy.unrestricted());
-        ExtensionHandler<PermissionCheckRequest, PermissionVerdict> guard = request -> null;
-        extensions.contribute("guard", PermissionCheckRequest.class, null, guard, RegisterOptions.DEFAULT);
-
-        // When
-        PermissionDecision decision = manager.decide(new PermissionCheckRequest("agent-a", "bash", null));
-
-        // Then
-        assertTrue(decision.isAllowed());
-    }
-
-    @Test
-    void decide_should_ignore_plugin_failure() {
-        // Given：一个插件抛异常不应该让整条调用链崩掉
-        when(policies.policyOf("agent-a")).thenReturn(PermissionPolicy.unrestricted());
-        ExtensionHandler<PermissionCheckRequest, PermissionVerdict> broken = request -> {
-            throw new IllegalStateException("boom");
-        };
-        extensions.contribute("broken", PermissionCheckRequest.class, null, broken, RegisterOptions.DEFAULT);
-
-        // When
-        PermissionDecision decision = manager.decide(new PermissionCheckRequest("agent-a", "bash", null));
-
-        // Then
-        assertTrue(decision.isAllowed());
     }
 
     @Test

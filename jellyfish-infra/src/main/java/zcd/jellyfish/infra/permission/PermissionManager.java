@@ -26,7 +26,8 @@ import java.util.function.Predicate;
  *     <li><b>核心策略</b>（普通 Java 代码，不开扩展点）：agent 策略的显式拒绝 &gt; 需人工审批 &gt;
  *     允许范围收窄；</li>
  *     <li><b>插件拦截</b>：类型级扩展点，按 {@code order} 升序调用，结论取最严
- *     （{@code DENY > ASK > ABSTAIN}），遇 {@code DENY} 短路；</li>
+ *     （{@code DENY > ASK > ABSTAIN}），遇 {@code DENY} 短路；<b>插件抛错或不给裁定按 {@code DENY}
+ *     处理</b>（fail-closed，理由见 {@code intercept}）；</li>
  *     <li><b>ASK 处理</b>：经 {@link ApprovalChannel} 向审批者提问，无审批者 / 超时 / 异常一律拒绝，
  *     绝不静默放行。</li>
  * </ol>
@@ -109,7 +110,7 @@ public class PermissionManager {
             for (HandlerBinding<PermissionCheckRequest, PermissionVerdict> binding
                     : extensions.bindings(PermissionCheckRequest.class, null)) {
                 PermissionVerdict verdict = intercept(binding, request);
-                if (verdict == null || verdict.isAbstain()) {
+                if (verdict.isAbstain()) {
                     continue;
                 }
                 if (verdict.isDenied()) {
@@ -181,22 +182,42 @@ public class PermissionManager {
     /**
      * 执行单个插件拦截处理器。
      * <p>
-     * 拦截处理器抛异常或返回 {@code null} 时按「无异议」处理：同步侧本就没有护栏，这里是调用点
-     * 自己决定的那一层——一个插件的故障不应该让整条工具调用链崩掉。
+     * <b>抛异常或返回 {@code null} 一律按「拒绝」处理（fail-closed）</b>：拦截只能把判定收紧，它
+     * 「没能表态」因此不能等价于「无异议」——那样一来，一条按模式或按参数收窄的授权会在插件出故障时
+     * <b>静默消失</b>，而现场没有任何痕迹：模型只看到这次调用照常放行，用户也不知道自己开着的那道
+     * 限制已经失效。拒绝是可见、可诊断、可重试的：模型收到一条写明「哪条拦截没跑成」的失败理由，
+     * 日志里有 owner 与堆栈。
+     * <p>
+     * <b>为什么把异常收在这里而不是让它逃出去</b>：本方法在判定链上被同步调用，异常逃出去会让整次
+     * 工具调用以未定义的方式失败（外壳拿到 500 而不是「工具被拒」）。内核的立场是
+     * <b>故障收敛成一条有理由的拒绝</b>，而不是把故障本身当成「没意见」。
+     * <p>
+     * <b>与「插件不能放宽权限」一致</b>：{@code PermissionVerdict} 里没有 {@code ALLOW}，插件连
+     * 表达放行都做不到；那么它无法表态时也就只可能落在「更严」这一侧。
      *
      * @param binding 带来源的处理器绑定
      * @param request 权限检查请求
-     * @return 裁定，{@code null} 表示无异议
+     * @return 裁定，保证非 {@code null}
      */
     private PermissionVerdict intercept(HandlerBinding<PermissionCheckRequest, PermissionVerdict> binding,
                                      PermissionCheckRequest request) {
+        PermissionVerdict verdict;
         try {
-            return extensions.invoke(binding.getHandler(), request);
+            verdict = extensions.invoke(binding.getHandler(), request);
         } catch (RuntimeException e) {
-            LOG.warn("权限拦截处理器执行失败，按无异议处理: owner={} tool={}", binding.getOwner(),
+            LOG.warn("权限拦截处理器执行失败，按拒绝处理: owner={} tool={}", binding.getOwner(),
                     request.getToolName(), e);
-            return null;
+            return PermissionVerdict.deny("权限拦截处理器执行失败（来源：" + binding.getOwner()
+                    + "），无法确认本次调用是否被放行，按拒绝处理");
         }
+        if (verdict == null) {
+            // 契约要求处理器返回三态之一，「什么都不返回」是它坏了，不是它没意见
+            LOG.warn("权限拦截处理器未给出裁定，按拒绝处理: owner={} tool={}", binding.getOwner(),
+                    request.getToolName());
+            return PermissionVerdict.deny("权限拦截处理器未给出裁定（来源：" + binding.getOwner()
+                    + "），按拒绝处理");
+        }
+        return verdict;
     }
 
     /**

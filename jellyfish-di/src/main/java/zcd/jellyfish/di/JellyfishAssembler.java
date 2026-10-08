@@ -46,6 +46,7 @@ import zcd.jellyfish.infra.config.ConfigReloader;
 import zcd.jellyfish.infra.config.RuntimeConfig;
 import zcd.jellyfish.infra.config.SettingsBinder;
 import zcd.jellyfish.infra.config.SettingsReader;
+import zcd.jellyfish.infra.config.ConfigWarningReporter;
 import zcd.jellyfish.infra.event.EventChannel;
 import zcd.jellyfish.infra.event.EventChannelOptions;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
@@ -256,6 +257,8 @@ public final class JellyfishAssembler {
             // 第六层：可观测性与共享设施
             MetricsRegistry metricsRegistry = new MetricsRegistry();
             MetricsSubscriber metricsSubscriber = new MetricsSubscriber(metricsRegistry, eventChannel);
+            // 配置告警的「给人看」那条出口：只订阅、只打日志（此前只有指标计数，提示到不了用户眼前）
+            ConfigWarningReporter configWarningReporter = new ConfigWarningReporter(eventChannel);
             runtimeInfoHolder = new RuntimeInfoHolder();
             ActionQueue actionQueue = new ActionQueue();
             ShellIngress shellIngress = new ShellIngress(metricsRegistry);
@@ -330,7 +333,8 @@ public final class JellyfishAssembler {
                     promptAssembler, runtimeConfig);
             agentHarness = new AgentHarness(runtimeConfig, eventChannel, modelManager, agentManager,
                     pluginRuntimeConfig, pluginManager, reActLooper, systemCommands, subAgentTools, sessionManager,
-                    conversationCompactor, inputDirectives, cacheKeepAlive, metricsSubscriber, metricsRegistry,
+                    conversationCompactor, inputDirectives, cacheKeepAlive, metricsSubscriber,
+                    configWarningReporter, metricsRegistry,
                     runObservation, healthCheck);
             conversationService = new ConversationService(commandManager, inputTransforms, inputDirectives,
                     sessionManager, turnRegistry, shellStreams, agentHarness);

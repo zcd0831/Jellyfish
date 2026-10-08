@@ -29,6 +29,8 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
@@ -340,7 +342,7 @@ class RuntimeConfigTest {
         ConfigPaths paths = pathsTo(shared, shared);
         when(appConfig.getModel()).thenReturn(paths);
         ConfigLoader configLoader = mock(ConfigLoader.class);
-        when(configLoader.read(shared.toString(), ModelSettings.class))
+        when(configLoader.read(eq(shared.toString()), eq(ModelSettings.class), any()))
                 .thenReturn(new ModelSettings(null, null, null));
 
         // When
@@ -348,7 +350,39 @@ class RuntimeConfigTest {
         runtimeConfig.refresh();
 
         // Then：同一路径只读取一次
-        verify(configLoader, times(1)).read(shared.toString(), ModelSettings.class);
+        verify(configLoader, times(1)).read(eq(shared.toString()), eq(ModelSettings.class), any());
+    }
+
+    @Test
+    void refresh_should_publish_warning_when_config_has_unknown_field() throws IOException {
+        // Given：一份把 defaultModel 拼成 defaultModle 的 models.json——绑定会照常成功（容忍未知字段），
+        // 因此没有这条告警的话，用户看到的就是「配置明明写了却没作用」
+        Path models = writeFile("models.json", "{\"defaultModle\":\"m\"}");
+        when(appConfig.getModel()).thenReturn(pathsTo(models, null));
+        RecordingPublisher publisher = new RecordingPublisher();
+
+        // When
+        runtimeConfigOf(new ConfigLoader(new SettingsReader(), new SettingsBinder()), publisher).refresh();
+
+        // Then：告警里既有文件路径也有字段名，用户才找得到
+        assertTrue(publisher.warnings().stream().anyMatch(warning -> models.toString().equals(warning.getSource())
+                        && warning.getMessage().contains("defaultModle")),
+                publisher.warnings().toString());
+    }
+
+    @Test
+    void refresh_should_not_publish_unknownField_warning_when_configIsClean() throws IOException {
+        // Given：字段全对的一份配置
+        Path models = writeFile("clean.json", "{\"defaultProvider\":\"p\",\"providers\":{}}");
+        when(appConfig.getModel()).thenReturn(pathsTo(models, null));
+        RecordingPublisher publisher = new RecordingPublisher();
+
+        // When
+        runtimeConfigOf(new ConfigLoader(new SettingsReader(), new SettingsBinder()), publisher).refresh();
+
+        // Then：误报会让这条告警变成噪音，用户很快学会忽略它
+        assertTrue(publisher.warnings().stream().noneMatch(warning -> warning.getMessage().contains("不认识的字段")),
+                publisher.warnings().toString());
     }
 
     @Test

@@ -10,6 +10,7 @@ import zcd.jellyfish.core.prompt.CacheKeepAlive;
 import zcd.jellyfish.core.input.InputDirectives;
 import zcd.jellyfish.core.subagent.SubAgentTools;
 import zcd.jellyfish.infra.agent.AgentManager;
+import zcd.jellyfish.infra.config.ConfigWarningReporter;
 import zcd.jellyfish.infra.config.RuntimeConfig;
 import zcd.jellyfish.infra.event.EventChannel;
 import zcd.jellyfish.infra.metrics.HealthCheck;
@@ -104,6 +105,14 @@ public class AgentHarness {
     /** 指标订阅者：可观测性这条边上的唯一写入方。 */
     private final MetricsSubscriber metricsSubscriber;
 
+    /**
+     * 配置告警上报器：把「配置有问题」这类事件打成一行 WARN 日志。
+     * <p>
+     * 它的可观测面与 {@link #metricsSubscriber} 互补：那个只计数（{@code config.warnings}），
+     * 只有数量没有内容，而用户需要知道的是「哪个文件的哪个字段错了」。
+     */
+    private final ConfigWarningReporter configWarningReporter;
+
     /** run 观测桥：把 run 的开始与结束翻成插件看得懂的通知事件。 */
     private final RunObservationBridge runObservation;
 
@@ -130,6 +139,7 @@ public class AgentHarness {
      * @param inputDirectives      输入指令服务
      * @param cacheKeepAlive       缓存保活器
      * @param metricsSubscriber    指标订阅者
+     * @param configWarningReporter 配置告警上报器
      * @param metricsRegistry      指标注册表
      * @param healthCheck          健康检查
      */
@@ -140,7 +150,8 @@ public class AgentHarness {
                         SubAgentTools subAgentTools, SessionManager sessionManager,
                         ConversationCompactor conversationCompactor, InputDirectives inputDirectives,
                         CacheKeepAlive cacheKeepAlive,
-                        MetricsSubscriber metricsSubscriber, MetricsRegistry metricsRegistry,
+                        MetricsSubscriber metricsSubscriber, ConfigWarningReporter configWarningReporter,
+                        MetricsRegistry metricsRegistry,
                         RunObservationBridge runObservation, HealthCheck healthCheck) {
         this.runtimeConfig = runtimeConfig;
         this.eventChannel = eventChannel;
@@ -156,6 +167,7 @@ public class AgentHarness {
         this.inputDirectives = inputDirectives;
         this.cacheKeepAlive = cacheKeepAlive;
         this.metricsSubscriber = metricsSubscriber;
+        this.configWarningReporter = configWarningReporter;
         this.runObservation = runObservation;
         this.metricsRegistry = metricsRegistry;
         this.healthCheck = healthCheck;
@@ -175,6 +187,8 @@ public class AgentHarness {
         eventChannel.start();
         // 必须在 runtimeConfig.refresh() 之前：配置加载期发出的告警要能被计数
         metricsSubscriber.start();
+        // 同上，而且更直接：配置加载期的告警（绝大多数都是那时发的）要能被人看见
+        configWarningReporter.start();
         // 与指标同理：订阅要先于任何 run 建立，否则最早的几次委派在插件侧是隐形的
         runObservation.start();
         systemCommands.register();
@@ -266,6 +280,8 @@ public class AgentHarness {
         try {
             // 指标是累计值，放在关闭之后不影响可读性；先退订再读快照，避免读到一半又变
             metricsSubscriber.close();
+            // 与指标同批：它也只是个订阅者，关掉后不再有配置告警的日志行
+            configWarningReporter.close();
             runObservation.close();
         } finally {
             LOG.info("运行期指标: {}", metricsSnapshotText());

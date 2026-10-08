@@ -961,8 +961,13 @@ handler 抛错**按放行处理**。它只管「结束运行态、保留快照�
 - **可观测性是纯订阅者，自己绝不发事件**（否则形成「事件 → 指标 → 事件」自激）；只订阅异步侧。
 - **通道是并发派发且允许乱序，因此断言计数时「依赖的每一个计数器都要各自等一遍」**；
   **修法不是等更久，而是不要假设顺序**。
-- **启动顺序**：`eventChannel.start()` 之后、`runtimeConfig.refresh()` 之前启动 `MetricsSubscriber`；
-  `shutdown()` 先打健康检查，末尾退订并打指标汇总。
+- **启动顺序**：`eventChannel.start()` 之后、`runtimeConfig.refresh()` 之前启动 `MetricsSubscriber`
+  与 `ConfigWarningReporter`；`shutdown()` 先打健康检查，末尾退订并打指标汇总。
+- **配置告警必须有「人看得见」的出口**：配置层只发 `ConfigWarningEvent`（不依赖日志实现），
+  因此每一条告警都要有订阅方渲染——`MetricsSubscriber` 只计数（`config.warnings`），
+  `ConfigWarningReporter` 负责打成一行 WARN。**只加计数不加渲染，等于告警没发生**：
+  用户看到的是「配置写了没作用」，而关停时那句 `config.warnings=N` 只说数量。
+  渲染前必须过 `ControlChars.singleLine`：告警里的字段名来自用户的 JSON。
 - **诊断输出必须比被诊断对象更稳**：坏仪表跳过、检查项抛错降级为 DOWN、关闭路径日志失败只记 WARN；
   健康检查三档 UP/WARN/DOWN。**刻意不加 `/metrics`**。
 

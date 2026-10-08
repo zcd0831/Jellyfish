@@ -6,7 +6,12 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -71,5 +76,30 @@ class ConfigLoaderTest {
 
         // When / Then
         assertNull(configLoader.read("missing.json", ModelSettings.class));
+    }
+
+    @Test
+    void read_should_report_unknown_fields_when_they_exist() {
+        // Given：两份配置，一份字段全对、一份把 defaultModel 拼错了
+        when(settingsReader.read("ok.json")).thenReturn("{\"defaultModel\": \"m\"}");
+        when(settingsReader.read("typo.json")).thenReturn("{\"defaultModle\": \"m\"}");
+        List<String> reported = new ArrayList<String>();
+
+        // When / Then：字段全对的一个都不报
+        configLoader.read("ok.json", ModelSettings.class, reported::add);
+        assertEquals(Collections.emptyList(), reported);
+
+        // When / Then：拼错的那个报出来（绑定本身不会报——它容忍未知字段）
+        configLoader.read("typo.json", ModelSettings.class, reported::add);
+        assertEquals(Collections.singletonList("defaultModle"), reported);
+    }
+
+    @Test
+    void read_should_not_report_when_reporting_not_requested() {
+        // Given
+        when(settingsReader.read("typo.json")).thenReturn("{\"defaultModle\": \"m\"}");
+
+        // When / Then：不传接收方的那条路（内置资源走的就是它）什么都不报、也不抛
+        assertNotNull(configLoader.read("typo.json", ModelSettings.class));
     }
 }

@@ -18,6 +18,7 @@ import zcd.jellyfish.infra.event.EventChannel;
 import zcd.jellyfish.infra.metrics.HealthCheck;
 import zcd.jellyfish.infra.metrics.MetricsRegistry;
 import zcd.jellyfish.core.runtime.RunObservationBridge;
+import zcd.jellyfish.infra.config.ConfigWarningReporter;
 import zcd.jellyfish.infra.metrics.MetricsSubscriber;
 import zcd.jellyfish.infra.model.ModelManager;
 import zcd.jellyfish.infra.plugin.PF4JPluginManager;
@@ -102,6 +103,10 @@ class AgentHarnessTest {
     @Mock
     private MetricsSubscriber metricsSubscriber;
 
+    /** 配置告警上报器：断言它随门面一起启动与停止。 */
+    @Mock
+    private ConfigWarningReporter configWarningReporter;
+
     /** run 观测桥：断言它随门面一起启动与停止。 */
     @Mock
     private RunObservationBridge runObservation;
@@ -128,11 +133,14 @@ class AgentHarnessTest {
 
         // Then：事件订阅者就绪 → 注册指标 → 注册核心命令 → 配置 → 各索引 → 插件配置 → 插件启动 →
         // 目录发现 → 会话恢复
-        InOrder order = inOrder(eventChannel, metricsSubscriber, runObservation, systemCommands, subAgentTools,
+        InOrder order = inOrder(eventChannel, metricsSubscriber, configWarningReporter, runObservation,
+                systemCommands, subAgentTools,
                 runtimeConfig, modelManager, agentManager, pluginRuntimeConfig, pluginManager, sessionManager);
         order.verify(eventChannel).start();
         // 必须在 runtimeConfig.refresh() 之前：配置加载期的告警要能被计数
         order.verify(metricsSubscriber).start();
+        // 同一条理由的另一半：那些告警还要能被人看见（只有计数的话，用户只知道「有几条」）
+        order.verify(configWarningReporter).start();
         // 订阅要先于任何 run：否则最早的几次委派在插件侧是隐形的
         order.verify(runObservation).start();
         order.verify(systemCommands).register();
@@ -181,8 +189,9 @@ class AgentHarnessTest {
         order.verify(subAgentTools).close();
         order.verify(pluginManager).close();
         order.verify(eventChannel).close();
-        // 收尾：指标退订、观测退订
+        // 收尾：指标退订、观测退订、配置告警退订
         verify(metricsSubscriber).close();
+        verify(configWarningReporter).close();
         verify(runObservation).close();
     }
 
@@ -211,6 +220,7 @@ class AgentHarnessTest {
     private AgentHarness newHarness() {
         return new AgentHarness(runtimeConfig, eventChannel, modelManager, agentManager, pluginRuntimeConfig,
                 pluginManager, reActLooper, systemCommands, subAgentTools, sessionManager, conversationCompactor,
-                inputDirectives, cacheKeepAlive, metricsSubscriber, metricsRegistry, runObservation, healthCheck);
+                inputDirectives, cacheKeepAlive, metricsSubscriber, configWarningReporter, metricsRegistry,
+                runObservation, healthCheck);
     }
 }

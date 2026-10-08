@@ -403,7 +403,10 @@ public class RuntimeConfig {
     }
 
     /**
-     * 读取单个配置段，并对「路径已配置但读不到内容」发出告警事件。
+     * 读取单个配置段，并对「路径已配置但读不到内容」与「字段名不认识」发出告警事件。
+     * <p>
+     * 未知字段那条是刻意的：绑定容忍未知字段（配置文件要向前兼容），于是拼错一个字段名完全没有提示，
+     * 现场表现只是「配置明明写了却没作用」。这里把文件路径与字段名一起报出来，用户才找得到。
      *
      * @param path 完整文件路径，可为空
      * @param type 绑定类型
@@ -411,7 +414,8 @@ public class RuntimeConfig {
      * @return 解析结果；路径为空或文件缺失时返回 {@code null}
      */
     private <T> T read(String path, Class<T> type) {
-        T value = configLoader.read(path, type);
+        T value = configLoader.read(path, type, field -> eventPublisher.publish(new ConfigWarningEvent(path,
+                "配置里有内核不认识的字段：" + field + "（拼错了？它会被静默忽略）")));
         if (value == null && StringUtils.isNotBlank(path)) {
             eventPublisher.publish(new ConfigWarningEvent(path, "配置段文件缺失或为空，将按未配置处理"));
         }

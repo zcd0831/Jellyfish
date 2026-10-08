@@ -17,6 +17,7 @@ import zcd.jellyfish.core.runtime.RunContext;
 import zcd.jellyfish.core.runtime.RunContextHolder;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.config.AgentDefinition;
+import zcd.jellyfish.infra.config.AgentPermissions;
 import zcd.jellyfish.infra.config.RuntimeConfig;
 import zcd.jellyfish.infra.config.SubAgentSettings;
 import zcd.jellyfish.infra.llm.LlmMessage;
@@ -193,6 +194,12 @@ public class SubAgentLauncher {
             if (call.getAgentId().equals(parent.getAgentId())) {
                 return SubAgentRunHandle.settled(
                         SubAgentOutcome.rejected("不能把任务委派给当前 agent 自己：" + call.getAgentId()));
+            }
+            String wider = widerToolThan(parent.getAgentId(), definition);
+            if (wider != null) {
+                return SubAgentRunHandle.settled(SubAgentOutcome.rejected(
+                        "不能把任务委派给权限更宽的 agent：[" + call.getAgentId() + "] 比当前 agent 多放行了 "
+                                + wider + "，那等于用委派绕过当前 agent 的权限收窄"));
             }
             // 模型先行：配置写错时连子会话都不该建，更不该发出一轮注定失败的模型调用
             sessionModelResolver.resolveByAgentOrDefault(call.getAgentId());
@@ -386,6 +393,61 @@ public class SubAgentLauncher {
      */
     private ToolFilter toolFilterOf(SubAgentCall call, Session parent) {
         return ToolFilter.of(permissionManager.usableTools(call.getAgentId()));
+    }
+
+    /**
+     * 找出「子 agent 放行、而父 agent 不放行」的工具名，用于阻止用委派提权。
+     * <p>
+     * <b>为什么必须在派生之前查</b>：子会话的权限是按它自己的 {@code agentId} 判定的
+     * （{@code ToolExecutor} 用 {@code session.getAgentId()} 去查策略），因此子会话拿到的是子 agent 的
+     * 完整策略、不与父取交集。而 {@code subagent_type} 是模型自选的——只看「存在且 delegatable」的话，
+     * 一个受限 agent 只要派给一个「没声明权限」（= 不受限）的 agent，就能完成自己被禁的写文件与跑命令。
+     * 这里立的是「委派不得提权」：子 agent 的授权必须是父 agent 授权的子集。
+     * <p>
+     * <b>判据是「严格度」而不是「两者相等」</b>：拒绝 &gt; 需审批 &gt; 放行。逐项查三件事——
+     * 父拒绝的（以及需要审批的）工具，子必须同样拒绝或需审批；父的允许范围已声明时，子的允许范围
+     * 不能越出去。父未绑定 agent（{@code null}）时父即不受限，任何子都不算更宽，这也是最常见的情形
+     * （内置默认 agent 不声明权限）。
+     * <p>
+     * <b>只做「拒绝」而不是「取交集」</b>：取交集要改权限判定链（它按 agentId 查策略，不知道父是谁），
+     * 会把改动铺到 {@code jellyfish-api} 的跨边界契约上。拒绝同样堵住了提权，且失败信息能说清
+     * 「是哪个工具让它变宽了」——用户据此去收紧子 agent 或放宽父 agent 即可。
+     *
+     * @param parentAgentId 父会话绑定的 agentId，可为 {@code null}（未绑定 = 不受限）
+     * @param child         子 agent 定义，不可为 {@code null}
+     * @return 越界的工具名；不比父更宽时返回 {@code null}
+     */
+    private String widerToolThan(String parentAgentId, AgentDefinition child) {
+        AgentDefinition parent = agentManager.find(parentAgentId);
+        if (parent == null) {
+            // 父未绑定 agent（或已失效）：父即不受限，没有「比不受限更宽」这回事
+            return null;
+        }
+        AgentPermissions parentPermissions = parent.getPermissions();
+        AgentPermissions childPermissions = child.getPermissions();
+        if (parentPermissions.isAllowListDeclared()) {
+            if (!childPermissions.isAllowListDeclared()) {
+                // 父声明了白名单、子干脆没声明，等于子不受限——这是最宽的一种，必须拦住
+                return "全部工具（它没有声明 allowedTools）";
+            }
+            for (String tool : childPermissions.getAllowedTools()) {
+                if (!parentPermissions.getAllowedTools().contains(tool)) {
+                    return tool;
+                }
+            }
+        }
+        for (String tool : parentPermissions.getDeniedTools()) {
+            if (!childPermissions.getDeniedTools().contains(tool)) {
+                return tool;
+            }
+        }
+        for (String tool : parentPermissions.getAskTools()) {
+            if (!childPermissions.getDeniedTools().contains(tool)
+                    && !childPermissions.getAskTools().contains(tool)) {
+                return tool;
+            }
+        }
+        return null;
     }
 
     /**

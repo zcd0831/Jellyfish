@@ -24,6 +24,7 @@ import zcd.jellyfish.core.runtime.RunScheduler;
 import zcd.jellyfish.core.prompt.ToolFilter;
 import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.config.AgentDefinition;
+import zcd.jellyfish.infra.config.AgentPermissions;
 import zcd.jellyfish.infra.config.Model;
 import zcd.jellyfish.infra.config.Provider;
 import zcd.jellyfish.infra.config.RuntimeConfig;
@@ -40,6 +41,7 @@ import zcd.jellyfish.infra.session.SessionDefaults;
 import zcd.jellyfish.infra.session.SessionManager;
 
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
@@ -289,6 +291,75 @@ class SubAgentLauncherTest {
         // Then
         assertEquals(SubAgentStatus.REJECTED, outcome.getStatus());
         assertTrue(outcome.getError().contains("delegatable"));
+    }
+
+    @Test
+    void run_should_reject_when_child_agent_is_widerThanParent() {
+        // Given：父 agent 只允许读，子 agent 完全没有权限声明（= 不受限）
+        when(agentManager.find(SCOUT)).thenReturn(unrestricted(SCOUT, true));
+        when(agentManager.find("jellyfish"))
+                .thenReturn(restricted("jellyfish", true, Arrays.asList("read_file", "grep_files")));
+        runContexts.open(8, 8);
+        Session parent = parent("jellyfish");
+
+        // When
+        SubAgentOutcome outcome = launcher.run(call(parent, SCOUT, "查一下"), null);
+
+        // Then：拒绝——子会话按它自己的 agentId 查策略，不拒绝就是「用委派绕过父的权限收窄」
+        assertEquals(SubAgentStatus.REJECTED, outcome.getStatus(), outcome.getError());
+        assertTrue(outcome.getError().contains("权限更宽"), outcome.getError());
+    }
+
+    @Test
+    void run_should_allow_when_child_agent_isNotWiderThanParent() {
+        // Given：父与子的允许范围一致（这是最常见的合法用法：受限 agent 派给同样受限的 agent）
+        when(agentManager.find(SCOUT))
+                .thenReturn(restricted(SCOUT, true, Arrays.asList("read_file", "grep_files")));
+        when(agentManager.find("jellyfish"))
+                .thenReturn(restricted("jellyfish", true, Arrays.asList("read_file", "grep_files")));
+        runContexts.open(8, 8);
+        Session parent = parent("jellyfish");
+        stubNestedTurn("子代理答复", 1);
+
+        // When
+        SubAgentOutcome outcome = launcher.run(call(parent, SCOUT, "查一下"), null);
+
+        // Then
+        assertEquals(SubAgentStatus.COMPLETED, outcome.getStatus(), outcome.getError());
+    }
+
+    @Test
+    void run_should_allow_when_parentAgentIsUnbound() {
+        // Given：父会话没绑 agent（= 不受限）。内置默认 agent 就是这种形态，最常见
+        when(agentManager.find(SCOUT)).thenReturn(definition(true));
+        runContexts.open(8, 8);
+        Session parent = parent(null);
+        stubNestedTurn("子代理答复", 1);
+
+        // When
+        SubAgentOutcome outcome = launcher.run(call(parent, SCOUT, "查一下"), null);
+
+        // Then：没有「比不受限更宽」这回事，照旧放行——这条堵的是提权，不该误伤普通委派
+        assertEquals(SubAgentStatus.COMPLETED, outcome.getStatus(), outcome.getError());
+    }
+
+    @Test
+    void run_should_reject_when_childDropsParentAsk() {
+        // Given：父把写文件设为「需审批」，子把它当成普通放行
+        when(agentManager.find(SCOUT)).thenReturn(
+                withPermissions(SCOUT, true, Collections.<String>emptyList(), Collections.<String>emptyList(), null));
+        when(agentManager.find("jellyfish")).thenReturn(
+                withPermissions("jellyfish", true, Collections.<String>emptyList(),
+                        Arrays.asList("write_file"), null));
+        runContexts.open(8, 8);
+        Session parent = parent("jellyfish");
+
+        // When
+        SubAgentOutcome outcome = launcher.run(call(parent, SCOUT, "查一下"), null);
+
+        // Then：严格度是「拒绝 > 需审批 > 放行」，子把「需审批」降级成放行同样算更宽
+        assertEquals(SubAgentStatus.REJECTED, outcome.getStatus(), outcome.getError());
+        assertTrue(outcome.getError().contains("write_file"), outcome.getError());
     }
 
     @Test
@@ -833,6 +904,48 @@ class SubAgentLauncherTest {
      */
     private static AgentDefinition definitionOf(String agentId, boolean delegatable) {
         return new AgentDefinition(agentId, "侦察", null, delegatable, null);
+    }
+
+    /**
+     * 构造「允许范围已声明」的 agent 定义。
+     * <p>
+     * 这正是「受限 agent」的形态：白名单之外一律拒绝。
+     *
+     * @param delegatable 是否可委派
+     * @param allowed     允许的工具名
+     * @return agent 定义
+     */
+    private static AgentDefinition restricted(String agentId, boolean delegatable, java.util.List<String> allowed) {
+        return withPermissions(agentId, delegatable, Collections.<String>emptyList(),
+                Collections.<String>emptyList(), allowed);
+    }
+
+    /**
+     * 构造「不声明任何权限」的 agent 定义（= 不受限）。
+     *
+     * @param agentId     agent 标识
+     * @param delegatable 是否可委派
+     * @return agent 定义
+     */
+    private static AgentDefinition unrestricted(String agentId, boolean delegatable) {
+        return new AgentDefinition(agentId, "侦察", new AgentPermissions(null, null, null), delegatable, null);
+    }
+
+    /**
+     * 构造带指定权限的 agent 定义。
+     *
+     * @param agentId     agent 标识
+     * @param delegatable 是否可委派
+     * @param denied      显式拒绝
+     * @param ask         需审批
+     * @param allowed     允许范围；{@code null} 表示未声明（不限制）
+     * @return agent 定义
+     */
+    private static AgentDefinition withPermissions(String agentId, boolean delegatable,
+                                                   java.util.List<String> denied,
+                                                   java.util.List<String> ask, java.util.List<String> allowed) {
+        return new AgentDefinition(agentId, "侦察",
+                new AgentPermissions(denied, ask, allowed), delegatable, null);
     }
 
     /**

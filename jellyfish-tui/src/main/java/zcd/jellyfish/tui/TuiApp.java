@@ -375,7 +375,6 @@ public final class TuiApp extends ToolkitApp {
      * @param asks     提问通道，不可为 {@code null}
      * @param compactor 会话压缩器，不可为 {@code null}
      * @param inputDirectives 输入指令服务，不可为 {@code null}
-     * @param thinkingExpanded 启动时是否展开思考过程（{@code --show-thinking} 置为 {@code true}）
      * @param sessionDefaults 本进程内新建会话的待生效默认值，不可为 {@code null}
      */
     public TuiApp(ConversationService conversations, TurnRegistry turnRegistry, ShellStreams streams,
@@ -383,7 +382,7 @@ public final class TuiApp extends ToolkitApp {
                   SessionManager sessions, ModelManager models, AgentManager agents,
                   UiContributions uiContributions, ApprovalChannel approvals, AskChannel asks,
                   ConversationCompactor compactor,
-                  InputDirectives inputDirectives, boolean thinkingExpanded, SessionDefaults sessionDefaults) {
+                  InputDirectives inputDirectives, SessionDefaults sessionDefaults) {
         this.conversations = Objects.requireNonNull(conversations, "conversations must not be null");
         this.turnRegistry = Objects.requireNonNull(turnRegistry, "turnRegistry must not be null");
         this.streams = Objects.requireNonNull(streams, "streams must not be null");
@@ -401,7 +400,7 @@ public final class TuiApp extends ToolkitApp {
         this.pluginPanelsEnabled = pluginPanelsEnabled();
         this.input = new ChatInputView(inputKeys);
         this.shell = new ChatShell(input);
-        chatState.setThinkingExpanded(thinkingExpanded);
+        // 启动期一律折叠：展开与否是运行期的全局开关（Ctrl+T / /thinking），没有启动参数这一条路
     }
 
     /**

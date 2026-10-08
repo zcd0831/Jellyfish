@@ -106,7 +106,7 @@ public final class StartupOptionsParser {
             + "      --host <地址>       服务器绑定地址（仅 -server），缺省 " + StartupOptions.DEFAULT_HOST + "\n"
             + "      --api-key <密钥>    服务器 API key（仅 -server）；不配则不鉴权，也可用环境变量\n"
             + "                          " + ServerConfig.ENV_API_KEY + "（推荐：argv 会出现在 ps 输出里）\n"
-            + "      --show-thinking     展示思考过程（-cli：打到 stderr；-tui：启动时展开）\n"
+            + "      --show-thinking     在 -cli 的工具轨迹之外单独打出思考过程（仅 -cli；TUI 用 Ctrl+T）\n"
             + "      --show-tool-args    在 -cli 的工具轨迹行上打出调用参数（单行，过长截断；可能含敏感信息）\n"
             + "      --trust-project-config\n"
             + "                          信任并加载项目级配置（./.jellyfish/*.json），仅本次进程有效。\n"
@@ -225,7 +225,7 @@ public final class StartupOptionsParser {
      * @param model          模型名，可为 {@code null}
      * @param portOption     {@code --port} 取值，可为 {@code null}
      * @param hostOption     {@code --host} 取值，可为 {@code null}
-     * @param showThinking   是否显示思考过程
+     * @param showThinking   是否在 {@code -cli} 下单独打出思考过程
      * @param showToolArgs   是否在工具轨迹行上打出调用参数
      * @param verbose        是否详细日志
      * @param trustProjectConfig 是否信任并加载项目级配置
@@ -262,18 +262,18 @@ public final class StartupOptionsParser {
                 "TUI 用 /model 设置，Server 在 POST /sessions 请求体里指定");
         requireCliOnly(mode, showToolArgs, FLAG_SHOW_TOOL_ARGS,
                 "TUI 用 Ctrl+E / /toolargs 在界面上切（同样是全局开关）");
-        if (mode == StartupOptions.Mode.SERVER && showThinking) {
-            throw new JellyfishException("--show-thinking 只在 -cli / -tui 下被接受：-server 没有终端界面");
-        }
+        requireCliOnly(mode, showThinking, FLAG_SHOW_THINKING,
+                "TUI 用 Ctrl+T / /thinking 在界面上切（同样是全局开关）");
         if (mode != StartupOptions.Mode.SERVER && (!positionals.isEmpty() || portOption != null
                 || hostOption != null || apiKeyOption != null)) {
             throw new JellyfishException("只有 -server 支持端口、绑定地址与 --api-key");
         }
         if (mode == StartupOptions.Mode.SERVER && sessionId != null) {
-            // Server 的会话由 HTTP path 显式寻址，启动参数指向单个会话没有意义；
-            // 而 -server 下 --agent/--model 降级为「新建会话的默认值」，因此仍允许。
+            // Server 的会话由 HTTP path 显式寻址，启动参数指向单个会话没有意义。
+            // 注意不要在这里承诺「--agent/--model 仍可用」：上面那两条 requireCliOnly 已经把它们
+            // 判成用法错误了，兜底的一句错话正好会被用户当成出路照着试
             throw new JellyfishException("-server 不支持 --session：会话由 HTTP 接口按 id 寻址"
-                    + "（--agent/--model 仍可作为新建会话的默认值）");
+                    + "（新建会话的 agent 与模型由 POST /sessions 请求体给定）");
         }
         if (positionals.size() > 1) {
             throw new JellyfishException("位置参数过多：" + positionals);

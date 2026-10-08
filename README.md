@@ -128,7 +128,7 @@ java -jar jellyfish-cli/target/jellyfish-cli-0.1.1.jar -tui
 | `--model <provider/模型>` | 新建会话时指定模型，必须含 `/` |
 | `--port <端口>` | 服务器端口（等价于 `-server` 的位置参数，缺省 `9096`） |
 | `--host <地址>` | 服务器绑定地址（缺省 `127.0.0.1`） |
-| `--show-thinking` | 展示模型的思考过程：`-cli` 打到 stderr，`-tui` 置为启动时展开 |
+| `--show-thinking` | 在 `-cli` 的工具轨迹之外单独打出思考过程（TUI 用 `Ctrl+T` / `/thinking`） |
 | `--show-tool-args` | `-cli` 的工具轨迹行上打出调用参数（单行，过长截断；TUI 用 `Ctrl+E` / `/toolargs`） |
 | `--verbose` | 日志级别降到 DEBUG（也可用 `-Djellyfish.log.level=DEBUG`） |
 | `--trust-project-config` | 信任并加载项目级配置（`./.jellyfish/*.json`），**仅本次进程有效、不落盘**。缺省不加载，理由见「项目级配置的信任」 |
@@ -219,7 +219,8 @@ java -jar jellyfish-cli/target/jellyfish-cli-0.1.1.jar -tui
 「`Enter` 发送 + 修饰键换行」在任何终端上都不可实现——反转之后 `Enter` 稳定换行、`Ctrl+S` 稳定发送。
 
 **思考过程默认折叠**：屏幕上只占一行（`✻ 思考过程（N 字，Ctrl+T 展开）`），流式期间是 `✻ 思考中…（N 字）`。
-`Ctrl+T` 是**全局**开关（要么都展开、要么都折叠）；`--show-thinking` 让 TUI 启动时就是展开态。
+`Ctrl+T` 是**全局**开关（要么都展开、要么都折叠）。启动参数 `--show-thinking` 只归 `-cli`，
+TUI 下带上它会判用法错误退 `2`——展开与否在这里是运行期的事。
 
 **工具轨迹行带调用参数**：轨迹行是 `⎿ 工具名 · 结果摘要 · 调用参数`，参数取自会话里 assistant 的 `toolCalls`
 （执行之前就已落库），按 `toolCallId` 与结果配对——所以运行期、回合结束后、`--session` 恢复之后看到的是

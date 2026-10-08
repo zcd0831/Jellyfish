@@ -34,9 +34,11 @@ import java.util.Objects;
  * <b>为什么不把本类放进 {@code jellyfish-server}</b>：{@code RunMode}、{@code StartupOptions} 与
  * {@code ExitCodes} 都定义在 {@code jellyfish-cli}，放进去会形成 {@code cli → server → cli} 循环依赖。
  * <p>
- * <b>启动参数在 Server 下的含义</b>：{@code --port} / {@code --host} 决定绑定；{@code --agent} /
- * {@code --model} 是<b>新建会话的默认值</b>（落进 {@link ServerConfig}），
- * 不在启动期落到任何会话上；{@code --session} 已在参数解析阶段判为用法错误。
+ * <b>启动参数在 Server 下的含义</b>：{@code --port} / {@code --host} 决定绑定；
+ * {@code --agent} / {@code --model} <b>在解析阶段就被判为用法错误退 2</b>——
+ * 新建会话的 agent 与模型由调用方在 {@code POST /sessions} 的请求体里给定，
+ * 服务端不另存一份启动参数默认值（理由见 {@link ServerConfig} 的类注释）。
+ * {@code --session} 同理：会话一律由 HTTP 接口按 id 寻址。
  * <p>
  * <b>为什么绑定失败退 3 而不是 4</b>：端口被占用是「启动条件不具备」，与配置写错同类，脚本应当直接放弃；
  * 报成运行期失败会让调用方以为是服务跑到一半挂了。

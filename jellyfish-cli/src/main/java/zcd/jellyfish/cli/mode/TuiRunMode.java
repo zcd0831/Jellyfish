@@ -200,7 +200,7 @@ public final class TuiRunMode implements RunMode {
         asks.attach();
         try {
             new TuiApp(conversations, turns, streams, commands, sessions, models, agents, uiContributions,
-                    approvals, asks, compactor, inputDirectives, options.isShowThinking(), sessionDefaults).run();
+                    approvals, asks, compactor, inputDirectives, sessionDefaults).run();
             return ExitCodes.OK;
         } catch (JellyfishException e) {
             // 回合未收敛仍然只算正常结束：它是「答完了但没收敛」，不是执行失败。

@@ -86,7 +86,12 @@ public final class StartupOptions {
     /** 服务器模式 API key；{@code null} 表示不鉴权。 */
     private final String apiKey;
 
-    /** 是否展示思考过程（cli 模式打到 stderr，tui 模式决定启动时的展开状态）。 */
+    /**
+     * 是否在 {@code -cli} 下单独打出思考过程。
+     * <p>
+     * 只归 {@code -cli}：互动界面已有运行期开关（{@code Ctrl+T} / {@code /thinking}），
+     * 而单次模式没有交互窗口，想看思考过程就只剩启动参数这一条路。
+     */
     private final boolean showThinking;
 
     /**

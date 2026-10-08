@@ -436,7 +436,7 @@ class ChatStateTest {
     }
 
     @Test
-    @DisplayName("预置展开态：构造 --show-thinking 启动时的初始状态")
+    @DisplayName("初始展开态可直接设定：设定后投影铺开思考块")
     void setThinkingExpanded_should_seed_initial_state() {
         state.setThinkingExpanded(true);
 

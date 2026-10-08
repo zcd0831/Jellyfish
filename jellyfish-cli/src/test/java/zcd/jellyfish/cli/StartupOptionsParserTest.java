@@ -225,20 +225,23 @@ class StartupOptionsParserTest {
         assertTrue(error.getMessage().contains("-p / --print 只在 -cli 下被接受"));
     }
 
-    @Test
-    void parse_should_fail_when_show_thinking_given_to_server() {
+    @ParameterizedTest
+    @ValueSource(strings = {"-tui", "-server"})
+    void parse_should_fail_when_show_thinking_given_outside_cli(String mode) {
+        // 与 --show-tool-args 同一条理由：TUI 的能力在运行期开关（Ctrl+T / /thinking）上，
+        // 不需要启动参数；Server 根本没有终端界面
         JellyfishException error = assertThrows(JellyfishException.class,
-                () -> StartupOptionsParser.parse(new String[] {"-server", "--show-thinking"}));
+                () -> StartupOptionsParser.parse(new String[] {mode, "--show-thinking"}));
 
-        assertTrue(error.getMessage().contains("--show-thinking 只在 -cli / -tui 下被接受"));
+        assertTrue(error.getMessage().contains("--show-thinking 只在 -cli 下被接受"), error.getMessage());
     }
 
     @Test
-    void parse_should_keep_show_thinking_when_tui_given() {
-        StartupOptions options = StartupOptionsParser.parse(new String[] {"-tui", "--show-thinking"});
+    void parse_should_keep_show_thinking_when_cli_given() {
+        StartupOptions options = StartupOptionsParser.parse(new String[] {"-cli", "--show-thinking"});
 
         assertTrue(options.isShowThinking());
-        assertEquals(StartupOptions.Mode.TUI, options.getMode());
+        assertEquals(StartupOptions.Mode.CLI, options.getMode());
     }
 
     @Test

@@ -1,6 +1,7 @@
 package zcd.jellyfish.tui;
 
 import zcd.jellyfish.infra.session.SessionUsage;
+import zcd.jellyfish.infra.support.ControlChars;
 import zcd.jellyfish.tui.text.DisplayWidth;
 
 import java.util.List;
@@ -59,10 +60,15 @@ public final class StatusBarView {
         }
         StringBuilder buffer = new StringBuilder(text);
         for (String fragment : fragments) {
-            if (fragment == null || fragment.isEmpty()) {
+            // 插件片段是第三方内容：一个 ESC 序列能清屏、能把光标挪回去覆盖界面。
+            // 这里与屏幕文本其它落地点同一条口径（见 StyledSegment 的构造器），
+            // 而状态栏这一路最终拼成一个字符串交给框架，不经过那层收口，因此必须单独滤一次
+            String filtered = ControlChars.strip(fragment);
+            if (filtered == null || filtered.isEmpty()) {
                 continue;
             }
-            String candidate = buffer + FRAGMENT_SEPARATOR + fragment;
+            // 宽度按滤过之后的文本算：控制字符不占列数，拿原串算会高估，让本来装得下的片段被丢掉
+            String candidate = buffer + FRAGMENT_SEPARATOR + filtered;
             if (terminalWidth > 0 && DisplayWidth.of(candidate) > terminalWidth) {
                 break;
             }

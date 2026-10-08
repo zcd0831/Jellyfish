@@ -18,6 +18,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -346,7 +347,7 @@ public class ToolOutputStore {
     private static Path sessionDirectory(ToolOutputSettings settings, String sessionId) throws IOException {
         Path root = Paths.get(HomePaths.expand(settings.getDir()));
         Path directory = root.resolve(sanitize(sessionId == null ? "unknown-session" : sessionId));
-        Files.createDirectories(directory);
+        createOwnerOnlyDirectories(directory);
         return directory;
     }
 
@@ -361,12 +362,67 @@ public class ToolOutputStore {
     private static Path namespaceDirectory(ToolOutputSettings settings, String namespace) throws IOException {
         Path root = Paths.get(HomePaths.expand(settings.getDir()));
         Path directory = root.resolve(sanitize(namespace == null ? "shared" : namespace));
-        Files.createDirectories(directory);
+        createOwnerOnlyDirectories(directory);
         return directory;
     }
 
     /**
+     * 创建目录，并把<b>本次新建的</b>层级权限收到「只有本人可进出」。
+     * <p>
+     * <b>为什么创建时就要收</b>：默认权限由 umask 决定（常见 755），也就是同机其他用户能进目录、
+     * 能读里面的文件。而这里放的正是工具输出——命令回显、文件内容、接口响应，什么都可能有。
+     * <p>
+     * <b>已存在的层级不动</b>：那是用户的盘，他可能出于自己的理由设过权限；一个落盘动作顺手改掉
+     * 用户主目录下既有目录的权限，比默认权限本身更让人意外。因此先记下哪些层级原本不存在，
+     * 建完只对它们收紧。
+     * <p>
+     * <b>已知边界</b>：这只挡「同机其他用户读」，挡不住同用户的其它进程，也挡不住已经落地的副本
+     * （备份、同步盘）。文件本身是 600，那才是防读取的主要一道。
+     *
+     * @param directory 目标目录
+     * @throws IOException 创建失败时抛出
+     */
+    private static void createOwnerOnlyDirectories(Path directory) throws IOException {
+        if (Files.exists(directory)) {
+            return;
+        }
+        List<Path> missing = new ArrayList<Path>();
+        for (Path current = directory; current != null && !Files.exists(current); current = current.getParent()) {
+            missing.add(current);
+        }
+        Files.createDirectories(directory);
+        for (Path created : missing) {
+            restrictToOwner(created, true);
+        }
+    }
+
+    /**
+     * 把一个文件或目录的权限收到「只有本人」。
+     * <p>
+     * 不支持的平台（Windows 等）直接跳过：那里没有 POSIX 权限位，落盘行为保持原样，
+     * 而不是因为「设不上权限」把一次正常落盘变成失败。
+     *
+     * @param path      目标路径
+     * @param directory 是否为目录（目录要带执行位才能进出）
+     */
+    private static void restrictToOwner(Path path, boolean directory) {
+        try {
+            Files.setPosixFilePermissions(path,
+                    PosixFilePermissions.fromString(directory ? "rwx------" : "rw-------"));
+        } catch (UnsupportedOperationException | IOException e) {
+            LOG.debug("无法收紧落盘权限（平台不支持则属正常）: path={} reason={}", path, e.toString());
+        }
+    }
+
+    /**
      * 原子写入文件：先写同目录临时文件，再改名到目标。
+     * <p>
+     * <b>临时文件用随机名而不是固定名</b>：{@code createTempFile} 以 {@code CREATE_NEW} 打开，
+     * 于是「目录里被预置了一个同名符号链接」这类预置攻击直接失败（写不进去），而固定名 +
+     * 普通 open 会老实地跟着链接写到别处去。随机名顺带解决同目录并发写互踩。
+     * <p>
+     * 文件权限在改名之前就收成 600：rename 保留 inode，因此目标文件一出生就是 600，
+     * 不存在「先按 umask 可读、稍后才收紧」的窗口。
      *
      * @param directory 目标目录（临时文件与目标同目录，保证改名不跨文件系统）
      * @param target    目标文件
@@ -375,8 +431,14 @@ public class ToolOutputStore {
      */
     private static void writeAtomically(Path directory, Path target, String content) throws IOException {
         Path temp = Files.createTempFile(directory, ".tmp-", ".part");
-        Files.write(temp, content.getBytes(StandardCharsets.UTF_8));
-        move(temp, target);
+        try {
+            Files.write(temp, content.getBytes(StandardCharsets.UTF_8));
+            restrictToOwner(temp, false);
+            move(temp, target);
+        } catch (IOException | RuntimeException e) {
+            deleteQuietly(temp);
+            throw e;
+        }
     }
 
     /**

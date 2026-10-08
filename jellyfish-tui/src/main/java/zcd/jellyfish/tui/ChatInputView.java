@@ -16,6 +16,7 @@ import dev.tamboui.tui.event.MouseEvent;
 import dev.tamboui.tui.event.PasteEvent;
 import dev.tamboui.widgets.input.TextArea;
 import dev.tamboui.widgets.input.TextAreaState;
+import zcd.jellyfish.infra.support.ControlChars;
 import zcd.jellyfish.tui.text.DisplayWidth;
 
 import java.util.List;
@@ -208,7 +209,9 @@ public final class ChatInputView implements Element {
 
     @Override
     public EventResult handlePasteEvent(PasteEvent event) {
-        String text = event.text();
+        // 粘贴进来的文本同样是不可信内容：它会被渲染到输入框（转义序列能改写屏幕），
+        // 提交后还会进模型上下文。这里与屏幕文本同一条口径——滤掉控制字符
+        String text = ControlChars.strip(event.text());
         if (text == null || text.isEmpty()) {
             return EventResult.UNHANDLED;
         }
@@ -289,7 +292,8 @@ public final class ChatInputView implements Element {
      * @param text 新内容，不可为 {@code null}
      */
     public void replaceText(String text) {
-        state.setText(text);
+        // 与粘贴同源：回填的文本可能来自历史或补全结果，同样不该把转义序列带进输入框
+        state.setText(ControlChars.strip(Objects.requireNonNull(text, "text must not be null")));
         state.moveCursorToEnd();
     }
 
@@ -401,7 +405,13 @@ public final class ChatInputView implements Element {
         if (codePoint <= 0) {
             return EventResult.UNHANDLED;
         }
-        state.insert(new String(Character.toChars(codePoint)));
+        // 与粘贴同一条口径：不可打印的控制字符不该进输入框（它会随提交进模型上下文，
+        // 而渲染时又能改写屏幕）。滤完为空说明它本来就是控制字符，按未处理回报
+        String inserted = ControlChars.strip(new String(Character.toChars(codePoint)));
+        if (inserted == null || inserted.isEmpty()) {
+            return EventResult.UNHANDLED;
+        }
+        state.insert(inserted);
         return EventResult.HANDLED;
     }
 }

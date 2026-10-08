@@ -70,6 +70,27 @@ class ChatInputViewTest {
     }
 
     @Test
+    @DisplayName("回填文本要滤掉控制字符：它会被渲染到输入框，提交后还会进模型上下文")
+    void replaceText_should_stripControlChars() {
+        ChatInputView view = input();
+
+        view.replaceText("rm -rf ~\u001b[2J");
+
+        assertEquals("rm -rf ~[2J", view.text());
+        assertFalse(view.text().indexOf('\u001b') >= 0);
+    }
+
+    @Test
+    @DisplayName("回车与退格同样要被滤掉：它们能把已显示的一行原地改写")
+    void replaceText_should_stripCarriageReturnAndBackspace() {
+        ChatInputView view = input();
+
+        view.replaceText("a\rb\bc");
+
+        assertEquals("abc", view.text());
+    }
+
+    @Test
     @DisplayName("打字后硬件光标跟随：中文按显示宽度推进两列")
     void render_should_advanceCursor_byDisplayWidth() {
         ChatInputView view = input();

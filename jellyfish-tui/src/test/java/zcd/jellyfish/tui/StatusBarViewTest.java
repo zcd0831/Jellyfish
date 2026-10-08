@@ -63,6 +63,29 @@ class StatusBarViewTest {
     }
 
     @Test
+    @DisplayName("片段里的控制字符要被滤掉：插件是第三方内容，一个 ESC 就能清屏")
+    void appendFragments_should_stripControlChars() {
+        // Given：清屏序列 + 光标归位
+        List<String> fragments = Collections.singletonList("\u001b[2J待办\u001b[H");
+
+        // When
+        String status = StatusBarView.appendFragments("base", fragments, 80);
+
+        // Then：引导符被滤掉，剩下的方括号内容只是普通可见字符
+        assertEquals("base" + GAP + "[2J待办[H", status);
+        assertTrue(status.indexOf('\u001b') < 0);
+    }
+
+    @Test
+    @DisplayName("全是控制字符的片段整块丢弃，不留一个空片段的位置")
+    void appendFragments_should_dropFragmentThatIsOnlyControlChars() {
+        // Given：只有转义引导符与回车——滤完什么都不剩
+        List<String> fragments = Arrays.asList("\u001b\r", "a");
+
+        assertEquals("base" + GAP + "a", StatusBarView.appendFragments("base", fragments, 80));
+    }
+
+    @Test
     @DisplayName("按显示列数而非字符数限宽：中文片段按两列算")
     void appendFragments_should_countWideCharactersAsTwoColumns() {
         // "待办 2/5" 只有 6 个字符，但显示宽度是 8；加上分隔符共 11 列

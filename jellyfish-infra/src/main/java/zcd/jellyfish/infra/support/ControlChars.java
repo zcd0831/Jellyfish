@@ -38,6 +38,11 @@ public final class ControlChars {
         if (text == null || text.isEmpty()) {
             return text;
         }
+        // 快速路径：屏幕文本里绝大多数本来就是干净的。它的调用点在渲染帧里（`StyledSegment` 的
+        // 构造器），每帧每段都要过一遍，因此先扫一遍、干净就原样返回，省掉一次分配与一次复制
+        if (!needsStripping(text)) {
+            return text;
+        }
         StringBuilder sb = new StringBuilder(text.length());
         int index = 0;
         while (index < text.length()) {
@@ -56,6 +61,31 @@ public final class ControlChars {
             }
         }
         return sb.toString();
+    }
+
+    /**
+     * 判断文本里是否含有需要处理的码点。
+     * <p>
+     * 判据必须与 {@link #strip(String)} 的过滤规则逐一对应：多认一种（例如把普通空白也算上）
+     * 会让快速路径失效、退回逐字符复制；少认一种就会漏过它、让过滤形同不存在。
+     *
+     * @param text 非空文本
+     * @return 需要处理返回 {@code true}
+     */
+    private static boolean needsStripping(String text) {
+        int index = 0;
+        while (index < text.length()) {
+            int codePoint = text.codePointAt(index);
+            index += Character.charCount(codePoint);
+            if (codePoint == '\n') {
+                continue;
+            }
+            if (codePoint == '\t' || isBidiControl(codePoint)
+                    || Character.getType(codePoint) == Character.CONTROL) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

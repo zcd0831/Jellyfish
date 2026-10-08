@@ -712,7 +712,7 @@ Gemini      { "vendorBody": { "generationConfig": { "thinkingConfig": { "thinkin
 | 外壳 | 行为 |
 | --- | --- |
 | `-tui` | 弹出审批选择框（`↑`/`↓` 选，`Enter` 确认，`Esc` 拒绝并中断回合），批准才执行 |
-| `-server` | 把待审批项推进 SSE 流（`approval_required`），由 `POST /approvals/{requestId}` 裁决 |
+| `-server` | 把待审批项推进 SSE 流（`approval_required`），由 `POST /sessions/{id}/approvals/{requestId}` 裁决 |
 | `-cli` | 没有审批界面（也没有审批者），因此**一律按拒绝处理**——绝不静默放行 |
 
 审批框等不到答复（缺省 120 秒，见 `permission.approvalTimeoutSeconds`）同样按拒绝处理。
@@ -1001,17 +1001,29 @@ curl -sN -X POST localhost:9096/sessions/$SID/chat \
 | `POST` | `/sessions/{id}/commands` | 执行命令 |
 | `GET` | `/commands` | 结构化命令清单 |
 | `GET` | `/commands/{name}/options` | 命令候选值 |
-| `GET` | `/approvals` · `POST /approvals/{requestId}` | 待审批项与裁决 |
-| `GET` | `/asks` · `POST /asks/{requestId}` | 待答提问与作答 |
+| `GET` | `/approvals` | 跨会话最早的那一条待审批项（子代理的审批只在这里看得到） |
+| `GET` · `POST` | `/sessions/{id}/approvals` · `/sessions/{id}/approvals/{requestId}` | 本会话待审批项与裁决 |
+| `GET` | `/asks` | 跨会话最早的那一条待答提问（同上） |
+| `GET` · `POST` | `/sessions/{id}/asks` · `/sessions/{id}/asks/{requestId}` | 本会话待答提问与作答 |
 | `GET` | `/health` | 健康报告（UP / WARN / DOWN） |
 
 几条接入方必须知道的：**同会话同时只允许一个回合**（第二个请求 `409`，要打断用 `/cancel` 或断开 SSE）；
 **`/sessions/{id}/commands` 会先校验会话存在**（不存在回 `404`，与 `/chat`、`GET /sessions/{id}` 同口径；
 命令自身不认识则回 `404` + `kind=UNKNOWN`，两者靠 `kind` 与状态码并存可区分）；
-**人工审批走 HTTP**（流里推 `approval_required`，拿 `requestId` 调 `POST /approvals/{id}`；头槽位**每会话一个**，
-会话之间互不排队，同一会话内是 FIFO 队列、上限 8 条，超出只拒新请求、**已排队的不受影响**）；**向用户提问同理**（流里推
-`ask_required`，拿 `requestId` 调 `POST /asks/{id}`，请求体给 `{"optionId":"…"}` 或 `{"text":"…"}`；两种都不给回 400，
-因为「用户自己填的答案」与「客户端写错了请求」必须能分开）；**`tool_output` 是可丢的过程信息**，
+**命令端点有一道闸门**：`/new`、`/resume`、`/reload`、`/session`、`/delete` 这类「改进程级状态或按参数操作
+别的会话」的命令回 `403 COMMAND_NOT_ALLOWED`——本外壳按会话 id 寻址，建会话用 `POST /sessions`、
+删会话用 `DELETE /sessions/{id}`，不需要这些命令（`GET /commands` 仍会如实列出全部命令，
+过滤器与闸门是两件事）；
+**人工审批的裁决必须按会话寻址**（流里推 `approval_required`，拿 `requestId` 调
+`POST /sessions/{id}/approvals/{requestId}`：要求 `requestId` 属于路径里那个会话、且是它的头槽位，
+否则 `404`；头槽位**每会话一个**，会话之间互不排队，同一会话内是 FIFO 队列、上限 8 条，超出只拒新请求、
+**已排队的不受影响**）；**`GET /approvals` 是只读的发现入口**（跨会话最早那一条，带 `sessionId`）——
+子代理的审批落在它自己的会话上，按主会话订阅的流看不到它，没有这个入口就只能等超时被拒；
+**向用户提问同理**（流里推
+`ask_required`，拿 `requestId` 调 `POST /sessions/{id}/asks/{requestId}`，请求体给 `{"optionId":"…"}` 或
+`{"text":"…"}`；两种都不给回 400，因为「用户自己填的答案」与「客户端写错了请求」必须能分开）；
+**带体的请求要声明 `application/json`**（回 `415` 的是 `text/plain` 这类浏览器能跨站发出的内容类型）；
+**`tool_output` 是可丢的过程信息**，
 权威结果是 `tool_done` 的 `output`；**错误体统一为** `{"error":"CODE","message":"…"}`；
 **`POST /chat` 不执行命令、不解析输入指令**，要与命令域打交道走 `/commands`。
 

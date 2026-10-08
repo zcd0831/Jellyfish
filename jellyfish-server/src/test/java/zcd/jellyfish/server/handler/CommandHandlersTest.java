@@ -79,6 +79,8 @@ class CommandHandlersTest {
         when(exchange.getInputStream())
                 .thenReturn(new ByteArrayInputStream(body.getBytes(StandardCharsets.UTF_8)));
         when(exchange.getResponseHeaders()).thenReturn(new HeaderMap());
+        // 真实交换对象上请求头永远在（JsonBody 会读 Content-Type），mock 也要如实
+        when(exchange.getRequestHeaders()).thenReturn(new HeaderMap());
         when(exchange.getOutputStream()).thenReturn(out);
         when(exchange.isResponseStarted()).thenReturn(false);
         when(exchange.getQueryParameters())
@@ -154,6 +156,33 @@ class CommandHandlersTest {
         assertEquals(Responses.NOT_FOUND, error.getStatus());
         verify(commands, never()).execute(any(String.class), any(String.class));
     }
+    @Test
+    void execute_should_return_403_when_inputIsProcessLevelCommand() {
+        when(commands.isCommand("/reload")).thenReturn(true);
+        Fixture fixture = fixture("{\"input\":\"/reload\"}", null);
+
+        ApiException error = assertThrows(ApiException.class,
+                () -> handlers.execute(fixture.exchange, param("id", "s1")));
+
+        // 闸门必须在「交给命令域」之前拦住：/reload 会重载进程级配置（模型 / agent / 插件）
+        assertEquals(Responses.FORBIDDEN, error.getStatus());
+        assertEquals("COMMAND_NOT_ALLOWED", error.getCode());
+        verify(commands, never()).execute(any(String.class), any(String.class));
+    }
+
+    @Test
+    void execute_should_return_403_when_structuredNameIsProcessLevelCommand() {
+        Fixture fixture = fixture("{\"name\":\"resume\"}", null);
+
+        ApiException error = assertThrows(ApiException.class,
+                () -> handlers.execute(fixture.exchange, param("id", "s1")));
+
+        // 结构化入口同样过闸门：否则「换个写法」就能绕开
+        assertEquals(Responses.FORBIDDEN, error.getStatus());
+        verify(commands, never()).execute(any(String.class), Mockito.any(CommandArguments.class),
+                any(String.class));
+    }
+
     @Test
     void execute_should_return_200_when_command_ok() {
         when(commands.isCommand("/help")).thenReturn(true);

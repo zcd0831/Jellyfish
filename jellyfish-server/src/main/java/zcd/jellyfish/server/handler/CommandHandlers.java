@@ -143,12 +143,7 @@ public final class CommandHandlers {
      * @throws ApiException 会话不存在时抛出 404
      */
     private String requireSession(String sessionId) {
-        try {
-            return sessions.require(sessionId).getSessionId();
-        } catch (JellyfishException e) {
-            throw new ApiException(Responses.NOT_FOUND, "SESSION_NOT_FOUND",
-                    "会话不存在：" + sessionId);
-        }
+        return SessionPath.require(sessions, sessionId);
     }
 
     /**
@@ -164,6 +159,7 @@ public final class CommandHandlers {
             throw new ApiException(Responses.BAD_REQUEST, "NOT_A_COMMAND",
                     "输入不是命令（应以 / 开头）：" + input + "（对话请用 POST /sessions/{id}/chat）");
         }
+        ServerCommandGate.check(input);
         return commands.execute(input, sessionId);
     }
 
@@ -176,6 +172,7 @@ public final class CommandHandlers {
      * @return 命令结果
      */
     private CommandResult executeByName(String name, List<String> args, String sessionId) {
+        ServerCommandGate.check("/" + name);
         List<String> tokens = args == null ? Collections.<String>emptyList()
                 : Collections.unmodifiableList(new ArrayList<String>(args));
         CommandArguments arguments = new CommandArguments(tokens, String.join(" ", tokens));

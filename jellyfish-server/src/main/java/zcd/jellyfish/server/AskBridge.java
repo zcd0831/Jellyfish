@@ -54,10 +54,11 @@ public final class AskBridge {
     }
 
     /**
-     * 取当前头槽位待答提问（跨会话最早的那一条）。
+     * 取当前头槽位待答提问（跨会话最早的那一条）：<b>只读的发现入口</b>。
      * <p>
-     * 只服务「不知道自己是哪个会话」的晚到客户端（{@code GET /asks}）；
-     * SSE 流应当用 {@link #headFor(String)} 取本会话的那一条。
+     * 与审批同理：子代理的提问落在它自己的会话上，按主会话订阅的 SSE 流看不到它。客户端拿它的
+     * {@code sessionId} 去 {@code POST /sessions/{id}/asks/{requestId}} 作答——
+     * 作答一律按会话寻址（见 {@link #resolveFor(String, String, AskAnswer)}）。
      *
      * @return 待答提问；没有时为空
      */
@@ -68,7 +69,7 @@ public final class AskBridge {
     /**
      * 取属于指定会话的头槽位待答提问。
      * <p>
-     * 只有属于本会话的头槽位才该发给本会话的 SSE 流。
+     * 只有属于本会话的头槽位才该发给本会话的客户端。
      *
      * @param sessionId 会话标识
      * @return 待答提问；该会话没有待答提问时为空
@@ -89,6 +90,44 @@ public final class AskBridge {
             throw new ApiException(Responses.NOT_FOUND, "ASK_NOT_FOUND",
                     "没有这条待答提问（可能已被作答或已超时）：" + requestId);
         }
+    }
+
+    /**
+     * 作答<b>指定会话</b>的一条待答提问：先确认它属于该会话且是头槽位，再作答。
+     * <p>
+     * <b>为什么必须多这一步</b>：{@code AskChannel.resolve(id, answer)} 只校验「这条提问是不是它自己
+     * 那个会话的头槽位」，<b>不校验调用方说的会话对不对</b>。而提问的答案会作为<b>工具结果原文进那个
+     * 会话的模型上下文</b>，所以少了这一层就不只是越权，还是一条把任意文本注入别人对话的路径。
+     *
+     * @param sessionId 会话标识
+     * @param requestId 请求标识
+     * @param answer    答复，不可为 {@code null}
+     * @throws ApiException 请求标识不属于该会话、或不是头槽位时抛出 404
+     */
+    public void resolveFor(String sessionId, String requestId, AskAnswer answer) {
+        if (!isHeadOf(sessionId, requestId)) {
+            throw new ApiException(Responses.NOT_FOUND, "ASK_NOT_FOUND",
+                    "这条待答提问不属于该会话（或不是头槽位，或已作答 / 已超时）：" + requestId);
+        }
+        resolve(requestId, answer);
+    }
+
+    /**
+     * 判断某条待答提问是不是指定会话的头槽位。
+     *
+     * @param sessionId 会话标识
+     * @param requestId 请求标识，可为 {@code null}
+     * @return 是头槽位返回 {@code true}
+     */
+    private boolean isHeadOf(String sessionId, String requestId) {
+        if (requestId == null) {
+            return false;
+        }
+        for (AskChannel.Pending pending : asks.pendingAsks(sessionId)) {
+            // 第一条就是头槽位（其后的都在排队区，作答它们等于无事发生）
+            return requestId.equals(pending.getId());
+        }
+        return false;
     }
 
     /**

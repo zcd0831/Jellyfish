@@ -308,8 +308,8 @@ public final class JellyfishServer {
         ChatHandler chatHandler = new ChatHandler(conversations, streams, turns, runEvents, sessions, config,
                 approvals, asks);
         CommandHandlers commandHandlers = new CommandHandlers(commands, sessions, config);
-        ApprovalHandlers approvalHandlers = new ApprovalHandlers(approvals, config);
-        AskHandlers askHandlers = new AskHandlers(asks, config);
+        ApprovalHandlers approvalHandlers = new ApprovalHandlers(approvals, sessions, config);
+        AskHandlers askHandlers = new AskHandlers(asks, sessions, config);
         HealthHandler healthHandler = new HealthHandler(healthCheck);
         return new Router()
                 .route("POST", "/sessions", sessionHandlers::create)
@@ -321,10 +321,12 @@ public final class JellyfishServer {
                 .route("POST", "/sessions/{id}/commands", commandHandlers::execute)
                 .route("GET", "/commands", commandHandlers::list)
                 .route("GET", "/commands/{name}/options", commandHandlers::options)
-                .route("GET", "/approvals", approvalHandlers::get)
-                .route("POST", "/approvals/{requestId}", approvalHandlers::decide)
-                .route("GET", "/asks", askHandlers::get)
-                .route("POST", "/asks/{requestId}", askHandlers::answer)
+                .route("GET", "/approvals", approvalHandlers::getAny)
+                .route("GET", "/sessions/{id}/approvals", approvalHandlers::get)
+                .route("POST", "/sessions/{id}/approvals/{requestId}", approvalHandlers::decide)
+                .route("GET", "/asks", askHandlers::getAny)
+                .route("GET", "/sessions/{id}/asks", askHandlers::get)
+                .route("POST", "/sessions/{id}/asks/{requestId}", askHandlers::answer)
                 .route("GET", "/health", healthHandler::handle);
     }
 

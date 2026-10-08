@@ -1031,9 +1031,15 @@ handler 抛错**按放行处理**。它只管「结束运行态、保留快照�
 - **会话一律按路径里的 id 寻址**；`--agent` / `--model` 降级为「新建会话的默认值」；启动期不预建任何会话。
 - **同会话同时只允许一个回合**：第二个请求返回 `409`；要打断就用 `POST /sessions/{id}/cancel`，
   或直接断开 SSE 连接（服务端据此取消回合）。
-- **人工审批走 HTTP**：客户端拿 `requestId` 调 `POST /approvals/{requestId}`。头槽位**每会话一个**，
-  会话之间互不排队。`GET /approvals` 没有会话上下文，取的是跨会话最早的那一条，**只适用于单客户端场景**。
-- **向用户提问同一条路**：流里推 `ask_required`（载荷即 `AskDto`），拿 `requestId` 调 `POST /asks/{requestId}`，
+- **人工审批走 HTTP**：客户端拿 `requestId` 调 `POST /sessions/{id}/approvals/{requestId}`。头槽位**每会话一个**，
+  会话之间互不排队。**裁决要求 `requestId` 属于路径里那个会话、且是它的头槽位**，否则 404：
+  内核的 `ApprovalChannel.resolve(id, approved)` 只看「是不是它自己那个会话的头槽位」、不校验调用方说的会话，
+  少了这一层，路径里的会话就只是装饰。
+  **`GET /approvals` 仍然保留，但它是只读的发现入口**（跨会话最早那一条，带 `sessionId`）：
+  子代理的审批落在它自己的会话上，按主会话订阅的流看不到它，删掉这个入口那条审批就只能等超时。
+  它不构成绕过归属的路径——裁决一律按会话收口。
+- **向用户提问同一条路**：流里推 `ask_required`（载荷即 `AskDto`），拿 `requestId` 调
+  `POST /sessions/{id}/asks/{requestId}`，
   请求体给 `{"optionId":"…"}` 或 `{"text":"…"}`，两者都不给（或 `text` 全空白）回 400。
   头槽位语义与审批一致；**客户端断开时服务端收敛未决提问**，否则那条 `react` 线程要阻塞到超时。
 - **错误体统一为** `{"error":"CODE","message":"…"}`。
@@ -1085,4 +1091,5 @@ handler 抛错**按放行处理**。它只管「结束运行态、保留快照�
   - **子代理类型的运行时注册**（只能来自 `agents.json`）；
   - **并行 / 链式 / 工作流编排**（内核不因此长出一个 workflow 引擎；要编排就装官方 workflow 插件）。
   - **已知边界**：嵌套（子代理）的审批落在**子会话**自己的头槽位上，因此按主会话 id 取件的外壳看不到它，
-    跨会话取「最早一条」的 `GET /approvals` 才看得到；子代理看不到主会话的模型（刻意）。
+    只能靠跨会话的只读入口 `GET /approvals` 发现「有一条、在哪个会话」，再按那个会话裁决
+    （`POST /sessions/{id}/approvals/{requestId}`）；子代理看不到主会话的模型（刻意）。

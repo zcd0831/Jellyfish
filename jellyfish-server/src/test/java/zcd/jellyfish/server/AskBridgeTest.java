@@ -114,13 +114,25 @@ class AskBridgeTest {
     }
 
     @Test
-    void head_should_return_oldest_across_sessions() throws InterruptedException {
+    void resolveFor_should_answer_when_request_isHeadOfThatSession() throws InterruptedException {
         occupyHead("s1", "唯一的问题？");
 
-        Optional<AskDto> head = bridge.head();
+        bridge.resolveFor("s1", headId("s1"), AskAnswer.answered("a"));
 
-        assertTrue(head.isPresent());
-        assertEquals("s1", head.get().getSessionId());
+        assertFalse(bridge.headFor("s1").isPresent());
+    }
+
+    @Test
+    void resolveFor_should_reject_when_request_belongsToAnotherSession() throws InterruptedException {
+        occupyHead("s1", "问题？");
+
+        // 拿别人的 requestId 配自己的会话：内核会照办，而答案会成为那个会话的工具结果原文
+        ApiException error = assertThrows(ApiException.class,
+                () -> bridge.resolveFor("s2", headId("s1"), AskAnswer.custom("注入的文本")));
+
+        assertEquals(404, error.getStatus());
+        assertEquals("ASK_NOT_FOUND", error.getCode());
+        assertTrue(bridge.headFor("s1").isPresent(), "别的会话的提问不该被这次调用答掉");
     }
 
     @Test
@@ -163,7 +175,7 @@ class AskBridgeTest {
 
         bridge.cancelIfPending(headId("s1"));
 
-        assertFalse(bridge.head().isPresent());
+        assertFalse(bridge.headFor("s1").isPresent());
     }
 
     @Test
@@ -172,7 +184,7 @@ class AskBridgeTest {
 
         bridge.cancelIfPending("missing");
 
-        assertTrue(bridge.head().isPresent());
+        assertTrue(bridge.headFor("s1").isPresent());
     }
 
     @Test
@@ -182,7 +194,7 @@ class AskBridgeTest {
         // 断开路径上拿不到 id 是正常情形，不该抛异常
         bridge.cancelIfPending(null);
 
-        assertTrue(bridge.head().isPresent());
+        assertTrue(bridge.headFor("s1").isPresent());
     }
 
     @Test
@@ -191,7 +203,7 @@ class AskBridgeTest {
 
         bridge.detach();
 
-        assertFalse(bridge.head().isPresent());
+        assertFalse(bridge.headFor("s1").isPresent());
     }
 
     @Test
@@ -200,7 +212,6 @@ class AskBridgeTest {
         AskBridge detached = new AskBridge(new AskChannel(Mockito.mock(RuntimeConfig.class)));
 
         // When / Then：取件永远是空，桥不做任何假设
-        assertFalse(detached.head().isPresent());
         assertFalse(detached.headFor("s1").isPresent());
     }
 }

@@ -159,6 +159,8 @@ class ChatHandlerTest {
         when(exchange.getInputStream())
                 .thenReturn(new ByteArrayInputStream(body.getBytes(StandardCharsets.UTF_8)));
         when(exchange.getResponseHeaders()).thenReturn(new HeaderMap());
+        // 真实交换对象上请求头永远在（JsonBody 会读 Content-Type），mock 也要如实
+        when(exchange.getRequestHeaders()).thenReturn(new HeaderMap());
         when(exchange.getOutputStream()).thenReturn(out);
         return new Fixture(exchange, out);
     }

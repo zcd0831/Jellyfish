@@ -6,7 +6,10 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
+import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.ask.AskAnswer;
+import zcd.jellyfish.infra.session.Session;
+import zcd.jellyfish.infra.session.SessionManager;
 import zcd.jellyfish.server.AskBridge;
 import zcd.jellyfish.server.ServerConfig;
 import zcd.jellyfish.server.dto.AskDto;
@@ -28,6 +31,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -45,13 +49,33 @@ class AskHandlersTest {
     /** 提问桥。 */
     private AskBridge bridge;
 
+    /** 会话域：真会话存在性检查由它回答。 */
+    private SessionManager sessions;
+
     /** 被测试的处理器。 */
     private AskHandlers handlers;
+
+    /** 会话标识。 */
+    private static final String SESSION_ID = "s1";
 
     @BeforeEach
     void setUp() {
         bridge = Mockito.mock(AskBridge.class);
-        handlers = new AskHandlers(bridge, ServerConfig.builder("127.0.0.1", 9096).build());
+        sessions = Mockito.mock(SessionManager.class);
+        when(sessions.require(anyString())).thenAnswer(invocation -> session(invocation.getArgument(0)));
+        handlers = new AskHandlers(bridge, sessions, ServerConfig.builder("127.0.0.1", 9096).build());
+    }
+
+    /**
+     * 造一个会话运行态（只需回答 id）。
+     *
+     * @param sessionId 会话标识
+     * @return 会话
+     */
+    private static Session session(String sessionId) {
+        Session session = Mockito.mock(Session.class);
+        when(session.getSessionId()).thenReturn(sessionId);
+        return session;
     }
 
     /**
@@ -67,6 +91,8 @@ class AskHandlersTest {
         when(exchange.getInputStream())
                 .thenReturn(new ByteArrayInputStream(body.getBytes(StandardCharsets.UTF_8)));
         when(exchange.getResponseHeaders()).thenReturn(new HeaderMap());
+        // 真实交换对象上请求头永远在（JsonBody 会读 Content-Type），mock 也要如实
+        when(exchange.getRequestHeaders()).thenReturn(new HeaderMap());
         when(exchange.getOutputStream()).thenReturn(out);
         when(exchange.isResponseStarted()).thenReturn(false);
         return new Fixture(exchange, out);
@@ -75,34 +101,73 @@ class AskHandlersTest {
     /**
      * 构造路径参数。
      *
+     * @param sessionId 会话标识
      * @param requestId 请求标识
      * @return 路径参数
      */
-    private static PathParams requestIdParam(String requestId) {
+    private static PathParams pathParams(String sessionId, String requestId) {
         Map<String, String> values = new LinkedHashMap<String, String>();
+        values.put("id", sessionId);
         values.put("requestId", requestId);
         return new PathParams(values);
     }
 
+    /**
+     * 构造只含会话的路径参数。
+     *
+     * @param sessionId 会话标识
+     * @return 路径参数
+     */
+    private static PathParams sessionParam(String sessionId) {
+        Map<String, String> values = new LinkedHashMap<String, String>();
+        values.put("id", sessionId);
+        return new PathParams(values);
+    }
+
     @Test
-    void get_should_return_204_when_no_pending_ask() {
-        when(bridge.head()).thenReturn(Optional.empty());
+    void getAny_should_return_oldest_across_sessions() {
+        AskDto dto = new AskDto("r1", "s2", "ask_user", "先做通道还是先做 UI？",
+                Arrays.asList(new AskOptionDto("a", "先做通道", "内核与插件先落地")), 1L);
+        when(bridge.head()).thenReturn(Optional.of(dto));
         Fixture fixture = fixture("");
 
-        handlers.get(fixture.exchange, PathParams.empty());
+        handlers.getAny(fixture.exchange, PathParams.empty());
+
+        // 子代理的提问落在它自己的会话上：靠这个入口的 sessionId 去按会话作答
+        verify(fixture.exchange).setStatusCode(200);
+        assertTrue(fixture.body().contains("\"sessionId\":\"s2\""), fixture.body());
+    }
+
+    @Test
+    void get_should_return_204_when_no_pending_ask() {
+        when(bridge.headFor(SESSION_ID)).thenReturn(Optional.empty());
+        Fixture fixture = fixture("");
+
+        handlers.get(fixture.exchange, sessionParam(SESSION_ID));
 
         verify(fixture.exchange).setStatusCode(204);
         assertEquals("", fixture.body());
     }
 
     @Test
+    void get_should_return_404_when_sessionMissing() {
+        when(sessions.require("ghost")).thenThrow(new JellyfishException("session not found: ghost"));
+        Fixture fixture = fixture("");
+
+        ApiException error = assertThrows(ApiException.class,
+                () -> handlers.get(fixture.exchange, sessionParam("ghost")));
+
+        assertEquals(Responses.NOT_FOUND, error.getStatus());
+    }
+
+    @Test
     void get_should_return_pending_when_present() {
         AskDto dto = new AskDto("r1", "s1", "ask_user", "先做通道还是先做 UI？",
                 Arrays.asList(new AskOptionDto("a", "先做通道", "内核与插件先落地")), 1L);
-        when(bridge.head()).thenReturn(Optional.of(dto));
+        when(bridge.headFor(SESSION_ID)).thenReturn(Optional.of(dto));
         Fixture fixture = fixture("");
 
-        handlers.get(fixture.exchange, PathParams.empty());
+        handlers.get(fixture.exchange, sessionParam(SESSION_ID));
 
         verify(fixture.exchange).setStatusCode(200);
         assertTrue(fixture.body().contains("\"requestId\":\"r1\""), fixture.body());
@@ -114,10 +179,10 @@ class AskHandlersTest {
     void answer_should_resolve_with_option_when_option_id_given() {
         Fixture fixture = fixture("{\"optionId\":\"b\"}");
 
-        handlers.answer(fixture.exchange, requestIdParam("r1"));
+        handlers.answer(fixture.exchange, pathParams(SESSION_ID, "r1"));
 
         ArgumentCaptor<AskAnswer> answer = ArgumentCaptor.forClass(AskAnswer.class);
-        verify(bridge).resolve(anyString(), answer.capture());
+        verify(bridge).resolveFor(eq(SESSION_ID), anyString(), answer.capture());
         assertEquals(AskAnswer.Status.ANSWERED, answer.getValue().getStatus());
         assertEquals("b", answer.getValue().getOptionId());
         assertNull(answer.getValue().getText());
@@ -128,10 +193,10 @@ class AskHandlersTest {
     void answer_should_resolve_with_text_when_only_text_given() {
         Fixture fixture = fixture("{\"text\":\"都不合适，改成先做 Server\"}");
 
-        handlers.answer(fixture.exchange, requestIdParam("r1"));
+        handlers.answer(fixture.exchange, pathParams(SESSION_ID, "r1"));
 
         ArgumentCaptor<AskAnswer> answer = ArgumentCaptor.forClass(AskAnswer.class);
-        verify(bridge).resolve(anyString(), answer.capture());
+        verify(bridge).resolveFor(eq(SESSION_ID), anyString(), answer.capture());
         assertEquals("都不合适，改成先做 Server", answer.getValue().getText());
         assertNull(answer.getValue().getOptionId());
     }
@@ -140,10 +205,10 @@ class AskHandlersTest {
     void answer_should_prefer_option_id_when_both_given() {
         Fixture fixture = fixture("{\"optionId\":\"a\",\"text\":\"随便写点\"}");
 
-        handlers.answer(fixture.exchange, requestIdParam("r1"));
+        handlers.answer(fixture.exchange, pathParams(SESSION_ID, "r1"));
 
         ArgumentCaptor<AskAnswer> answer = ArgumentCaptor.forClass(AskAnswer.class);
-        verify(bridge).resolve(anyString(), answer.capture());
+        verify(bridge).resolveFor(eq(SESSION_ID), anyString(), answer.capture());
         assertEquals("a", answer.getValue().getOptionId(), "点选表达的是更明确的意图");
         assertNull(answer.getValue().getText());
     }
@@ -153,7 +218,7 @@ class AskHandlersTest {
         Fixture fixture = fixture("{}");
 
         ApiException error = assertThrows(ApiException.class,
-                () -> handlers.answer(fixture.exchange, requestIdParam("r1")));
+                () -> handlers.answer(fixture.exchange, pathParams(SESSION_ID, "r1")));
 
         assertEquals(Responses.BAD_REQUEST, error.getStatus());
     }
@@ -164,7 +229,7 @@ class AskHandlersTest {
         Fixture fixture = fixture("{\"text\":\"   \"}");
 
         ApiException error = assertThrows(ApiException.class,
-                () -> handlers.answer(fixture.exchange, requestIdParam("r1")));
+                () -> handlers.answer(fixture.exchange, pathParams(SESSION_ID, "r1")));
 
         assertEquals(Responses.BAD_REQUEST, error.getStatus());
     }
@@ -174,7 +239,7 @@ class AskHandlersTest {
         Fixture fixture = fixture("");
 
         ApiException error = assertThrows(ApiException.class,
-                () -> handlers.answer(fixture.exchange, requestIdParam("r1")));
+                () -> handlers.answer(fixture.exchange, pathParams(SESSION_ID, "r1")));
 
         assertEquals(Responses.BAD_REQUEST, error.getStatus());
     }
@@ -183,21 +248,21 @@ class AskHandlersTest {
     void answer_should_trim_whitespace_around_answer() {
         Fixture fixture = fixture("{\"text\":\"  先做 Server  \"}");
 
-        handlers.answer(fixture.exchange, requestIdParam("r1"));
+        handlers.answer(fixture.exchange, pathParams(SESSION_ID, "r1"));
 
         ArgumentCaptor<AskAnswer> answer = ArgumentCaptor.forClass(AskAnswer.class);
-        verify(bridge).resolve(anyString(), answer.capture());
+        verify(bridge).resolveFor(eq(SESSION_ID), anyString(), answer.capture());
         assertEquals("先做 Server", answer.getValue().getText());
     }
 
     @Test
     void answer_should_propagate_404_when_bridge_rejects() {
         doThrow(new ApiException(Responses.NOT_FOUND, "ASK_NOT_FOUND", "x"))
-                .when(bridge).resolve(anyString(), Mockito.any(AskAnswer.class));
+                .when(bridge).resolveFor(anyString(), anyString(), Mockito.any(AskAnswer.class));
         Fixture fixture = fixture("{\"optionId\":\"a\"}");
 
         ApiException error = assertThrows(ApiException.class,
-                () -> handlers.answer(fixture.exchange, requestIdParam("missing")));
+                () -> handlers.answer(fixture.exchange, pathParams(SESSION_ID, "missing")));
 
         assertEquals(Responses.NOT_FOUND, error.getStatus());
     }

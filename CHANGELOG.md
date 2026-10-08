@@ -18,6 +18,23 @@
 
 ### Changed
 
+- **审批与提问的 HTTP 端点改为按会话寻址**（破坏性）：裁决/作答走
+  `POST /sessions/{id}/approvals/{requestId}` 与 `POST /sessions/{id}/asks/{requestId}`——
+  要求该 `requestId` 属于路径里那个会话、且是它的头槽位，否则 `404`。此前是
+  `POST /approvals/{id}` / `POST /asks/{id}`：内核的通道只认「某会话的头槽位」、不校验调用方说的会话，
+  于是路径/参数里的会话只是个装饰，拿别人的 requestId 递进来会被照单执行（提问那条更重：
+  答案会作为工具结果原文进别人的模型上下文）。**只读的发现入口 `GET /approvals` / `GET /asks` 保留**
+  （跨会话最早一条，带 `sessionId`）：子代理的审批落在它自己的会话上，按主会话订阅的流看不到它，
+  删掉它那条审批就只能等超时。新增 `GET /sessions/{id}/approvals` / `GET /sessions/{id}/asks`
+  看本会话的待办项，两者都先校验会话存在（不存在回 `404`）。
+- **`-server` 的命令端点加了闸门**（破坏性）：`/new`、`/resume`、`/reload`、`/session`、`/delete`、`/rm`
+  这类「改进程级状态或按参数操作别的会话」的命令回 `403 COMMAND_NOT_ALLOWED`。本外壳按会话 id 寻址，
+  建会话与删会话都有对应端点，这些命令在这里没有意义；它们仍可用于 TUI / CLI。
+  `GET /commands` 照旧列出全部命令（清单是清单，闸门是闸门）。
+- **带请求体的端点要求 `Content-Type: application/json`**（破坏性）：声明了别的媒体类型回 `415`。
+  挡的是浏览器能跨站发出的那三种简单请求（`text/plain`、`x-www-form-urlencoded`、`multipart/form-data`）——
+  它们不触发预检，副作用照常发生。只用 `curl -d` 的调用方要补一个
+  `-H 'Content-Type: application/json'`；没声明这个头的调用方不受影响。
 - **项目级配置默认不加载**（破坏性）：它按进程当前目录读取，因此内容取决于「在哪个仓库里启动」，
   而它能改写 provider 的 `baseUrl` / `apiKey`（同名 provider 整对象替换）、新增 agent（未声明权限即不受限）、
   改落盘目录与插件配置——一个 `git clone` 下来的目录就足以改变运行行为。现需显式信任，

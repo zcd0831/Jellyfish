@@ -54,6 +54,9 @@ public final class Responses {
     /** 请求体过大。 */
     public static final int PAYLOAD_TOO_LARGE = 413;
 
+    /** 请求体的媒体类型不是 JSON。 */
+    public static final int UNSUPPORTED_MEDIA_TYPE = 415;
+
     /** 拒绝跨站请求。 */
     public static final int FORBIDDEN = 403;
 

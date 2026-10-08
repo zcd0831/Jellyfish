@@ -52,10 +52,15 @@ public final class ApprovalBridge {
     }
 
     /**
-     * 取当前头槽位待审批项（跨会话最早的那一条）。
+     * 取当前头槽位待审批项（跨会话最早的那一条）：<b>只读的发现入口</b>。
      * <p>
-     * 只服务「不知道自己是哪个会话」的晚到客户端（{@code GET /approvals}）；
-     * SSE 流应当用 {@link #headFor(String)} 取本会话的那一条。
+     * <b>为什么需要它</b>：子代理跑在它自己的会话上，它的审批落在那个会话的头槽位——按主会话订阅的
+     * SSE 流看不到它（{@link #headFor(String)} 取的是主会话自己那一条）。没有这个跨会话入口，
+     * 那条审批就只能等到超时被拒。客户端拿它的 {@code sessionId} 去
+     * {@code POST /sessions/{id}/approvals/{requestId}} 裁决。
+     * <p>
+     * <b>它只回答「有没有、在哪个会话」，不回答「该不该批准」</b>：裁决一律按会话寻址（见
+     * {@link #resolveFor(String, String, boolean)}），因此这个入口不构成「绕过归属」的路径。
      *
      * @return 待审批项；没有时为空
      */
@@ -66,7 +71,7 @@ public final class ApprovalBridge {
     /**
      * 取属于指定会话的头槽位待审批项。
      * <p>
-     * 只有属于本会话的头槽位才该发给本会话的 SSE 流。
+     * 只有属于本会话的头槽位才该发给本会话的客户端。
      *
      * @param sessionId 会话标识
      * @return 待审批项；该会话没有待审批项时为空
@@ -87,6 +92,48 @@ public final class ApprovalBridge {
             throw new ApiException(Responses.NOT_FOUND, "APPROVAL_NOT_FOUND",
                     "没有这条待审批项（可能已被裁决或已超时）：" + requestId);
         }
+    }
+
+    /**
+     * 裁决<b>指定会话</b>的一条待审批项：先确认它属于该会话且是头槽位，再裁决。
+     * <p>
+     * <b>为什么必须多这一步</b>：{@code ApprovalChannel.resolve(id, approved)} 只校验「这条请求是不是
+     * 它自己那个会话的头槽位」，<b>不校验调用方说的会话对不对</b>——拿「我的会话 id + 别人的 requestId」
+     * 去调它，内核会照办。少了这一层，HTTP 上的两个参数就是各说各话：
+     * 路径里的会话只是装饰，真正生效的是请求体里的 id。
+     * <p>
+     * <b>头槽位是每会话一个</b>：所以「属于本会话」＝「是本会话队列里的第一条」。
+     * 排队中的那一条裁决它等于无事发生（内核的既有语义），这里如实回 404。
+     *
+     * @param sessionId 会话标识
+     * @param requestId 请求标识
+     * @param approved  是否批准
+     * @throws ApiException 请求标识不属于该会话、或不是头槽位（已裁决 / 已超时 / 还在排队）时抛出 404
+     */
+    public void resolveFor(String sessionId, String requestId, boolean approved) {
+        if (!isHeadOf(sessionId, requestId)) {
+            throw new ApiException(Responses.NOT_FOUND, "APPROVAL_NOT_FOUND",
+                    "这条待审批项不属于该会话（或不是头槽位，或已裁决 / 已超时）：" + requestId);
+        }
+        resolve(requestId, approved);
+    }
+
+    /**
+     * 判断某条待审批项是不是指定会话的头槽位。
+     *
+     * @param sessionId 会话标识
+     * @param requestId 请求标识，可为 {@code null}
+     * @return 是头槽位返回 {@code true}
+     */
+    private boolean isHeadOf(String sessionId, String requestId) {
+        if (requestId == null) {
+            return false;
+        }
+        for (ApprovalChannel.Pending pending : approvals.pendingApprovals(sessionId)) {
+            // 第一条就是头槽位（其后的都在排队区，裁决它们等于无事发生）
+            return requestId.equals(pending.getId());
+        }
+        return false;
     }
 
     /**

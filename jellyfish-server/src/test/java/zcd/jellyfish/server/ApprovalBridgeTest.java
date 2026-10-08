@@ -102,7 +102,29 @@ class ApprovalBridgeTest {
 
         bridge.resolve(requestId, true);
 
-        assertFalse(bridge.head().isPresent());
+        assertFalse(bridge.headFor("s1").isPresent());
+    }
+
+    @Test
+    void resolveFor_should_resolve_when_request_isHeadOfThatSession() throws InterruptedException {
+        String requestId = occupyHead("s1", "write_file");
+
+        bridge.resolveFor("s1", requestId, true);
+
+        assertFalse(bridge.headFor("s1").isPresent());
+    }
+
+    @Test
+    void resolveFor_should_reject_when_request_belongsToAnotherSession() throws InterruptedException {
+        String requestId = occupyHead("s1", "write_file");
+
+        // 拿别人的 requestId 配自己的会话：内核会照办，因此这一步必须在桥里拦住
+        ApiException error = assertThrows(ApiException.class,
+                () -> bridge.resolveFor("s2", requestId, true));
+
+        assertEquals(404, error.getStatus());
+        assertEquals("APPROVAL_NOT_FOUND", error.getCode());
+        assertTrue(bridge.headFor("s1").isPresent(), "别的会话的裁决不该被这次调用落定");
     }
 
     @Test
@@ -111,7 +133,7 @@ class ApprovalBridgeTest {
 
         bridge.rejectIfPending(requestId);
 
-        assertFalse(bridge.head().isPresent());
+        assertFalse(bridge.headFor("s1").isPresent());
     }
 
     @Test
@@ -120,7 +142,7 @@ class ApprovalBridgeTest {
 
         bridge.rejectIfPending("missing");
 
-        assertTrue(bridge.head().isPresent());
+        assertTrue(bridge.headFor("s1").isPresent());
     }
 
     @Test
@@ -129,6 +151,6 @@ class ApprovalBridgeTest {
 
         bridge.detach();
 
-        assertFalse(bridge.head().isPresent());
+        assertFalse(bridge.headFor("s1").isPresent());
     }
 }

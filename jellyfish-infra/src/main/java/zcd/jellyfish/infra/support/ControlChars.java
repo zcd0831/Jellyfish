@@ -64,6 +64,29 @@ public final class ControlChars {
     }
 
     /**
+     * 把文本压成单行：过滤控制字符，并把换行换成空格。
+     * <p>
+     * <b>为什么换行要单独处理</b>：{@link #strip(String)} 保留换行是对的（它是排版语义，流式增量输出靠它断行），
+     * 但在「这段文本必须在单行里出现」的语境下换行就是一个可用的注入手段——一段带 {@code \n} 的输入
+     * 能在日志里伪造出一整行（{@code 会话不存在} 之后跟一行 {@code 已授权}），在终端上伪装成外壳自己打的诊断。
+     * 因此这里比 {@code strip} 更严一点，而严的那部分与「谁在用」无关：日志行与 CLI 诊断行都要求单行。
+     * <p>
+     * <b>不含长度上限</b>：单行不等于短行——CLI 的整行诊断（工具完成行）可以很长，日志的限长是日志自己的事
+     * （见 serve 侧的 {@code LogText}），截断逻辑与「单行」这条规则不该混在一起。
+     *
+     * @param text 原始文本，可为 {@code null}
+     * @return 单行文本；入参为 {@code null} 时返回 {@code null}
+     */
+    public static String singleLine(String text) {
+        if (text == null || text.isEmpty()) {
+            return text;
+        }
+        // strip 自己有「干净即原样返回」的快速路径，String.replace 在无匹配时也返回原串，
+        // 因此这里不必再判一次：干净且无换行的文本零分配
+        return strip(text).replace('\n', ' ');
+    }
+
+    /**
      * 判断文本里是否含有需要处理的码点。
      * <p>
      * 判据必须与 {@link #strip(String)} 的过滤规则逐一对应：多认一种（例如把普通空白也算上）

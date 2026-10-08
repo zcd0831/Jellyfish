@@ -38,7 +38,9 @@ public final class LogText {
         if (raw == null) {
             return "";
         }
-        String stripped = ControlChars.strip(raw).replace('\n', ' ');
-        return stripped.length() <= MAX_CHARS ? stripped : stripped.substring(0, MAX_CHARS) + "…";
+        // 过滤与「压成单行」的规则在 ControlChars 里只有一份（CLI 的整行诊断用同一份），
+        // 这里只加日志自己的长度上限
+        String single = ControlChars.singleLine(raw);
+        return single.length() <= MAX_CHARS ? single : single.substring(0, MAX_CHARS) + "…";
     }
 }

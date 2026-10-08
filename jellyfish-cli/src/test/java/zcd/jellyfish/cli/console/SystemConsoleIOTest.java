@@ -10,6 +10,7 @@ import java.io.PrintStream;
 import java.nio.charset.Charset;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
@@ -103,6 +104,48 @@ class SystemConsoleIOTest {
         consoleWithInput("").writeErrLine(null);
 
         assertEquals(System.lineSeparator(), text(err));
+    }
+
+    @Test
+    void writeOut_should_strip_escape_so_answer_cannot_clear_screen() {
+        // 模型回答直接写在终端上：一段 ESC[2J 就能清屏、ESC]0;…BEL 能改窗口标题
+        consoleWithInput("").writeOut("答案\u001b[2J尾部");
+
+        assertEquals("答案[2J尾部", text(out));
+        assertFalse(text(out).contains("\u001b"));
+    }
+
+    @Test
+    void writeErr_should_strip_escape_from_tool_output() {
+        // 工具输出正文来自磁盘上的文件：读到含 ESC 的文件就会把它打进终端
+        consoleWithInput("").writeErr("日志\u001b]0;改标题\u0007行");
+
+        assertEquals("日志]0;改标题行", text(err));
+        assertFalse(text(err).contains("\u001b"));
+    }
+
+    @Test
+    void writeErr_should_keep_newline_because_streamKeepsItsOwnLineBreaks() {
+        // 增量诊断的换行由内容自己带，绝不能在这里换掉（否则思考过程会挤成一行）
+        consoleWithInput("").writeErr("第一段\n第二段");
+
+        assertEquals("第一段\n第二段", text(err));
+    }
+
+    @Test
+    void writeErrLine_should_flatten_newline_because_oneLine_means_oneLine() {
+        // 整行语义下换行是注入手段：一条含 \n 的理由能伪装成两行诊断
+        consoleWithInput("").writeErrLine("回合被拦下：没事\n已授权：全部工具");
+
+        assertEquals("回合被拦下：没事 已授权：全部工具" + System.lineSeparator(), text(err));
+    }
+
+    @Test
+    void writeErrLine_should_strip_carriageReturn_so_line_cannot_be_rewritten() {
+        // \r 能把已显示的一行原地改写：终端上看起来就像外壳自己打了那句话
+        consoleWithInput("").writeErrLine("进度 10%\r进度 100%");
+
+        assertEquals("进度 10%进度 100%" + System.lineSeparator(), text(err));
     }
 
     @Test

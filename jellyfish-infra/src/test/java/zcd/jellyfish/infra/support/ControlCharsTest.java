@@ -65,6 +65,36 @@ class ControlCharsTest {
     }
 
     @Test
+    @DisplayName("单行化：换行换成空格，控制字符照旧剔除")
+    void singleLine_should_replaceNewlineAndStripControls() {
+        // 日志行与 CLI 诊断行都要求单行——一段带 \n 的输入能在那里伪造出整行
+        assertEquals("a b", ControlChars.singleLine("a\nb"));
+        // 注意剔除的是 ESC 本身，剩下的 `[2J` 只是三个普通字符：引导符没了就不再是控制序列
+        assertEquals("a[2Jb", ControlChars.singleLine("a\u001b[2Jb"));
+        assertEquals("会话不存在[2J 已授权",
+                ControlChars.singleLine("会话不存在\u001b[2J\n已授权"));
+    }
+
+    @Test
+    @DisplayName("单行化保留制表符以外的排版字符：制表符仍按 strip 的规则换成空格")
+    void singleLine_should_softenTabLikeStrip() {
+        assertEquals("a b", ControlChars.singleLine("a\tb"));
+    }
+
+    @Test
+    @DisplayName("单行化：干净的单行文本原样返回，CJK 与 emoji 不受影响")
+    void singleLine_should_keepPlainText() {
+        assertEquals("中文 🐟 完成", ControlChars.singleLine("中文 🐟 完成"));
+    }
+
+    @Test
+    @DisplayName("单行化：空值与空串原样返回")
+    void singleLine_should_passThroughNullAndEmpty() {
+        assertNull(ControlChars.singleLine(null));
+        assertEquals("", ControlChars.singleLine(""));
+    }
+
+    @Test
     @DisplayName("过滤后不残留任何控制字符")
     void strip_should_leaveNoControlCharacters() {
         // Given：一串混了各种控制字符的文本

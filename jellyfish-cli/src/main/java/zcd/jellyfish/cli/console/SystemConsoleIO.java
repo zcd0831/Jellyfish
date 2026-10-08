@@ -1,6 +1,7 @@
 package zcd.jellyfish.cli.console;
 
 import zcd.jellyfish.api.JellyfishException;
+import zcd.jellyfish.infra.support.ControlChars;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -20,6 +21,15 @@ import java.util.Objects;
  * <p>
  * <b>为什么不关闭 {@code System.in}</b>：读完即关闭会让随后的任何读取直接失败，而这不是本对象的职责
  * （进程退出由 {@code main} 负责）。三参构造器供测试注入内存流。
+ * <p>
+ * <b>写出前一律过控制字符过滤</b>：这是外壳里唯一往终端写字节的地方，而写出去的文本几乎都来自
+ * 不可信来源（模型回答、工具输出正文、异常消息、命令回显）。终端把 {@code ESC} 当控制序列引导符，
+ * 一段 {@code ESC[2J} 就能清屏、{@code ESC]0;…BEL} 能改窗口标题——而 CLI 的屏幕上并没有审批框之类
+ * 「显示的内容必须等于真正要执行的内容」的承诺，被改写的只是人读到的诊断，因此更要挡。
+ * <b>过滤与「写到哪里去」无关</b>：stdout 被重定向时下游不是终端、{@code ESC} 没有攻击性，
+ * 但 JDK 1.8 没有可靠的「这是不是终端」判定，且「有时过滤有时不过滤」会让行为随运行环境变化；
+ * 判据取「文本从哪里来」更稳，代价是重定向到文件时回答里的控制字符也会被剔掉。
+ * 整行诊断（{@code writeErrLine}）额外走 {@link ControlChars#singleLine}：单行语义下换行是注入手段。
  *
  * @author zcd
  */
@@ -124,7 +134,7 @@ public final class SystemConsoleIO implements ConsoleIO {
         if (text == null || text.isEmpty()) {
             return;
         }
-        out.print(text);
+        out.print(ControlChars.strip(text));
         out.flush();
     }
 
@@ -133,14 +143,14 @@ public final class SystemConsoleIO implements ConsoleIO {
         if (text == null || text.isEmpty()) {
             return;
         }
-        err.print(text);
+        err.print(ControlChars.strip(text));
         err.flush();
     }
 
     @Override
     public void writeErrLine(String line) {
         // println(null) 会打出字面量 "null"；空行才是「没有内容」的正确表现
-        err.println(line == null ? "" : line);
+        err.println(line == null ? "" : ControlChars.singleLine(line));
         err.flush();
     }
 }

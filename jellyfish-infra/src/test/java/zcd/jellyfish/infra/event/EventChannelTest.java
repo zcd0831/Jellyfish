@@ -62,6 +62,29 @@ class EventChannelTest {
     }
 
     @Test
+    void publish_should_isolateFilterFailure_when_oneSubscriberPredicateThrows() {
+        // Given：先注册的那个订阅者，过滤器本身抛错
+        List<ConfigWarningEvent> brokenReceived = new ArrayList<>();
+        List<ConfigWarningEvent> healthyReceived = new ArrayList<>();
+        channel.start();
+        channel.subscribe("broken", ConfigWarningEvent.class,
+                event -> {
+                    throw new IllegalStateException("过滤器坏了");
+                }, brokenReceived::add);
+        channel.subscribe("healthy", ConfigWarningEvent.class, healthyReceived::add);
+
+        // When
+        channel.publish(new ConfigWarningEvent("path", "message"));
+        queued.forEach(Runnable::run);
+
+        // Then：过滤器坏掉的那个收不到（那是它自己的问题），但它不能把事件从别人手里吞掉——
+        // 派发顺序上它在 healthy 之前，逃出循环就会让 healthy 也收不到
+        assertEquals(0, brokenReceived.size());
+        assertEquals(1, healthyReceived.size(), "一个订阅者的过滤器抛错不该影响其它订阅者");
+        assertEquals(1L, channel.stats().getSubscriberErrors());
+    }
+
+    @Test
     void publish_should_buffer_before_start_and_replay_after_start() {
         // Given：启动前发布
         String sessionId = "session-1";

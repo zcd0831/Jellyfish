@@ -274,19 +274,41 @@ public final class EventChannel implements EventPublisher, AutoCloseable {
 
     /**
      * 在广播线程上派发通知：单个订阅者异常被隔离并计数，不影响其它订阅者。
+     * <p>
+     * <b>谓词与投递在同一段隔离里</b>：{@code accepts} 是订阅者自己的过滤器，它抛错与
+     * {@code deliver} 抛错是同一类事——坏掉的订阅者只该影响自己。此前它被留在 try 之外，
+     * 于是一个谓词抛错会逃出整个派发循环：该事件对它之后的<b>全部</b>订阅者静默丢失、
+     * 不计入错误计数，任务异常还会让广播线程被替换掉。
      *
      * @param event 通知事件
      */
     private void deliver(JellyfishEvent event) {
         int matched = 0;
         int errors = 0;
-        for (HandlerRegistration registration : registry.resolve(event.getClass(), null)) {
+        List<HandlerRegistration> registrations;
+        try {
+            registrations = registry.resolve(event.getClass(), null);
+        } catch (RuntimeException e) {
+            // 注册表异常是极端情形，但它不该把一个事件变成「谁都收不到」而无迹可循
+            stats.subscriberErrors.increment();
+            LOG.warn("通知订阅者解析失败: event={}", event.getClass().getName(), e);
+            return;
+        }
+        for (HandlerRegistration registration : registrations) {
             Object handler = registration.getHandler();
             if (!(handler instanceof EventSubscriber)) {
                 continue;
             }
             EventSubscriber subscriber = (EventSubscriber) handler;
-            if (!subscriber.accepts(event)) {
+            try {
+                if (!subscriber.accepts(event)) {
+                    continue;
+                }
+            } catch (RuntimeException e) {
+                // 收不到这条事件是「它的过滤器坏了」的正确结果：不 matched、不 deliver，但也不影响别人
+                errors++;
+                LOG.warn("通知订阅者谓词异常: owner={} event={}", subscriber.getOwner(),
+                        event.getClass().getName(), e);
                 continue;
             }
             matched++;

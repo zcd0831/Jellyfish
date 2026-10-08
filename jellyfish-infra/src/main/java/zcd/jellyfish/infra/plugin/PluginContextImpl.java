@@ -171,6 +171,20 @@ public final class PluginContextImpl implements PluginContext {
     }
 
     @Override
+    public String parentSessionId(String sessionId) {
+        if (sessionId == null || sessionId.trim().isEmpty()) {
+            return null;
+        }
+        try {
+            return sessions.require(sessionId).getParentSessionId();
+        } catch (JellyfishException e) {
+            // 会话不存在（或上下文已失效）：没有会话就没有父链。插件侧按「无父」处理即可，
+            // 这里不为一个查询接口制造第二条失败路径
+            return null;
+        }
+    }
+
+    @Override
     public Map<String, Object> configuration() {
         return declaration.getConfiguration();
     }

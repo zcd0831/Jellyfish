@@ -35,6 +35,7 @@ import zcd.jellyfish.infra.event.EventChannel;
 import zcd.jellyfish.infra.event.EventChannelOptions;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.registry.TypeRegistry;
+import zcd.jellyfish.infra.session.Session;
 import zcd.jellyfish.infra.session.SessionManager;
 import zcd.jellyfish.infra.metrics.MetricsRegistry;
 import zcd.jellyfish.infra.shell.ShellIngress;
@@ -48,6 +49,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -86,6 +88,34 @@ class PluginContextImplTest {
     void pluginId_should_come_from_declaration() {
         // Then
         assertEquals("plugin-a", context.pluginId());
+    }
+
+    @Test
+    void parentSessionId_should_returnParentOfSession() {
+        // Given：会话域知道这条会话派生自谁
+        Session child = Mockito.mock(Session.class);
+        when(sessions.require("child")).thenReturn(child);
+        when(child.getParentSessionId()).thenReturn("parent");
+
+        // Then：插件据此沿父链判定「按会话树生效」的那些策略
+        assertEquals("parent", context.parentSessionId("child"));
+    }
+
+    @Test
+    void parentSessionId_should_returnNull_whenSessionMissing() {
+        // Given：会话已经不在了（子代理会话用完即关，父链查询随时可能落在这种会话上）
+        when(sessions.require("ghost")).thenThrow(new JellyfishException("会话不存在：ghost"));
+
+        // Then：没有会话就没有父链，不制造第二条失败路径
+        assertNull(context.parentSessionId("ghost"));
+    }
+
+    @Test
+    void parentSessionId_should_returnNull_whenIdIsBlank() {
+        // Then：标识为空是调用方给的「没有会话」，不该去问会话域
+        assertNull(context.parentSessionId(null));
+        assertNull(context.parentSessionId("  "));
+        verify(sessions, never()).require(any());
     }
 
     @Test

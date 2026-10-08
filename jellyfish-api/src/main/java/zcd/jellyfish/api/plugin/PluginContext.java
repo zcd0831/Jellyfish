@@ -324,6 +324,23 @@ public interface PluginContext {
     void removeExtensionEntry(String sessionId, String key);
 
     /**
+     * 取会话的父会话标识（仅子代理派生出来的会话有）。
+     * <p>
+     * <b>为什么插件需要它</b>：按会话生效的「模式类」约束（例如 plan 模式「只看不改」）在子代理会话上
+     * 查不到自己的条目，于是拦截形同不存在——而子代理会话正是模型自己派出来的，那是一条绕过路径。
+     * 有了父链，这类插件可以沿链判定「本回合所在的会话树里有没有开过这个模式」。
+     * <p>
+     * <b>默认实现返回 {@code null}</b>（= 不知道父会话，按无父处理）：这是为不实现本方法的容器留的
+     * 兼容口。内核的实现会如实返回，因此插件不必为此做降级。
+     *
+     * @param sessionId 目标会话标识，可为 {@code null}
+     * @return 父会话标识；该会话没有父、会话不存在或标识为空时返回 {@code null}
+     */
+    default String parentSessionId(String sessionId) {
+        return null;
+    }
+
+    /**
      * 列出<b>本插件命名空间下</b>的全部扩展条目。
      * <p>
      * <b>看不到别人的条目</b>：与写入的命名空间隔离对称。需要诊断「谁挂了东西」请看内核的

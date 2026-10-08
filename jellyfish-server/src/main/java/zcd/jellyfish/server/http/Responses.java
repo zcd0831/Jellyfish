@@ -54,6 +54,9 @@ public final class Responses {
     /** 请求体过大。 */
     public static final int PAYLOAD_TOO_LARGE = 413;
 
+    /** 拒绝跨站请求。 */
+    public static final int FORBIDDEN = 403;
+
     /** 服务内部错误。 */
     public static final int INTERNAL_ERROR = 500;
 
@@ -68,6 +71,9 @@ public final class Responses {
 
     /** 鉴权失败错误码常量。 */
     public static final String CODE_UNAUTHORIZED = "UNAUTHORIZED";
+
+    /** 跨站请求被拒错误码常量。 */
+    public static final String CODE_FORBIDDEN = "FORBIDDEN";
 
     /** JSON 内容类型。 */
     private static final String JSON_CONTENT_TYPE = "application/json; charset=utf-8";

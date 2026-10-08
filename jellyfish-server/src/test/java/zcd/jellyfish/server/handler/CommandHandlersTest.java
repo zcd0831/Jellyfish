@@ -5,12 +5,15 @@ import io.undertow.util.HeaderMap;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
+import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.extension.CommandArguments;
 import zcd.jellyfish.api.extension.CommandChoice;
 import zcd.jellyfish.api.extension.CommandDescriptor;
 import zcd.jellyfish.api.extension.CommandResult;
 import zcd.jellyfish.infra.command.CommandInfo;
 import zcd.jellyfish.infra.command.CommandManager;
+import zcd.jellyfish.infra.session.Session;
+import zcd.jellyfish.infra.session.SessionManager;
 import zcd.jellyfish.server.ServerConfig;
 import zcd.jellyfish.server.http.ApiException;
 import zcd.jellyfish.server.http.PathParams;
@@ -31,6 +34,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -44,13 +49,20 @@ class CommandHandlersTest {
     /** 命令域服务。 */
     private CommandManager commands;
 
+    /** 会话域服务：本用例统一让 "s1" 存在，供「先校验会话」这一步通过。 */
+    private SessionManager sessions;
+
     /** 被测试的处理器。 */
     private CommandHandlers handlers;
 
     @BeforeEach
     void setUp() {
         commands = Mockito.mock(CommandManager.class);
-        handlers = new CommandHandlers(commands, ServerConfig.builder("127.0.0.1", 9096).build());
+        sessions = Mockito.mock(SessionManager.class);
+        Session existing = Mockito.mock(Session.class);
+        lenient().when(existing.getSessionId()).thenReturn("s1");
+        lenient().when(sessions.require("s1")).thenReturn(existing);
+        handlers = new CommandHandlers(commands, sessions, ServerConfig.builder("127.0.0.1", 9096).build());
     }
 
     /**
@@ -127,6 +139,21 @@ class CommandHandlersTest {
         assertTrue(fixture.body().contains("\"value\":\"openai/gpt-4o\""), fixture.body());
     }
 
+    @Test
+    void execute_should_return_404_when_session_missing() {
+        // Given：会话不存在
+        when(sessions.require("ghost")).thenThrow(new JellyfishException("会话不存在：ghost"));
+        Fixture fixture = fixture("{\"input\":\"/help\"}", null);
+
+        // When
+        ApiException error = assertThrows(ApiException.class,
+                () -> handlers.execute(fixture.exchange, param("id", "ghost")));
+
+        // Then：与 /chat、GET /sessions/{id} 同口径回 404——不校验的话，幽灵 id 也能把命令跑起来、
+        // 回 200 + kind=ERROR，调用方无法区分「会话不存在」与「命令这次失败」
+        assertEquals(Responses.NOT_FOUND, error.getStatus());
+        verify(commands, never()).execute(any(String.class), any(String.class));
+    }
     @Test
     void execute_should_return_200_when_command_ok() {
         when(commands.isCommand("/help")).thenReturn(true);

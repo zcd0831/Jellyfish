@@ -23,9 +23,12 @@ import zcd.jellyfish.server.handler.CommandHandlers;
 import zcd.jellyfish.server.handler.HealthHandler;
 import zcd.jellyfish.server.handler.SessionHandlers;
 import zcd.jellyfish.server.http.ApiKeyGuard;
+import zcd.jellyfish.server.http.OriginGuard;
 import zcd.jellyfish.server.http.Router;
 
 import java.net.InetSocketAddress;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -143,10 +146,14 @@ public final class JellyfishServer {
      * @throws JellyfishException 绑定失败时抛出
      */
     public void start() {
+        requireUsableExposure();
         approvals.attach();
         // 提问答复者同批挂上：服务模式把提问搬到 HTTP 层，与审批同一条路
         asks.attach();
         HttpHandler router = buildRouter();
+        // 来源校验在鉴权之外单独一层：它挡的是「浏览器被别的页面指使去写本服务」，
+        // 与「调用方有没有密钥」是两件事——没有密钥的本地服务同样需要它
+        router = new OriginGuard(router);
         if (config.getApiKey() != null) {
             // 包在路由外面：新接口默认就被保护，例外只能是显式声明的（探活）
             router = new ApiKeyGuard(config.getApiKey(), router);
@@ -167,6 +174,58 @@ public final class JellyfishServer {
         logReady();
         hook = new Thread(this::stop, "jellyfish-server-shutdown");
         Runtime.getRuntime().addShutdownHook(hook);
+    }
+
+    /**
+     * 校验监听配置不会把无鉴权的能力敞开给非本机。
+     * <p>
+     * <b>为什么是拒绝启动而不是继续用 WARN</b>：无密钥 + 非回环等于把「建会话、跑命令、读全部会话正文、
+     * 批准他人的工具调用」交给同一网段的任何人，而唯一的提示是一行 WARN——那是最容易被忽略、
+     * 又最不该被忽略的一种配置。退出码 3 让脚本当场停下，比跑到一半被人扫到要好。
+     * <p>
+     * <b>回环仍然允许无密钥</b>：这是刻意的缺省，只服务「本机跑一次」。
+     *
+     * @throws JellyfishException 绑定了非回环地址但未配 API key 时抛出
+     */
+    private void requireUsableExposure() {
+        requireUsableExposure(config);
+    }
+
+    /**
+     * 校验监听配置不会把无鉴权的能力敞开给非本机（实现）。
+     * <p>
+     * 抽成静态是为了能在不起服务的前提下单测这条判据——它是一段纯配置检查，
+     * 而 {@code start()} 需要全套协作者。
+     *
+     * @param config 运行参数，不可为 {@code null}
+     * @throws JellyfishException 绑定了非回环地址但未配 API key 时抛出
+     */
+    static void requireUsableExposure(ServerConfig config) {
+        if (config.getApiKey() != null || isLoopback(config.getHost())) {
+            return;
+        }
+        throw new JellyfishException("拒绝启动：绑定 " + config.getHost()
+                + " 却未配 API key——任何能访问该端口的人都能建会话、跑命令、读全部会话正文。"
+                + "请配 " + ServerConfig.ENV_API_KEY + " 环境变量或 --api-key，或改回 --host 127.0.0.1");
+    }
+
+    /**
+     * 判断监听地址是否只服务本机。
+     * <p>
+     * 判据用 {@link InetAddress#isLoopbackAddress()} 而不是字符串比对：{@code localhost}、
+     * {@code ::1}、{@code 127.0.0.2} 都是回环，而它们与 {@code 127.0.0.1} 不同名。
+     * 解析不出来时按「非回环」处理（拒绝），因为那多半是写错的主机名——让它在启动期就暴露。
+     *
+     * @param host 监听地址，不可为 {@code null}
+     * @return 只服务本机返回 {@code true}
+     */
+    private static boolean isLoopback(String host) {
+        try {
+            return InetAddress.getByName(host).isLoopbackAddress();
+        } catch (UnknownHostException e) {
+            LOG.warn("监听地址无法解析，按「非回环」处理: host={}", host);
+            return false;
+        }
     }
 
     /**
@@ -248,7 +307,7 @@ public final class JellyfishServer {
         SessionHandlers sessionHandlers = new SessionHandlers(config, sessions, agents, models, turns);
         ChatHandler chatHandler = new ChatHandler(conversations, streams, turns, runEvents, sessions, config,
                 approvals, asks);
-        CommandHandlers commandHandlers = new CommandHandlers(commands, config);
+        CommandHandlers commandHandlers = new CommandHandlers(commands, sessions, config);
         ApprovalHandlers approvalHandlers = new ApprovalHandlers(approvals, config);
         AskHandlers askHandlers = new AskHandlers(asks, config);
         HealthHandler healthHandler = new HealthHandler(healthCheck);

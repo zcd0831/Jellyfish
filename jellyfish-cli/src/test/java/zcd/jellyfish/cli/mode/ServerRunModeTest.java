@@ -1,5 +1,6 @@
 package zcd.jellyfish.cli.mode;
 
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import zcd.jellyfish.cli.ExitCodes;
 import zcd.jellyfish.cli.StartupOptions;
@@ -137,12 +138,25 @@ class ServerRunModeTest {
     void run_should_return_startup_error_when_bind_fails() {
         // 用「非本机地址」构造绑定失败。刻意不用「占用端口」：macOS 上 Undertow 会设 SO_REUSEPORT，
         // 已占端口仍能绑上（实测），那样测试会挂在 awaitShutdown 上。
+        // 必须配一个 key：非回环 + 无 key 会先被暴露面检查拦下，那样测的就不是绑定失败了
         RecordingConsoleIO console = new RecordingConsoleIO(null);
 
         int code = mode(console).run(StartupOptions.builder(StartupOptions.Mode.SERVER)
-                .port(0).host("198.51.100.1").build());
+                .port(0).host("198.51.100.1").apiKey("test-key-for-bind-failure").build());
 
         assertEquals(ExitCodes.STARTUP_ERROR, code);
         assertTrue(console.err().contains("启动失败"), console.err());
+    }
+
+    @Test
+    @DisplayName("绑非回环却不配 API key：退 3 且说清原因，而不是起一个敞开给同网段的服务")
+    void run_should_return_startup_error_when_nonLoopbackWithoutKey() {
+        RecordingConsoleIO console = new RecordingConsoleIO(null);
+
+        int code = mode(console).run(StartupOptions.builder(StartupOptions.Mode.SERVER)
+                .port(0).host("0.0.0.0").build());
+
+        assertEquals(ExitCodes.STARTUP_ERROR, code);
+        assertTrue(console.err().contains("未配 API key"), console.err());
     }
 }

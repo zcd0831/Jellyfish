@@ -963,8 +963,9 @@ stderr、SSE 的 `notice`），**都不会被拼进正文**——拼进去会让
 java -jar jellyfish-cli/target/jellyfish-cli-0.1.1.jar -server 9096
 ```
 
-**默认只绑 `127.0.0.1`**，且**没配密钥时不鉴权**——对只绑回环的本地场景够用。对外开放必须显式 `--host 0.0.0.0`
-并配上 API key：
+**默认只绑 `127.0.0.1`**，且**没配密钥时不鉴权**——对只绑回环的本地场景够用。
+**绑非回环地址却未配密钥会拒绝启动（退 3）**：那等于把「建会话、跑命令、读全部会话正文」
+交给同网段的任何人，而一行 WARN 是拦不住这种配置的。对外开放必须显式 `--host 0.0.0.0` 并配上 API key：
 
 ```bash
 # 推荐：密钥走环境变量（不会出现在 ps 输出里）
@@ -972,6 +973,11 @@ JELLYFISH_SERVER_API_KEY=$(openssl rand -hex 32) java -jar ...jar -server --host
 # 也可以：命令行参数（argv 会出现在 ps 里，同机其他用户看得见）
 java -jar ...jar -server --host 0.0.0.0 --api-key <密钥>
 ```
+
+**写请求（`POST` / `PUT` / `PATCH` / `DELETE`）额外校验来源**：带 `Origin`（或退到 `Referer`）时，
+其主机必须与本服务一致，否则回 `403`。这挡的是浏览器被恶意页面指使来驱动你本机的 agent——
+浏览器对 `text/plain` 这类「简单请求」会照常发出并执行副作用，只是响应不可读，仅靠「只绑回环」挡不住
+（请求确实来自本机，只是由别人的页面发起）。不带这两个头的客户端（`curl`、SDK）不受影响。
 
 配了密钥后，**除 `GET /health` 外所有接口**都要 `Authorization: Bearer <密钥>`。跑通一次：
 
@@ -1000,12 +1006,18 @@ curl -sN -X POST localhost:9096/sessions/$SID/chat \
 | `GET` | `/health` | 健康报告（UP / WARN / DOWN） |
 
 几条接入方必须知道的：**同会话同时只允许一个回合**（第二个请求 `409`，要打断用 `/cancel` 或断开 SSE）；
+**`/sessions/{id}/commands` 会先校验会话存在**（不存在回 `404`，与 `/chat`、`GET /sessions/{id}` 同口径；
+命令自身不认识则回 `404` + `kind=UNKNOWN`，两者靠 `kind` 与状态码并存可区分）；
 **人工审批走 HTTP**（流里推 `approval_required`，拿 `requestId` 调 `POST /approvals/{id}`；头槽位**每会话一个**，
-会话之间互不排队，同一会话内是 FIFO 队列、上限 8 条，超出直接按拒绝处理）；**向用户提问同理**（流里推
+会话之间互不排队，同一会话内是 FIFO 队列、上限 8 条，超出只拒新请求、**已排队的不受影响**）；**向用户提问同理**（流里推
 `ask_required`，拿 `requestId` 调 `POST /asks/{id}`，请求体给 `{"optionId":"…"}` 或 `{"text":"…"}`；两种都不给回 400，
 因为「用户自己填的答案」与「客户端写错了请求」必须能分开）；**`tool_output` 是可丢的过程信息**，
 权威结果是 `tool_done` 的 `output`；**错误体统一为** `{"error":"CODE","message":"…"}`；
 **`POST /chat` 不执行命令、不解析输入指令**，要与命令域打交道走 `/commands`。
+
+**服务端是单主体模型**：一个 API key 就是一个信任域，内核不认识「哪个调用方」。
+按调用方区分的会话归属与审批归属在 Spring starter 的 `user` 包里（`SessionOwnerStore` /
+`ApprovalGateway`）——那里有 userId 概念；直接用本服务时不要把它当成多租户服务。
 
 SSE 事件名、鉴权细节与会话语义见 [docs/constraints.md](docs/constraints.md)。
 

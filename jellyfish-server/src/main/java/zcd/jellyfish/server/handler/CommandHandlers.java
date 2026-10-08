@@ -1,11 +1,13 @@
 package zcd.jellyfish.server.handler;
 
 import io.undertow.server.HttpServerExchange;
+import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.extension.CommandArguments;
 import zcd.jellyfish.api.extension.CommandChoice;
 import zcd.jellyfish.api.extension.CommandResult;
 import zcd.jellyfish.infra.command.CommandInfo;
 import zcd.jellyfish.infra.command.CommandManager;
+import zcd.jellyfish.infra.session.SessionManager;
 import zcd.jellyfish.server.ServerConfig;
 import zcd.jellyfish.server.dto.ChoiceDto;
 import zcd.jellyfish.server.dto.CommandExecRequest;
@@ -54,6 +56,9 @@ public final class CommandHandlers {
     /** 命令域服务。 */
     private final CommandManager commands;
 
+    /** 会话域服务：命令按会话寻址，先校验会话存在。 */
+    private final SessionManager sessions;
+
     /** 运行参数（请求体上限）。 */
     private final ServerConfig config;
 
@@ -61,10 +66,12 @@ public final class CommandHandlers {
      * 构造处理器。
      *
      * @param commands 命令域服务，不可为 {@code null}
+     * @param sessions 会话域服务，不可为 {@code null}
      * @param config   运行参数，不可为 {@code null}
      */
-    public CommandHandlers(CommandManager commands, ServerConfig config) {
+    public CommandHandlers(CommandManager commands, SessionManager sessions, ServerConfig config) {
         this.commands = commands;
+        this.sessions = sessions;
         this.config = config;
     }
 
@@ -104,7 +111,7 @@ public final class CommandHandlers {
      * @param params   路径参数（含 {@code id}）
      */
     public void execute(HttpServerExchange exchange, PathParams params) {
-        String sessionId = params.get("id");
+        String sessionId = requireSession(params.get("id"));
         CommandExecRequest request = JsonBody.read(exchange, CommandExecRequest.class, config.getMaxBodyBytes());
         if (request == null) {
             throw new ApiException(Responses.BAD_REQUEST, Responses.CODE_BAD_REQUEST,
@@ -122,6 +129,26 @@ public final class CommandHandlers {
         // UNKNOWN 用 404 表达「没有这条命令」，并仍返回结果体：判别字段是 kind
         int status = result.getKind() == CommandResult.Kind.UNKNOWN ? Responses.NOT_FOUND : Responses.OK;
         Responses.writeJson(exchange, status, CommandResultDto.of(result));
+    }
+
+    /**
+     * 校验会话存在，返回其标识。
+     * <p>
+     * <b>为什么必须校验</b>：不校验的话，一个不存在的会话 id 也能让命令跑起来，接口回
+     * {@code 200 + kind=ERROR}——调用方无法区分「会话不存在」与「命令这次失败」，
+     * 而 {@code /chat} 与 {@code GET /sessions/{id}} 对同一种输入都回 404。
+     *
+     * @param sessionId 路径里的会话标识，可为 {@code null}
+     * @return 已确认存在的会话标识，保证非空白
+     * @throws ApiException 会话不存在时抛出 404
+     */
+    private String requireSession(String sessionId) {
+        try {
+            return sessions.require(sessionId).getSessionId();
+        } catch (JellyfishException e) {
+            throw new ApiException(Responses.NOT_FOUND, "SESSION_NOT_FOUND",
+                    "会话不存在：" + sessionId);
+        }
     }
 
     /**

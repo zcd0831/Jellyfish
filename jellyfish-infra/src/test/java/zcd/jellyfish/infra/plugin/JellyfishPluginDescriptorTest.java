@@ -2,6 +2,7 @@ package zcd.jellyfish.infra.plugin;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import zcd.jellyfish.api.plugin.PluginConfigScope;
 import zcd.jellyfish.api.plugin.PluginDeclaration;
 
 import java.io.IOException;
@@ -37,7 +38,7 @@ class JellyfishPluginDescriptorTest {
                 + "plugin.class=com.acme.SamplePlugin\n");
 
         // When
-        PluginDeclaration declaration = descriptor.toDeclaration(null);
+        PluginDeclaration declaration = descriptor.toDeclaration(null, null, PluginConfigScope.ABSENT);
 
         // Then
         assertEquals("sample", declaration.getPluginId());
@@ -51,7 +52,8 @@ class JellyfishPluginDescriptorTest {
         configuration.put("precision", 4);
 
         // When
-        PluginDeclaration declaration = descriptor.toDeclaration(configuration);
+        PluginDeclaration declaration = descriptor.toDeclaration(configuration, configuration,
+                PluginConfigScope.GLOBAL);
 
         // Then
         assertEquals(4, declaration.getConfiguration().get("precision"));

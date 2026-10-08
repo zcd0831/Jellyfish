@@ -1,6 +1,7 @@
 package zcd.jellyfish.infra.plugin;
 
 import org.junit.jupiter.api.Test;
+import zcd.jellyfish.api.plugin.PluginConfigScope;
 import zcd.jellyfish.infra.config.PluginsSettings;
 
 import java.nio.file.Path;
@@ -64,6 +65,42 @@ class PluginRuntimeConfigTest {
         // Then
         assertTrue(config.configurationOf("plugin-a").isEmpty());
         assertTrue(config.configurationOf(null).isEmpty());
+    }
+
+    @Test
+    void configScopeOf_should_report_project_and_keep_global_section() {
+        // Given：项目级整段替换了 plugin-a 的配置段，而全局级那一份另有内容
+        PluginRuntimeConfig config = PluginRuntimeConfig.defaults();
+        Map<String, Map<String, Object>> merged = new LinkedHashMap<>();
+        merged.put("plugin-a", Collections.<String, Object>singletonMap("maxInlineBytes", 1048576));
+        Map<String, Map<String, Object>> globalOnly = new LinkedHashMap<>();
+        globalOnly.put("plugin-a", Collections.<String, Object>singletonMap("maxInlineBytes", 4096));
+
+        // When
+        config.refresh(null, new PluginsSettings(null, null, merged, globalOnly,
+                new LinkedHashSet<>(Collections.singletonList("plugin-a"))));
+
+        // Then：合并值来自项目级，但「全局级那一份」仍读得到——只认全局级的键据此取值
+        assertEquals(PluginConfigScope.PROJECT, config.configScopeOf("plugin-a"));
+        assertEquals(1048576, config.configurationOf("plugin-a").get("maxInlineBytes"));
+        assertEquals(4096, config.globalConfigurationOf("plugin-a").get("maxInlineBytes"));
+    }
+
+    @Test
+    void configScopeOf_should_report_global_when_only_global_declared() {
+        // Given
+        PluginRuntimeConfig config = PluginRuntimeConfig.defaults();
+        Map<String, Map<String, Object>> merged = new LinkedHashMap<>();
+        merged.put("plugin-a", Collections.<String, Object>singletonMap("k", "v"));
+
+        // When：单份配置（未经合并）反序列化出的插件段就是全局级那一份
+        config.refresh(null, new PluginsSettings(null, null, merged));
+
+        // Then
+        assertEquals(PluginConfigScope.GLOBAL, config.configScopeOf("plugin-a"));
+        assertEquals("v", config.globalConfigurationOf("plugin-a").get("k"));
+        assertEquals(PluginConfigScope.ABSENT, config.configScopeOf("plugin-b"));
+        assertEquals(PluginConfigScope.ABSENT, config.configScopeOf(null));
     }
 
     @Test

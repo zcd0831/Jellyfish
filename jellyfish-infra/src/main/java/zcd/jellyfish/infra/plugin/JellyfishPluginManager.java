@@ -106,13 +106,15 @@ final class JellyfishPluginManager extends DefaultPluginManager {
     }
 
     /**
-     * 由描述符构造插件声明，并附上该插件的配置段。
+     * 由描述符构造插件声明，并附上该插件的配置段与来源。
      *
      * @param descriptor 插件描述符，不可为 {@code null}
      * @return 插件声明
      */
     PluginDeclaration declarationOf(JellyfishPluginDescriptor descriptor) {
-        return descriptor.toDeclaration(runtimeConfig.configurationOf(descriptor.getPluginId()));
+        String pluginId = descriptor.getPluginId();
+        return descriptor.toDeclaration(runtimeConfig.configurationOf(pluginId),
+                runtimeConfig.globalConfigurationOf(pluginId), runtimeConfig.configScopeOf(pluginId));
     }
 
     /**

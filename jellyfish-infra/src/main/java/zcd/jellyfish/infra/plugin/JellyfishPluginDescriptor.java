@@ -4,6 +4,7 @@ import org.pf4j.DefaultPluginDescriptor;
 import org.pf4j.PluginDescriptor;
 import org.pf4j.PluginWrapper;
 import zcd.jellyfish.api.JellyfishException;
+import zcd.jellyfish.api.plugin.PluginConfigScope;
 import zcd.jellyfish.api.plugin.PluginDeclaration;
 
 import java.util.ArrayList;
@@ -87,12 +88,20 @@ public final class JellyfishPluginDescriptor extends DefaultPluginDescriptor {
 
     /**
      * 转换为插件声明。
+     * <p>
+     * <b>为什么配置要分两份传</b>：两级合并时同名插件段是整对象替换，因此 {@code configuration}
+     * 可能是项目级那份；而安全边界类的键（提示内联上限、加载目录范围）只能认全局级那份，
+     * 同时也不能把全局级设的值一起丢掉。来源层级一并带上，见 {@code PluginDeclaration}。
      *
-     * @param configuration 插件配置段，可为 {@code null}
+     * @param configuration       插件配置段（合并值），可为 {@code null}
+     * @param globalConfiguration 只由全局级决定的那份配置，可为 {@code null}
+     * @param configScope         配置段来源层级，可为 {@code null}（按 {@code UNKNOWN} 处理）
      * @return 插件声明
      */
-    public PluginDeclaration toDeclaration(Map<String, Object> configuration) {
-        return PluginDeclaration.of(getPluginId(), configuration);
+    public PluginDeclaration toDeclaration(Map<String, Object> configuration,
+                                           Map<String, Object> globalConfiguration,
+                                           PluginConfigScope configScope) {
+        return PluginDeclaration.of(getPluginId(), configuration, globalConfiguration, configScope);
     }
 
     /**

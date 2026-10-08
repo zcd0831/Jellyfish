@@ -635,13 +635,22 @@ public class RuntimeConfig {
      */
     private static PluginsSettings mergePluginsSettings(PluginsSettings global, PluginsSettings project) {
         Map<String, Map<String, Object>> configurations = new LinkedHashMap<>();
+        Map<String, Map<String, Object>> globalConfigurations = new LinkedHashMap<>();
+        Set<String> projectDeclared = new LinkedHashSet<>();
         putPluginConfigurations(configurations, global);
+        // 全局级那一份单独留底：下面同名插件段会被项目级整对象替换掉，而安全边界类的键只能认它
+        if (global != null) {
+            putPluginConfigurations(globalConfigurations, global);
+        }
         // 同名插件配置段整对象替换：插件声明的名单类配置必须整段生效或整段不生效，不能半新半旧
         putPluginConfigurations(configurations, project);
+        if (project != null) {
+            projectDeclared.addAll(project.getConfigurations().keySet());
+        }
         return new PluginsSettings(
                 listOverride(project, global, PluginsSettings::isEnabledDeclared, PluginsSettings::getEnabled),
                 listOverride(project, global, PluginsSettings::isDisabledDeclared, PluginsSettings::getDisabled),
-                configurations);
+                configurations, globalConfigurations, projectDeclared);
     }
 
     /**

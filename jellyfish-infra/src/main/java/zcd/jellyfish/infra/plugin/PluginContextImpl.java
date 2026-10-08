@@ -13,6 +13,7 @@ import zcd.jellyfish.api.extension.ExtensionRequest;
 import zcd.jellyfish.api.extension.SessionExtensionEntry;
 import zcd.jellyfish.api.extension.ShellContribution;
 import zcd.jellyfish.api.extension.ShellContributionStatus;
+import zcd.jellyfish.api.plugin.PluginConfigScope;
 import zcd.jellyfish.api.plugin.PluginContext;
 import zcd.jellyfish.api.plugin.PluginDeclaration;
 import zcd.jellyfish.api.plugin.PluginOwnerNamespace;
@@ -190,6 +191,16 @@ public final class PluginContextImpl implements PluginContext {
     }
 
     @Override
+    public PluginConfigScope configScope() {
+        return declaration.getConfigScope();
+    }
+
+    @Override
+    public Map<String, Object> globalConfiguration() {
+        return declaration.getGlobalConfiguration();
+    }
+
+    @Override
     public RuntimeInfo runtimeInfo() {
         return runtimeInfo.snapshot();
     }
@@ -217,7 +228,8 @@ public final class PluginContextImpl implements PluginContext {
         // 子上下文复用父上下文的存活标记：否则回收根上下文管不住子上下文，幽灵注册会从这条缝回来。
         // 本方法刻意不做存活检查——它不产生任何注册，真正需要被拦住的是注册那一刻。
         // 运行时信息持有者也一并复用：外壳是进程级事实，子单元与父单元看到的必须一致
-        return new PluginContextImpl(PluginDeclaration.of(childPluginId, declaration.getConfiguration()),
+        return new PluginContextImpl(PluginDeclaration.of(childPluginId, declaration.getConfiguration(),
+                        declaration.getGlobalConfiguration(), declaration.getConfigScope()),
                 extensions, events, lifecycle, runtimeInfo, actions, sessions, shellIngress, delegations, asks);
     }
 

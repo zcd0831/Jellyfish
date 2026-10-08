@@ -1,5 +1,6 @@
 package zcd.jellyfish.infra.plugin;
 
+import zcd.jellyfish.api.plugin.PluginConfigScope;
 import zcd.jellyfish.infra.config.PluginsSettings;
 
 import java.nio.file.Path;
@@ -53,7 +54,8 @@ public final class PluginRuntimeConfig {
     public PluginRuntimeConfig(List<Path> pluginsRoots, Set<String> enabledPluginIds,
                                Set<String> disabledPluginIds,
                                Map<String, Map<String, Object>> pluginConfigurations) {
-        this.snapshot = Snapshot.of(pluginsRoots, enabledPluginIds, disabledPluginIds, pluginConfigurations);
+        this.snapshot = Snapshot.of(pluginsRoots, enabledPluginIds, disabledPluginIds, pluginConfigurations,
+                null, null);
     }
 
     /**
@@ -93,7 +95,7 @@ public final class PluginRuntimeConfig {
      */
     public void refresh(List<Path> pluginsRoots, PluginsSettings settings) {
         if (settings == null) {
-            this.snapshot = Snapshot.of(pluginsRoots, null, null, null);
+            this.snapshot = Snapshot.of(pluginsRoots, null, null, null, null, null);
             return;
         }
         // 未声明的名单传 null（不额外限定），声明的名单（哪怕是空列表）传集合：
@@ -101,7 +103,24 @@ public final class PluginRuntimeConfig {
         this.snapshot = Snapshot.of(pluginsRoots,
                 settings.isEnabledDeclared() ? new LinkedHashSet<>(settings.getEnabled()) : null,
                 settings.isDisabledDeclared() ? new LinkedHashSet<>(settings.getDisabled()) : null,
-                settings.getConfigurations());
+                settings.getConfigurations(), settings.getGlobalConfigurations(),
+                settingsProjectDeclared(settings));
+    }
+
+    /**
+     * 取出「来自项目级的 pluginId」集合。
+     *
+     * @param settings 插件段配置，不可为 {@code null}
+     * @return 集合，无项目级声明时为空集
+     */
+    private static Set<String> settingsProjectDeclared(PluginsSettings settings) {
+        Set<String> declared = new LinkedHashSet<>();
+        for (String pluginId : settings.getConfigurations().keySet()) {
+            if (settings.isProjectDeclared(pluginId)) {
+                declared.add(pluginId);
+            }
+        }
+        return declared;
     }
 
     /**
@@ -158,6 +177,35 @@ public final class PluginRuntimeConfig {
     }
 
     /**
+     * 获取指定插件配置段里<b>只由全局级决定</b>的那一份。
+     * <p>
+     * 用途见 {@code PluginContext.globalConfiguration()}：有类配置键的作用是收紧一个安全边界，
+     * 它们不能由随仓库变化的内容决定，但也不能因为项目级覆盖了整个段就把全局级设的值丢掉。
+     *
+     * @param pluginId 插件标识，可为 {@code null}
+     * @return 不可变配置映射，全局级未配置该插件段时为空映射而非 {@code null}
+     */
+    public Map<String, Object> globalConfigurationOf(String pluginId) {
+        Map<String, Object> configuration = snapshot.pluginGlobalConfigurations.get(pluginId);
+        return configuration == null ? Collections.<String, Object>emptyMap() : configuration;
+    }
+
+    /**
+     * 获取指定插件配置段的来源层级。
+     *
+     * @param pluginId 插件标识，可为 {@code null}
+     * @return 来源层级，保证非 {@code null}
+     */
+    public PluginConfigScope configScopeOf(String pluginId) {
+        if (pluginId == null || !snapshot.pluginConfigurations.containsKey(pluginId)) {
+            return PluginConfigScope.ABSENT;
+        }
+        return snapshot.projectDeclaredPluginIds.contains(pluginId)
+                ? PluginConfigScope.PROJECT
+                : PluginConfigScope.GLOBAL;
+    }
+
+    /**
      * 获取全部插件配置段。
      * <p>
      * 供<b>不按 pluginId 逐个查询</b>的消费方使用：例如权限模块要把各插件声明的只读名单
@@ -191,8 +239,14 @@ public final class PluginRuntimeConfig {
         /** 禁用名单。 */
         private final Set<String> disabledPluginIds;
 
-        /** pluginId → 该插件配置段。 */
+        /** pluginId → 该插件配置段（两级合并后的最终值）。 */
         private final Map<String, Map<String, Object>> pluginConfigurations;
+
+        /** pluginId → 只由全局级决定的那份配置段。 */
+        private final Map<String, Map<String, Object>> pluginGlobalConfigurations;
+
+        /** 哪些 pluginId 的配置段来自项目级。 */
+        private final Set<String> projectDeclaredPluginIds;
 
         /**
          * 构造快照。
@@ -201,16 +255,22 @@ public final class PluginRuntimeConfig {
          * @param enabledPluginIds         启用名单
          * @param enabledPluginIdsDeclared 启用名单是否被显式声明
          * @param disabledPluginIds        禁用名单
-         * @param pluginConfigurations     插件配置段
+         * @param pluginConfigurations     插件配置段（合并值）
+         * @param pluginGlobalConfigurations 插件配置段里只由全局级决定的那一份
+         * @param projectDeclaredPluginIds 来自项目级的 pluginId
          */
         private Snapshot(List<Path> pluginsRoots, Set<String> enabledPluginIds,
                          boolean enabledPluginIdsDeclared, Set<String> disabledPluginIds,
-                         Map<String, Map<String, Object>> pluginConfigurations) {
+                         Map<String, Map<String, Object>> pluginConfigurations,
+                         Map<String, Map<String, Object>> pluginGlobalConfigurations,
+                         Set<String> projectDeclaredPluginIds) {
             this.pluginsRoots = pluginsRoots;
             this.enabledPluginIds = enabledPluginIds;
             this.enabledPluginIdsDeclared = enabledPluginIdsDeclared;
             this.disabledPluginIds = disabledPluginIds;
             this.pluginConfigurations = pluginConfigurations;
+            this.pluginGlobalConfigurations = pluginGlobalConfigurations;
+            this.projectDeclaredPluginIds = projectDeclaredPluginIds;
         }
 
         /**
@@ -219,11 +279,18 @@ public final class PluginRuntimeConfig {
          * @param roots          插件根目录，为 {@code null} 或空时回退默认目录
          * @param enabled        启用名单，为 {@code null} 表示未声明（不额外限定）
          * @param disabled       禁用名单，可为 {@code null}
-         * @param configurations 插件配置段，可为 {@code null}
+         * @param configurations 插件配置段（合并值），可为 {@code null}
+         * @param globalConfigurations 插件配置段里只由全局级决定的那一份，可为 {@code null}（按配置段本身处理）
+         * @param projectDeclared 来自项目级的 pluginId，可为 {@code null}
          * @return 不可变快照
          */
         private static Snapshot of(List<Path> roots, Set<String> enabled, Set<String> disabled,
-                                   Map<String, Map<String, Object>> configurations) {
+                                   Map<String, Map<String, Object>> configurations,
+                                   Map<String, Map<String, Object>> globalConfigurations,
+                                   Set<String> projectDeclared) {
+            Map<String, Map<String, Object>> resolved = configurations == null
+                    ? Collections.<String, Map<String, Object>>emptyMap()
+                    : Collections.unmodifiableMap(new LinkedHashMap<>(configurations));
             return new Snapshot(
                     roots == null || roots.isEmpty()
                             ? Collections.singletonList(Paths.get(DEFAULT_PLUGINS_ROOT))
@@ -235,9 +302,14 @@ public final class PluginRuntimeConfig {
                     disabled == null
                             ? Collections.<String>emptySet()
                             : Collections.unmodifiableSet(new LinkedHashSet<>(disabled)),
-                    configurations == null
-                            ? Collections.<String, Map<String, Object>>emptyMap()
-                            : Collections.unmodifiableMap(new LinkedHashMap<>(configurations)));
+                    resolved,
+                    // 调用方没给全局级那一份时按配置段本身处理：单份配置的语境下两者本来就是一回事
+                    globalConfigurations == null
+                            ? resolved
+                            : Collections.unmodifiableMap(new LinkedHashMap<>(globalConfigurations)),
+                    projectDeclared == null
+                            ? Collections.<String>emptySet()
+                            : Collections.unmodifiableSet(new LinkedHashSet<>(projectDeclared)));
         }
     }
 }

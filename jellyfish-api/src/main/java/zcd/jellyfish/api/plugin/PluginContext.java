@@ -97,10 +97,49 @@ public interface PluginContext {
      * 获取本插件在 {@code jellyfish.json} 中的配置段。
      * <p>
      * 双源合并与环境变量替换已由内核完成，插件拿到的是最终值；插件不允许自行读配置文件。
+     * 这里的「最终值」指的是<b>两级合并之后</b>的值——需要区分「这个值是用户自己那台机器上定的
+     * 还是当前仓库里定的」时，用 {@link #configScope()} 与 {@link #globalConfiguration()}。
      *
      * @return 不可变配置映射，未配置时为空映射而非 {@code null}
      */
     Map<String, Object> configuration();
+
+    /**
+     * 获取本插件配置段的来源层级。
+     * <p>
+     * <b>为什么需要它</b>：全局级配置在 {@code ~/.jellyfish/}，只属于用户自己；项目级在
+     * {@code ./.jellyfish/}，随仓库走。有一类配置键的作用是「收紧一个安全边界」（提示内联上限、
+     * 加载目录范围），它们不该由随仓库变化的内容决定——一个 {@code git clone} 下来的目录就能调宽它。
+     * 插件据此判定该不该采纳某个值，见 {@link #globalConfiguration()}。
+     * <p>
+     * <b>默认实现返回 {@link PluginConfigScope#UNKNOWN}</b>：这是为「不区分来源的容器」留的兼容口
+     * （旧内核、手写装配、测试桩）。此时插件只能按合并值处理，即行为退回改造前；真实内核会如实返回。
+     *
+     * @return 配置段来源层级，保证非 {@code null}
+     */
+    default PluginConfigScope configScope() {
+        return PluginConfigScope.UNKNOWN;
+    }
+
+    /**
+     * 获取本插件配置段里<b>只由全局级决定</b>的那一份。
+     * <p>
+     * <b>与 {@link #configuration()} 的唯一区别</b>：两级合并时同名插件段是<b>整对象替换</b>
+     * （见内核 {@code RuntimeConfig.mergePluginsSettings}），因此项目级一旦写了这个插件段，
+     * {@code configuration()} 给的就是项目级那一份，而本方法给的仍是用户自己那台机器上的那一份。
+     * <p>
+     * <b>为什么两个都要有</b>：安全边界类的键需要「只认全局级」——但也不能因此把全局级的值一起丢掉。
+     * 例如全局级把内联上限调成 4 KiB、项目级只加了一个无关的键：若直接「来源是项目级就忽略整段」，
+     * 用户设的 4 KiB 会静默退回缺省；正确做法是从这里读那个键。
+     * <p>
+     * <b>默认实现返回 {@link #configuration()}</b>：来源未知时，「区分来源」这件事本身就不成立，
+     * 于是把合并值当作全局值——也就是行为退回改造前。真实内核会如实返回。
+     *
+     * @return 不可变配置映射，全局级未配置该插件段时为空映射而非 {@code null}
+     */
+    default Map<String, Object> globalConfiguration() {
+        return configuration();
+    }
 
     /**
      * 获取运行时信息只读快照：本进程跑在哪种外壳里、有没有可交互界面、能不能弹审批。

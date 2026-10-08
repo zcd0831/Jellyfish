@@ -675,6 +675,24 @@ class ReActLooperTest {
     }
 
     @Test
+    void chat_should_noticeStreamCut_when_replyEndsWithoutAnyFinishSignal() {
+        // Given：连接在模型答到一半时断了（流层已把它标成不完整，且没有结束原因）
+        when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
+        stubResponses(new LlmResponse("半句话", null, null, new LlmUsage(1, 1, 2), null).asIncomplete());
+        Session session = sessionManager.createDefault();
+
+        // When
+        ReActResult result = newLooper().chat(session.getSessionId(), "写篇长文", new RecordingListener()).await();
+
+        // Then：提示要与「被输出上限截断」分开——这一种的成因是连接断了，该做的是重发，
+        // 而不是去调一个与现象无关的配置项
+        assertEquals("半句话", result.getContent());
+        assertNotNull(result.getNotice());
+        assertTrue(result.getNotice().contains("中断"), result.getNotice());
+        assertFalse(result.getNotice().contains("maxOutputTokens"), result.getNotice());
+    }
+
+    @Test
     void chat_should_notNotice_when_finishReasonIsNormalStop() {
         // Given：正常答完（stop / 无结束原因都不该被当成截断）
         when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());

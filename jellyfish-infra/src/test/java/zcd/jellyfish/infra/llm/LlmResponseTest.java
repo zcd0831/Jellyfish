@@ -8,6 +8,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -114,6 +115,49 @@ class LlmResponseTest {
         assertFalse(response(null).isTruncated());
         assertFalse(response("").isTruncated());
         assertFalse(response("content_filter").isTruncated());
+    }
+
+    @Test
+    void isIncomplete_should_beTrue_only_when_marked() {
+        // 标记来自读流那一层（「有没有读到结束标记」只有它知道），解码器不参与
+        assertFalse(response("stop").isIncomplete());
+        assertTrue(response(null).asIncomplete().isIncomplete());
+    }
+
+    @Test
+    void asIncomplete_should_keepEveryField_andBeIdempotent() {
+        // Given：一份内容齐全的响应
+        LlmResponse original = new LlmResponse("正文", "思考", null, new LlmUsage(1, 2, 3), "stop");
+
+        // When
+        LlmResponse marked = original.asIncomplete();
+
+        // Then：只多一个标记，别的一个字段都不能动——它是副本，不是「另一份结果」
+        assertEquals("正文", marked.getContent());
+        assertEquals("思考", marked.getThinking());
+        assertEquals("stop", marked.getFinishReason());
+        assertEquals(3, marked.getUsage().getTotalTokens());
+        assertFalse(original.isIncomplete(), "原对象不该被改");
+        assertSame(marked, marked.asIncomplete(), "重复标记应当是原地返回");
+    }
+
+    @Test
+    void isTruncated_should_beTrue_when_streamWasCut() {
+        // 流被切断与「被输出上限截断」形状相同（有正文、没有工具调用），调用方只需知道
+        // 「这段回复不能当完整答案」，因此两者都算 truncated；区分成因是 isIncomplete 的事
+        assertTrue(response(null).asIncomplete().isTruncated());
+        // 连结束原因都没有的响应本身不算截断——它不是「答完了但被限住」，而是我们不知道发生了什么，
+        // 只有流层标记了才算（避免把 mock/占位场景误判）
+        assertFalse(response(null).isTruncated());
+    }
+
+    @Test
+    void isOutputLimitReason_should_exposeTheSameJudgement() {
+        // 判据只有一份：调用方要区分「截断」与「流中断」两种成因时不必自己再抄一张取值表
+        assertTrue(LlmResponse.isOutputLimitReason("length"));
+        assertTrue(LlmResponse.isOutputLimitReason("MAX_TOKENS"));
+        assertFalse(LlmResponse.isOutputLimitReason("stop"));
+        assertFalse(LlmResponse.isOutputLimitReason(null));
     }
 
     /**

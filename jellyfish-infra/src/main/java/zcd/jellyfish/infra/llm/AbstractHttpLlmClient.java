@@ -9,13 +9,17 @@ import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
 import okio.BufferedSource;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.LlmHttpException;
 import zcd.jellyfish.infra.config.Provider;
 import zcd.jellyfish.infra.support.LlmClients;
 import zcd.jellyfish.infra.support.ObjectMapperWrapper;
 
+import java.io.EOFException;
 import java.io.IOException;
+import java.net.SocketTimeoutException;
 import java.util.Collections;
 import java.util.List;
 import java.util.Set;
@@ -35,11 +39,44 @@ import java.util.concurrent.TimeUnit;
  */
 public abstract class AbstractHttpLlmClient implements LlmClient {
 
+    /** 日志。 */
+    private static final Logger LOG = LoggerFactory.getLogger(AbstractHttpLlmClient.class);
+
     /** 统一的 JSON 请求媒体类型。 */
     private static final MediaType JSON_MEDIA_TYPE = MediaType.parse("application/json; charset=utf-8");
 
     /** 错误响应体写入异常信息时的截断长度，避免日志被超长响应淹没。 */
     private static final int ERROR_BODY_LIMIT = 2000;
+
+    /**
+     * 流式响应的空闲超时（秒）：单次读操作这么久没有拿到任何数据就判失败。
+     * <p>
+     * <b>为什么不能像改造前那样置 0</b>：置 0 等于「永不超时」，而对端在流中途静默断连时
+     * （网络设备掉了、上游进程被杀了，但没有发 FIN）读取会一直阻塞——那个回合就永久挂住，
+     * 并一直占着一条 stream 许可。
+     * <p>
+     * <b>为什么取 300 而不是普通请求的 120</b>：流式与一次性请求的节奏不同，思考类模型在首字之前、
+     * 或长工具参数生成期间可能安静得比 120 秒更久，而这是正常现象。300 秒仍然远小于「用户能接受的
+     * 挂死时间」，也远大于任何正常的 token 间隔。
+     */
+    private static final long STREAM_IDLE_TIMEOUT_SECONDS = 300L;
+
+    /**
+     * 单个 SSE 事件的累积上限（字符）。
+     * <p>
+     * 事件数据逐行拼进一个 {@code StringBuilder}，而它的长度完全由对端决定：一个不回换行、
+     * 一直吐 {@code data:} 的响应能把它撑到 OOM。8 MiB 远大于任何正常事件（最大的那种是携带
+     * 整段工具调用参数的分片），因此正常流量碰不到它。
+     */
+    private static final int MAX_EVENT_CHARS = 8 * 1024 * 1024;
+
+    /**
+     * 单行长度上限（字符）。
+     * <p>
+     * 与 {@link #MAX_EVENT_CHARS} 是两道不同的闸：事件上限挡「很多行拼起来的巨事件」，
+     * 这一道挡「一行本身就巨长」（对端一次写出几十 MB 而不带回车）。SSE 的行本应很短。
+     */
+    private static final int MAX_LINE_CHARS = 1024 * 1024;
 
     /** 当前客户端绑定的 provider 配置。 */
     protected final Provider provider;
@@ -213,10 +250,7 @@ public abstract class AbstractHttpLlmClient implements LlmClient {
         if (listener == null) {
             throw new JellyfishException("stream listener must not be null");
         }
-        // 流式响应可能长时间没有数据，这里禁用读超时；连接池/调度器与共享客户端一致
-        OkHttpClient streamingClient = okHttpClient.newBuilder()
-                .readTimeout(0, TimeUnit.MILLISECONDS)
-                .build();
+        OkHttpClient streamingClient = streamingClient();
         Call call = streamingClient.newCall(request);
         try {
             streamExecutor.execute(() -> runStream(call, listener, decoder));
@@ -225,6 +259,23 @@ public abstract class AbstractHttpLlmClient implements LlmClient {
                     "stream executor rejected the task for provider: " + provider.getName(), e);
         }
         return call::cancel;
+    }
+
+    /**
+     * 取用于流式请求的 HTTP 客户端：与共享客户端同源，只改读超时。
+     * <p>
+     * <b>为什么单独成一个方法</b>：这个读超时是本模块最容易「好心改坏」的一处——
+     * 它曾经被设成 0（「流式响应可能长时间没有数据」），而那等于对端静默断连时永久挂住。
+     * 抽出来之后单测能直接断言它不是 0（见 {@code OpenAiLlmClientTest}）。
+     * <p>
+     * 空闲超时值见 {@link #STREAM_IDLE_TIMEOUT_SECONDS}。
+     *
+     * @return 流式请求用的 HTTP 客户端
+     */
+    protected OkHttpClient streamingClient() {
+        return okHttpClient.newBuilder()
+                .readTimeout(STREAM_IDLE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                .build();
     }
 
     /**
@@ -248,14 +299,21 @@ public abstract class AbstractHttpLlmClient implements LlmClient {
                 return;
             }
             listener.onOpen();
-            readSse(httpResponse, listener, decoder);
+            // 「流是否正常收尾」看两个信号（见下），任一出现即算完成 —— 详见 LlmResponse.isIncomplete
+            boolean terminal = readSse(httpResponse, listener, decoder);
             completed = decoder.buildResponse();
+            if (!terminal && completed.getFinishReason() == null) {
+                // 结束标记是协议糖，而结束原因是模型真的答完了：只看标记会误伤「不发 [DONE]
+                // 但给了 finish_reason」的兼容厂商，只看原因则会漏掉「给了原因、随后连接才断」
+                // 之外的所有情形。两者都没有，才是真的被切断
+                LOG.warn("流式响应在结束标记之前结束，已标注为不完整: provider={}", provider.getName());
+                completed = completed.asIncomplete();
+            }
         } catch (IOException e) {
             if (call.isCanceled()) {
                 listener.onCancelled();
             } else {
-                listener.onError(new JellyfishException(
-                        "stream request failed for provider: " + provider.getName(), e));
+                listener.onError(streamFailure(e));
             }
             return;
         } catch (JellyfishException e) {
@@ -271,25 +329,46 @@ public abstract class AbstractHttpLlmClient implements LlmClient {
     }
 
     /**
+     * 把流式读取的 IO 异常翻成一句能指出成因的错误。
+     * <p>
+     * <b>为什么要单独认空闲超时</b>：它表现为一次普通的读失败（{@code SocketTimeoutException}），
+     * 而用户的疑问恰恰是「为什么等了几分钟才失败」。不写清楚的话，日志里只有
+     * 「stream request failed」加一句读超时，看不出这是我们自己的防线在起作用。
+     *
+     * @param e 读流时抛出的异常
+     * @return 错误
+     */
+    private JellyfishException streamFailure(IOException e) {
+        if (e instanceof SocketTimeoutException) {
+            return new JellyfishException("stream request failed for provider: " + provider.getName()
+                    + "（" + STREAM_IDLE_TIMEOUT_SECONDS + " 秒没有收到任何数据，已按空闲超时中止）", e);
+        }
+        return new JellyfishException("stream request failed for provider: " + provider.getName(), e);
+    }
+
+    /**
      * 逐行读取 SSE 响应，把完整事件交给 {@link #dispatch} 处理。
      *
      * @param response HTTP 响应
      * @param listener 流式响应监听器
      * @param decoder  本次流响应的解码器
+     * @return {@code true} 表示读到了结束标记（{@code [DONE]} 或解码器认定的终止事件）
      * @throws IOException 读取响应流失败时抛出
      */
-    private void readSse(Response response, LlmStreamListener listener, StreamDecoder decoder) throws IOException {
+    private boolean readSse(Response response, LlmStreamListener listener, StreamDecoder decoder) throws IOException {
         if (response.body() == null) {
             throw new JellyfishException("stream response has no body for provider: " + provider.getName());
         }
         BufferedSource source = response.body().source();
         StringBuilder data = new StringBuilder();
         String event = null;
-        String line;
-        while ((line = source.readUtf8Line()) != null) {
+        // 先用 request(1) 探一次有没有下一个字节，再用带上限的 readUtf8LineStrict 读整行：
+        // 前者把「正常读完」与「被切断」分开，后者保证一行不会把内存吃掉
+        while (source.request(1)) {
+            String line = readLineWithinLimit(source);
             if (line.isEmpty()) {
                 if (dispatch(event, data, listener, decoder)) {
-                    return;
+                    return true;
                 }
                 event = null;
                 data.setLength(0);
@@ -307,11 +386,33 @@ public abstract class AbstractHttpLlmClient implements LlmClient {
                     data.append('\n');
                 }
                 data.append(value);
+                if (data.length() > MAX_EVENT_CHARS) {
+                    throw new JellyfishException("stream event too large for provider: " + provider.getName()
+                            + "（单个事件超过 " + MAX_EVENT_CHARS + " 字符）");
+                }
             } else if (line.startsWith("event:")) {
                 event = line.substring("event:".length()).trim();
             }
         }
-        dispatch(event, data, listener, decoder);
+        return dispatch(event, data, listener, decoder);
+    }
+
+    /**
+     * 读一行，并保证它不超过 {@link #MAX_LINE_CHARS}。
+     *
+     * @param source 响应体来源
+     * @return 一行（不含换行）
+     * @throws IOException 读取失败、或这一行超过上限时抛出
+     */
+    private String readLineWithinLimit(BufferedSource source) throws IOException {
+        try {
+            return source.readUtf8LineStrict(MAX_LINE_CHARS);
+        } catch (EOFException e) {
+            // readUtf8LineStrict 在这两种情况下都抛 EOF：行内一直没有换行（超长），或流在行中间结束。
+            // 两者对 SSE 都是异常——正常事件一定以换行收尾
+            throw new JellyfishException("stream line too long or truncated for provider: " + provider.getName()
+                    + "（单行未在 " + MAX_LINE_CHARS + " 字符内结束）", e);
+        }
     }
 
     /**

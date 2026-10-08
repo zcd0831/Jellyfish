@@ -113,6 +113,10 @@ public class ReActLooper implements AutoCloseable {
     private static final String TRUNCATED_NOTICE =
             "回复被输出上限截断（结束原因：%s），上面的内容可能不完整。需要完整回复请调大该模型的 maxOutputTokens。";
 
+    /** 流在结束标记之前断掉时给用户的提示。 */
+    private static final String STREAM_CUT_NOTICE =
+            "连接在回复结束之前中断了，上面的内容可能不完整。这不是模型答完了，重发一次通常可以拿到完整回复。";
+
     /** 顶层回合的轮数上限配置键名。 */
     private static final String REACT_MAX_ROUNDS_KEY = "react.maxRounds";
 
@@ -533,15 +537,22 @@ public class ReActLooper implements AutoCloseable {
     }
 
     /**
-     * 组装「回复被输出上限截断」的提示；没被截断时返回 {@code null}。
+     * 组装「这一轮回复不完整」的提示；完整时返回 {@code null}。
+     * <p>
+     * <b>两种成因分开措辞</b>：被输出上限截断时该改配置，而流被切断时该重发——给出对不上的建议
+     * 比不给建议更糟（用户会去调一个与现象无关的配置项，然后以为「调了也没用」）。
+     * 两者同时成立时按「截断」说：那条建议更具体，而且流被切断这件事在日志里有 WARN。
      * <p>
      * <b>为什么不把厂商的结束原因直接当提示</b>：{@code length} / {@code max_tokens} / {@code MAX_TOKENS}
      * 对用户都不是可执行的信息。提示里带上它只为可排查，主体必须是「该改哪个配置」。
      *
      * @param response 本轮模型响应，不可为 {@code null}
-     * @return 提示文本；本轮回复没有被截断时返回 {@code null}
+     * @return 提示文本；本轮回复完整时返回 {@code null}
      */
     private static String truncationNoticeOf(LlmResponse response) {
+        if (response.isIncomplete() && !LlmResponse.isOutputLimitReason(response.getFinishReason())) {
+            return STREAM_CUT_NOTICE;
+        }
         if (!response.isTruncated()) {
             return null;
         }

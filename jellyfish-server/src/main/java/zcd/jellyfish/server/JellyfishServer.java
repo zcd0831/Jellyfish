@@ -30,6 +30,8 @@ import java.net.InetSocketAddress;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -100,6 +102,15 @@ public final class JellyfishServer {
     /** Undertow 实例，{@link #start()} 之前为 {@code null}。 */
     private Undertow server;
 
+    /**
+     * SSE 写循环的专用线程池，构造时建好、{@link #stop()} 时关停。
+     * <p>
+     * <b>容量取 {@code maxStreams}</b>：一条流在它整个生命周期里占一个线程，而入口处已有
+     * 并发流许可把数量限在 {@code maxStreams} —— 两者相等时「拿到许可一定拿得到线程」成立，
+     * 也就不会出现「许可拿到了、任务却排在池里等线程」这种白等。
+     */
+    private final ExecutorService streamExecutor;
+
     /** 关闭钩子，{@link #start()} 时注册。 */
     private Thread hook;
 
@@ -135,6 +146,8 @@ public final class JellyfishServer {
         this.turns = turns;
         this.streams = streams;
         this.runEvents = runEvents;
+        this.streamExecutor = Executors.newFixedThreadPool(Math.max(1, config.getMaxStreams()),
+                new SseThreadFactory());
     }
 
     /**
@@ -279,6 +292,9 @@ public final class JellyfishServer {
         approvals.detach();
         // 提问答复者同批摘下：未决提问立刻收敛成「这次没问到」，等待线程随即继续
         asks.detach();
+        // 不等写循环收敛：它们可能正阻塞在一条不读的客户端上，而中断唤不醒阻塞写。
+        // 它们是守护线程，且持有的是自己的资源（订阅已被 JVM 退出带走），因此这里只发个信号
+        streamExecutor.shutdownNow();
         shutdown.countDown();
         removeHook();
     }
@@ -306,7 +322,7 @@ public final class JellyfishServer {
     private HttpHandler buildRouter() {
         SessionHandlers sessionHandlers = new SessionHandlers(config, sessions, agents, models, turns);
         ChatHandler chatHandler = new ChatHandler(conversations, streams, turns, runEvents, sessions, config,
-                approvals, asks);
+                approvals, asks, streamExecutor);
         CommandHandlers commandHandlers = new CommandHandlers(commands, sessions, config);
         ApprovalHandlers approvalHandlers = new ApprovalHandlers(approvals, sessions, config);
         AskHandlers askHandlers = new AskHandlers(asks, sessions, config);

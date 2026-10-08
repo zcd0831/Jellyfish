@@ -41,6 +41,15 @@ public final class LlmResponse {
     private final String finishReason;
 
     /**
+     * 本次回复是否<b>不完整</b>（流在结束标记之前就断了）。
+     * <p>
+     * <b>为什么它与「被上限截断」分开记</b>：两者的成因不同（一个是配小了输出上限，一个是连接被切断），
+     * 用户能采取的行动也不同。但对外都归入 {@link #isTruncated()}——调用方要判断的是
+     * 「这段回复能不能当成完整答案」，而不是成因。
+     */
+    private final boolean incomplete;
+
+    /**
      * 构造返回结果。
      *
      * @param content      文本回复
@@ -50,6 +59,21 @@ public final class LlmResponse {
      * @param finishReason 结束原因
      */
     public LlmResponse(String content, String thinking, List<LlmToolCall> toolCalls, LlmUsage usage, String finishReason) {
+        this(content, thinking, toolCalls, usage, finishReason, false);
+    }
+
+    /**
+     * 构造返回结果。
+     *
+     * @param content      文本回复
+     * @param thinking     思考过程
+     * @param toolCalls    工具调用，可为 {@code null}
+     * @param usage        token 使用量，可为 {@code null}
+     * @param finishReason 结束原因
+     * @param incomplete   流是否在结束标记之前断掉
+     */
+    private LlmResponse(String content, String thinking, List<LlmToolCall> toolCalls, LlmUsage usage,
+                        String finishReason, boolean incomplete) {
         this.content = content;
         this.thinking = thinking;
         this.toolCalls = toolCalls == null
@@ -57,6 +81,20 @@ public final class LlmResponse {
                 : Collections.unmodifiableList(new ArrayList<>(toolCalls));
         this.usage = usage;
         this.finishReason = finishReason;
+        this.incomplete = incomplete;
+    }
+
+    /**
+     * 返回一个「标记为不完整」的副本。
+     * <p>
+     * <b>为什么用副本而不是让解码器自己填</b>：只有读流的那一层知道「有没有读到结束标记」，
+     * 解码器（各厂商一份）不该为此各加一个参数字段——那会让同一件事在三处实现，而漏掉一处的后果
+     * 正是「半句话被当成完整答案」。
+     *
+     * @return 标记为不完整的副本
+     */
+    public LlmResponse asIncomplete() {
+        return incomplete ? this : new LlmResponse(content, thinking, toolCalls, usage, finishReason, true);
     }
 
     /**
@@ -124,20 +162,48 @@ public final class LlmResponse {
     }
 
     /**
-     * 判断本次回复是否被输出上限截断。
+     * 判断一个厂商给的结束原因是否表示「被输出上限截断」。
      * <p>
-     * <b>为什么内核需要它</b>：被截断的回复在形状上与「正常答完」完全一样——有正文、没有工具调用，
-     * 因此会被当成一次正常收敛，而屏幕上留下的是一句没说完的话。<b>用户没有任何办法分辨</b>，
-     * 这正是「配了 maxOutputTokens 却没配够」最典型的症状。
-     * <p>
-     * 各厂商的结束原因取值见 {@link #TRUNCATION_REASONS}，大小写不敏感（Gemini 给的是大写）。
-     * 取值不认识时返回 {@code false}：宁可少提示，也不要凭猜测把一次正常回复说成截断。
+     * <b>为什么公开这个判据</b>：「哪个厂商把截断叫什么」这份知识属于本类（见
+     * {@code TRUNCATION_REASONS}）。调用方（例如要给用户写提示的那一层）需要区分
+     * 「截断」与「流被切断」两种成因，若让它自己再抄一份取值表，两处迟早不一致——
+     * 而不一致的后果是把一次正常回复说成截断，或反过来。
      *
-     * @return 被输出上限截断时返回 {@code true}
+     * @param finishReason 结束原因，可为 {@code null}
+     * @return 属于截断类返回 {@code true}
      */
-    public boolean isTruncated() {
+    public static boolean isOutputLimitReason(String finishReason) {
         return finishReason != null
                 && TRUNCATION_REASONS.contains(finishReason.trim().toLowerCase(Locale.ROOT));
+    }
+
+    /**
+     * 判断本次回复是否不完整（不能当成完整答案）。
+     * <p>
+     * <b>为什么内核需要它</b>：不完整的回复在形状上与「正常答完」完全一样——有正文、没有工具调用，
+     * 因此会被当成一次正常收敛，而屏幕上留下的是一句没说完的话。<b>用户没有任何办法分辨</b>。
+     * <p>
+     * 两种成因都算：厂商给了截断类的结束原因（配小了输出上限，见 {@link #TRUNCATION_REASONS}），
+     * 或流在结束标记之前就断了（{@link #isIncomplete()}）。两者的区别只影响给用户的那句话怎么措辞。
+     * <p>
+     * 结束原因不认识时返回 {@code false}：宁可少提示，也不要凭猜测把一次正常回复说成截断。
+     *
+     * @return 回复不完整时返回 {@code true}
+     */
+    public boolean isTruncated() {
+        return isIncomplete() || isOutputLimitReason(finishReason);
+    }
+
+    /**
+     * 判断流是否在<b>结束标记之前</b>断掉（没读到 {@code [DONE]} / {@code message_stop}）。
+     * <p>
+     * 与 {@link #isTruncated()} 分开暴露，是为了让提示措辞能对上成因：这一种不是「输出上限配小了」，
+     * 因此不该给出「调大 maxOutputTokens」的建议。
+     *
+     * @return 流被提前切断时返回 {@code true}
+     */
+    public boolean isIncomplete() {
+        return incomplete;
     }
 
     /**

@@ -314,6 +314,68 @@ class OpenAiLlmClientTest {
     }
 
     @Test
+    void chatStream_should_markIncomplete_when_streamIsCutBeforeAnyFinishSignal() {
+        // Given：内容发了一半，连接就断了——既没有 [DONE]，也没有 finish_reason
+        String cut = "data: {\"choices\":[{\"delta\":{\"content\":\"半句\"}}]}\n\n";
+        OpenAiLlmClient client = client(sseStub(cut));
+        RecordingListener listener = new RecordingListener();
+
+        // When
+        client.chatStream(LlmRequest.builder("gpt-4o").message(LlmMessage.user("hi")).build(), listener);
+
+        // Then：内容仍是内容（不丢），但必须被标成不完整，否则「半句话」会被当成完整答案落库
+        assertEquals("半句", listener.completed.getContent());
+        assertTrue(listener.completed.isIncomplete());
+        assertTrue(listener.completed.isTruncated());
+        assertNull(listener.error);
+    }
+
+    @Test
+    void chatStream_should_treatFinishReasonAsEnough_when_providerSkipsDoneMarker() {
+        // Given：有 finish_reason 但没有 [DONE] —— 兼容厂商常见写法，不该被误判成断流
+        String noDone = "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n"
+                + "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n";
+        OpenAiLlmClient client = client(sseStub(noDone));
+        RecordingListener listener = new RecordingListener();
+
+        // When
+        client.chatStream(LlmRequest.builder("gpt-4o").message(LlmMessage.user("hi")).build(), listener);
+
+        // Then
+        assertEquals("stop", listener.completed.getFinishReason());
+        assertFalse(listener.completed.isIncomplete());
+        assertFalse(listener.completed.isTruncated());
+    }
+
+
+
+    @Test
+    void chatStream_should_useNonZeroIdleTimeout_soDeadConnectionDoesNotHangTheTurn() {
+        // 这个读超时曾经是 0（「流式响应可能长时间没有数据」），而那等于对端静默断连时
+        // 回合永久挂住，并一直占着一条 stream 许可。0 在这里不是合法的取值范围
+        assertTrue(client(jsonStub("{}")).streamingClient().readTimeoutMillis() > 0,
+                "流式请求的读超时不能是 0（等于永不超时）");
+    }
+
+    @Test
+    void chatStream_should_notifyError_when_singleLineExceedsLimit() {
+        // Given：一行巨长且不带换行——对端这样吐能把内存吃掉（SSE 的行本应很短）
+        StringBuilder huge = new StringBuilder("data: ");
+        for (int i = 0; i < 1024 * 1024; i++) {
+            huge.append('x');
+        }
+        OpenAiLlmClient client = client(sseStub(huge.toString()));
+        RecordingListener listener = new RecordingListener();
+
+        // When
+        client.chatStream(LlmRequest.builder("gpt-4o").message(LlmMessage.user("hi")).build(), listener);
+
+        // Then：报错而不是继续读——流已经是不可信的输入了
+        assertTrue(listener.error instanceof JellyfishException, String.valueOf(listener.error));
+        assertTrue(listener.error.getMessage().contains("单行未在"), listener.error.getMessage());
+    }
+
+    @Test
     void chatStream_should_notify_error_when_http_status_is_error() {
         // Given
         OpenAiLlmClient client = client(errorStub(500, "{\"error\":\"boom\"}"));

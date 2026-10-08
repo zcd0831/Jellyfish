@@ -36,6 +36,7 @@ import zcd.jellyfish.server.http.SseWriter;
 import java.io.IOException;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Semaphore;
 
 /**
@@ -101,6 +102,16 @@ public final class ChatHandler {
     private final Semaphore streamPermit;
 
     /**
+     * SSE 写循环的专用线程池。
+     * <p>
+     * <b>为什么不让它跑在工作线程上</b>：写 socket 会阻塞，而阻塞写没有可用的超时。客户端连上不读时，
+     * 一条流就能把工作线程占到天荒地老——而工作线程还要服务 {@code /health} 这类短请求。
+     * 池容量由 {@code maxStreams} 决定（见 {@link JellyfishServer}），配合下面的许可，
+     * 「拿到许可一定拿得到线程」这一点成立。
+     */
+    private final ExecutorService streamExecutor;
+
+    /**
      * 构造处理器。
      *
      * @param conversations 会话提交服务，不可为 {@code null}
@@ -111,10 +122,11 @@ public final class ChatHandler {
      * @param config   运行参数，不可为 {@code null}
      * @param approvals 审批桥，不可为 {@code null}
      * @param asks     提问桥，不可为 {@code null}
+     * @param streamExecutor SSE 写循环的线程池，不可为 {@code null}
      */
     public ChatHandler(ConversationService conversations, ShellStreams streams, TurnRegistry turns,
                        RunEventBus runEvents, SessionManager sessions, ServerConfig config,
-                       ApprovalBridge approvals, AskBridge asks) {
+                       ApprovalBridge approvals, AskBridge asks, ExecutorService streamExecutor) {
         this.conversations = Objects.requireNonNull(conversations, "conversations must not be null");
         this.streams = Objects.requireNonNull(streams, "streams must not be null");
         this.turns = Objects.requireNonNull(turns, "turns must not be null");
@@ -123,6 +135,7 @@ public final class ChatHandler {
         this.config = config;
         this.approvals = approvals;
         this.asks = asks;
+        this.streamExecutor = Objects.requireNonNull(streamExecutor, "streamExecutor must not be null");
         this.streamPermit = new Semaphore(config.getMaxStreams());
     }
 
@@ -189,6 +202,40 @@ public final class ChatHandler {
                     "/chat 只接受对话消息，命令请用 POST /sessions/{id}/commands");
         }
         Emitted emitted = new Emitted();
+        // 从这一刻起是「长时间等着写」的那一段（回合可能跑几分钟，客户端还随时可能不读）。
+        // 把它交给专用线程池：留在工作线程上，几条卡住的流就能把 /health 这类短请求排到队尾
+        try {
+            exchange.dispatch(streamExecutor, dispatched -> runStream(dispatched, sessionId, listener,
+                    contributions, runs, emitted, subscription, contributionSubscription, runSubscription));
+        } catch (RuntimeException e) {
+            // 池已关停（服务正在停止）：把许可与订阅还回去，并如实报「稍后再试」，
+            // 而不是让调用方以为回合开始了
+            contributionSubscription.close();
+            subscription.close();
+            runSubscription.close();
+            streamPermit.release();
+            throw new ApiException(Responses.SERVICE_UNAVAILABLE, "TOO_MANY_STREAMS",
+                    "服务正在停止，无法开始新的流式回合");
+        }
+    }
+
+    /**
+     * 在专用线程上消费事件流直到终态，并归还本流占用的全部资源。
+     *
+     * @param exchange               HTTP 交换对象
+     * @param sessionId              会话标识
+     * @param listener               可靠 lane 的订阅者
+     * @param contributions          尽力 lane 的订阅者
+     * @param runs                   run 事件总线订阅者
+     * @param emitted                已推送出去的「待人工响应」请求 id
+     * @param subscription           可靠 lane 订阅句柄
+     * @param contributionSubscription 尽力 lane 订阅句柄
+     * @param runSubscription        run 总线订阅句柄
+     */
+    private void runStream(HttpServerExchange exchange, String sessionId, SseTurnListener listener,
+                           SseContributionListener contributions, SseRunListener runs, Emitted emitted,
+                           Subscription subscription, Subscription contributionSubscription,
+                           Subscription runSubscription) {
         try {
             SseWriter writer = SseWriter.prepare(exchange);
             streamUntilTerminal(writer, listener, contributions, runs, sessionId, emitted);

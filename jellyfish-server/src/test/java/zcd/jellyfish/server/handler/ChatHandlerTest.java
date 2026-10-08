@@ -1,7 +1,9 @@
 package zcd.jellyfish.server.handler;
 
+import io.undertow.server.HttpHandler;
 import io.undertow.server.HttpServerExchange;
 import io.undertow.util.HeaderMap;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
@@ -38,14 +40,21 @@ import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -86,6 +95,9 @@ class ChatHandlerTest {
     /** 被测试的处理器。 */
     private ChatHandler handler;
 
+    /** SSE 写循环的线程池。 */
+    private ExecutorService streamExecutor;
+
     @BeforeEach
     void setUp() {
         conversations = Mockito.mock(ConversationService.class);
@@ -95,8 +107,14 @@ class ChatHandlerTest {
         config = ServerConfig.builder("127.0.0.1", 9096).build();
         approvals = new ApprovalBridge(new ApprovalChannel());
         asks = askBridge();
+        streamExecutor = Executors.newSingleThreadExecutor();
         handler = new ChatHandler(conversations, streams, turns, new RunEventBus(), sessions, config, approvals,
-                asks);
+                asks, streamExecutor);
+    }
+
+    @AfterEach
+    void tearDown() {
+        streamExecutor.shutdownNow();
     }
 
     /**
@@ -162,6 +180,12 @@ class ChatHandlerTest {
         // 真实交换对象上请求头永远在（JsonBody 会读 Content-Type），mock 也要如实
         when(exchange.getRequestHeaders()).thenReturn(new HeaderMap());
         when(exchange.getOutputStream()).thenReturn(out);
+        // 真实交换对象会把任务交给另一个线程；测试里同步执行，断言才是确定性的
+        Mockito.doAnswer(invocation -> {
+            HttpHandler dispatched = invocation.getArgument(1);
+            dispatched.handleRequest(exchange);
+            return null;
+        }).when(exchange).dispatch(any(Executor.class), any(HttpHandler.class));
         return new Fixture(exchange, out);
     }
 
@@ -206,7 +230,8 @@ class ChatHandlerTest {
     void handle_should_release_stream_permit_when_turn_completes() {
         // 并发流许可是外壳自己的资源（内核管的是会话槽位）。最大 1 条：第一条跑完必须能跑第二条
         ChatHandler limited = new ChatHandler(conversations, streams, turns, new RunEventBus(), sessions,
-                ServerConfig.builder("127.0.0.1", 9096).maxStreams(1).build(), approvals, asks);
+                ServerConfig.builder("127.0.0.1", 9096).maxStreams(1).build(), approvals, asks,
+                streamExecutor);
         stubTurn("s1", "hi", lane -> lane.publish(ShellTurnEvent.completed("s1", "t1", "x", 1, false)));
 
         limited.handle(fixture("{\"message\":\"hi\"}").exchange, idParam("s1"));
@@ -261,9 +286,57 @@ class ChatHandlerTest {
     }
 
     @Test
+    void handle_should_dispatchStreamLoop_toDedicatedExecutor() {
+        // 写循环不能就地跑在调用线程上：那是 Undertow 的工作线程，还要服务 /health 这类短请求。
+        // 客户端连上不读时阻塞写会一直等，而阻塞写没有可用的超时——几条这样的流就足以
+        // 把短请求排到队尾
+        stubTurn("s1", "hi", lane -> lane.publish(ShellTurnEvent.completed("s1", "t1", "x", 1, false)));
+        Fixture fixture = fixture("{\"message\":\"hi\"}");
+
+        handler.handle(fixture.exchange, idParam("s1"));
+
+        Mockito.verify(fixture.exchange).dispatch(eq(streamExecutor), any(HttpHandler.class));
+    }
+
+    @Test
+    void handle_should_runStreamLoop_onAnotherThread() throws Exception {
+        // 上一条钉的是「交给了谁」，这一条钉「真的换了线程」——两条合起来才是完整的行为
+        stubTurn("s1", "hi", lane -> lane.publish(ShellTurnEvent.completed("s1", "t1", "x", 1, false)));
+        Fixture fixture = fixture("{\"message\":\"hi\"}");
+        String caller = Thread.currentThread().getName();
+        AtomicReference<String> loopThread = new AtomicReference<String>();
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            // 覆盖夹具里那个「同步执行」的桩，让这次 dispatch 真的落到另一条线程上
+            Mockito.doAnswer(invocation -> {
+                HttpHandler dispatched = invocation.getArgument(1);
+                pool.execute(() -> {
+                    loopThread.set(Thread.currentThread().getName());
+                    try {
+                        dispatched.handleRequest(fixture.exchange);
+                    } catch (Exception e) {
+                        throw new IllegalStateException(e);
+                    }
+                });
+                return null;
+            }).when(fixture.exchange).dispatch(any(Executor.class), any(HttpHandler.class));
+
+            handler.handle(fixture.exchange, idParam("s1"));
+
+            // 收尾时交换对象被结束：以此为「写循环跑完了」的信号，不必睡固定时长
+            Mockito.verify(fixture.exchange, Mockito.timeout(5000)).endExchange();
+            assertNotNull(loopThread.get(), "写循环没有在另一条线程上跑");
+            assertNotEquals(caller, loopThread.get());
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
     void handle_should_return_503_when_stream_limit_reached() {
         ChatHandler limited = new ChatHandler(conversations, streams, turns, new RunEventBus(), sessions,
-                ServerConfig.builder("127.0.0.1", 9096).maxStreams(0).build(), approvals, asks);
+                ServerConfig.builder("127.0.0.1", 9096).maxStreams(0).build(), approvals, asks,
+                streamExecutor);
 
         ApiException error = assertThrows(ApiException.class,
                 () -> limited.handle(fixture("{\"message\":\"hi\"}").exchange, idParam("s1")));

@@ -60,11 +60,22 @@ public final class TypeRegistry {
     /** 注册项：键 → 槽位，保持注册顺序。 */
     private final Map<RegistryKey, Slot> registrations = new ConcurrentHashMap<>();
 
-    /** 解析缓存：查询类型 → 命中注册项（已按 order + sequence 排序）。 */
-    private final Map<Class<?>, List<HandlerRegistration>> candidates = new ConcurrentHashMap<>();
+    /** 解析缓存：查询类型 → 命中注册项（已按 order + sequence 排序，并记着收集时的版本）。 */
+    private final Map<Class<?>, CachedCandidates> candidates = new ConcurrentHashMap<>();
 
     /** 注册序号，保证候选顺序稳定。 */
     private final AtomicLong sequence = new AtomicLong();
+
+    /**
+     * 注册表版本：任何一次登记、注销或清空都递增。
+     * <p>
+     * <b>为什么不能靠「清缓存」来失效</b>：{@link #candidatesFor} 是「先读缓存、未命中就开始收集、
+     * 最后写回」三步。清空发生在第二步与第三步之间时，第三步会把一份<b>基于旧表</b>收集出来的视图
+     * 写进缓存——而它此后一直是命中的，于是新注册在该类型下一次变更之前<b>永远不可见</b>。
+     * 现象是「装完插件，工具/命令没了」，且没有任何日志。带上版本并在读取时校验，最坏也只是
+     * 「本次调用看到旧视图」这一瞬，不会留成永久状态。
+     */
+    private final AtomicLong version = new AtomicLong();
 
     /**
      * 同键唯一登记。
@@ -97,7 +108,7 @@ public final class TypeRegistry {
             registration = create(owner, type, routeKey, handler, descriptor, order, overriddenOwner);
             slot.entries.add(registration);
         }
-        candidates.clear();
+        invalidateCandidates();
         return registration;
     }
 
@@ -124,7 +135,7 @@ public final class TypeRegistry {
         Slot slot = slotOf(key);
         slot.unique = false;
         slot.entries.add(registration);
-        candidates.clear();
+        invalidateCandidates();
         return registration;
     }
 
@@ -207,7 +218,7 @@ public final class TypeRegistry {
         if (slot.entries.isEmpty()) {
             registrations.remove(key, slot);
         }
-        candidates.clear();
+        invalidateCandidates();
         return true;
     }
 
@@ -295,7 +306,7 @@ public final class TypeRegistry {
             }
         }
         if (removed > 0) {
-            candidates.clear();
+            invalidateCandidates();
         }
         return removed;
     }
@@ -348,7 +359,7 @@ public final class TypeRegistry {
      */
     public void clear() {
         registrations.clear();
-        candidates.clear();
+        invalidateCandidates();
     }
 
     /**
@@ -405,11 +416,36 @@ public final class TypeRegistry {
      * @param type 查询类型
      * @return 已按 order + sequence 排序的注册项，不可修改
      */
+    /**
+     * 让候选缓存失效：登记、注销、清空之后都必须调用。
+     * <p>
+     * 实现是<b>递增版本号</b>而不是清空映射。读侧（{@link #candidatesFor}）是「先读缓存、
+     * 未命中才收集、最后写回」三步：若用清空，一次发生在后两步之间的清空会让写回的是
+     * 一份基于旧表的视图，而它此后一直命中——新注册在该类型下一次变更之前<b>永远不可见</b>。
+     * 带上版本后，这种写回在读取时就被判为过时，最坏只是「本次调用看到旧视图」这一瞬。
+     * <p>
+     * 版本是全局的，因此任一类型的变更会让所有类型的缓存重建。这与原来「一次
+     * {@code clear()} 清空整张映射」的代价相同，没有额外开销。
+     */
+    private void invalidateCandidates() {
+        version.incrementAndGet();
+    }
+
+    /**
+     * 收集查询类型对应的候选注册项，带缓存。
+     * <p>
+     * 只收<b>生效</b>的登记项：唯一键链上被压住的层不参与匹配，否则一次覆盖会变成
+     * {@code AMBIGUOUS_HANDLER}。
+     *
+     * @param type 查询类型
+     * @return 已按 order + sequence 排序的注册项，不可修改
+     */
     private List<HandlerRegistration> candidatesFor(Class<?> type) {
         Objects.requireNonNull(type, "type must not be null");
-        List<HandlerRegistration> cached = candidates.get(type);
-        if (cached != null) {
-            return cached;
+        long current = version.get();
+        CachedCandidates cached = candidates.get(type);
+        if (cached != null && cached.version == current) {
+            return cached.registrations;
         }
         List<HandlerRegistration> collected = new ArrayList<>();
         for (Slot slot : registrations.values()) {
@@ -421,8 +457,12 @@ public final class TypeRegistry {
         }
         collected.sort(ORDER_COMPARATOR);
         List<HandlerRegistration> immutable = Collections.unmodifiableList(collected);
-        List<HandlerRegistration> raced = candidates.putIfAbsent(type, immutable);
-        return raced == null ? immutable : raced;
+        // 只在这段收集期间一次变更都没发生时写回：否则写进去的是基于旧表收集的视图，
+        // 读侧虽然会因版本不符而重建（这才是本方法的关键），但白白留着它没有意义
+        if (version.get() == current) {
+            candidates.put(type, new CachedCandidates(current, immutable));
+        }
+        return immutable;
     }
 
     /**
@@ -432,6 +472,32 @@ public final class TypeRegistry {
      */
     public RegistrySnapshot snapshot() {
         return RegistrySnapshot.of(this);
+    }
+
+    /**
+     * 一条缓存下来的候选列表，连同它是基于哪个版本收集出来的。
+     * <p>
+     * 版本必须和列表放在一起：分开存的话，读取方可能在「拿到列表」与「读到版本」之间被换掉版本，
+     * 从而把过时列表当成当前的用。
+     */
+    private static final class CachedCandidates {
+
+        /** 收集时的注册表版本。 */
+        private final long version;
+
+        /** 已排序的候选注册项，不可修改。 */
+        private final List<HandlerRegistration> registrations;
+
+        /**
+         * 构造缓存条目。
+         *
+         * @param version       收集时的注册表版本
+         * @param registrations 候选注册项，不可为 {@code null}
+         */
+        private CachedCandidates(long version, List<HandlerRegistration> registrations) {
+            this.version = version;
+            this.registrations = registrations;
+        }
     }
 
     /**

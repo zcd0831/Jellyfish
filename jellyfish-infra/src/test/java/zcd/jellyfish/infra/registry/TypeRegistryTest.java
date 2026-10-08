@@ -435,6 +435,24 @@ class TypeRegistryTest {
     }
 
     @Test
+    void resolve_should_rebuild_when_registryChangedAfterCacheWasFilled() {
+        // Given：先查一次把缓存填上（此时该类型没有任何注册项）
+        assertEquals(0, registry.resolve(ContributionRequest.class, null).size());
+
+        // When：再登记一个——缓存里那条是「基于旧版本」的，必须被判为过时
+        registry.registerShared("late", ContributionRequest.class, null, "late", null, 0);
+
+        // Then：看得见新登记项。这一条钉的是「读取时校验版本」那道防线：
+        // 若只在写回时校验，缓存里那条过时条目仍会被读到，新注册就永远不可见
+        //
+        // 这里刻意不去写「并发交错」的复现用例：要做到确定性复现，必须能让测试卡在
+        // 「已开始收集、还没写回」那一刻，而那个窗口在 candidatesFor 内部，类外无从注入。
+        // 靠多线程碰运气跑出来的用例即使偶尔变红也不是防线（它可能一万次才命中一次，
+        // 而 CI 上没人会去看那次失败）。真正的保证在读侧那一行版本比较，本用例直接钉住它
+        assertTrue(handlersOf(registry.resolve(ContributionRequest.class, null)).contains("late"));
+    }
+
+    @Test
     void concurrent_registration_should_not_lose_entries() throws InterruptedException {
         // Given
         int threads = 8;

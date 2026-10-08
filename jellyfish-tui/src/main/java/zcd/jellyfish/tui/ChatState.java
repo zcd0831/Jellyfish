@@ -233,24 +233,6 @@ public final class ChatState {
     }
 
     /**
-     * 设置思考过程展开状态。
-     *
-     * @param expanded 是否展开
-     */
-    public void setThinkingExpanded(boolean expanded) {
-        this.thinkingExpanded = expanded;
-    }
-
-    /**
-     * 判断思考过程是否展开。
-     *
-     * @return 展开返回 {@code true}
-     */
-    public boolean isThinkingExpanded() {
-        return thinkingExpanded;
-    }
-
-    /**
      * 切换工具调用参数展开状态。
      *
      * @return 切换后的状态（{@code true} 为已展开）

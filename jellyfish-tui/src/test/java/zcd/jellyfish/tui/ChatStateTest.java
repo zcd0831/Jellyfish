@@ -436,15 +436,6 @@ class ChatStateTest {
     }
 
     @Test
-    @DisplayName("初始展开态可直接设定：设定后投影铺开思考块")
-    void setThinkingExpanded_should_seed_initial_state() {
-        state.setThinkingExpanded(true);
-
-        assertTrue(state.isThinkingExpanded());
-        assertTrue(texts(view(thinkingMessages(), 20)).contains("      \u273b 先想一下"));
-    }
-
-    @Test
     @DisplayName("工具参数默认封顶，展开开关必须重投影：否则缓存会把开关吃掉")
     void view_should_reproject_when_toolArgumentsToggled() {
         List<SessionMessage> messages = toolCallMessages();

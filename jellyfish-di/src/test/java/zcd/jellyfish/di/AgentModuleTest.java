@@ -9,6 +9,7 @@ import zcd.jellyfish.infra.config.AppConfig;
 import zcd.jellyfish.infra.config.BuiltinAgentLoader;
 import zcd.jellyfish.infra.config.ConfigLoader;
 import zcd.jellyfish.infra.config.ConfigPaths;
+import zcd.jellyfish.infra.config.ProjectConfigTrust;
 import zcd.jellyfish.infra.config.RuntimeConfig;
 import zcd.jellyfish.infra.config.SettingsBinder;
 import zcd.jellyfish.infra.config.SettingsReader;
@@ -94,11 +95,23 @@ class AgentModuleTest {
         ConfigLoader configLoader = new ConfigLoader(new SettingsReader(), new SettingsBinder());
         AgentPromptLoader promptLoader = new AgentPromptLoader(new SettingsReader());
         RuntimeConfig runtimeConfig = new RuntimeConfig(appConfig, configLoader, event -> {
-        }, new BuiltinAgentLoader(configLoader, promptLoader), promptLoader);
+        }, new BuiltinAgentLoader(configLoader, promptLoader), promptLoader, trustingAllProjectConfigs());
         runtimeConfig.refresh();
         return new AgentManager(runtimeConfig, new AgentRegistry(event -> {
         }), event -> {
         });
+    }
+
+    /**
+     * 构造信任裁决：本用例只关心 agent 双源合并，因此直接信任全部项目级配置。
+     *
+     * @return 信任裁决
+     */
+    private static ProjectConfigTrust trustingAllProjectConfigs() {
+        ProjectConfigTrust trust = new ProjectConfigTrust(
+                java.nio.file.Paths.get("target", "unused-trust-store.json"));
+        trust.trustEverythingInThisRun();
+        return trust;
     }
 
     /**

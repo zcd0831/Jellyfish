@@ -42,6 +42,7 @@ import zcd.jellyfish.infra.config.AgentPromptLoader;
 import zcd.jellyfish.infra.config.AppConfig;
 import zcd.jellyfish.infra.config.BuiltinAgentLoader;
 import zcd.jellyfish.infra.config.ConfigLoader;
+import zcd.jellyfish.infra.config.ProjectConfigTrust;
 import zcd.jellyfish.infra.config.ConfigReloader;
 import zcd.jellyfish.infra.config.RuntimeConfig;
 import zcd.jellyfish.infra.config.SettingsBinder;
@@ -169,6 +170,10 @@ public final class JellyfishAssembler {
         private LlmClientFactory llmClientFactory;
         private ModelManager modelManager;
         private RuntimeConfig runtimeConfig;
+        private ProjectConfigTrust projectConfigTrust;
+
+        /** 应用级配置：外壳启动期靠它算出项目级配置文件的候选清单。 */
+        private AppConfig appConfig;
         private AgentHarness agentHarness;
         private AgentManager agentManager;
         private PermissionManager permissionManager;
@@ -204,6 +209,8 @@ public final class JellyfishAssembler {
          * @param appConfig 应用级配置，不可为 {@code null}
          */
         private void assemble(AppConfig appConfig) {
+            // 应用级配置留一份引用：外壳在启动期要按它算出「哪些项目级配置文件存在」
+            this.appConfig = appConfig;
             // 第一层：扩展层。两份策略共用同一份注册表——这是硬约束，不得各建一份
             TypeRegistry registry = new TypeRegistry();
             extensionRegistry = new ExtensionRegistry(registry);
@@ -219,7 +226,11 @@ public final class JellyfishAssembler {
             ConfigLoader configLoader = new ConfigLoader(settingsReader, settingsBinder);
             AgentPromptLoader promptLoader = new AgentPromptLoader(settingsReader);
             BuiltinAgentLoader builtinAgentLoader = new BuiltinAgentLoader(configLoader, promptLoader);
-            runtimeConfig = new RuntimeConfig(appConfig, configLoader, publisher, builtinAgentLoader, promptLoader);
+            // 信任裁决与配置读取共用同一个实例：授予信任发生在启动期、读取它发生在 refresh()，
+            // 两边看到的状态必须是同一份，否则「确认了却不生效」
+            projectConfigTrust = new ProjectConfigTrust();
+            runtimeConfig = new RuntimeConfig(appConfig, configLoader, publisher, builtinAgentLoader, promptLoader,
+                    projectConfigTrust);
 
             // 第三层：模型与 agent 索引
             ModelRegistry modelRegistry = new ModelRegistry();
@@ -428,6 +439,16 @@ public final class JellyfishAssembler {
         @Override
         public RuntimeConfig runtimeConfig() {
             return runtimeConfig;
+        }
+
+        @Override
+        public ProjectConfigTrust projectConfigTrust() {
+            return projectConfigTrust;
+        }
+
+        @Override
+        public AppConfig appConfig() {
+            return appConfig;
         }
 
         @Override

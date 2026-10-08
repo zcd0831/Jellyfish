@@ -340,11 +340,22 @@ class StartupOptionsParserTest {
     }
 
     @Test
+    void parse_should_set_trust_project_config_when_given_in_any_mode() {
+        // 它是启动期的安全表态，不是模式专属能力：三种外壳都得能带上
+        for (String mode : new String[] {"-cli", "-tui", "-server"}) {
+            StartupOptions options = StartupOptionsParser.parse(new String[] {mode, "--trust-project-config"});
+            assertTrue(options.isTrustProjectConfig(), mode);
+        }
+    }
+
+    @Test
     void parse_should_default_switches_to_false() {
         StartupOptions options = StartupOptionsParser.parse(new String[] {"-cli"});
 
         assertFalse(options.isShowThinking());
         assertFalse(options.isVerbose());
+        // 缺省不信任项目级配置：这个方向的缺省必须是「不加载」
+        assertFalse(options.isTrustProjectConfig());
         assertFalse(options.isHelp());
         assertFalse(options.isVersion());
         assertNull(options.getAgentId());

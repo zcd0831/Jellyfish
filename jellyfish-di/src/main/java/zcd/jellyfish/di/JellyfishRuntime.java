@@ -11,6 +11,8 @@ import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.ask.AskChannel;
 import zcd.jellyfish.infra.command.CommandManager;
 import zcd.jellyfish.infra.config.RuntimeConfig;
+import zcd.jellyfish.infra.config.AppConfig;
+import zcd.jellyfish.infra.config.ProjectConfigTrust;
 import zcd.jellyfish.infra.event.EventChannel;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.llm.LlmClientFactory;
@@ -64,6 +66,25 @@ public interface JellyfishRuntime {
      * @return 运行时配置门面，保证非 {@code null}
      */
     RuntimeConfig runtimeConfig();
+
+    /**
+     * 获取应用级配置（各配置段的双源路径与插件扫描目录）。
+     * <p>
+     * 外壳在启动期需要它来算出「哪些项目级配置文件存在」，以便决定要不要向用户征求信任。
+     *
+     * @return 应用级配置，保证非 {@code null}
+     */
+    AppConfig appConfig();
+
+    /**
+     * 获取项目级配置的信任裁决。
+     * <p>
+     * 外壳在 {@code bootstrap()} 之前用它授予信任（启动参数或交互确认），
+     * {@code RuntimeConfig} 在 {@code refresh()} 里用它决定项目级配置是否参与合并。
+     *
+     * @return 信任裁决，保证非 {@code null}
+     */
+    ProjectConfigTrust projectConfigTrust();
 
     /**
      * 获取 agent 运行时宿主。

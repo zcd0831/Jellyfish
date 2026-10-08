@@ -78,6 +78,10 @@ jellyfish-server/  路由、SSE、审批桥
 - **`CommandManager` 无状态、对外壳中立**；「需不需要会话」由命令自己声明（`sessionRequired` 缺省 `true`）。
 - **压缩是插件能力、内核只提供机制**；没有策略插件即整体不可用，不回退内置。
 - **提示词组装**：`PromptAssembler`；裁剪只裁本次请求（`ContextWindow` 成组丢弃），历史一条不动。
+- **项目级配置默认不加载**（`ProjectConfigTrust`）：它按进程当前目录解析，一个 `git clone` 的目录就足以
+  改写模型端点与密钥、新增 agent、改落盘目录。信任单位是「文件路径 + 内容指纹」，内容一变即失效；
+  授予只有 `--trust-project-config`（本次，不落盘）与 TUI 确认框（可记住）两条。**未信任即跳过 + 告警**，
+  `classpath:` 路径不受此闸管辖。**任何新增的项目级配置读取点都必须过这道闸**。
 - **子代理**：`SubAgentLauncher` + `TaskTool`（owner=core）→ `AgentRuntime.spawn`；嵌套回合**调度到独立的
   `agent-run` 池上执行，绝不进 `react` 池**；并发由 governor 许可门控，等待中的 run 会让出许可。
   run 起止走运行时的 `RunEventBus`（不是外壳回合 lane）；**插件要驱动子代理走 `PluginContext.delegations()`**。

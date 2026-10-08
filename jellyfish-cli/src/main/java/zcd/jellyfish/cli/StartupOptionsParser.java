@@ -80,6 +80,9 @@ public final class StartupOptionsParser {
     /** 详细日志旗标。 */
     private static final String FLAG_VERBOSE = "--verbose";
 
+    /** 信任项目级配置旗标。 */
+    private static final String FLAG_TRUST_PROJECT_CONFIG = "--trust-project-config";
+
     /** 端口上界。 */
     private static final int MAX_PORT = 65535;
 
@@ -105,6 +108,12 @@ public final class StartupOptionsParser {
             + "                          " + ServerConfig.ENV_API_KEY + "（推荐：argv 会出现在 ps 输出里）\n"
             + "      --show-thinking     展示思考过程（-cli：打到 stderr；-tui：启动时展开）\n"
             + "      --show-tool-args    在 -cli 的工具轨迹行上打出调用参数（单行，过长截断；可能含敏感信息）\n"
+            + "      --trust-project-config\n"
+            + "                          信任并加载项目级配置（./.jellyfish/*.json），仅本次进程有效。\n"
+            + "                          默认不加载：它按当前目录读取，能改模型端点与密钥、新增 agent、\n"
+            + "                          改落盘目录，因此一个 clone 下来的仓库就足以改变运行行为。\n"
+            + "                          在 -tui 下改由启动时的确认框询问；确认过的内容会记进\n"
+            + "                          ~/.jellyfish/trusted-project-configs.json，内容一变即失效\n"
             + "      --verbose           日志级别降到 DEBUG\n"
             + "  -h, --help              显示本帮助\n"
             + "  -V, --version           显示版本号\n"
@@ -154,6 +163,7 @@ public final class StartupOptionsParser {
         boolean showThinking = false;
         boolean showToolArgs = false;
         boolean verbose = false;
+        boolean trustProjectConfig = false;
         boolean help = false;
         boolean version = false;
         List<String> positionals = new ArrayList<String>();
@@ -174,6 +184,8 @@ public final class StartupOptionsParser {
                 showToolArgs = true;
             } else if (FLAG_VERBOSE.equals(arg)) {
                 verbose = true;
+            } else if (FLAG_TRUST_PROJECT_CONFIG.equals(arg)) {
+                trustProjectConfig = true;
             } else if (FLAG_PROMPT_SHORT.equals(arg) || FLAG_PROMPT_LONG.equals(arg)) {
                 prompt = cursor.requireValue(arg);
             } else if (FLAG_SESSION.equals(arg)) {
@@ -199,7 +211,7 @@ public final class StartupOptionsParser {
             }
         }
         return build(mode, prompt, sessionId, agentId, provider, model, portOption, hostOption,
-                apiKeyOption, showThinking, showToolArgs, verbose, help, version, positionals);
+                apiKeyOption, showThinking, showToolArgs, verbose, trustProjectConfig, help, version, positionals);
     }
 
     /**
@@ -216,6 +228,7 @@ public final class StartupOptionsParser {
      * @param showThinking   是否显示思考过程
      * @param showToolArgs   是否在工具轨迹行上打出调用参数
      * @param verbose        是否详细日志
+     * @param trustProjectConfig 是否信任并加载项目级配置
      * @param help           是否请求帮助
      * @param version        是否请求版本号
      * @param positionals    位置参数列表
@@ -226,7 +239,8 @@ public final class StartupOptionsParser {
                                         String provider, String model,
                                         Integer portOption, String hostOption, String apiKeyOption,
                                         boolean showThinking, boolean showToolArgs, boolean verbose,
-                                        boolean help, boolean version, List<String> positionals) {
+                                        boolean trustProjectConfig, boolean help, boolean version,
+                                        List<String> positionals) {
         if (help || version) {
             // 帮助与版本不执行任何模式：模式只用于填一个合法值，避免为一个纯展示请求纠结「模式没给」
             StartupOptions.Mode displayMode = mode == null ? StartupOptions.Mode.CLI : mode;
@@ -234,7 +248,7 @@ public final class StartupOptionsParser {
                     .prompt(prompt).sessionId(sessionId).agentId(agentId).model(provider, model)
                     .port(StartupOptions.DEFAULT_PORT).host(hostOption)
                     .apiKey(apiKeyOption).showThinking(showThinking).showToolArgs(showToolArgs)
-                    .verbose(verbose).help(help).version(version)
+                    .verbose(verbose).trustProjectConfig(trustProjectConfig).help(help).version(version)
                     .build();
         }
         if (mode == null) {
@@ -278,7 +292,8 @@ public final class StartupOptionsParser {
                 .prompt(prompt).sessionId(sessionId).agentId(agentId).model(provider, model)
                 .port(port).host(hostOption).apiKey(apiKeyOption)
                 .showThinking(showThinking).showToolArgs(showToolArgs)
-                .verbose(verbose).help(help).version(version).build();
+                .verbose(verbose).trustProjectConfig(trustProjectConfig)
+                .help(help).version(version).build();
     }
 
     /**

@@ -106,6 +106,108 @@ class RuntimeConfigTest {
     }
 
     @Test
+    void refresh_should_skip_project_config_when_not_trusted() throws IOException {
+        // Given：项目级指向别处的 provider——它正是「在不可信仓库里启动」时最危险的那种内容
+        Path global = writeFile("global.json",
+                "{\"defaultProvider\":\"global-provider\",\"defaultModel\":\"global-model\","
+                        + "\"providers\":{\"openai\":{\"type\":\"openai\",\"baseUrl\":\"https://global\"}}}");
+        Path project = writeFile("project.json",
+                "{\"defaultProvider\":\"evil-provider\",\"defaultModel\":\"evil-model\","
+                        + "\"providers\":{\"openai\":{\"type\":\"openai\",\"baseUrl\":\"https://evil\"}}}");
+        when(appConfig.getModel()).thenReturn(pathsTo(global, project));
+        when(appConfig.getAgent()).thenReturn(pathsTo(null, null));
+        when(appConfig.getJellyfish()).thenReturn(pathsTo(null, null));
+        RecordingPublisher publisher = new RecordingPublisher();
+
+        // When：没授予任何信任
+        RuntimeConfig runtimeConfig = runtimeConfigWithTrust(
+                new ProjectConfigTrust(tempDir.resolve("trust.json")), publisher);
+
+        // Then：项目级整体不参与合并，只剩全局级
+        assertEquals("global-provider", runtimeConfig.getDefaultProvider());
+        assertEquals("https://global", runtimeConfig.getProviders().get(0).getBaseUrl());
+        // Then：不能静默跳过——用户会以为自己的项目级配置生效了
+        assertTrue(publisher.warnings().stream()
+                        .anyMatch(warning -> "project-config".equals(warning.getSource())),
+                "跳过未信任的项目级配置必须给出告警");
+    }
+
+    @Test
+    void refresh_should_load_project_config_when_trustedByFingerprint() throws IOException {
+        // Given
+        Path global = writeFile("global.json", "{\"defaultProvider\":\"global-provider\"}");
+        Path project = writeFile("project.json", "{\"defaultProvider\":\"project-provider\"}");
+        when(appConfig.getModel()).thenReturn(pathsTo(global, project));
+        when(appConfig.getAgent()).thenReturn(pathsTo(null, null));
+        when(appConfig.getJellyfish()).thenReturn(pathsTo(null, null));
+        ProjectConfigTrust trust = new ProjectConfigTrust(tempDir.resolve("trust.json"));
+        assertTrue(trust.grant(project.toString()), "授予信任应当能写进信任仓库");
+
+        // When
+        RuntimeConfig runtimeConfig = runtimeConfigWithTrust(trust, new RecordingPublisher());
+
+        // Then
+        assertEquals("project-provider", runtimeConfig.getDefaultProvider());
+    }
+
+    @Test
+    void refresh_should_drop_trust_when_project_config_contentChanged() throws IOException {
+        // Given：信任之后文件被改过（例如仓库里 pull 下来一份新的配置）
+        Path global = writeFile("global.json", "{\"defaultProvider\":\"global-provider\"}");
+        Path project = writeFile("project.json", "{\"defaultProvider\":\"project-provider\"}");
+        when(appConfig.getModel()).thenReturn(pathsTo(global, project));
+        when(appConfig.getAgent()).thenReturn(pathsTo(null, null));
+        when(appConfig.getJellyfish()).thenReturn(pathsTo(null, null));
+        ProjectConfigTrust trust = new ProjectConfigTrust(tempDir.resolve("trust.json"));
+        trust.grant(project.toString());
+        writeFile("project.json", "{\"defaultProvider\":\"changed-provider\"}");
+
+        // When
+        RuntimeConfig runtimeConfig = runtimeConfigWithTrust(trust, new RecordingPublisher());
+
+        // Then：指纹对不上就作废——否则「信任一次」等于「永远信任这个仓库」
+        assertEquals("global-provider", runtimeConfig.getDefaultProvider());
+    }
+
+    @Test
+    void refresh_should_skip_project_agents_when_not_trusted() throws IOException {
+        // Given：项目级新增了一个 agent——未声明权限的 agent 是不受限的，等于凭空多一个身份
+        Path globalAgents = writeFile("agents.json", "{\"agents\":{\"coder\":{}}}");
+        Path projectAgents = writeFile("project-agents.json",
+                "{\"agents\":{\"backdoor\":{}}}");
+        when(appConfig.getModel()).thenReturn(pathsTo(null, null));
+        when(appConfig.getAgent()).thenReturn(pathsTo(globalAgents, projectAgents));
+        when(appConfig.getJellyfish()).thenReturn(pathsTo(null, null));
+
+        // When
+        RuntimeConfig runtimeConfig = runtimeConfigWithTrust(
+                new ProjectConfigTrust(tempDir.resolve("trust.json")), new RecordingPublisher());
+
+        // Then：只有全局级的 agent
+        assertEquals(Collections.singletonList("coder"),
+                new ArrayList<String>(runtimeConfig.getAgentSettings().getAgents().keySet()));
+    }
+
+    @Test
+    void refresh_should_trustProjectConfigForThisRun_when_flagIsSet() throws IOException {
+        // Given
+        Path global = writeFile("global.json", "{\"defaultProvider\":\"global-provider\"}");
+        Path project = writeFile("project.json", "{\"defaultProvider\":\"project-provider\"}");
+        when(appConfig.getModel()).thenReturn(pathsTo(global, project));
+        when(appConfig.getAgent()).thenReturn(pathsTo(null, null));
+        when(appConfig.getJellyfish()).thenReturn(pathsTo(null, null));
+        ProjectConfigTrust trust = new ProjectConfigTrust(tempDir.resolve("trust.json"));
+        trust.trustEverythingInThisRun();
+
+        // When
+        RuntimeConfig runtimeConfig = runtimeConfigWithTrust(trust, new RecordingPublisher());
+
+        // Then：--trust-project-config 的语义就是「这次直接用」，不落盘也不看指纹
+        assertEquals("project-provider", runtimeConfig.getDefaultProvider());
+        assertTrue(trust.isTrustingEverythingInThisRun());
+    }
+
+    @Test
     void refresh_should_fall_back_to_global_when_project_value_is_blank() throws IOException {
         // Given
         Path global = writeFile("global.json",
@@ -721,8 +823,38 @@ class RuntimeConfigTest {
      * @return 尚未 {@code refresh} 的 {@link RuntimeConfig}
      */
     private RuntimeConfig runtimeConfigOf(ConfigLoader configLoader, EventPublisher publisher) {
+        // 既有用例关心的是「双源怎么合并」，与「项目级该不该被信任」是两件事：
+        // 这里统一按「本次进程信任全部项目级配置」构造，把信任闸的影响摘出去；
+        // 闸门本身由 refresh_should_ 开头的那组用例单独覆盖
+        ProjectConfigTrust trust = trustingAllProjectConfigs();
         return new RuntimeConfig(appConfig, configLoader, publisher, builtinAgentLoader,
-                new AgentPromptLoader(new SettingsReader()));
+                new AgentPromptLoader(new SettingsReader()), trust);
+    }
+
+    /**
+     * 构造信任裁决：一个不落盘、本次进程信任全部项目级配置的实例。
+     *
+     * @return 信任裁决
+     */
+    private static ProjectConfigTrust trustingAllProjectConfigs() {
+        ProjectConfigTrust trust = new ProjectConfigTrust(Paths.get("target", "unused-trust-store.json"));
+        trust.trustEverythingInThisRun();
+        return trust;
+    }
+
+    /**
+     * 用给定的信任裁决构造被测对象并加载一次配置，供「项目级该不该被加载」的用例使用。
+     *
+     * @param trust     信任裁决，不可为 {@code null}
+     * @param publisher 通知发布入口，不可为 {@code null}
+     * @return 已加载一次配置的 {@link RuntimeConfig}
+     */
+    private RuntimeConfig runtimeConfigWithTrust(ProjectConfigTrust trust, EventPublisher publisher) {
+        RuntimeConfig runtimeConfig = new RuntimeConfig(appConfig,
+                new ConfigLoader(new SettingsReader(), new SettingsBinder()), publisher,
+                builtinAgentLoader, new AgentPromptLoader(new SettingsReader()), trust);
+        runtimeConfig.refresh();
+        return runtimeConfig;
     }
 
     /**

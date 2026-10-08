@@ -22,6 +22,9 @@ public final class RecordingConsoleIO implements ConsoleIO {
     /** 标准错误写入的整行条数。 */
     private int errorLineCount;
 
+    /** 预置的「读一行」应答队列（按顺序消费，耗尽后返回 EOF）。 */
+    private final java.util.Deque<String> lines = new java.util.ArrayDeque<String>();
+
     /**
      * 构造记录器。
      *
@@ -31,9 +34,25 @@ public final class RecordingConsoleIO implements ConsoleIO {
         this.stdin = stdin == null ? "" : stdin;
     }
 
+    /**
+     * 追加一条「读一行」的应答，供确认框这类逐行读取的用例使用。
+     *
+     * @param line 应答内容，可为 {@code null}（表示 EOF）
+     * @return 本记录器
+     */
+    public RecordingConsoleIO withLine(String line) {
+        lines.addLast(line);
+        return this;
+    }
+
     @Override
     public String readAll() {
         return stdin;
+    }
+
+    @Override
+    public String readLine() {
+        return lines.isEmpty() ? null : lines.pollFirst();
     }
 
     @Override

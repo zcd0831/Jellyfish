@@ -365,6 +365,16 @@ handler 抛错**按放行处理**。它只管「结束运行态、保留快照�
   **`PluginRuntimeConfig` 必须在 `pluginManager.bootstrap()` 之前刷新**。
 - `global` / `project` 合并：同名 provider / agent / 插件配置段以 project **整对象**覆盖；
   列表段项目级已声明则整体替换（写 `[]` 即清空）；`react` / `permission` / `subAgent` 段同口径。
+- **项目级默认不加载**：它按进程当前目录解析，因此内容取决于「在哪个仓库里启动」，而它能改 provider 的
+  `baseUrl` / `apiKey`、新增 agent、改落盘目录与插件配置——一个 `git clone` 下来的目录就足以改变运行行为。
+  判据在 `ProjectConfigTrust`：**信任单位是「文件绝对路径 + 内容指纹」**，内容一变即失效（避免一次
+  `git pull` 之后沿用旧的信任）。授予方式只有三种——`--trust-project-config`（本次进程，不落盘）、
+  TUI 启动时的确认框选「加载并记住」（落进 `~/.jellyfish/trusted-project-configs.json`）、
+  以及「仅本次加载」；**缺省答案与读取失败一律按「不加载」**。
+  `classpath:` 形式的项目级路径**不受本闸管辖**：它属于运行构件本身（Spring 接入方正是靠它把配置放进
+  自己的 `resources`），与全局级同性质。
+- **项目级被跳过时必发一条 `ConfigWarningEvent`**（源为 `project-config`）：静默跳过会让用户以为配置生效了。
+  文件不存在不发告警——「这个目录没有项目级配置」是常态。
 - **「字段缺失」≠「显式空数组」**：`allowedTools` / `plugins.enabled` 缺失为不限制，`[]` 为一个都不放行 / 不启用；
   `plugins.roots` 不适用。
 

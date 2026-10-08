@@ -31,6 +31,9 @@ import java.util.function.Predicate;
  * <p>
  * 合并规则（对每个配置段一致）：
  * <ul>
+ *     <li><b>项目级只在被信任时参与合并</b>：它按当前目录读取，因此内容取决于「在哪个仓库里启动」，
+ *     而它能改 provider 的 {@code baseUrl}/{@code apiKey}、新增 agent、改落盘目录。未被显式信任过的
+ *     项目级文件一律跳过并告警，判据见 {@link ProjectConfigTrust}；</li>
  *     <li>同名 provider 以项目级<b>整对象</b>替换全局级，避免同一 provider 的字段散落在两份文件中；</li>
  *     <li>默认 provider / model 以项目级非空值覆盖全局级，项目级未配置时回退全局级。</li>
  * </ul>
@@ -67,6 +70,9 @@ public class RuntimeConfig {
     /** 提示词加载器：把用户 agent 的 {@code {agentId}.md} 补进定义。 */
     private final AgentPromptLoader agentPromptLoader;
 
+    /** 项目级配置的信任裁决：未信任的项目级文件不参与合并。 */
+    private final ProjectConfigTrust projectConfigTrust;
+
     /** 当前配置快照，整体替换保证读取一致性。 */
     private volatile RuntimeSnapshot snapshot = RuntimeSnapshot.empty();
 
@@ -80,10 +86,12 @@ public class RuntimeConfig {
      * @param eventPublisher 通知发布入口，用于广播配置告警
      * @param builtinAgentLoader 内置默认 agent 加载器
      * @param agentPromptLoader  用户 agent 的提示词加载器
+     * @param projectConfigTrust 项目级配置的信任裁决，决定项目级文件是否参与合并
      */
     @Inject
     public RuntimeConfig(AppConfig appConfig, ConfigLoader configLoader, EventPublisher eventPublisher,
-                         BuiltinAgentLoader builtinAgentLoader, AgentPromptLoader agentPromptLoader) {
+                         BuiltinAgentLoader builtinAgentLoader, AgentPromptLoader agentPromptLoader,
+                         ProjectConfigTrust projectConfigTrust) {
         this.appConfig = appConfig;
         this.configLoader = configLoader;
         this.eventPublisher = eventPublisher;
@@ -91,6 +99,8 @@ public class RuntimeConfig {
                 "builtinAgentLoader must not be null");
         this.agentPromptLoader = Objects.requireNonNull(agentPromptLoader,
                 "agentPromptLoader must not be null");
+        this.projectConfigTrust = Objects.requireNonNull(projectConfigTrust,
+                "projectConfigTrust must not be null");
     }
 
     /**
@@ -125,8 +135,28 @@ public class RuntimeConfig {
         String globalPath = paths == null ? null : paths.getGlobalPath();
         String projectPath = paths == null ? null : paths.getProjectPath();
         AgentSettings global = readAgents(globalPath);
-        AgentSettings project = isSamePath(globalPath, projectPath) ? null : readAgents(projectPath);
+        AgentSettings project = isSamePath(globalPath, projectPath) ? null : readAgentsTrusted(projectPath);
         return mergeAgentSettings(global, project);
+    }
+
+    /**
+     * 读取项目级 agent 配置，但先过信任闸。
+     * <p>
+     * 与通用项目级读取同一道闸（见 {@link #readTrustedProject}），只是这里读完之后还要按条目补提示词，
+     * 因此不能直接复用那一个方法。
+     *
+     * @param projectPath 项目级路径，可为 {@code null}
+     * @return agent 配置；未信任或文件不存在时返回 {@code null}
+     */
+    private AgentSettings readAgentsTrusted(String projectPath) {
+        ProjectConfigTrust.Decision decision = projectConfigTrust.decide(projectPath);
+        if (decision == ProjectConfigTrust.Decision.LOAD) {
+            return readAgents(projectPath);
+        }
+        if (decision == ProjectConfigTrust.Decision.UNTRUSTED) {
+            notifyUntrustedProjectConfig(projectPath);
+        }
+        return null;
     }
 
     /**
@@ -194,13 +224,50 @@ public class RuntimeConfig {
             // 同一份文件读一次即可，避免重复解析并产生两套等价对象
             project = null;
         } else {
-            project = read(projectPath, type);
+            project = readTrustedProject(projectPath, type);
         }
         T merged = merger.apply(global, project);
         if (merged == null) {
             throw new JellyfishException("config merger returned null for type: " + type.getName());
         }
         return merged;
+    }
+
+    /**
+     * 读取项目级配置，但先过信任闸。
+     * <p>
+     * 项目级配置的读取基准是进程当前目录，因此它的内容会随「在哪个仓库里启动」而变化；
+     * 而它能改 provider 的 {@code baseUrl}/{@code apiKey}、新增 agent、改落盘目录。
+     * 因此没被显式信任过的项目级文件一律跳过（详见 {@link ProjectConfigTrust}），
+     * 并且只留一条告警——静默跳过会让用户以为自己的配置生效了。
+     *
+     * @param projectPath 项目级路径，可为 {@code null}
+     * @param type        绑定类型，不可为 {@code null}
+     * @param <T>         配置类型
+     * @return 绑定结果；未信任或文件不存在时返回 {@code null}
+     */
+    private <T> T readTrustedProject(String projectPath, Class<T> type) {
+        ProjectConfigTrust.Decision decision = projectConfigTrust.decide(projectPath);
+        if (decision == ProjectConfigTrust.Decision.LOAD) {
+            return read(projectPath, type);
+        }
+        if (decision == ProjectConfigTrust.Decision.UNTRUSTED) {
+            notifyUntrustedProjectConfig(projectPath);
+        }
+        return null;
+    }
+
+    /**
+     * 对「项目级配置存在但未被信任」发出告警。
+     * <p>
+     * 消息里带上解锁方式：只说「没加载」而不说怎么加载，用户面前就是一个没有出口的死角。
+     *
+     * @param projectPath 项目级路径，可为 {@code null}
+     */
+    private void notifyUntrustedProjectConfig(String projectPath) {
+        eventPublisher.publish(new ConfigWarningEvent("project-config",
+                "项目级配置未加载（未被信任）：" + projectPath
+                        + "；确认无误后用 --trust-project-config 启动，或在 TUI 里选择加载"));
     }
 
     /**

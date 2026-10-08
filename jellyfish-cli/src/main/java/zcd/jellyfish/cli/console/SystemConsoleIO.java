@@ -38,6 +38,15 @@ public final class SystemConsoleIO implements ConsoleIO {
     private final PrintStream err;
 
     /**
+     * 标准输入的字符读取器，懒建。
+     * <p>
+     * <b>两种读取方式必须共用同一个</b>：{@link InputStreamReader} 会预读一批字符进自己的缓冲，
+     * 各建一个的话，第二个读到的内容会从第一个已经预读走的位置开始——表现为「确认框读到了空行」
+     * 或「单次输入少了一截」。
+     */
+    private Reader reader;
+
+    /**
      * 构造标准流实现。
      */
     public SystemConsoleIO() {
@@ -61,17 +70,53 @@ public final class SystemConsoleIO implements ConsoleIO {
     public String readAll() {
         StringBuilder text = new StringBuilder();
         char[] buffer = new char[READ_BUFFER_SIZE];
-        Reader reader = new InputStreamReader(in);
+        Reader source = reader();
         try {
-            int read = reader.read(buffer);
+            int read = source.read(buffer);
             while (read != -1) {
                 text.append(buffer, 0, read);
-                read = reader.read(buffer);
+                read = source.read(buffer);
             }
         } catch (IOException e) {
             throw new JellyfishException("读取 stdin 失败：" + e.getMessage(), e);
         }
         return text.toString();
+    }
+
+    @Override
+    public String readLine() {
+        Reader source = reader();
+        StringBuilder text = new StringBuilder();
+        try {
+            int read = source.read();
+            if (read == -1) {
+                return null;
+            }
+            while (read != -1 && read != '\n') {
+                text.append((char) read);
+                read = source.read();
+            }
+        } catch (IOException e) {
+            throw new JellyfishException("读取 stdin 失败：" + e.getMessage(), e);
+        }
+        // 兼容 CRLF：确认框只关心那一个字母，把回车留在里面会让所有选项都对不上
+        int length = text.length();
+        if (length > 0 && text.charAt(length - 1) == '\r') {
+            text.setLength(length - 1);
+        }
+        return text.toString();
+    }
+
+    /**
+     * 取标准输入的字符读取器，首次使用时创建。
+     *
+     * @return 读取器，保证非 {@code null}
+     */
+    private synchronized Reader reader() {
+        if (reader == null) {
+            reader = new InputStreamReader(in);
+        }
+        return reader;
     }
 
     @Override

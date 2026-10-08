@@ -12,6 +12,8 @@ import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.ask.AskChannel;
 import zcd.jellyfish.infra.command.CommandManager;
 import zcd.jellyfish.infra.config.RuntimeConfig;
+import zcd.jellyfish.infra.config.AppConfig;
+import zcd.jellyfish.infra.config.ProjectConfigTrust;
 import zcd.jellyfish.infra.event.EventChannel;
 import zcd.jellyfish.infra.extension.ExtensionRegistry;
 import zcd.jellyfish.infra.llm.LlmClientFactory;
@@ -61,6 +63,20 @@ public interface JellyfishComponent extends JellyfishRuntime {
      * @return RuntimeConfig
      */
     RuntimeConfig runtimeConfig();
+
+    /**
+     * 获取应用级配置（各配置段的双源路径与插件扫描目录）。
+     *
+     * @return AppConfig
+     */
+    AppConfig appConfig();
+
+    /**
+     * 获取项目级配置的信任裁决，由外壳在启动内核之前授予信任。
+     *
+     * @return ProjectConfigTrust
+     */
+    ProjectConfigTrust projectConfigTrust();
 
     /**
      * 获取 Agent 运行时宿主，由外壳调用 {@code bootstrap()} 启动。

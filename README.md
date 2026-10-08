@@ -72,6 +72,7 @@ java -jar jellyfish-cli/target/jellyfish-cli-0.1.1.jar -cli -p "/help"
 ### 2. 配一份模型
 
 配置按「全局级 `~/.jellyfish/` + 项目级 `<工作目录>/.jellyfish/`」双源读取，项目级优先。
+**项目级默认不加载**，需要显式信任（见「项目级配置的信任」）；一路只读全局级时什么都不用做。
 在项目根建 `.jellyfish/models.json`：
 
 ```json
@@ -130,6 +131,7 @@ java -jar jellyfish-cli/target/jellyfish-cli-0.1.1.jar -tui
 | `--show-thinking` | 展示模型的思考过程：`-cli` 打到 stderr，`-tui` 置为启动时展开 |
 | `--show-tool-args` | `-cli` 的工具轨迹行上打出调用参数（单行，过长截断；TUI 用 `Ctrl+E` / `/toolargs`） |
 | `--verbose` | 日志级别降到 DEBUG（也可用 `-Djellyfish.log.level=DEBUG`） |
+| `--trust-project-config` | 信任并加载项目级配置（`./.jellyfish/*.json`），**仅本次进程有效、不落盘**。缺省不加载，理由见「项目级配置的信任」 |
 | `-h, --help` / `-V, --version` | 帮助 / 版本号 |
 
 `--agent` / `--model` / `-p` / `--show-thinking` / `--show-tool-args` **只归 `-cli`**：`-tui` / `-server` 带上它们
@@ -910,12 +912,41 @@ stderr、SSE 的 `notice`），**都不会被拼进正文**——拼进去会让
   JSON 的 key 不替换。`{agentId}.md` 提示词是**原文**，不做模板插值。
 - **路径**：`~` 与 `~/` 展开为用户主目录；项目级路径相对**进程工作目录**解析，不是相对 jar 位置。
   文件不存在视为「该源未配置」，静默跳过。`config.json` 的 `plugins.roots` 语义一致。
+  **项目级文件存在但未被信任时不加载，并发一条配置告警**（判据与授予方式见「项目级配置的信任」）；
+  `classpath:` 形式的项目级路径不受该闸管辖。
 - **合并**：同名 `provider` / `agent` / 插件配置段以项目级**整对象**覆盖全局级，agent 的提示词 md 也随来源一起覆盖；
   `defaultProvider` / `defaultModel` 取项目级非空值，否则回退全局级；`react` / `permission` / `subAgent` 段项目级
   **整对象**覆盖全局级；启用 / 禁用名单项目级**已声明则整体替换**（写 `[]` 即清空该名单，不做并集）。
   `plugins.roots` 只在 `config.json` 一处，不参与双源合并。
 - **容错**：配置缺失或可疑只发配置告警事件，不中断启动；真正用到时才报错。
 - **不要提交密钥**：`apiKey` 等敏感值通过环境变量注入，不要落到配置文件里。
+
+### 项目级配置的信任
+
+**项目级配置（`<工作目录>/.jellyfish/*.json`）默认不加载**，只有被显式信任过才参与合并。
+
+理由是它的读取基准是**进程当前目录**，因此内容取决于「在哪个目录里启动」；而它能决定的东西很重：
+`models.json` 里同名 provider 是整对象替换，其中的 `baseUrl` / `apiKey` 一改，该 provider 的密钥与全部对话正文
+就送到别处；`agents.json` 可以新增 agent（未声明权限的 agent 不受限）；`jellyfish.json` 可以改落盘目录与插件配置。
+这些内容会因为 `git clone` / `git pull` 凭空出现在工作目录里，所以闸门设在「这个目录可不可信」这一层。
+
+信任的单位是**文件绝对路径 + 内容指纹**，不是目录：文件内容一变（比如 pull 下来一份新配置）信任立即失效，
+需要重新确认。这是刻意的——只记目录的话，「信任一次」会变成「永远信任这个仓库，无论它以后写什么」。
+
+三种授予方式：
+
+| 场景 | 做法 | 是否落盘 |
+| --- | --- | --- |
+| `-cli` / `-server` | 启动时加 `--trust-project-config` | 否，仅本次进程 |
+| `-tui` | 启动时弹出确认框，选 `y` 加载并记住 | 是，记进 `~/.jellyfish/trusted-project-configs.json` |
+| `-tui` | 同一确认框里选 `o` 仅本次加载 | 否 |
+
+没有终端可问时（`-cli` / `-server`）**只会打印一行提示**，告诉你怎么才能加载，绝不擅自加载。
+确认框的缺省答案、无法识别的输入、以及读不到应答，一律按**不加载**处理。
+
+`classpath:` 形式的项目级路径（如 `classpath:jellyfish/models.json`）**不受这道闸管辖**：它属于运行构件本身，
+由打包与部署的人决定，与全局级同性质。Spring 接入方正是用它把配置放进自己的 `resources`，
+从而彻底不必依赖工作目录。
 
 ### 常见配置任务
 

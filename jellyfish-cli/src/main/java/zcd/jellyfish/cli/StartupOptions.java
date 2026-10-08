@@ -100,6 +100,15 @@ public final class StartupOptions {
     /** 是否把日志级别降到 DEBUG。 */
     private final boolean verbose;
 
+    /**
+     * 是否信任并加载项目级配置。
+     * <p>
+     * 项目级配置按当前目录读取，因此「在哪个仓库里启动」决定它的内容，而它能改 provider 的
+     * {@code baseUrl}/{@code apiKey}、新增 agent、改落盘目录——所以默认不加载。
+     * 本参数是「我确认这个目录可信」的那一次显式表态，只对本次进程有效。
+     */
+    private final boolean trustProjectConfig;
+
     /** 是否请求帮助。 */
     private final boolean help;
 
@@ -124,6 +133,7 @@ public final class StartupOptions {
         this.showThinking = builder.showThinking;
         this.showToolArgs = builder.showToolArgs;
         this.verbose = builder.verbose;
+        this.trustProjectConfig = builder.trustProjectConfig;
         this.help = builder.help;
         this.version = builder.version;
     }
@@ -247,6 +257,15 @@ public final class StartupOptions {
     }
 
     /**
+     * 判断是否信任并加载项目级配置。
+     *
+     * @return 信任项目级配置返回 {@code true}
+     */
+    public boolean isTrustProjectConfig() {
+        return trustProjectConfig;
+    }
+
+    /**
      * 判断是否请求帮助。
      *
      * @return 请求帮助返回 {@code true}
@@ -308,6 +327,9 @@ public final class StartupOptions {
 
         /** 是否把日志级别降到 DEBUG。 */
         private boolean verbose;
+
+        /** 是否信任并加载项目级配置。 */
+        private boolean trustProjectConfig;
 
         /** 是否请求帮助。 */
         private boolean help;
@@ -433,6 +455,17 @@ public final class StartupOptions {
          */
         public Builder verbose(boolean verbose) {
             this.verbose = verbose;
+            return this;
+        }
+
+        /**
+         * 设置是否信任并加载项目级配置。
+         *
+         * @param trustProjectConfig 信任项目级配置传 {@code true}
+         * @return 本构建器
+         */
+        public Builder trustProjectConfig(boolean trustProjectConfig) {
+            this.trustProjectConfig = trustProjectConfig;
             return this;
         }
 

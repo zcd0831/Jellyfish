@@ -18,9 +18,9 @@ import java.util.Optional;
 /**
  * 启动模式分发与生命周期宿主：把「选哪个模式」与「内核什么时候起停」这两件事收在一处。
  * <p>
- * 三种模式共享同一段生命周期（{@link AgentHarness#bootstrap()} → 保证当前会话 → 跑模式 →
- * {@link AgentHarness#shutdown()}），差别只在 {@link RunMode} 实现；因此子命令之外的一切
- * （会话准备、退出码、异常收敛）都在这里做一次，模式实现不必各自重复。
+ * 三种模式共享同一段生命周期（环境自检 → 项目级配置的信任表态 → {@link AgentHarness#bootstrap()} →
+ * 保证当前会话 → 跑模式 → {@link AgentHarness#shutdown()}），差别只在 {@link RunMode} 实现；
+ * 因此子命令之外的一切（会话准备、退出码、异常收敛）都在这里做一次，模式实现不必各自重复。
  * <p>
  * <b>shutdown 双保险</b>：{@code addShutdownHook} 覆盖 Ctrl+C / {@code kill}，{@code finally}
  * 覆盖正常路径与异常路径。两侧都会调 {@link AgentHarness#shutdown()}，靠内核自身的幂等保证安全。
@@ -85,6 +85,10 @@ public final class Launcher {
         component.runtimeInfoHolder().set(
                 RuntimeInfo.forShell(mode.shell(), System.console() != null));
         AgentHarness harness = component.agentHarness();
+        // 项目级配置的信任表态必须排在 bootstrap 之前：配置就是在 bootstrap 里装载的，
+        // 晚一步问等于问了也不生效。它也不依赖任何需要回收的资源
+        new ProjectConfigTrustConsent(console, component.projectConfigTrust())
+                .resolve(component.appConfig(), options, mode.shell() == RuntimeInfo.Shell.TUI);
         Thread hook = new Thread(harness::shutdown, SHUTDOWN_HOOK_NAME);
         Runtime.getRuntime().addShutdownHook(hook);
         try {

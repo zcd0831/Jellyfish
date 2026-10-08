@@ -10,8 +10,9 @@ package zcd.jellyfish.cli.console;
  * 逐段追加换行会把输出打散；而工具进度、错误是<b>整行</b>诊断，天然该带换行。两类语义不同，
  * 接口上分开而不是靠调用方自己拼 {@code "\n"}。
  * <p>
- * <b>只服务单次模式</b>：交互式外壳（TUI）有自己的渲染层，不会复用本接口——因此这里不提供
- * 「读一行」这种交互式 API，避免为不存在的降级形态预留死代码。
+ * <b>只服务外壳的输入输出</b>：交互式外壳（TUI）有自己的渲染层，界面内容不会复用本接口——
+ * 这里只提供两种读取方式：整读到 EOF（单次模式没有 {@code -p} 时的输入）与读一行
+ * （启动期的确认框，那时 TUI 还没接管终端）。
  *
  * @author zcd
  */
@@ -26,6 +27,17 @@ public interface ConsoleIO {
      * @throws zcd.jellyfish.api.JellyfishException 读取失败时抛出
      */
     String readAll();
+
+    /**
+     * 读取标准输入的一行（到换行或 EOF）。
+     * <p>
+     * 供启动期的确认框使用：那一问发生在 TUI 接管终端之前，此时还没有界面可用，
+     * 只能走朴素的终端读写。
+     *
+     * @return 读到的一行（不含行尾换行）；已到 EOF 时返回 {@code null}
+     * @throws zcd.jellyfish.api.JellyfishException 读取失败时抛出
+     */
+    String readLine();
 
     /**
      * 向标准输出原样写出文本（不追加换行），并立即刷新。

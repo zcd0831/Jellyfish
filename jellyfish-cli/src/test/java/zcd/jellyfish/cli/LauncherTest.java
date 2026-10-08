@@ -36,6 +36,9 @@ import zcd.jellyfish.core.compact.ConversationCompactor;
 import zcd.jellyfish.core.prompt.PromptAssembler;
 import zcd.jellyfish.core.input.InputDirectives;
 import zcd.jellyfish.infra.ask.AskChannel;
+import zcd.jellyfish.infra.config.AppConfig;
+import zcd.jellyfish.infra.config.ConfigPaths;
+import zcd.jellyfish.infra.config.ProjectConfigTrust;
 import zcd.jellyfish.infra.config.RuntimeConfig;
 import zcd.jellyfish.infra.permission.ApprovalChannel;
 import zcd.jellyfish.infra.plugin.RuntimeInfoHolder;
@@ -44,6 +47,7 @@ import zcd.jellyfish.infra.session.Session;
 import zcd.jellyfish.infra.session.SessionDefaults;
 import zcd.jellyfish.infra.session.SessionManager;
 
+import java.nio.file.Paths;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -113,6 +117,14 @@ class LauncherTest {
      * 刻意不用 mock：写入是断言的一部分，用 mock 就只能验「调过 set」而验不了「写进去的是什么」。
      */
     private final RuntimeInfoHolder runtimeInfoHolder = new RuntimeInfoHolder();
+
+    /** 应用级配置：三个配置段都不带项目级路径，因此信任确认器无事可做。 */
+    private final AppConfig launcherAppConfig = new AppConfig(null, new ConfigPaths(), new ConfigPaths(),
+            new ConfigPaths(), null);
+
+    /** 信任裁决：本用例不涉及项目级配置，用一个不会落盘的仓库。 */
+    private final ProjectConfigTrust projectConfigTrust =
+            new ProjectConfigTrust(Paths.get("target", "unused-trust-store.json"));
 
     /** 真实输入改写服务：只为满足三个运行模式的构造（非空校验）。 */
     @Mock
@@ -312,6 +324,8 @@ conversationCompactor = new ConversationCompactor(sessions, models, runtimeConfi
         when(component.shellStreams()).thenReturn(shellStreams);
         when(component.sessionManager()).thenReturn(sessions);
         when(component.runtimeInfoHolder()).thenReturn(runtimeInfoHolder);
+        when(component.projectConfigTrust()).thenReturn(projectConfigTrust);
+        when(component.appConfig()).thenReturn(launcherAppConfig);
         doThrow(new JellyfishException("插件目录不可读")).when(harness).bootstrap();
 
         int code = launcher.launch(StartupOptions.builder(StartupOptions.Mode.CLI).prompt("你好").build());
@@ -373,6 +387,10 @@ conversationCompactor = new ConversationCompactor(sessions, models, runtimeConfi
         when(component.shellStreams()).thenReturn(shellStreams);
         when(component.sessionManager()).thenReturn(sessions);
         lenient().when(component.runtimeInfoHolder()).thenReturn(runtimeInfoHolder);
+        // 项目级配置的信任确认也在 launch 里、且同样只在环境自检通过之后才发生：
+        // 这里给一份「没有任何项目级路径」的应用级配置，让确认器无事可做，用例不必关心它
+        lenient().when(component.projectConfigTrust()).thenReturn(projectConfigTrust);
+        lenient().when(component.appConfig()).thenReturn(launcherAppConfig);
     }
 
     /**

@@ -726,6 +726,24 @@ class ReActLooperTest {
     }
 
     @Test
+    void chat_should_reportExactlyOnce_when_preTurnStatementFails() {
+        // Given：配置读取发生在 runTurn 之前——它抛错时 runTurn 从未进入，因此没有任何 listener 回调
+        when(runtimeConfig.getSubAgentSettings()).thenThrow(new IllegalStateException("配置坏了"));
+        Session session = sessionManager.createDefault();
+        RecordingListener recording = new RecordingListener();
+
+        // When
+        ReActTurn turn = newLooper().chat(session.getSessionId(), "你好", recording);
+
+        // Then：恰好一条终态。0 条会让外壳一直等一个永不到来的终态（-cli 连超时都没有），
+        // 2 条会破坏「每个回合恰好一条 isTerminal」的契约——两个方向都不能容忍
+        assertThrows(JellyfishException.class, turn::await);
+        assertEquals(1, recording.errors.size(), "前置失败必须补一条终态，且只能是一条");
+        assertTrue(recording.completed.isEmpty());
+        assertEquals(0, recording.cancelledCount);
+    }
+
+    @Test
     void chat_should_throw_when_session_missing() {
         // Given
         RecordingListener recording = new RecordingListener();

@@ -281,6 +281,11 @@ public class ReActLooper implements AutoCloseable {
      * <p>
      * <b>作用域归属顶层回合而不是单次委派</b>：同一个回合里模型可以连着委派好几次，
      * 也可能某个子代理再往下委派；「本回合已经派出多少」这笔账只能挂在回合上。
+     * <p>
+     * <b>前置语句也必须在这一个 try 内</b>：配置读取、作用域开启、会话解析三处任何一处抛错，
+     * 都会让回合停在「还没有任何回调」的状态上——外壳收不到终态（{@code -cli} 连超时都没有，
+     * 就是挂死），回合槽位与动作窗口也不会归还，该会话此后再也起不了回合。
+     * 它们与回合体共用同一段收尾，失败时由本方法补一条终态。
      *
      * @param turn      回合句柄
      * @param sessionId 会话标识
@@ -289,22 +294,29 @@ public class ReActLooper implements AutoCloseable {
      * @return 回合结果
      */
     private ReActResult execute(ReActTurnImpl turn, String sessionId, String userInput, ReActListener listener) {
-        SubAgentSettings subAgent = runtimeConfig.getSubAgentSettings();
-        runContexts.open(subAgent.getMaxDepth(), subAgent.getMaxSpawnsPerTurn(),
-                subAgent.getRunTokenBudget(), subAgent.getTreeTokenBudget());
+        // runTurn 自己会把异常收敛成 onError（它内部两个 catch 都这么做），因此本方法只负责
+        // 「还没走到 runTurn」那一段的终态——那段窗口里没有任何回调
+        boolean runTurnEntered = false;
         try {
-            Session session;
-            try {
-                // 先解析会话：不存在的会话是调用方的问题，也要经 onError 告诉它（与其余失败同口径）
-                session = sessionManager.require(sessionId);
-            } catch (JellyfishException e) {
-                listener.onError(e);
-                throw e;
-            }
+            SubAgentSettings subAgent = runtimeConfig.getSubAgentSettings();
+            runContexts.open(subAgent.getMaxDepth(), subAgent.getMaxSpawnsPerTurn(),
+                    subAgent.getRunTokenBudget(), subAgent.getTreeTokenBudget());
+            // 先解析会话：不存在的会话是调用方的问题，也要经 onError 告诉它（与其余失败同口径，
+            // 统一由下面的 catch 补终态）
+            Session session = sessionManager.require(sessionId);
+            runTurnEntered = true;
             return runTurn(turn, session, userInput, listener,
                     runtimeConfig.getReactSettings().getMaxRounds(), ToolFilter.none(), false);
+        } catch (RuntimeException e) {
+            // 只有「没进 runTurn」的失败需要在这里补终态：进了的话它已经报过一次，
+            // 再报一次会让外壳收到第二条 isTerminal——修这个缺陷不能顺手破坏那条硬契约
+            if (!runTurnEntered) {
+                listener.onError(e);
+            }
+            throw e;
         } finally {
-            // react 池线程会被复用：不关的话下一个回合会继承本回合的深度与计数
+            // react 池线程会被复用：不关的话下一个回合会继承本回合的深度与计数。
+            // 它在未 open 时是无害的（ThreadLocal.remove），因此不必再判断「开过没有」
             runContexts.close();
             // 注销必须是回合的最后一步：排空点都在这之前，之后的投递已经没有窗口可进——
             // 它们会在队列里被标成「本回合内没能排空」
@@ -373,8 +385,11 @@ public class ReActLooper implements AutoCloseable {
     private ReActResult runTurn(ReActTurnImpl turn, Session session, String userInput, ReActListener listener,
                                 int maxRounds, ToolFilter toolFilter, boolean nested) {
         String sessionId = session.getSessionId();
-        sessionManager.beginTurn(sessionId);
         try {
+            // 标脏放在 try 内：本方法的承诺是「异常统一收敛成 onError」，而 try 之外的语句
+            // 不在那个承诺里。它当前只是往集合里加一项、没有抛的路径，但「首尾都在同一段
+            // 收尾里」这条规则不该因为「现在不会抛」而留例外
+            sessionManager.beginTurn(sessionId);
             // 回合开始前钩子：位置必须在追加用户消息之前——一旦消息进了会话，拦下就只剩「再删掉」
             // 这条路，而历史是 append-only 的（缓存前缀与落盘都依赖这条性质）。
             // 顶层与嵌套共用本方法，因此子代理路径不会绕过钩子

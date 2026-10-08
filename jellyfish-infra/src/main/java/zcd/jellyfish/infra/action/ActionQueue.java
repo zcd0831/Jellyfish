@@ -133,7 +133,7 @@ public final class ActionQueue {
         if (previous == null) {
             return;
         }
-        List<Pending> superseded = previous.takeAllWithoutStateChange();
+        List<Pending> superseded = previous.closeAndTakeAll();
         LOG.warn("会话已有在途回合窗口，动作通道改认新回合: sessionId={} 未排空动作={}",
                 sessionId, superseded.size());
         for (Pending leftover : superseded) {
@@ -156,7 +156,7 @@ public final class ActionQueue {
         if (window == null) {
             return;
         }
-        for (Pending leftover : window.takeAllWithoutStateChange()) {
+        for (Pending leftover : window.closeAndTakeAll()) {
             leftover.fail(ActionFailureReason.TURN_ENDED_UNREACHED, "回合已结束，动作未能在本回合内排空");
         }
     }
@@ -230,7 +230,14 @@ public final class ActionQueue {
                             + "（会话不存在、或该会话只有子代理回合时同样如此）");
         }
         handle.owner = owner;
-        if (!window.offer(handle)) {
+        OfferOutcome outcome = window.offer(handle);
+        if (outcome == OfferOutcome.CLOSED) {
+            // 「拿到窗口引用」与「真正入队」之间发生的关闭（endTurn 摘窗口、或 beginTurn 换窗口）。
+            // 窗口关闭时会取走队列里的全部动作并标失败，但看不到还没进队列的这一条，因此由这里兜住
+            return handle.onFailed(ActionFailureReason.TURN_ENDED_UNREACHED,
+                    "回合窗口已关闭，动作未能在本回合内排空");
+        }
+        if (outcome == OfferOutcome.FULL) {
             LOG.warn("动作队列已满，丢弃: owner={} sessionId={} capacity={}",
                     owner, handle.getAction().getSessionId(), capacity);
             return handle.onDropped(ActionFailureReason.QUEUE_FULL,
@@ -244,23 +251,58 @@ public final class ActionQueue {
      * <p>
      * 所有读写都在本对象上加锁——提交线程、react 线程与插件停止线程会同时碰到它。
      */
+    /**
+     * 入队结果。
+     * <p>
+     * 三种结局要分开报给插件：{@link ActionFailureReason#QUEUE_FULL} 是可以稍后重试的容量问题，
+     * 而窗口已关闭是「这次回合没赶上」——插件按状态分流时不能把两者混为一谈。
+     */
+    private enum OfferOutcome {
+
+        /** 已入队。 */
+        ACCEPTED,
+
+        /** 队列已满。 */
+        FULL,
+
+        /** 窗口已关闭（回合结束，或窗口被同会话的新回合替换）。 */
+        CLOSED
+    }
+
+    /**
+     * 一个会话的投递窗口。
+     * <p>
+     * 动作句柄不在这里定义——它们是 {@link Handle}，本类只负责按顺序暂存与取走。
+     */
     private final class Window {
 
         /** 待排空动作，按投递顺序。 */
         private final Deque<Handle> pending = new ArrayDeque<Handle>();
 
+        /** 是否已关闭：关闭之后一律拒绝入队，且不会再变回未关闭。 */
+        private boolean closed;
+
         /**
          * 入队。
+         * <p>
+         * <b>关闭标志与入队共用同一把锁，这是本方法的关键</b>：{@code closed} 一旦置上就永远拒绝，
+         * 于是「拿到窗口引用」与「真正入队」之间发生的关闭不可能漏掉这条动作——
+         * 要么它在关闭前就入了队（由关闭方取走并标失败），要么在关闭后被拒（由
+         * {@link #enqueue} 标失败），没有第三种结局。所以这里不需要事后回头检查
+         * 「窗口还是不是原来那个」。
          *
          * @param handle 动作句柄
-         * @return 入队成功返回 {@code true}；已满返回 {@code false}
+         * @return 入队结果
          */
-        private synchronized boolean offer(Handle handle) {
+        private synchronized OfferOutcome offer(Handle handle) {
+            if (closed) {
+                return OfferOutcome.CLOSED;
+            }
             if (pending.size() >= capacity) {
-                return false;
+                return OfferOutcome.FULL;
             }
             pending.addLast(handle);
-            return true;
+            return OfferOutcome.ACCEPTED;
         }
 
         /**
@@ -285,11 +327,16 @@ public final class ActionQueue {
         }
 
         /**
-         * 取走全部剩余动作，<b>不改状态</b>：调用方（回合结束）要的是「还没被任何人取走的那些」。
+         * 关闭窗口并取走全部剩余动作。
+         * <p>
+         * <b>置关闭标志与取走动作必须在同一把锁里</b>：分两步做的话，两步之间入队的动作
+         * 既不在取走的名单里、又已经进了队列——它会永远停在 {@link ActionStatus#QUEUED} 上。
+         * 关闭后 {@link #offer} 会拒绝，因此「取走之后再有人想入队」这条路径是闭的。
          *
          * @return 剩余动作
          */
-        private synchronized List<Pending> takeAllWithoutStateChange() {
+        private synchronized List<Pending> closeAndTakeAll() {
+            closed = true;
             List<Pending> taken = new ArrayList<Pending>(pending);
             pending.clear();
             return taken;

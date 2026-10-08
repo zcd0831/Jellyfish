@@ -150,6 +150,27 @@ class ActionQueueTest {
     }
 
     @Test
+    void beginTurn_should_leaveNewWindowAccepting_when_previousWindowWasClosed() {
+        // Given：旧窗口里留一条没排空的动作
+        queue.beginTurn("s1");
+        ActionHandle stale = queue.submit("plugin-a",
+                PluginAction.sendUserMessage("s1", "旧窗口里的", DeliverAs.FOLLOW_UP));
+
+        // When：同一会话开新窗口，旧窗口随之关闭
+        queue.beginTurn("s1");
+
+        // Then：旧窗口的残留被标失败
+        assertEquals(ActionStatus.FAILED, stale.getStatus());
+        assertEquals(ActionFailureReason.TURN_SUPERSEDED, stale.getFailureReason());
+        // Then：新窗口照常接受动作——「已关闭」属于那一个窗口，不属于这张表。
+        // 把关闭状态实现成队列级的话，这里会得到 FAILED，于是同一会话的第二个回合永远投不进动作
+        ActionHandle fresh = queue.submit("plugin-a",
+                PluginAction.sendUserMessage("s1", "新窗口里的", DeliverAs.FOLLOW_UP));
+        assertEquals(ActionStatus.QUEUED, fresh.getStatus());
+        assertEquals(1, queue.takeConvergence("s1").size());
+    }
+
+    @Test
     void endTurn_should_be_noop_when_no_window() {
         queue.endTurn("ghost");
     }

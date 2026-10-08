@@ -10,6 +10,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import zcd.jellyfish.infra.config.ReactSettings;
 import zcd.jellyfish.infra.config.RuntimeConfig;
 import zcd.jellyfish.infra.config.ToolOutputSettings;
+import zcd.jellyfish.infra.support.HomePaths;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -156,6 +157,44 @@ class ToolOutputStoreTest {
         assertTrue(Files.notExists(Paths.get(oldest)));
         assertTrue(Files.exists(Paths.get(newest)));
         assertTrue(Files.exists(Paths.get(toolOutput)));
+    }
+
+    @Test
+    @DisplayName("落盘根在主目录内时，回灌的三条路径都应缩写成 ~ 形式")
+    void allPaths_should_abbreviateRealHome_when_directoryIsUnderHome() throws IOException {
+        // Given：user.home 指向临时目录，落盘根写成 ~/tool-outputs（真实部署的缺省形态）
+        String originalHome = System.getProperty("user.home");
+        System.setProperty("user.home", tempDir.toString());
+        try {
+            when(runtimeConfig.getReactSettings()).thenReturn(
+                    new ReactSettings(null, null, null, null, null, null,
+                            new ToolOutputSettings("~/tool-outputs", 0, 0L, null, null)));
+            ToolOutputStore.SpillWriter writer = store.open("s-1", "call-1", "shell");
+
+            // When：事后截断、捕获期溢出、子代理归档三条返回路径各取一个
+            String spilled = store.store("s-1", "call-1", "read_file", "x", false);
+            String archived = store.storeIn("subagent-runs", "run-1", "{}", true, 0, 0);
+            writer.write("y");
+            String committed = writer.commit();
+
+            // Then：真实用户名与主目录结构不进上下文（它会随会话落盘、被导出、发给上游模型），
+            // 而回灌的路径展开后仍指向那个真实文件——两条都成立才叫「缩写了但能用」
+            for (String path : new String[]{spilled, archived, committed}) {
+                assertNotNull(path);
+                assertTrue(path.startsWith("~"), path);
+                assertFalse(path.contains(tempDir.toString()), path);
+            }
+            assertEquals("x", new String(Files.readAllBytes(Paths.get(HomePaths.expand(spilled))),
+                    StandardCharsets.UTF_8));
+            assertEquals("y", new String(Files.readAllBytes(Paths.get(HomePaths.expand(committed))),
+                    StandardCharsets.UTF_8));
+        } finally {
+            if (originalHome == null) {
+                System.clearProperty("user.home");
+            } else {
+                System.setProperty("user.home", originalHome);
+            }
+        }
     }
 
     @Test

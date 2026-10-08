@@ -2,6 +2,8 @@ package zcd.jellyfish.server.http;
 
 import io.undertow.server.HttpServerExchange;
 import io.undertow.util.Headers;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.infra.support.ObjectMapperWrapper;
 
@@ -23,6 +25,9 @@ import java.util.Locale;
  * @author zcd
  */
 public final class JsonBody {
+
+    /** 日志。 */
+    private static final Logger LOG = LoggerFactory.getLogger(JsonBody.class);
 
     /** 单次读取的缓冲区大小。 */
     private static final int BUFFER_SIZE = 8192;
@@ -99,8 +104,9 @@ public final class JsonBody {
         if (JSON_MEDIA_TYPE.equals(mediaType) || mediaType.endsWith(JSON_SUFFIX)) {
             return;
         }
+        LOG.info("请求体不是 JSON: Content-Type={}", LogText.singleLine(mediaType));
         throw new ApiException(Responses.UNSUPPORTED_MEDIA_TYPE, "UNSUPPORTED_MEDIA_TYPE",
-                "请求体必须是 JSON：期望 Content-Type: application/json，收到 " + mediaType);
+                "请求体必须是 JSON：期望 Content-Type: " + JSON_MEDIA_TYPE);
     }
 
     /**

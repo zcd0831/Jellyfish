@@ -67,13 +67,17 @@ public final class Router implements HttpHandler {
         try {
             Match match = match(method, pathSegments);
             if (match == null) {
-                Responses.writeError(exchange, Responses.NOT_FOUND, "NOT_FOUND", "没有这个接口：" + method + " " + path);
+                LOG.info("没有匹配的接口: {} {}", LogText.singleLine(method), LogText.singleLine(path));
+                Responses.writeError(exchange, Responses.NOT_FOUND, "NOT_FOUND", "没有这个接口");
                 return;
             }
             if (match.isWrongMethod()) {
-                exchange.getResponseHeaders().put(Headers.ALLOW, String.join(", ", match.getAllowedMethods()));
+                String allowed = String.join(", ", match.getAllowedMethods());
+                LOG.info("接口不支持该请求方法: {} {}（允许 {}）", LogText.singleLine(method),
+                        LogText.singleLine(path), allowed);
+                exchange.getResponseHeaders().put(Headers.ALLOW, allowed);
                 Responses.writeError(exchange, Responses.METHOD_NOT_ALLOWED, "METHOD_NOT_ALLOWED",
-                        "接口 " + path + " 不支持 " + method + "，允许：" + String.join(", ", match.getAllowedMethods()));
+                        "接口不支持该请求方法，允许：" + allowed);
                 return;
             }
             match.getRoute().handler.handle(exchange, match.getParams());
@@ -81,9 +85,10 @@ public final class Router implements HttpHandler {
             Responses.writeError(exchange, e.getStatus(), e.getCode(), e.getMessage());
         } catch (Exception e) {
             // 同步侧刻意没有护栏，异常处置是调用点（这里）的责任；已开始的响应由 Responses 兜底
-            LOG.error("接口处理失败: {} {}", method, path, e);
+            LOG.error("接口处理失败: {} {}", LogText.singleLine(method), LogText.singleLine(path), e);
+            // 文案固定：异常消息可能带内部细节（路径、上游地址、甚至请求里的密钥片段），只进日志
             Responses.writeError(exchange, Responses.INTERNAL_ERROR, Responses.CODE_INTERNAL_ERROR,
-                    e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
+                    "服务内部错误");
         }
     }
 

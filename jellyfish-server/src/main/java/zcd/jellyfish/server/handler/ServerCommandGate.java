@@ -1,6 +1,9 @@
 package zcd.jellyfish.server.handler;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import zcd.jellyfish.server.http.ApiException;
+import zcd.jellyfish.server.http.LogText;
 import zcd.jellyfish.server.http.Responses;
 
 import java.util.Arrays;
@@ -32,6 +35,9 @@ import java.util.Set;
  */
 final class ServerCommandGate {
 
+    /** 日志。 */
+    private static final Logger LOG = LoggerFactory.getLogger(ServerCommandGate.class);
+
     /** 服务模式下不可通过 HTTP 执行的命令：语义与本外壳的寻址方式不兼容，或改进程级状态。 */
     private static final Set<String> DENIED = Collections.unmodifiableSet(new LinkedHashSet<String>(
             Arrays.asList("new", "resume", "reload", "session", "sessions", "delete", "rm")));
@@ -53,8 +59,10 @@ final class ServerCommandGate {
         if (name.isEmpty() || !DENIED.contains(name)) {
             return;
         }
+        // 命令名来自请求原文，因此只进日志、不进响应文案
+        LOG.info("服务模式拒绝了命令: /{}", LogText.singleLine(name));
         throw new ApiException(Responses.FORBIDDEN, "COMMAND_NOT_ALLOWED",
-                "命令 /" + name + " 不能在服务模式下执行：它会操作进程级状态或按参数操作别的会话，"
+                "该命令不能在服务模式下执行：它会操作进程级状态或按参数操作别的会话，"
                         + "而本外壳按会话 id 寻址（建会话用 POST /sessions，删会话用 DELETE /sessions/{id}）");
     }
 

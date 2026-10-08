@@ -25,6 +25,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.eq;
@@ -133,7 +134,9 @@ class SessionHandlersTest {
                 () -> handlers.create(fixture.exchange, PathParams.empty()));
 
         assertEquals(Responses.BAD_REQUEST, error.getStatus());
-        assertTrue(error.getMessage().contains("ghost"));
+        // 文案不回显 agentId：它会随响应进客户端与日志，未清洗时能伪造日志行、改终端显示
+        assertFalse(error.getMessage().contains("ghost"), error.getMessage());
+        assertTrue(error.getMessage().contains("agent 不存在"), error.getMessage());
     }
 
     @Test
@@ -145,6 +148,8 @@ class SessionHandlersTest {
 
         assertEquals(Responses.NOT_FOUND, error.getStatus());
         assertEquals("SESSION_NOT_FOUND", error.getCode());
+        // 文案不回显会话标识：注入面之外，「存在但无权」与「不存在」也必须逐字节相同
+        assertFalse(error.getMessage().contains("nope"), error.getMessage());
     }
 
     @Test

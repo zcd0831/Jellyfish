@@ -1,6 +1,8 @@
 package zcd.jellyfish.server.handler;
 
 import io.undertow.server.HttpServerExchange;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.extension.SessionSnapshot;
 import zcd.jellyfish.api.extension.SessionUsageSnapshot;
@@ -17,6 +19,7 @@ import zcd.jellyfish.server.dto.CreateSessionRequest;
 import zcd.jellyfish.server.dto.SessionSummary;
 import zcd.jellyfish.server.http.ApiException;
 import zcd.jellyfish.server.http.JsonBody;
+import zcd.jellyfish.server.http.LogText;
 import zcd.jellyfish.server.http.PathParams;
 import zcd.jellyfish.server.http.Responses;
 
@@ -42,6 +45,9 @@ import java.util.List;
  * @author zcd
  */
 public final class SessionHandlers {
+
+    /** 日志。 */
+    private static final Logger LOG = LoggerFactory.getLogger(SessionHandlers.class);
 
     /** 运行参数。 */
     private final ServerConfig config;
@@ -131,7 +137,8 @@ public final class SessionHandlers {
         String sessionId = params.get("id");
         Session deleted = sessions.delete(sessionId);
         if (deleted == null) {
-            throw notFound(sessionId);
+            LOG.info("要删除的会话不存在: {}", LogText.singleLine(sessionId));
+            throw SessionPath.notFound();
         }
         Responses.writeNoContent(exchange);
     }
@@ -157,21 +164,7 @@ public final class SessionHandlers {
      * @throws ApiException 会话不存在时抛出
      */
     private Session requireSession(String sessionId) {
-        try {
-            return sessions.require(sessionId);
-        } catch (JellyfishException e) {
-            throw notFound(sessionId);
-        }
-    }
-
-    /**
-     * 构造 404 异常。
-     *
-     * @param sessionId 会话标识
-     * @return 404 异常
-     */
-    private static ApiException notFound(String sessionId) {
-        return new ApiException(Responses.NOT_FOUND, "SESSION_NOT_FOUND", "会话不存在：" + sessionId);
+        return SessionPath.require(sessions, sessionId);
     }
 
     /**
@@ -216,8 +209,10 @@ public final class SessionHandlers {
         try {
             agents.require(agentId);
         } catch (JellyfishException e) {
+            // 文案不带 agentId：理由同 SessionPath.notFound（回显调用方输入只是多一个注入面）
+            LOG.info("请求里的 agent 不存在: {}", LogText.singleLine(agentId));
             throw new ApiException(Responses.BAD_REQUEST, Responses.CODE_BAD_REQUEST,
-                    "agent 不存在：" + agentId + "（可用 /agent 查看可用 agent）");
+                    "agent 不存在（可用 /agent 查看可用 agent）");
         }
     }
 
@@ -235,8 +230,10 @@ public final class SessionHandlers {
         try {
             models.resolve(provider, model);
         } catch (JellyfishException e) {
+            // 文案不带 provider/model：理由同 SessionPath.notFound
+            LOG.info("请求里的模型不存在: {}/{}", LogText.singleLine(provider), LogText.singleLine(model));
             throw new ApiException(Responses.BAD_REQUEST, Responses.CODE_BAD_REQUEST,
-                    "模型不存在：" + provider + "/" + model + "（可用 /model 查看可用模型）");
+                    "模型不存在（可用 /model 查看可用模型）");
         }
     }
 }

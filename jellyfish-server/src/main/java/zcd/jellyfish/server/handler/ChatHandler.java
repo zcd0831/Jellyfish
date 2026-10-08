@@ -394,11 +394,7 @@ public final class ChatHandler {
      * @throws ApiException 会话不存在时抛出
      */
     private void requireSession(String sessionId) {
-        try {
-            sessions.require(sessionId);
-        } catch (JellyfishException e) {
-            throw new ApiException(Responses.NOT_FOUND, "SESSION_NOT_FOUND", "会话不存在：" + sessionId);
-        }
+        SessionPath.require(sessions, sessionId);
     }
 
     /**

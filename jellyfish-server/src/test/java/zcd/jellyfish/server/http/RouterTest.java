@@ -122,14 +122,30 @@ class RouterTest {
     void handleRequest_should_return_500_when_handler_throws_unexpected() throws Exception {
         Router router = new Router();
         router.route("GET", "/x", (exchange, params) -> {
-            throw new IllegalStateException("boom");
+            throw new IllegalStateException("boom: /Users/someone/secret.json");
         });
         Fixture fixture = fixture("GET", "/x");
 
         router.handleRequest(fixture.exchange);
 
         verify(fixture.exchange).setStatusCode(500);
-        assertTrue(fixture.body().contains("boom"), fixture.body());
+        assertTrue(fixture.body().contains("INTERNAL_ERROR"), fixture.body());
+        // 异常消息可能带内部细节（路径、上游地址、请求里的密钥片段），只在日志里出现
+        assertFalse(fixture.body().contains("boom"), fixture.body());
+        assertFalse(fixture.body().contains("secret.json"), fixture.body());
+    }
+
+    @Test
+    void handleRequest_should_not_echo_request_path_when_no_route_matches() throws Exception {
+        Router router = new Router();
+        Fixture fixture = fixture("GET", "/nope/../etc/passwd");
+
+        router.handleRequest(fixture.exchange);
+
+        verify(fixture.exchange).setStatusCode(404);
+        assertTrue(fixture.body().contains("NOT_FOUND"), fixture.body());
+        // 请求路径来自调用方，回显它只是多一个注入面（换行能伪造日志行、ESC 能改终端显示）
+        assertFalse(fixture.body().contains("passwd"), fixture.body());
     }
 
     @Test

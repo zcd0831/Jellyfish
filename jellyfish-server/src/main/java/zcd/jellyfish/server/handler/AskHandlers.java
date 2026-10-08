@@ -85,7 +85,7 @@ public final class AskHandlers {
      * @param params   路径参数（含 {@code id}）
      */
     public void get(HttpServerExchange exchange, PathParams params) {
-        String sessionId = SessionPath.require(sessions, params.get("id"));
+        String sessionId = SessionPath.require(sessions, params.get("id")).getSessionId();
         Optional<AskDto> head = asks.headFor(sessionId);
         if (head.isPresent()) {
             Responses.writeJson(exchange, Responses.OK, head.get());
@@ -105,7 +105,7 @@ public final class AskHandlers {
      * @param params   路径参数（含 {@code id} 与 {@code requestId}）
      */
     public void answer(HttpServerExchange exchange, PathParams params) {
-        String sessionId = SessionPath.require(sessions, params.get("id"));
+        String sessionId = SessionPath.require(sessions, params.get("id")).getSessionId();
         AskAnswerRequest request = JsonBody.read(exchange, AskAnswerRequest.class, config.getMaxBodyBytes());
         AskAnswer answer = toAnswer(request);
         asks.resolveFor(sessionId, params.get("requestId"), answer);

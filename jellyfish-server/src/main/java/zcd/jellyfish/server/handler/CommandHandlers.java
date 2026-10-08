@@ -1,6 +1,8 @@
 package zcd.jellyfish.server.handler;
 
 import io.undertow.server.HttpServerExchange;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.extension.CommandArguments;
 import zcd.jellyfish.api.extension.CommandChoice;
@@ -15,6 +17,7 @@ import zcd.jellyfish.server.dto.CommandInfoDto;
 import zcd.jellyfish.server.dto.CommandResultDto;
 import zcd.jellyfish.server.http.ApiException;
 import zcd.jellyfish.server.http.JsonBody;
+import zcd.jellyfish.server.http.LogText;
 import zcd.jellyfish.server.http.PathParams;
 import zcd.jellyfish.server.http.Responses;
 
@@ -52,6 +55,9 @@ import java.util.Map;
  * @author zcd
  */
 public final class CommandHandlers {
+
+    /** 日志。 */
+    private static final Logger LOG = LoggerFactory.getLogger(CommandHandlers.class);
 
     /** 命令域服务。 */
     private final CommandManager commands;
@@ -143,7 +149,7 @@ public final class CommandHandlers {
      * @throws ApiException 会话不存在时抛出 404
      */
     private String requireSession(String sessionId) {
-        return SessionPath.require(sessions, sessionId);
+        return SessionPath.require(sessions, sessionId).getSessionId();
     }
 
     /**
@@ -156,8 +162,10 @@ public final class CommandHandlers {
      */
     private CommandResult executeByInput(String input, String sessionId) {
         if (!commands.isCommand(input)) {
+            // 文案不带原文：它会随响应进客户端与日志，未清洗时能伪造日志行、改终端显示
+            LOG.info("命令端点收到非命令输入: {}", LogText.singleLine(input));
             throw new ApiException(Responses.BAD_REQUEST, "NOT_A_COMMAND",
-                    "输入不是命令（应以 / 开头）：" + input + "（对话请用 POST /sessions/{id}/chat）");
+                    "输入不是命令（应以 / 开头，对话请用 POST /sessions/{id}/chat）");
         }
         ServerCommandGate.check(input);
         return commands.execute(input, sessionId);

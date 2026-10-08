@@ -1,9 +1,12 @@
 package zcd.jellyfish.server;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import zcd.jellyfish.api.ask.AskAnswer;
 import zcd.jellyfish.infra.ask.AskChannel;
 import zcd.jellyfish.server.dto.AskDto;
 import zcd.jellyfish.server.http.ApiException;
+import zcd.jellyfish.server.http.LogText;
 import zcd.jellyfish.server.http.Responses;
 
 import java.util.Optional;
@@ -24,6 +27,9 @@ import java.util.Optional;
  * @author zcd
  */
 public final class AskBridge {
+
+    /** 日志。 */
+    private static final Logger LOG = LoggerFactory.getLogger(AskBridge.class);
 
     /** 内核提问通道。 */
     private final AskChannel asks;
@@ -87,8 +93,10 @@ public final class AskBridge {
      */
     public void resolve(String requestId, AskAnswer answer) {
         if (!asks.resolve(requestId, answer)) {
+            // 文案不带 requestId：它会随响应进客户端与日志，未清洗时能伪造日志行、改终端显示
+            LOG.info("待答提问不存在或已被作答: {}", LogText.singleLine(requestId));
             throw new ApiException(Responses.NOT_FOUND, "ASK_NOT_FOUND",
-                    "没有这条待答提问（可能已被作答或已超时）：" + requestId);
+                    "没有这条待答提问（可能已被作答或已超时）");
         }
     }
 
@@ -106,8 +114,10 @@ public final class AskBridge {
      */
     public void resolveFor(String sessionId, String requestId, AskAnswer answer) {
         if (!isHeadOf(sessionId, requestId)) {
+            LOG.info("待答提问不属于该会话或不是头槽位: sessionId={} requestId={}",
+                    LogText.singleLine(sessionId), LogText.singleLine(requestId));
             throw new ApiException(Responses.NOT_FOUND, "ASK_NOT_FOUND",
-                    "这条待答提问不属于该会话（或不是头槽位，或已作答 / 已超时）：" + requestId);
+                    "这条待答提问不属于该会话（或不是头槽位，或已作答 / 已超时）");
         }
         resolve(requestId, answer);
     }

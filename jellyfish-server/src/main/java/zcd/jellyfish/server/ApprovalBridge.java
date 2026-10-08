@@ -1,8 +1,11 @@
 package zcd.jellyfish.server;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import zcd.jellyfish.infra.permission.ApprovalChannel;
 import zcd.jellyfish.server.dto.ApprovalDto;
 import zcd.jellyfish.server.http.ApiException;
+import zcd.jellyfish.server.http.LogText;
 import zcd.jellyfish.server.http.Responses;
 
 import java.util.Optional;
@@ -22,6 +25,9 @@ import java.util.Optional;
  * @author zcd
  */
 public final class ApprovalBridge {
+
+    /** 日志。 */
+    private static final Logger LOG = LoggerFactory.getLogger(ApprovalBridge.class);
 
     /** 内核审批通道。 */
     private final ApprovalChannel approvals;
@@ -89,8 +95,10 @@ public final class ApprovalBridge {
      */
     public void resolve(String requestId, boolean approved) {
         if (!approvals.resolve(requestId, approved)) {
+            // 文案不带 requestId：它会随响应进客户端与日志，未清洗时能伪造日志行、改终端显示
+            LOG.info("待审批项不存在或已被裁决: {}", LogText.singleLine(requestId));
             throw new ApiException(Responses.NOT_FOUND, "APPROVAL_NOT_FOUND",
-                    "没有这条待审批项（可能已被裁决或已超时）：" + requestId);
+                    "没有这条待审批项（可能已被裁决或已超时）");
         }
     }
 
@@ -112,8 +120,10 @@ public final class ApprovalBridge {
      */
     public void resolveFor(String sessionId, String requestId, boolean approved) {
         if (!isHeadOf(sessionId, requestId)) {
+            LOG.info("待审批项不属于该会话或不是头槽位: sessionId={} requestId={}",
+                    LogText.singleLine(sessionId), LogText.singleLine(requestId));
             throw new ApiException(Responses.NOT_FOUND, "APPROVAL_NOT_FOUND",
-                    "这条待审批项不属于该会话（或不是头槽位，或已裁决 / 已超时）：" + requestId);
+                    "这条待审批项不属于该会话（或不是头槽位，或已裁决 / 已超时）");
         }
         resolve(requestId, approved);
     }

@@ -80,7 +80,8 @@ public class ToolOutputStore {
      * @param toolName   工具名，可为 {@code null}
      * @param content    完整内容，不可为 {@code null}
      * @param structured 是否为结构化结果（决定扩展名为 {@code .json} 还是 {@code .txt}）
-     * @return 落盘文件的绝对路径；失败时返回 {@code null}
+     * @return 落盘文件路径，主目录内是 {@code ~} 开头的缩写形式（见 {@link HomePaths#abbreviate}）；
+     *         失败时返回 {@code null}
      */
     public String store(String sessionId, String toolCallId, String toolName, String content, boolean structured) {
         if (content == null) {
@@ -93,7 +94,7 @@ public class ToolOutputStore {
             Path target = directory.resolve(fileName(toolCallId, toolName, structured));
             writeAtomically(directory, target, content);
             cleanup(directory, target, settings);
-            return target.toAbsolutePath().toString();
+            return HomePaths.abbreviate(target);
         } catch (IOException | RuntimeException e) {
             LOG.warn("工具结果落盘失败: sessionId={} tool={} reason={}", sessionId, toolName, e.toString());
             return null;
@@ -118,7 +119,8 @@ public class ToolOutputStore {
      * @param structured 是否为结构化结果（决定扩展名为 {@code .json} 还是 {@code .txt}）
      * @param keepFiles  该命名空间最多保留的文件数，{@code 0} 表示不清理
      * @param maxBytes   该命名空间最多占用的字节数，{@code 0} 表示不清理
-     * @return 落盘文件的绝对路径；失败时返回 {@code null}
+     * @return 落盘文件路径，主目录内是 {@code ~} 开头的缩写形式（见 {@link HomePaths#abbreviate}）；
+     *         失败时返回 {@code null}
      */
     public String storeIn(String namespace, String key, String content, boolean structured,
                           int keepFiles, long maxBytes) {
@@ -132,7 +134,7 @@ public class ToolOutputStore {
             Path target = directory.resolve(sanitize(key) + (structured ? JSON_SUFFIX : TEXT_SUFFIX));
             writeAtomically(directory, target, content);
             cleanup(directory, target, keepFiles, maxBytes);
-            return target.toAbsolutePath().toString();
+            return HomePaths.abbreviate(target);
         } catch (IOException | RuntimeException e) {
             LOG.warn("落盘失败: namespace={} key={} reason={}", namespace, key, e.toString());
             return null;
@@ -267,7 +269,8 @@ public class ToolOutputStore {
         /**
          * 收尾：刷新、原子改名，并做一次清理。
          *
-         * @return 最终文件的绝对路径；打开失败、写入失败或改名失败时为 {@code null}
+         * @return 最终文件路径，主目录内是 {@code ~} 开头的缩写形式（见 {@link HomePaths#abbreviate}）；
+         *         打开失败、写入失败或改名失败时为 {@code null}
          */
         public synchronized String commit() {
             if (committedPath != null) {
@@ -290,7 +293,7 @@ public class ToolOutputStore {
                 return null;
             }
             cleanup(directory, target, settings);
-            committedPath = target.toAbsolutePath().toString();
+            committedPath = HomePaths.abbreviate(target);
             return committedPath;
         }
 

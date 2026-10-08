@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
+import java.nio.file.Paths;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -63,5 +64,32 @@ class HomePathsTest {
     @Test
     void expand_should_return_null_when_path_null() {
         assertNull(HomePaths.expand(null));
+    }
+
+    @Test
+    void abbreviate_should_replaceHomePrefix_when_pathIsUnderHome() {
+        assertEquals("~/plugins/x.json", HomePaths.abbreviate(tempDir.resolve("plugins/x.json")));
+    }
+
+    @Test
+    void abbreviate_should_returnTilde_when_pathIsHomeItself() {
+        assertEquals("~", HomePaths.abbreviate(tempDir));
+    }
+
+    @Test
+    void abbreviate_should_keepAbsolutePath_when_pathIsOutsideHome() {
+        assertEquals("/opt/jellyfish/x", HomePaths.abbreviate(Paths.get("/opt/jellyfish/x")));
+    }
+
+    @Test
+    void abbreviate_should_beInverseOfExpand() {
+        // 一对互逆变换：回灌的 `~` 形式展开后必须回到原来那个真实文件
+        Path file = tempDir.resolve("plugins/x.json");
+        assertEquals(file, Paths.get(HomePaths.expand(HomePaths.abbreviate(file))));
+    }
+
+    @Test
+    void abbreviate_should_returnNull_when_pathNull() {
+        assertNull(HomePaths.abbreviate(null));
     }
 }

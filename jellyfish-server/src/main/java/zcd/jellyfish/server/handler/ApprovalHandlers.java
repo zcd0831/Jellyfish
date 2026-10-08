@@ -84,7 +84,7 @@ public final class ApprovalHandlers {
      * @param params   路径参数（含 {@code id}）
      */
     public void get(HttpServerExchange exchange, PathParams params) {
-        String sessionId = SessionPath.require(sessions, params.get("id"));
+        String sessionId = SessionPath.require(sessions, params.get("id")).getSessionId();
         Optional<ApprovalDto> head = approvals.headFor(sessionId);
         if (head.isPresent()) {
             Responses.writeJson(exchange, Responses.OK, head.get());
@@ -100,7 +100,7 @@ public final class ApprovalHandlers {
      * @param params   路径参数（含 {@code id} 与 {@code requestId}）
      */
     public void decide(HttpServerExchange exchange, PathParams params) {
-        String sessionId = SessionPath.require(sessions, params.get("id"));
+        String sessionId = SessionPath.require(sessions, params.get("id")).getSessionId();
         ApprovalDecisionRequest request = JsonBody.read(exchange, ApprovalDecisionRequest.class,
                 config.getMaxBodyBytes());
         Boolean approved = request == null ? null : request.getApproved();

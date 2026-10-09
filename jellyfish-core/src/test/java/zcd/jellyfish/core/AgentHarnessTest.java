@@ -18,6 +18,7 @@ import zcd.jellyfish.infra.event.EventChannel;
 import zcd.jellyfish.infra.metrics.HealthCheck;
 import zcd.jellyfish.infra.metrics.MetricsRegistry;
 import zcd.jellyfish.core.runtime.RunObservationBridge;
+import zcd.jellyfish.core.runtime.RunScheduler;
 import zcd.jellyfish.infra.config.ConfigWarningReporter;
 import zcd.jellyfish.infra.metrics.MetricsSubscriber;
 import zcd.jellyfish.infra.model.ModelManager;
@@ -98,6 +99,10 @@ class AgentHarnessTest {
     /** 输入指令服务。 */
     @Mock
     private InputDirectives inputDirectives;
+
+    /** run 调度器：断言关闭时它收到通知（在途 run 必须在那之前被收尾）。 */
+    @Mock
+    private RunScheduler runScheduler;
 
     /** 指标订阅者。 */
     @Mock
@@ -180,10 +185,11 @@ class AgentHarnessTest {
         // When
         harness.shutdown();
 
-        // Then：先停 ReAct 与输入指令，再回收核心命令，再插件，最后通道
-        InOrder order = Mockito.inOrder(reActLooper, inputDirectives, systemCommands, subAgentTools, pluginManager,
-                eventChannel);
+        // Then：先停 ReAct（不再接新回合），再收在途 run 与在途命令，再回收核心命令，再插件，最后通道
+        InOrder order = Mockito.inOrder(reActLooper, runScheduler, inputDirectives, systemCommands, subAgentTools,
+                pluginManager, eventChannel);
         order.verify(reActLooper).close();
+        order.verify(runScheduler).close();
         order.verify(inputDirectives).close();
         order.verify(systemCommands).close();
         order.verify(subAgentTools).close();
@@ -220,7 +226,7 @@ class AgentHarnessTest {
     private AgentHarness newHarness() {
         return new AgentHarness(runtimeConfig, eventChannel, modelManager, agentManager, pluginRuntimeConfig,
                 pluginManager, reActLooper, systemCommands, subAgentTools, sessionManager, conversationCompactor,
-                inputDirectives, cacheKeepAlive, metricsSubscriber, configWarningReporter, metricsRegistry,
-                runObservation, healthCheck);
+                inputDirectives, runScheduler, cacheKeepAlive, metricsSubscriber, configWarningReporter,
+                metricsRegistry, runObservation, healthCheck);
     }
 }

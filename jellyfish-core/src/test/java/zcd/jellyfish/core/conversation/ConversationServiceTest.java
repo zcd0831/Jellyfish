@@ -12,6 +12,7 @@ import zcd.jellyfish.api.extension.InputTransformResult;
 import zcd.jellyfish.core.AgentHarness;
 import zcd.jellyfish.core.ReActListener;
 import zcd.jellyfish.core.ReActTurn;
+import zcd.jellyfish.core.input.InputDirectiveCompletion;
 import zcd.jellyfish.core.input.InputDirectiveRun;
 import zcd.jellyfish.core.input.InputDirectives;
 import zcd.jellyfish.core.input.InputTransforms;
@@ -21,13 +22,18 @@ import zcd.jellyfish.infra.session.SessionManager;
 import zcd.jellyfish.infra.metrics.MetricsRegistry;
 import zcd.jellyfish.infra.shell.ShellIngress;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -94,7 +100,7 @@ class ConversationServiceTest {
     private void givenTurnStarts(String sessionId, String input) {
         when(inputTransforms.transform(sessionId, input, InputTransformRequest.Source.TUI))
                 .thenReturn(InputTransformResult.continueAsIs());
-        when(inputDirectives.submit(eq(sessionId), eq(input), any())).thenReturn(Optional.empty());
+        when(inputDirectives.submit(eq(sessionId), eq(input), any(), any())).thenReturn(Optional.empty());
         when(harness.chat(eq(sessionId), anyString(), eq(input), any())).thenReturn(turn);
     }
 
@@ -140,7 +146,7 @@ class ConversationServiceTest {
         when(inputTransforms.transform("s1", "请阅读当前仓库并写出 AGENTS.md",
                 InputTransformRequest.Source.TUI))
                 .thenReturn(InputTransformResult.continueAsIs());
-        when(inputDirectives.submit(eq("s1"), eq("请阅读当前仓库并写出 AGENTS.md"), any()))
+        when(inputDirectives.submit(eq("s1"), eq("请阅读当前仓库并写出 AGENTS.md"), any(), any()))
                 .thenReturn(Optional.empty());
         when(harness.chat(eq("s1"), anyString(), eq("请阅读当前仓库并写出 AGENTS.md"), any()))
                 .thenReturn(turn);
@@ -219,7 +225,7 @@ class ConversationServiceTest {
         // 顺序 2：输入改写先于输入指令解析——指令按改写后的文本解析
         when(inputTransforms.transform("s1", "继续", InputTransformRequest.Source.TUI))
                 .thenReturn(InputTransformResult.replace("附上上下文：继续"));
-        when(inputDirectives.submit(eq("s1"), eq("附上上下文：继续"), any()))
+        when(inputDirectives.submit(eq("s1"), eq("附上上下文：继续"), any(), any()))
                 .thenReturn(Optional.empty());
         when(harness.chat(eq("s1"), anyString(), eq("附上上下文：继续"), any())).thenReturn(turn);
 
@@ -235,7 +241,8 @@ class ConversationServiceTest {
         // 顺序 4：输入指令先于普通对话
         when(inputTransforms.transform("s1", "!ls", InputTransformRequest.Source.TUI))
                 .thenReturn(InputTransformResult.continueAsIs());
-        when(inputDirectives.submit(eq("s1"), eq("!ls"), any())).thenReturn(Optional.of(directiveRun));
+        when(inputDirectives.submit(eq("s1"), eq("!ls"), any(), any()))
+                .thenReturn(Optional.of(directiveRun));
 
         Submission submission = service.submit("s1", "!ls", InputTransformRequest.Source.TUI,
                 SubmissionPolicy.tui());
@@ -281,7 +288,7 @@ class ConversationServiceTest {
         when(inputTransforms.transform(null, "你好", InputTransformRequest.Source.TUI))
                 .thenReturn(InputTransformResult.continueAsIs());
         when(sessions.createDefault()).thenReturn(created);
-        when(inputDirectives.submit(eq("new-1"), eq("你好"), any())).thenReturn(Optional.empty());
+        when(inputDirectives.submit(eq("new-1"), eq("你好"), any(), any())).thenReturn(Optional.empty());
         when(harness.chat(eq("new-1"), anyString(), eq("你好"), any())).thenReturn(turn);
 
         Submission submission = service.submit(null, "你好", InputTransformRequest.Source.TUI,
@@ -301,7 +308,7 @@ class ConversationServiceTest {
         Session created = org.mockito.Mockito.mock(Session.class);
         when(created.getSessionId()).thenReturn("new-1");
         when(sessions.createDefault()).thenReturn(created);
-        when(inputDirectives.submit(eq("new-1"), eq("/compact"), any())).thenReturn(Optional.empty());
+        when(inputDirectives.submit(eq("new-1"), eq("/compact"), any(), any())).thenReturn(Optional.empty());
         when(harness.chat(eq("new-1"), anyString(), eq("/compact"), any())).thenReturn(turn);
 
         Submission submission = service.submit(null, "/compact", InputTransformRequest.Source.TUI,
@@ -328,7 +335,7 @@ class ConversationServiceTest {
                 new java.util.concurrent.atomic.AtomicReference<ReActListener>();
         when(inputTransforms.transform("s1", "你好", InputTransformRequest.Source.TUI))
                 .thenReturn(InputTransformResult.continueAsIs());
-        when(inputDirectives.submit(eq("s1"), eq("你好"), any())).thenReturn(Optional.empty());
+        when(inputDirectives.submit(eq("s1"), eq("你好"), any(), any())).thenReturn(Optional.empty());
         when(harness.chat(eq("s1"), anyString(), eq("你好"), any())).thenAnswer(invocation -> {
             captured.set(invocation.getArgument(3));
             return turn;
@@ -353,7 +360,7 @@ class ConversationServiceTest {
         // 第二次走到占位就得被拒：指令解析前的几步要能走通
         when(inputTransforms.transform("s1", "再来一次", InputTransformRequest.Source.TUI))
                 .thenReturn(InputTransformResult.continueAsIs());
-        when(inputDirectives.submit(eq("s1"), eq("再来一次"), any())).thenReturn(Optional.empty());
+        when(inputDirectives.submit(eq("s1"), eq("再来一次"), any(), any())).thenReturn(Optional.empty());
 
         assertThrows(TurnInProgressException.class, () -> service.submit("s1", "再来一次",
                 InputTransformRequest.Source.TUI, SubmissionPolicy.tui()));
@@ -363,7 +370,7 @@ class ConversationServiceTest {
     void submit_should_release_slot_when_turn_start_fails() {
         when(inputTransforms.transform("s1", "你好", InputTransformRequest.Source.TUI))
                 .thenReturn(InputTransformResult.continueAsIs());
-        when(inputDirectives.submit(eq("s1"), eq("你好"), any())).thenReturn(Optional.empty());
+        when(inputDirectives.submit(eq("s1"), eq("你好"), any(), any())).thenReturn(Optional.empty());
         when(harness.chat(eq("s1"), anyString(), eq("你好"), any()))
                 .thenThrow(new JellyfishException("执行器已关闭"));
 
@@ -373,6 +380,110 @@ class ConversationServiceTest {
         // 槽位没泄漏
         TurnRegistry.Slot probe = turnRegistry.acquire("s1");
         turnRegistry.release("s1", probe);
+    }
+
+    @Test
+    void submit_should_not_leave_stale_turn_when_turn_converged_before_bind() {
+        // Given：回合在 chat 返回之前就收敛了——会话不存在、前置语句抛错、被插件在开始前拦下都会走到
+        // 这条路（ReActLooper 补一条终态 → 包装器归还槽位）。这个迟到的句柄已经不是「在途回合」了
+        when(inputTransforms.transform("s1", "你好", InputTransformRequest.Source.TUI))
+                .thenReturn(InputTransformResult.continueAsIs());
+        when(inputDirectives.submit(eq("s1"), eq("你好"), any(), any())).thenReturn(Optional.empty());
+        when(harness.chat(eq("s1"), anyString(), eq("你好"), any())).thenAnswer(invocation -> {
+            ReActListener listener = invocation.getArgument(3);
+            listener.onError(new JellyfishException("回合没起来"));
+            return turn;
+        });
+
+        assertEquals(Submission.Kind.STARTED_TURN,
+                service.submit("s1", "你好", InputTransformRequest.Source.TUI, SubmissionPolicy.tui())
+                        .getKind());
+
+        // Then（一）：在途表里不留过期条目
+        assertFalse(turnRegistry.turnOf("s1").isPresent(), "已收敛的回合不该被登记成在途回合");
+
+        // Then（二）：下一个回合也不会被它盖掉——Esc 仍然取消得到当前这个回合
+        ReActTurn second = org.mockito.Mockito.mock(ReActTurn.class);
+        when(second.getTurnId()).thenReturn("t-2");
+        when(inputTransforms.transform("s1", "再来一次", InputTransformRequest.Source.TUI))
+                .thenReturn(InputTransformResult.continueAsIs());
+        when(inputDirectives.submit(eq("s1"), eq("再来一次"), any(), any())).thenReturn(Optional.empty());
+        when(harness.chat(eq("s1"), anyString(), eq("再来一次"), any())).thenReturn(second);
+
+        service.submit("s1", "再来一次", InputTransformRequest.Source.TUI, SubmissionPolicy.tui());
+
+        assertSame(second, turnRegistry.turnOf("s1").orElse(null));
+        assertTrue(turnRegistry.cancel("s1"));
+        verify(second).cancel();
+    }
+
+    @Test
+    void submit_should_publish_one_terminal_event_when_directive_finishes() {
+        // 指令也在可靠 lane 上产出事件，而契约是「每个标识的事件流恰好一条终态」：
+        // 少一条，按契约实现的订阅者（判 isTerminal 收尾）就会一直等下去
+        List<ShellTurnEvent> received = new ArrayList<ShellTurnEvent>();
+        streams.subscribeAll(received::add);
+        AtomicReference<InputDirectiveCompletion> completion = new AtomicReference<InputDirectiveCompletion>();
+        when(inputTransforms.transform("s1", "!ls", InputTransformRequest.Source.TUI))
+                .thenReturn(InputTransformResult.continueAsIs());
+        when(inputDirectives.submit(eq("s1"), eq("!ls"), any(), any())).thenAnswer(invocation -> {
+            completion.set(invocation.getArgument(3));
+            return Optional.of(directiveRun);
+        });
+        when(directiveRun.isCancelled()).thenReturn(false);
+
+        Submission submission = service.submit("s1", "!ls", InputTransformRequest.Source.TUI,
+                SubmissionPolicy.tui());
+        assertEquals(Submission.Kind.STARTED_DIRECTIVE, submission.getKind());
+        assertTrue(received.isEmpty(), "指令还没结束，可靠 lane 上不该出现事件");
+
+        // When：指令结束（提交方在提交之前就交进去的那个通知）
+        completion.get().finished(directiveRun);
+
+        // Then：恰好一条终态，且带着这条指令的标识
+        List<ShellTurnEvent> terminals = terminalsOf(received);
+        assertEquals(1, terminals.size(), "每个标识的事件流恰好一条终态");
+        assertEquals(ShellTurnEvent.Kind.COMPLETED, terminals.get(0).getKind());
+        assertEquals(submission.getTurnId(), terminals.get(0).getTurnId());
+        assertEquals("s1", terminals.get(0).getSessionId());
+    }
+
+    @Test
+    void submit_should_publish_cancelled_terminal_when_directive_was_cancelled() {
+        List<ShellTurnEvent> received = new ArrayList<ShellTurnEvent>();
+        streams.subscribeAll(received::add);
+        AtomicReference<InputDirectiveCompletion> completion = new AtomicReference<InputDirectiveCompletion>();
+        when(inputTransforms.transform("s1", "!ls", InputTransformRequest.Source.TUI))
+                .thenReturn(InputTransformResult.continueAsIs());
+        when(inputDirectives.submit(eq("s1"), eq("!ls"), any(), any())).thenAnswer(invocation -> {
+            completion.set(invocation.getArgument(3));
+            return Optional.of(directiveRun);
+        });
+        when(directiveRun.isCancelled()).thenReturn(true);
+
+        service.submit("s1", "!ls", InputTransformRequest.Source.TUI, SubmissionPolicy.tui());
+        completion.get().finished(directiveRun);
+
+        // 被 Esc 打断的指令如实报「已取消」，而不是混进「正常结束」
+        List<ShellTurnEvent> terminals = terminalsOf(received);
+        assertEquals(1, terminals.size());
+        assertEquals(ShellTurnEvent.Kind.CANCELLED, terminals.get(0).getKind());
+    }
+
+    /**
+     * 取事件序列里的终态。
+     *
+     * @param events 收到的事件
+     * @return 终态列表
+     */
+    private static List<ShellTurnEvent> terminalsOf(List<ShellTurnEvent> events) {
+        List<ShellTurnEvent> terminals = new ArrayList<ShellTurnEvent>();
+        for (ShellTurnEvent event : events) {
+            if (event.isTerminal()) {
+                terminals.add(event);
+            }
+        }
+        return terminals;
     }
 
     @Test

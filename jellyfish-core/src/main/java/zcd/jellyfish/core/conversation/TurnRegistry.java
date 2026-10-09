@@ -14,7 +14,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Semaphore;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * 每会话在途回合表：把「同一会话同时只能有一个回合」这条约束钉在一个地方。
@@ -27,6 +27,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * <b>它管什么、不管什么</b>：
  * <ul>
  *     <li>管：<b>起回合</b>的互斥、取消入口、以及「这个会话现在有没有在途回合」；</li>
+ *     <li>管：<b>登记的时效</b>（{@link #bind} 只在槽位还活着时生效）。「占位」与「拿到回合句柄」
+ *     之间隔着一次异步提交，回合可以在拿到句柄之前就结束；不校验时效的登记会在表里留下过期条目，
+ *     更糟时还会盖掉下一个回合，让取消键指向一个已经结束的回合；</li>
  *     <li>管：把取消<b>报出去</b>（{@link TurnCancelledEvent}）。取消此前只在外壳的可靠 lane 上可见，
  *     而插件看不到那条通道；放在这里是因为「这次是不是第一次上报该会话的取消」只有本类知道
  *     （{@link ReActTurn#cancel()} 幂等，但它不会让回合立刻变成已完成）；</li>
@@ -59,9 +62,16 @@ public final class TurnRegistry {
     private final ConcurrentHashMap<String, Semaphore> slots =
             new ConcurrentHashMap<String, Semaphore>();
 
-    /** 在途回合表：会话标识 → 当前回合（供取消用）。 */
-    private final ConcurrentHashMap<String, ReActTurn> turns =
-            new ConcurrentHashMap<String, ReActTurn>();
+    /**
+     * 在途回合表：会话标识 → 当前占用者（回合句柄挂在槽位里）。
+     * <p>
+     * <b>为什么值是槽位而不是句柄</b>：只有槽位知道「这次登记还算不算数」——一个回合可能在
+     * 拿到句柄之前就收敛并归还槽位（{@link #bind} 的注释给了具体路径）。存槽位之后，
+     * 迟到登记的句柄能自己认出「我已经不在位了」，归还也能按身份精确删除自己那一条
+     * （{@code remove(key, slot)}），不会误删下一个占用者。
+     */
+    private final ConcurrentHashMap<String, Slot> turns =
+            new ConcurrentHashMap<String, Slot>();
 
     /**
      * 已经上报过取消的会话。
@@ -106,20 +116,37 @@ public final class TurnRegistry {
     }
 
     /**
-     * 把已启动的回合句柄绑定到槽位，供 {@link #cancel} 使用。
+     * 把已启动的回合句柄绑到它自己的槽位上，供 {@link #cancel} 使用。
      * <p>
-     * 允许在「已占位、尚未拿到句柄」的窗口里不绑定：{@link #cancel} 对没有句柄的会话返回
-     * {@code false}，而那个窗口只覆盖「调用 {@code chat} 到拿到句柄」这几微秒，
-     * 此刻回合还没有可取消的工作。
+     * <b>必须带槽位</b>：这是「这次登记还算不算数」的唯一依据。{@code acquire} 与 {@code bind} 之间
+     * 隔着 {@code AgentHarness.chat}（它只把任务提交到 {@code react} 池就返回），而回合完全可能在返回
+     * 之前就收敛——会话不存在、前置语句抛错、插件在回合开始前拦下，都会走终态回调，槽位随之归还。
+     * 那种迟到的句柄已经<b>不是</b>在途回合了：
+     * <ul>
+     *     <li>登记它会在表里留下一个「已结束却仍被当成在途」的条目；</li>
+     *     <li>更糟的是它可能<b>盖掉下一个回合</b>——那时 {@link #cancel} 读到的是一个已结束的句柄，
+     *     于是 {@code Esc} 静默失效，而用户以为自己在打断当前这一轮。</li>
+     * </ul>
+     * 因此槽位已归还时本方法什么都不做；调用方也不需要知道「绑定成没成」——没成正是因为
+     * 那个回合已经结束了，取消它本来也无事可做。
      *
-     * @param sessionId 会话标识，不可为空白
-     * @param turn      回合句柄，可为 {@code null}（等价于不绑定）
+     * @param slot 槽位，可为 {@code null}（等价于不绑定）
+     * @param turn 回合句柄，可为 {@code null}（等价于不绑定）
      */
-    public void bind(String sessionId, ReActTurn turn) {
-        if (turn == null) {
+    public void bind(Slot slot, ReActTurn turn) {
+        if (slot == null || turn == null) {
             return;
         }
-        turns.put(requireSessionId(sessionId), turn);
+        String key = slot.getSessionId();
+        if (!slot.bind(turn)) {
+            return;
+        }
+        turns.put(key, slot);
+        // 与 release 交错时，「放进表」与「从表里删」的先后无法靠一次原子操作定下来，
+        // 因此两边各查一次：先放再查（这里），先查再删（release）
+        if (slot.isReleased()) {
+            turns.remove(key, slot);
+        }
     }
 
     /**
@@ -127,6 +154,8 @@ public final class TurnRegistry {
      * <p>
      * <b>幂等</b>：同一个 {@link Slot} 重复归还只生效一次。重复归还若被放过，
      * 信号量许可会涨到 2，从而静默破坏互斥——那比抛异常更难查。
+     * <p>
+     * 解绑按<b>槽位身份</b>删（{@code remove(key, slot)}）：迟到的归还因此删不掉下一个占用者的条目。
      *
      * @param sessionId 会话标识，可为 {@code null}
      * @param slot      {@link #acquire} 返回的槽位，可为 {@code null}（等价于无事发生）
@@ -135,7 +164,7 @@ public final class TurnRegistry {
         if (slot == null || sessionId == null || !slot.claimRelease()) {
             return;
         }
-        turns.remove(sessionId);
+        turns.remove(sessionId, slot);
         // 与槽位一起清掉「已上报取消」的标记：不清的话，这个会话的下一个回合被取消时就再也报不出来
         reported.remove(sessionId);
         Semaphore semaphore = slots.get(sessionId);
@@ -153,10 +182,7 @@ public final class TurnRegistry {
      * @return 有在途回合返回 {@code true}
      */
     public boolean isRunning(String sessionId) {
-        if (sessionId == null) {
-            return false;
-        }
-        ReActTurn turn = turns.get(sessionId);
+        ReActTurn turn = turnOfOrNull(sessionId);
         return turn != null && !turn.isDone();
     }
 
@@ -178,10 +204,7 @@ public final class TurnRegistry {
      * @return 真的取消到了在途回合返回 {@code true}；该会话没有在途回合时返回 {@code false}
      */
     public boolean cancel(String sessionId) {
-        if (sessionId == null) {
-            return false;
-        }
-        ReActTurn turn = turns.get(sessionId);
+        ReActTurn turn = turnOfOrNull(sessionId);
         if (turn == null || turn.isDone()) {
             return false;
         }
@@ -195,17 +218,31 @@ public final class TurnRegistry {
     /**
      * 取某会话的在途回合句柄。
      * <p>
-     * 供需要直接操作句柄的调用方使用（当前只有测试）；外壳应当走 {@link #cancel}，
+     * 供需要直接操作句柄的调用方使用（当前只有测试与 {@link #cancel}）；外壳应当走 {@link #cancel}，
      * 以免把「持有句柄」这件事散到各处。
      *
      * @param sessionId 会话标识，可为 {@code null}
      * @return 在途回合；没有时为空
      */
     public Optional<ReActTurn> turnOf(String sessionId) {
+        return Optional.ofNullable(turnOfOrNull(sessionId));
+    }
+
+    /**
+     * 取某会话当前登记的回合句柄，没有时返回 {@code null}。
+     * <p>
+     * 表里存的是槽位，句柄挂在槽位里；占用者还没拿到句柄（占位与 {@code bind} 之间）时返回
+     * {@code null}——那个窗口里没有可取消的工作。
+     *
+     * @param sessionId 会话标识，可为 {@code null}
+     * @return 回合句柄；没有时返回 {@code null}
+     */
+    private ReActTurn turnOfOrNull(String sessionId) {
         if (sessionId == null) {
-            return Optional.empty();
+            return null;
         }
-        return Optional.ofNullable(turns.get(sessionId));
+        Slot slot = turns.get(sessionId);
+        return slot == null ? null : slot.turn();
     }
 
     /**
@@ -245,19 +282,35 @@ public final class TurnRegistry {
     }
 
     /**
-     * 已占用的槽位：一次性归还凭证。
+     * 已占用的槽位：一次性归还凭证，同时挂住这次占用的回合句柄。
      * <p>
      * 不暴露内部信号量：调用方只需要「拿住它、还回去」，任何直接操作信号量的机会都只会被误用。
+     * <p>
+     * <b>三个状态</b>：占位但还没拿到句柄（{@link #PENDING}）→ 已绑上句柄（{@link #BOUND}）
+     * → 已归还（{@link #RELEASED}）。{@code bind} 与 {@code claimRelease} 共用这一个状态，
+     * 因此「已归还」之后的登记一定失败，不会出现「回合早结束了，却又回到在途表里」。
      *
      * @author zcd
      */
     public static final class Slot {
 
+        /** 已占位、尚未绑定回合句柄。 */
+        private static final int PENDING = 0;
+
+        /** 已绑定回合句柄。 */
+        private static final int BOUND = 1;
+
+        /** 已归还；此后不再接受任何登记。 */
+        private static final int RELEASED = 2;
+
         /** 槽位所属的会话标识。 */
         private final String sessionId;
 
-        /** 是否已归还，保证重复归只会生效一次。 */
-        private final AtomicBoolean released = new AtomicBoolean(false);
+        /** 状态；{@code bind} 与归还都靠它做互斥。 */
+        private final AtomicInteger state = new AtomicInteger(PENDING);
+
+        /** 本次占用的回合句柄；未绑定或已归还时为 {@code null}。 */
+        private volatile ReActTurn turn;
 
         /**
          * 构造槽位。
@@ -278,12 +331,45 @@ public final class TurnRegistry {
         }
 
         /**
+         * 抢占「本次登记有效」。
+         *
+         * @param value 回合句柄，不可为 {@code null}
+         * @return 抢到（槽位还活着）返回 {@code true}；已归还返回 {@code false}
+         */
+        private boolean bind(ReActTurn value) {
+            if (state.compareAndSet(PENDING, BOUND)) {
+                this.turn = value;
+                return true;
+            }
+            return false;
+        }
+
+        /**
+         * 取已绑定的回合句柄。
+         *
+         * @return 回合句柄；未绑定或已归还时为 {@code null}
+         */
+        private ReActTurn turn() {
+            return turn;
+        }
+
+        /**
+         * 判断槽位是否已归还。
+         *
+         * @return 已归还返回 {@code true}
+         */
+        private boolean isReleased() {
+            return state.get() == RELEASED;
+        }
+
+        /**
          * 抢占「本次归还有效」。
          *
          * @return 本次调用赢得归还返回 {@code true}
          */
         private boolean claimRelease() {
-            return released.compareAndSet(false, true);
+            // 占位态（还没有句柄）与已绑定态都能归，但只有第一个赢家拿到 true
+            return state.getAndSet(RELEASED) != RELEASED;
         }
     }
 

@@ -38,6 +38,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.Executor;
@@ -79,6 +80,9 @@ class ChatHandlerTest {
 
     /** 在途回合表（真实现）。 */
     private TurnRegistry turns;
+
+    /** 每个会话在本测试里占住的槽位：绑句柄时要带上它，且同一个会话只占一次（第二条请求不该被拒）。 */
+    private final Map<String, TurnRegistry.Slot> slots = new HashMap<String, TurnRegistry.Slot>();
 
     /** 会话域服务。 */
     private SessionManager sessions;
@@ -143,8 +147,15 @@ class ChatHandlerTest {
         FakeTurn turn = new FakeTurn("t1");
         when(conversations.submit(eq(sessionId), eq(message), eq(InputTransformRequest.Source.SERVER),
                 any(SubmissionPolicy.class))).thenAnswer(invocation -> {
-                    // 内核会把句柄绑进 TurnRegistry（断连取消要靠它）；STARTED 也由内核发布
-                    turns.bind(sessionId, turn);
+                    // 内核会把句柄绑进 TurnRegistry（断连取消要靠它）；STARTED 也由内核发布。
+                    // 绑定要带槽位——槽位是「这次登记还算不算数」的唯一依据（见 TurnRegistry.bind），
+                    // 而一个会话在同一用例里可能被提交多次，因此槽位只占一次
+                    TurnRegistry.Slot slot = slots.get(sessionId);
+                    if (slot == null) {
+                        slot = turns.acquire(sessionId);
+                        slots.put(sessionId, slot);
+                    }
+                    turns.bind(slot, turn);
                     streams.publish(ShellTurnEvent.started(sessionId, "t1"));
                     if (emit != null) {
                         emit.accept(streams);

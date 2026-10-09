@@ -177,11 +177,18 @@ public class ConversationService {
 
         // 4) 输入指令先于普通对话：指令也发布到可靠 lane（它有自己的实时输出）
         if (policy.isDirectives()) {
+            final String directiveSession = sessionId;
             String directiveId = newTurnId();
-            ReActListener publisher = streams.publisher(sessionId, directiveId);
-            Optional<InputDirectiveRun> run = inputDirectives.submit(sessionId, input, publisher);
+            ReActListener publisher = streams.publisher(directiveSession, directiveId);
+            // 结束通知在提交之前就交进去：指令可能很短，短到在你拿到句柄之前已经跑完，
+            // 而「先提交、后注册」会漏掉那一次；可靠 lane 的契约是「每个标识的事件流恰好一条终态」，
+            // 漏一条就等于向订阅者承诺了一件不会发生的事（按契约实现的订阅者会一直等下去）
+            Optional<InputDirectiveRun> run = inputDirectives.submit(directiveSession, input, publisher,
+                    finished -> streams.publish(finished.isCancelled()
+                            ? ShellTurnEvent.cancelled(directiveSession, directiveId)
+                            : ShellTurnEvent.completed(directiveSession, directiveId, null, 0, false)));
             if (run.isPresent()) {
-                return Submission.directive(sessionId, directiveId, run.get());
+                return Submission.directive(directiveSession, directiveId, run.get());
             }
         }
 
@@ -197,7 +204,9 @@ public class ConversationService {
         streams.publish(ShellTurnEvent.started(sessionId, turnId));
         try {
             ReActTurn turn = harness.chat(sessionId, turnId, input, tracked);
-            turns.bind(sessionId, turn);
+            // 带槽位登记：回合可能在 chat 返回之前就已经收敛（槽位随之归还），
+            // 那种迟到的句柄必须被挡在外面，否则它会盖掉下一个回合，让 Esc 指向一个已结束的回合
+            turns.bind(slot, turn);
             LOG.debug("提交进入 ReAct 回合: sessionId={} turnId={} source={}", sessionId, turnId, source);
             return Submission.turn(sessionId, turnId);
         } catch (RuntimeException e) {

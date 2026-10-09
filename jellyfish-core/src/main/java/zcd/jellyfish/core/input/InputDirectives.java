@@ -2,6 +2,7 @@ package zcd.jellyfish.core.input;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.extension.ExtensionException;
 import zcd.jellyfish.api.extension.ExtensionHandler;
 import zcd.jellyfish.api.extension.InputDirectiveRequest;
@@ -31,6 +32,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
@@ -130,19 +132,25 @@ public class InputDirectives implements AutoCloseable {
      * <b>解析是同步的，执行是异步的</b>：解析只调用插件的纯函数（必须快），据此判断「这行输入
      * 有没有人认领」；认领了就建句柄并提交执行，立即返回。解析结果是不是工具调用意图决定返回值：
      * {@code unclaimed} 与「没有处理器」都返回空，外壳据此把这行输入当普通文本。
+     * <p>
+     * <b>结束通知在提交之前就交进去</b>（{@code completion}）：指令可能短到在你拿到句柄之前
+     * 就已经跑完，那时才注册回调会漏掉那一次通知——而可靠 lane 的契约是「每个标识恰好一条终态」。
      *
-     * @param sessionId 会话标识，不可为空白
-     * @param input     用户输入原文，可为 {@code null}
-     * @param listener  工具执行的流式回调（实时输出），可为 {@code null}
+     * @param sessionId  会话标识，不可为空白
+     * @param input      用户输入原文，可为 {@code null}
+     * @param listener   工具执行的流式回调（实时输出），可为 {@code null}
+     * @param completion 结束通知，不可为 {@code null}
      * @return 执行句柄；没有指令认领时为空
-     * @throws zcd.jellyfish.api.JellyfishException 会话不存在时抛出（调用方应保证会话已建）
+     * @throws zcd.jellyfish.api.JellyfishException 会话不存在时抛出（调用方应保证会话已建）、
+     *                                              或指令执行队列已满时抛出
      */
-    public Optional<InputDirectiveRun> submit(String sessionId, String input, ReActListener listener) {
+    public Optional<InputDirectiveRun> submit(String sessionId, String input, ReActListener listener,
+                                              InputDirectiveCompletion completion) {
         Optional<InputDirectiveCall> call = resolve(sessionId, input);
         if (!call.isPresent()) {
             return Optional.empty();
         }
-        return Optional.of(start(sessionId, call.get(), listener));
+        return Optional.of(start(sessionId, call.get(), listener, completion));
     }
 
     /**
@@ -184,20 +192,37 @@ public class InputDirectives implements AutoCloseable {
      * <p>
      * <b>调用方必须先做好自己的准备工作</b>（如重置界面暂存区）——执行线程在本方法返回前就可能
      * 已经开始产出实时输出。
+     * <p>
+     * <b>队列满时抛异常，而不是静默丢或就地改成同步跑</b>：指令队列是「等一个空闲执行线程」的场所，
+     * 满员说明这一批指令已经超出内核的处理能力。此刻就地同步跑会占住调用方（渲染线程 / HTTP 线程），
+     * 静默丢则让用户以为命令跑了。异常类型是 {@code JellyfishException}：它是外壳唯一声明会处理的
+     * 一类失败，{@code RejectedExecutionException} 会一路穿过 {@code ConversationService.submit} 的契约。
      *
-     * @param sessionId 会话标识，不可为空白
-     * @param call      已解析的指令，不可为 {@code null}
-     * @param listener  工具执行的流式回调（实时输出），可为 {@code null}
+     * @param sessionId  会话标识，不可为空白
+     * @param call       已解析的指令，不可为 {@code null}
+     * @param listener   工具执行的流式回调（实时输出），可为 {@code null}
+     * @param completion 结束通知，不可为 {@code null}
      * @return 执行句柄，保证非 {@code null}
-     * @throws zcd.jellyfish.api.JellyfishException 会话不存在时抛出（调用方应保证会话已建）
+     * @throws zcd.jellyfish.api.JellyfishException 会话不存在时抛出（调用方应保证会话已建）、
+     *                                              或执行队列已满时抛出
      */
-    public InputDirectiveRun start(String sessionId, InputDirectiveCall call, ReActListener listener) {
+    public InputDirectiveRun start(String sessionId, InputDirectiveCall call, ReActListener listener,
+                                   InputDirectiveCompletion completion) {
         Objects.requireNonNull(call, "call must not be null");
+        Objects.requireNonNull(completion, "completion must not be null");
         Session session = sessionManager.require(sessionId);
         InputDirectiveRun run = new InputDirectiveRun(UUID.randomUUID().toString(), call.getMarker(),
-                call.getInput());
+                call.getInput(), completion);
         activeRuns.add(run);
-        run.submit(executor, () -> execute(run, session, call, listener));
+        try {
+            run.submit(executor, () -> execute(run, session, call, listener));
+        } catch (RejectedExecutionException e) {
+            // 任务没被受理：把在途条目摘掉——留着它既没有任何人会来执行，也会让关闭时的取消清单越来越长
+            activeRuns.remove(run);
+            LOG.warn("输入指令提交被拒（队列已满）: runId={} queueCapacity={}", run.getRunId(), QUEUE_CAPACITY);
+            throw new JellyfishException("输入指令队列已满（正在跑 " + MAX_THREADS + " 条、排队 " + QUEUE_CAPACITY
+                    + " 条）：请稍后重试，或等前一条命令跑完", e);
+        }
         return run;
     }
 
@@ -260,6 +285,19 @@ public class InputDirectives implements AutoCloseable {
     }
 
     /**
+     * 取当前在途（或排队中）的指令条数。
+     * <p>
+     * <b>包私有接缝</b>：只供同包测试断言「提交被拒之后没有把条目留在表里」。那条残留没有别的
+     * 观察点——它是内存里的一个条目；而它的后果会一直累积（关闭时的取消清单越来越长，且那些条目
+     * 永远不会被执行）。
+     *
+     * @return 在途条数
+     */
+    int activeRunCount() {
+        return activeRuns.size();
+    }
+
+    /**
      * 执行一次指令：跑工具，然后把「回显 + 结果」作为一条 user 消息落进会话。
      * <p>
      * <b>落盘方式</b>：这里不在回合作用域内，因此 {@code appendMessage} 会即时落盘——正是想要的
@@ -283,6 +321,26 @@ public class InputDirectives implements AutoCloseable {
             appendResult(session, echo, "执行失败：" + messageOf(e));
         } finally {
             activeRuns.remove(run);
+            // 通知排在最后：订阅者收到「结束了」时，结果消息已经落库，读会话就能看到它。
+            // 通知本身抛错不上抛——它是通知，不是执行结果（与「落盘失败只记 WARN」同一口径）
+            notifyFinished(run);
+        }
+    }
+
+    /**
+     * 通知提交方「这条指令结束了」。
+     * <p>
+     * 这是可靠 lane 上那条终态事件的唯一出处：错过它，按「每个标识恰好一条终态」实现的订阅者
+     * 会一直等下去。通知失败只记 WARN，因为指令本身已经跑完、结果已经落库，把整次执行升级成异常
+     * 既补不回那条事件，也会让调用方以为指令没跑成。
+     *
+     * @param run 已结束的指令句柄
+     */
+    private void notifyFinished(InputDirectiveRun run) {
+        try {
+            run.notifyFinished();
+        } catch (RuntimeException e) {
+            LOG.warn("输入指令结束通知失败: runId={}", run.getRunId(), e);
         }
     }
 

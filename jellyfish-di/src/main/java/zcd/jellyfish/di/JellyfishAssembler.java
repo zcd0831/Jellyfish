@@ -333,7 +333,7 @@ public final class JellyfishAssembler {
                     promptAssembler, runtimeConfig);
             agentHarness = new AgentHarness(runtimeConfig, eventChannel, modelManager, agentManager,
                     pluginRuntimeConfig, pluginManager, reActLooper, systemCommands, subAgentTools, sessionManager,
-                    conversationCompactor, inputDirectives, cacheKeepAlive, metricsSubscriber,
+                    conversationCompactor, inputDirectives, runScheduler, cacheKeepAlive, metricsSubscriber,
                     configWarningReporter, metricsRegistry,
                     runObservation, healthCheck);
             conversationService = new ConversationService(commandManager, inputTransforms, inputDirectives,

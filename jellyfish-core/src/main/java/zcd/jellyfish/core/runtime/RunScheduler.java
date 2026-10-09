@@ -7,6 +7,8 @@ import zcd.jellyfish.infra.config.SubAgentSettings;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
@@ -16,6 +18,7 @@ import java.util.concurrent.Semaphore;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -52,15 +55,29 @@ import java.util.concurrent.atomic.AtomicInteger;
  * {@link RunTree}、带上自己的 runId 与许可），执行完清掉。父上下文里的两个值（树引用、进入深度）
  * 在提交时<b>同步读取快照</b>，因为父线程随后还会改动它自己的上下文对象。
  * <p>
+ * <b>关闭是一个显式动作</b>（{@link #close()}）：「不再派新的 run」只是它的一半，另一半是让<b>已经在
+ * 途与仍在排队的</b> run 都走到终态——{@code shutdownNow()} 会把排队任务丢掉，那些 run 从此没有人
+ * 来落终态，等它们的父回合会永久挂住。顺序是立旗 → 取消 → 丢队列 → 有界等待 → 兜底收尾；
+ * 兜底如实落「已取消」（它们此前确实都被取消过），而不是编一个失败原因。
+ * <p>
  * 线程安全：池、信号量本身线程安全；每个 worker 只碰自己的上下文与句柄。
  *
  * @author zcd
  */
 @Singleton
-public final class RunScheduler {
+public final class RunScheduler implements AutoCloseable {
 
     /** 日志。 */
     private static final Logger LOG = LoggerFactory.getLogger(RunScheduler.class);
+
+    /** 关闭时等在途 run 收敛的上限（毫秒）。超过就如实收尾并记 WARN，不无限期拖住关闭。 */
+    private static final long CLOSE_WAIT_MILLIS = 2000L;
+
+    /** 关闭等待的轮询间隔（毫秒）。 */
+    private static final long CLOSE_WAIT_POLL_MILLIS = 10L;
+
+    /** 关闭之后对「还在跑」的 run 的收尾原因；也用于拒绝关闭期新增的委派。 */
+    private static final String SHUTDOWN_REASON = "内核正在关闭，不再接受新的子代理委派";
 
     /** 全局并发许可。 */
     private final Semaphore permits;
@@ -73,6 +90,19 @@ public final class RunScheduler {
 
     /** 墙钟看门狗：到点取消在途 run。 */
     private final ScheduledExecutorService watchdog;
+
+    /**
+     * 在途与排队的 run 句柄：关闭时逐个取消，并把被丢弃的那些收尾。
+     * <p>
+     * <b>为什么调度器自己要记一份</b>：登记表（{@code RunRegistry}）里只有「状态」，没有「等它的人是谁」；
+     * 而关闭时要把「排队中被丢弃、执行体从未开跑」的 run 也落成终态，否则等它的父回合永远等不到结果。
+     * 条目在 {@link #finishNow} 里摘掉，因此它只覆盖「还没落终态」的那些。
+     */
+    private final Map<String, AgentRunHandle> pending =
+            new ConcurrentHashMap<String, AgentRunHandle>();
+
+    /** 是否已关闭；关闭之后不再接受新的委派。 */
+    private final AtomicBoolean closed = new AtomicBoolean(false);
 
     /** 上下文持有者：把 run 的上下文装载到执行线程上。 */
     private final RunContextHolder contexts;
@@ -122,6 +152,9 @@ public final class RunScheduler {
      * 本方法不阻塞：它只负责把任务交给线程池。线程满时任务进队列等一个空闲线程，拿到线程后若并发
      * 许可已被占满则在线程上等许可（等待中的 run 不占许可，见类注释）——只有「线程满且队列也满」才
      * 当场以失败落终态。
+     * <p>
+     * <b>关闭之后一律拒绝，并如实说明是「内核在关」</b>：那一刻线程池已经关了，再走「排队已满」那条
+     * 分支会把两件不同的事说成同一件（用户会去调 {@code maxQueuedRuns}，而真正该做的是别再派）。
      *
      * @param runId       run 标识
      * @param body        执行体
@@ -132,12 +165,98 @@ public final class RunScheduler {
      */
     void submit(String runId, AgentRunBody body, RunTree tree, int parentDepth, String rootRunId,
                 AgentRunHandle handle) {
+        if (closed.get()) {
+            finishNow(runId, AgentRunResult.failed(SHUTDOWN_REASON), handle);
+            return;
+        }
+        pending.put(runId, handle);
         try {
             executor.execute(() -> runTask(runId, body, tree, parentDepth, rootRunId, handle));
         } catch (RejectedExecutionException e) {
-            LOG.warn("run 提交被拒（排队已满）: runId={} queueCapacity={}", runId, queueCapacity);
-            finishNow(runId, AgentRunResult.failed("子代理排队已满（subAgent.maxQueuedRuns=" + queueCapacity
-                    + "）：在途与排队的 run 已占满等待区，可稍后重试或调大 subAgent.maxQueuedRuns"), handle);
+            LOG.warn("run 提交被拒: runId={} closed={} queueCapacity={}", runId, closed.get(), queueCapacity);
+            finishNow(runId, AgentRunResult.failed(rejectionReason()), handle);
+        }
+    }
+
+    /**
+     * 取「这次提交为什么被拒」的如实说法。
+     * <p>
+     * 关闭与队列满是两种情形：前者不该让用户去调配置键，后者应当——而两者都会表现为执行器的
+     * {@code RejectedExecutionException}（关停之后的提交也抛它），因此判据取关闭标志。
+     *
+     * @return 拒绝原因，保证非 {@code null}
+     */
+    private String rejectionReason() {
+        if (closed.get()) {
+            return SHUTDOWN_REASON;
+        }
+        return "子代理排队已满（subAgent.maxQueuedRuns=" + queueCapacity
+                + "）：在途与排队的 run 已占满等待区，可稍后重试或调大 subAgent.maxQueuedRuns";
+    }
+
+    /**
+     * 关闭调度器：不再接受新的委派，取消并收尾在途与排队的 run，然后关掉池与看门狗。幂等。
+     * <p>
+     * <b>为什么必须显式收尾，而不是只关池</b>：{@code shutdownNow()} 会把<b>排队中等许可</b>的任务丢掉，
+     * 那些 run 的执行体从此不会跑，也就没有人来给它们落终态——而等待方（父回合或面板）拿不到结果的
+     * 表现是永久挂住，不是一条错误。因此顺序是「立旗 → 取消在途 → 丢队列 → 有界等待 → 兜底落终态」。
+     * <p>
+     * <b>兜底那条为什么是「已取消」而不是「失败」</b>：它们此前都被 {@link AgentRunHandle#cancel()} 取消过，
+     * 说「已取消」符合事实；说「失败」会把「内核关了」和「它真的错了」混成同一件事。剩下的那些
+     * （取消没赶上、仍在长工具里）会在日志里被点名，代价是它的真实结果不会再被任何人使用——
+     * 这一点无从补救，因为读取它的人自己也在关闭中。
+     * <p>
+     * <b>顺序为什么是这个顺序</b>：先立旗（挡掉新委派），再取消（让在跑的尽快收敛），
+     * 再丢队列（把还没开跑的摘出来），然后才等待——等待的对象因此恰好剩下「已经开始跑的那些」。
+     */
+    @Override
+    public void close() {
+        if (!closed.compareAndSet(false, true)) {
+            return;
+        }
+        LOG.debug("关闭 run 调度器: pending={} queueCapacity={}", pending.size(), queueCapacity);
+        for (AgentRunHandle handle : pending.values()) {
+            handle.cancel();
+        }
+        executor.shutdownNow();
+        awaitPending();
+        finishRemaining();
+        watchdog.shutdownNow();
+    }
+
+    /**
+     * 有界等待在途 run 收敛：等到 {@code pending} 空或超时。
+     * <p>
+     * <b>为什么是轮询而不是 join 某个线程</b>：run 与线程不是一对一——它可能正在等并发许可、
+     * 可能已经完成但还没被摘掉，没有一个可 join 的对象。判据因此取「它还留在 pending 里吗」，
+     * 而条目正是在 {@link #finishNow}（终态）里摘掉的。
+     */
+    private void awaitPending() {
+        long deadline = System.currentTimeMillis() + CLOSE_WAIT_MILLIS;
+        while (!pending.isEmpty() && System.currentTimeMillis() < deadline) {
+            try {
+                TimeUnit.MILLISECONDS.sleep(CLOSE_WAIT_POLL_MILLIS);
+            } catch (InterruptedException e) {
+                // 有人在催关闭：不再等，直接走兜底收尾，但把中断标记还回去让调用方知道
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
+    }
+
+    /**
+     * 兜底收尾：把还没落终态的 run 就地落成终态，让等它的人拿得到结果。
+     */
+    private void finishRemaining() {
+        for (Map.Entry<String, AgentRunHandle> entry : pending.entrySet()) {
+            AgentRunHandle handle = entry.getValue();
+            if (handle.isDone()) {
+                continue;
+            }
+            LOG.warn("内核关闭：run 未在 {} ms 内收敛，就地按「已取消」收尾: runId={}", CLOSE_WAIT_MILLIS,
+                    entry.getKey());
+            finishNow(entry.getKey(), AgentRunResult.of(AgentRunStatus.CANCELLED, null, 0, null,
+                    "内核正在关闭，这次委派的结果不会再被使用"), handle);
         }
     }
 
@@ -152,6 +271,8 @@ public final class RunScheduler {
      * @param handle run 句柄，不可为 {@code null}
      */
     private void finishNow(String runId, AgentRunResult result, AgentRunHandle handle) {
+        // 先从「还没落终态」的清单里摘掉：它正是关闭时「还有谁在等结果」的判据
+        pending.remove(runId);
         registry.finish(runId, result.getStatus(), result.getRounds(), result.getUsage());
         publishFinished(runId);
         handle.complete(result);

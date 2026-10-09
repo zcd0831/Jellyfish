@@ -8,6 +8,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import zcd.jellyfish.api.event.EventPublisher;
 import zcd.jellyfish.api.event.RegisterOptions;
+import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.extension.ExtensionHandler;
 import zcd.jellyfish.api.extension.InputDirectiveDescriptor;
 import zcd.jellyfish.api.extension.InputDirectiveRequest;
@@ -37,19 +38,25 @@ import zcd.jellyfish.infra.session.SessionMessage;
 import zcd.jellyfish.infra.tooloutput.ToolOutputLimiter;
 import zcd.jellyfish.infra.tooloutput.ToolOutputStore;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /**
@@ -82,6 +89,9 @@ class InputDirectivesTest {
     /** 真实会话服务。 */
     private SessionManager sessionManager;
 
+    /** 工具执行器：权限与截断的唯一入口（与生产装配同一形状）。 */
+    private ToolExecutor toolExecutor;
+
     /** 专用单线程执行器，便于用 await 汇合。 */
     private ExecutorService executor;
 
@@ -99,8 +109,8 @@ class InputDirectivesTest {
         session = sessionManager.createDefault();
         ToolOutputLimiter outputLimiter = new ToolOutputLimiter(runtimeConfig, new ToolOutputStore(runtimeConfig));
         lenient().when(runtimeConfig.getReactSettings()).thenReturn(new ReactSettings());
-        directives = new InputDirectives(extensions, new ToolExecutor(permissionManager, extensions, events,
-                outputLimiter, new RunContextHolder()), sessionManager, executor);
+        toolExecutor = new ToolExecutor(permissionManager, extensions, events, outputLimiter, new RunContextHolder());
+        directives = new InputDirectives(extensions, toolExecutor, sessionManager, executor);
     }
 
     @AfterEach
@@ -162,7 +172,8 @@ class InputDirectivesTest {
         InputDirectiveCall call = directives.resolve(session.getSessionId(), "!ls").orElseThrow(AssertionError::new);
 
         // When
-        InputDirectiveRun run = directives.start(session.getSessionId(), call, ReActListener.NOOP);
+        InputDirectiveRun run = directives.start(session.getSessionId(), call, ReActListener.NOOP,
+                finished -> { });
         assertNotNull(run);
         awaitMessages(1);
 
@@ -238,6 +249,114 @@ class InputDirectivesTest {
 
         // Then：补全失败退化成未命中，不得把界面弄崩
         assertFalse(completion.isPresent());
+    }
+
+    @Test
+    void submit_should_notify_completion_once_when_tool_finishes() throws Exception {
+        // Given：一条会被执行的指令（工具正常返回）
+        when(permissionManager.decide(any(PermissionCheckRequest.class))).thenReturn(PermissionDecision.allow(null));
+        registerTool("shell", request -> new ToolCallResult("shell", "total 0"));
+        registerDirective("!", request -> InputDirectiveResult.toolCall("shell",
+                Collections.<String, Object>singletonMap("command", "ls")));
+        List<InputDirectiveRun> finished = Collections.synchronizedList(new ArrayList<InputDirectiveRun>());
+
+        // When：提交（结束通知在提交之前交进去）
+        Optional<InputDirectiveRun> run = directives.submit(session.getSessionId(), "!ls", ReActListener.NOOP,
+                finished::add);
+
+        // Then：恰好通知一次，且它不是被取消的那一种
+        assertTrue(run.isPresent());
+        awaitFinished(finished, 1);
+        assertEquals(1, finished.size(), "结束通知恰好一次");
+        assertFalse(finished.get(0).isCancelled());
+    }
+
+    @Test
+    void submit_should_notify_completion_with_cancelled_run_when_cancelled() throws Exception {
+        // Given：一条卡在工具里不返回的指令（Esc 能在它执行期间到达）
+        when(permissionManager.decide(any(PermissionCheckRequest.class))).thenReturn(PermissionDecision.allow(null));
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        registerTool("shell", request -> {
+            entered.countDown();
+            try {
+                release.await(5, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            return new ToolCallResult("shell", "total 0");
+        });
+        registerDirective("!", request -> InputDirectiveResult.toolCall("shell",
+                Collections.<String, Object>singletonMap("command", "ls")));
+        List<InputDirectiveRun> finished = Collections.synchronizedList(new ArrayList<InputDirectiveRun>());
+
+        Optional<InputDirectiveRun> run = directives.submit(session.getSessionId(), "!ls", ReActListener.NOOP,
+                finished::add);
+        assertTrue(run.isPresent());
+        assertTrue(entered.await(5, TimeUnit.SECONDS), "工具应当已经开始跑");
+
+        // When：用户按下 Esc，工具随后返回
+        run.get().cancel();
+        release.countDown();
+
+        // Then：通知照发一次，并且如实是「已取消」——订阅者据此说「被打断」而不是「跑完了」
+        awaitFinished(finished, 1);
+        assertEquals(1, finished.size());
+        assertTrue(finished.get(0).isCancelled());
+    }
+
+    @Test
+    void start_should_report_queue_full_as_jellyfish_exception_without_leaking_entry() {
+        // Given：执行器直接拒收（队列满）。RejectedExecutionException 不是外壳声明会处理的类型，
+        // 它会一路穿过 ConversationService.submit 的契约打到界面上
+        ExecutorService rejecting = mock(ExecutorService.class);
+        when(rejecting.submit(any(Runnable.class))).thenThrow(new RejectedExecutionException("full"));
+        InputDirectives full = new InputDirectives(extensions, toolExecutor, sessionManager, rejecting);
+        registerTool("shell", request -> new ToolCallResult("shell", "total 0"));
+        registerDirective("!", request -> InputDirectiveResult.toolCall("shell",
+                Collections.<String, Object>singletonMap("command", "ls")));
+        InputDirectiveCall call = full.resolve(session.getSessionId(), "!ls").orElseThrow(AssertionError::new);
+
+        // When
+        JellyfishException error = assertThrows(JellyfishException.class,
+                () -> full.start(session.getSessionId(), call, ReActListener.NOOP, finished -> { }));
+
+        // Then：说清是队列满（而不是别的什么），且没把条目留在在途表里
+        assertTrue(error.getMessage().contains("队列已满"), error.getMessage());
+        assertEquals(0, full.activeRunCount(), "被拒的指令不该留在在途表里");
+        full.close();
+    }
+
+    @Test
+    void submit_should_report_done_when_executor_rejects_the_task() {
+        // 任务没被受理同样是「结束」：句柄若继续回答「还没跑完」，
+        // 外壳就会永远停在「运行中」，而实际上什么都不会再发生
+        InputDirectiveRun run = new InputDirectiveRun("r1", "!", "!ls");
+        ExecutorService rejecting = mock(ExecutorService.class);
+        when(rejecting.submit(any(Runnable.class))).thenThrow(new RejectedExecutionException("full"));
+
+        assertThrows(RejectedExecutionException.class, () -> run.submit(rejecting, () -> { }));
+
+        assertTrue(run.isDone());
+    }
+
+    /**
+     * 等待结束通知达到预期条数。
+     *
+     * @param finished 已收到通知的句柄
+     * @param expected 期望条数
+     * @throws InterruptedException 等待被中断时抛出
+     */
+    private static void awaitFinished(List<InputDirectiveRun> finished, int expected)
+            throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (System.nanoTime() < deadline) {
+            if (finished.size() >= expected) {
+                return;
+            }
+            Thread.sleep(10L);
+        }
+        assertEquals(expected, finished.size());
     }
 
     /**

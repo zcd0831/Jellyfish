@@ -5,6 +5,7 @@ import org.slf4j.LoggerFactory;
 
 import zcd.jellyfish.core.command.SystemCommands;
 import zcd.jellyfish.core.runtime.RunObservationBridge;
+import zcd.jellyfish.core.runtime.RunScheduler;
 import zcd.jellyfish.core.compact.ConversationCompactor;
 import zcd.jellyfish.core.prompt.CacheKeepAlive;
 import zcd.jellyfish.core.input.InputDirectives;
@@ -97,7 +98,11 @@ public class AgentHarness {
     private final CacheKeepAlive cacheKeepAlive;
 
     /** 输入指令服务：关闭时要先停掉它的线程池并取消在途命令。 */
+    /** 输入指令服务：`!` 那条路。 */
     private final InputDirectives inputDirectives;
+
+    /** run 调度器：子代理 run 的取消与收尾（关停时取消在途 run）。 */
+    private final RunScheduler runScheduler;
 
     /** 会话域服务：启动末期向插件要回历史会话。 */
     private final SessionManager sessionManager;
@@ -137,6 +142,7 @@ public class AgentHarness {
      * @param sessionManager       会话域服务
      * @param conversationCompactor 会话压缩器
      * @param inputDirectives      输入指令服务
+     * @param runScheduler         子代理 run 调度器（关闭时要取消在途 run）
      * @param cacheKeepAlive       缓存保活器
      * @param metricsSubscriber    指标订阅者
      * @param configWarningReporter 配置告警上报器
@@ -149,7 +155,7 @@ public class AgentHarness {
                         PF4JPluginManager pluginManager, ReActLooper reActLooper, SystemCommands systemCommands,
                         SubAgentTools subAgentTools, SessionManager sessionManager,
                         ConversationCompactor conversationCompactor, InputDirectives inputDirectives,
-                        CacheKeepAlive cacheKeepAlive,
+                        RunScheduler runScheduler, CacheKeepAlive cacheKeepAlive,
                         MetricsSubscriber metricsSubscriber, ConfigWarningReporter configWarningReporter,
                         MetricsRegistry metricsRegistry,
                         RunObservationBridge runObservation, HealthCheck healthCheck) {
@@ -165,6 +171,7 @@ public class AgentHarness {
         this.sessionManager = sessionManager;
         this.conversationCompactor = conversationCompactor;
         this.inputDirectives = inputDirectives;
+        this.runScheduler = runScheduler;
         this.cacheKeepAlive = cacheKeepAlive;
         this.metricsSubscriber = metricsSubscriber;
         this.configWarningReporter = configWarningReporter;
@@ -252,6 +259,10 @@ public class AgentHarness {
         LOG.info("健康检查: {}", healthReportText());
         try {
             reActLooper.close();
+            // 在途 run 与在途回合同类：先取消并让它们走到终态，再谈落盘与摘插件。
+            // run 会写子会话、会调插件工具，因此这一步必须早于 flushAll 与 pluginManager.close()；
+            // 而它在 reActLooper.close() 之后，是因为「不再起新回合」先于「收在途的 run」
+            runScheduler.close();
             // 与 reActLooper 同类：先停「还会发起工具调用」的入口，再谈落盘与摘插件。
             // 它内部会取消在途命令，否则关闭会被一条长命令拖到它自己的超时
             inputDirectives.close();

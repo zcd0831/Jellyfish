@@ -88,7 +88,8 @@ jellyfish-server/  路由、SSE、审批桥
 - **跨边界载荷必须是 `api` 侧快照值类型**，且快照类型恰好只有一个可见构造器；**`-parameters` 不许去掉**。
 - **插件在 `stop()` 之后 fail-closed**：任何注册 / 发布当场失败；`start()` 抛错则插件转 `FAILED` 并回收已完成的注册。
 - **生命周期收尾顺序**：`flushAll()` → `InputDirectives.close()` → `pluginManager.close()`
-  （落盘经扩展点派发给插件，插件一停就没人接了）。
+  （落盘经扩展点派发给插件，插件一停就没人接了）。**在途 run 由 `RunScheduler.close()` 收尾，
+  它也必须在 `flushAll()` 之前**——run 会写子会话、会调插件工具。
 - **`-tui` / `-server` 的启动期都不建会话**；`--agent` / `--model` / `-p` / `--show-thinking` 只归 `CLI`，
   其余模式带上它们一律判用法错误退 2（**拒绝而不是静默忽略**）。
 

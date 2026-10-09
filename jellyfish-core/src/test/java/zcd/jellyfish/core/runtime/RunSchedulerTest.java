@@ -151,6 +151,104 @@ class RunSchedulerTest {
         assertEquals(AgentRunStatus.DONE, await(queued).getStatus());
     }
 
+    @Test
+    @Timeout(30)
+    @DisplayName("关闭时取消在途 run，并等它走到终态才返回")
+    void close_should_cancel_in_flight_run_and_wait_for_it() {
+        // Given：一个不自己结束、只有被取消才收敛的 run
+        scheduler = scheduler(1, 8, 0L);
+        CountDownLatch started = new CountDownLatch(1);
+        AtomicBoolean bodyExited = new AtomicBoolean(false);
+        AgentRunHandle running = submitRun(handle -> {
+            started.countDown();
+            long deadline = System.currentTimeMillis() + 10_000L;
+            while (!handle.isCancelled() && System.currentTimeMillis() < deadline) {
+                sleepQuietly();
+            }
+            bodyExited.set(true);
+            return AgentRunResult.of(AgentRunStatus.CANCELLED, null, 0, null, null);
+        });
+        awaitLatch(started);
+
+        // When
+        scheduler.close();
+
+        // Then：run 落了终态，且执行体真的已经退出——「关闭返回」意味着「不再有 run 在写子会话、调插件」
+        assertEquals(AgentRunStatus.CANCELLED, await(running).getStatus());
+        assertTrue(bodyExited.get(), "关闭返回时执行体必须已经退出");
+    }
+
+    @Test
+    @Timeout(30)
+    @DisplayName("关闭时把排队中、从未开跑的 run 也收尾，等它的人不会永远等下去")
+    void close_should_finish_queued_run_that_never_started() {
+        // Given：并发 1、不看门狗。第一个 run 占住唯一的线程且（此处故意）不理会取消，第二个只能排队
+        scheduler = scheduler(1, 8, 0L);
+        CountDownLatch release = new CountDownLatch(1);
+        AgentRunHandle running = submitRun(blockingUntil(release));
+        AtomicBoolean queuedBodyRan = new AtomicBoolean(false);
+        AgentRunHandle queued = submitRun(handle -> {
+            queuedBodyRan.set(true);
+            return AgentRunResult.of(AgentRunStatus.DONE, "ok", 1, null, null);
+        });
+        assertEquals(AgentRunStatus.PENDING, registry.snapshot(queued.getRunId())
+                .orElseThrow(AssertionError::new).getStatus());
+
+        // When
+        scheduler.close();
+
+        // Then：排队那一个的执行体从未跑过，但它必须有终态——它在 shutdownNow 之后不会有人来收尾，
+        // 而拿不到结果的表现是父回合永久挂住，不是一条错误
+        assertEquals(AgentRunStatus.CANCELLED, await(queued).getStatus(),
+                "排队中被丢弃的 run 由兜底收尾，如实按「已取消」记");
+        assertFalse(queuedBodyRan.get(), "排队中被取消的 run 不该再被执行");
+
+        // 收尾：放掉第一个，免得后台线程继续挂着。它此刻落 DONE 还是 CANCELLED 取决于
+        // 「中断先到」还是「取消先到」——两种都如实（它确实被取消过，也确实是执行体自己返回的），
+        // 因此这里只断言它一定已经落终态，不断言是哪一种
+        release.countDown();
+        assertTrue(await(running).getStatus().isTerminal());
+    }
+
+    @Test
+    void close_should_be_idempotent() {
+        scheduler = scheduler(1, 8, 0L);
+        AgentRunHandle done = submitRun(done());
+        assertEquals(AgentRunStatus.DONE, await(done).getStatus());
+
+        scheduler.close();
+        scheduler.close();
+    }
+
+    @Test
+    void submit_after_close_should_fail_with_shutdown_reason() {
+        // Given：内核已经在关闭
+        scheduler = scheduler(1, 8, 0L);
+        scheduler.close();
+
+        // When：还有人想派一个 run
+        AgentRunResult result = await(submitRun(done()));
+
+        // Then：如实说「内核正在关闭」，而不是编一句「排队已满」让人去调配置键
+        assertEquals(AgentRunStatus.FAILED, result.getStatus());
+        assertTrue(result.getError().contains("关闭"), String.valueOf(result.getError()));
+        assertFalse(result.getError().contains("排队已满"), String.valueOf(result.getError()));
+    }
+
+    /**
+     * 等待一个闩锁开闸。
+     *
+     * @param latch 闩锁
+     */
+    private static void awaitLatch(CountDownLatch latch) {
+        try {
+            assertTrue(latch.await(5, TimeUnit.SECONDS), "等待超时");
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError("等待被中断", e);
+        }
+    }
+
     /**
      * 构造一套调度装配。
      *
@@ -165,7 +263,6 @@ class RunSchedulerTest {
         lenient().when(runtimeConfig.getSubAgentSettings()).thenReturn(settings);
         return new RunScheduler(contexts, registry, new RunEventBus(), runtimeConfig);
     }
-
     /**
      * 登记并提交一个 run。
      *

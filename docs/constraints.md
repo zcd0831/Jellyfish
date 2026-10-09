@@ -524,6 +524,12 @@ handler 抛错**按放行处理**。它只管「结束运行态、保留快照�
   否则「扇得多」会直接变成「排在后面的被判超时」。代价是排队本身没有超时约束。
 - **排队期间被取消的 run 不再执行**：调度器取出任务时先查取消标记，已取消就直接落 `CANCELLED`
   （回合可能已结束，结果没人读，跑了只是白占许可与 token）。
+- **`RunScheduler.close()` 是一个显式动作，不只是「关池」**：先立旗（关停之后 `submit` 一律以
+  「内核正在关闭」失败，**不得说成「排队已满」**——那会把人引去调 `maxQueuedRuns`），再取消在途 run，
+  再 `shutdownNow` 丢掉排队中的任务，然后有界等待（2 秒）收敛，最后把仍未收敛的就地按 `CANCELLED` 收尾。
+  **兜底那一步不能省**：被 `shutdownNow` 丢掉的任务永远不会跑，也就没有人来给它们的句柄落终态，
+  而拿不到结果的表现是等它的人**永久挂住**（不是一条错误）。`AgentHarness.shutdown` 在
+  `reActLooper.close()` 之后、`flushAll()` 与 `pluginManager.close()` **之前**调它——run 会写子会话、会调插件工具。
 - **回合开始前可被拦下（`TurnBeforeRequest` → `TurnDirective`）**，调用点必须在**追加用户消息之前**——
   一旦消息进了会话，拦下就只剩「再删掉」这条路，而历史是 append-only 的。顶层与嵌套共用同一个入口。拦下后：
   - **不追加用户消息、不调用模型、不伪造 assistant 消息**，会话一字未改；
@@ -760,8 +766,17 @@ handler 抛错**按放行处理**。它只管「结束运行态、保留快照�
 - **片段切分由内核算，插件不重复实现**。
 - **执行是异步的，界面每帧轮询句柄**；`Esc` 调 `cancel()`。
   **`beginDirective` 必须早于提交执行**——晚一步重置会抹掉执行线程写出的第一段实时输出。
-- **关闭顺序**：`AgentHarness.shutdown` 在 `reActLooper.close()` 之后调 `InputDirectives.close()`，
-  **仍必须早于 `pluginManager.close()`**。
+- **关闭顺序**：`AgentHarness.shutdown` 在 `reActLooper.close()` 之后依次调 `RunScheduler.close()` 与
+  `InputDirectives.close()`（前者收在途 run、后者取消在途命令），
+  **两者都必须早于 `flushAll()` 与 `pluginManager.close()`**——它们都会写子会话、都会调插件工具。
+- **指令在可靠 lane 上也是一个「有始有终」的事件流**：结束时会发**恰好一条终态**
+  （`Esc` 取消 → `cancelled`，其余 → `completed`），因为契约是「每个标识的事件流恰好一条终态」。
+  结束通知在**提交执行之前**就交进 `InputDirectives.submit(…, completion)`——指令可能短到在你拿到句柄
+  之前就结束，「先提交后注册」会漏掉那一次。**失败原因不在这条事件里**：它已经作为会话消息落库并展示，
+  在这里再说一遍等于同一件事出现两次；终态只回答「这条流到此为止」。
+- **指令执行队列满时抛 `JellyfishException`（不是 `RejectedExecutionException`）**：后者不在
+  `ConversationService.submit` 的契约里，会一路穿过外壳；而且被拒的指令必须从在途表里摘掉——
+  留着的条目既不会被执行，又会让关闭时的取消清单越来越长。
 
 ### 命令域
 
@@ -936,6 +951,10 @@ handler 抛错**按放行处理**。它只管「结束运行态、保留快照�
 - **一会话一在途回合（内核不变量）**：`TurnRegistry` 用非重入的 `Semaphore(1)` 占位，且**占位早于
   `AgentHarness.chat`**（回合任务一提交就 append 用户消息，事后判断冲突已经污染历史）。
   **槽位的归还在内核**（`TurnRegistry.releasing` 把「终态回调」与「归还」绑死），调用方不要自己写 `try/finally`。
+- **登记（`TurnRegistry.bind`）必须带上槽位**：占位与拿到回合句柄之间隔着一次异步提交，回合可能在拿到
+  句柄之前就收敛（会话不存在、前置语句抛错、被插件在开始前拦下），那种迟到的登记会留下过期条目，
+  并在极限交错下**盖掉下一个回合**（取消键于是指向一个已结束的回合，`Esc` 静默失效）。因此一律写
+  `turns.bind(slot, turn)`——**没有不带槽位的重载，这是有意的**。
 - **API key 鉴权包在路由外面**（`ApiKeyGuard` 是外层 handler）：逐个处理器里加校验等于「漏一个就是一条攻击面」，
   而「新加接口忘了校验」**没有任何测试能可靠拦住**。**目前只有 `GET /health` 豁免**。
   它自己先 `dispatch` 到工作线程再写 401（**阻塞 I/O 不允许在 IO 线程上**）；密钥比较用

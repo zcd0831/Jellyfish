@@ -155,6 +155,21 @@ public final class JellyfishAssembler {
     }
 
     /**
+     * 取某个装配结果里的插件上下文工厂，供同包测试使用。
+     * <p>
+     * 装配期它是 {@link Assembly} 的局部变量，{@link JellyfishRuntime} 不暴露它——而「插件拿到的
+     * 两个出向端口是不是占位实现」正是一类静默故障：装成 {@code unavailable()} 时插件照常启动，
+     * 功能只在运行时悄悄不生效。Dagger 侧由 {@code PluginModuleTest} 在模块函数层断言，
+     * 这里补的是手工装配侧那一半。
+     *
+     * @param runtime 装配结果
+     * @return 插件上下文工厂；不是本类产出的对象时返回 {@code null}
+     */
+    static PluginContextFactory pluginContextFactoryOf(JellyfishRuntime runtime) {
+        return runtime instanceof Assembly ? ((Assembly) runtime).pluginContextFactory : null;
+    }
+
+    /**
      * 对象图的持有者与装配过程：字段在 {@link #assemble} 里一次性写完，此后只读。
      * <p>
      * 用一个「可变字段的私有类 + 一次性装配」而不是「二十个局部变量 + 二十参构造器」，
@@ -185,6 +200,17 @@ public final class JellyfishAssembler {
         private ExtensionRegistry extensionRegistry;
         private EventChannel eventChannel;
         private RuntimeInfoHolder runtimeInfoHolder;
+
+        /**
+         * 插件上下文工厂。
+         * <p>
+         * 装配期它是 {@link #assemble} 的局部变量，这里留一份引用只为让<b>同包测试</b>能检查
+         * 「插件拿到的那两个出向端口是不是真实现」——装成占位时插件照常启动、功能只在运行时悄悄失效。
+         * 它不进 {@link JellyfishRuntime} 契约，也不是给生产调用方用的。
+         * <p>
+         * 只覆盖手工装配这一侧：Dagger 侧由 {@code PluginModuleTest} 在模块函数层断言同一件事。
+         */
+        private PluginContextFactory pluginContextFactory;
         private ConversationService conversationService;
         private TurnRegistry turnRegistry;
         private ShellStreams shellStreams;
@@ -317,7 +343,7 @@ public final class JellyfishAssembler {
             // 第十四层：插件运行时（必须排在 ReAct / 压缩链之后，因为它要拿到两个出向端口）
             PluginRuntimeConfig pluginRuntimeConfig = PluginRuntimeConfig.defaults();
             pluginRuntimeConfig.refresh(runtimeConfig.getPluginRoots(), runtimeConfig.getPluginsSettings());
-            PluginContextFactory pluginContextFactory = new PluginContextFactory(extensionRegistry, eventChannel,
+            pluginContextFactory = new PluginContextFactory(extensionRegistry, eventChannel,
                     registry, runtimeInfoHolder, actionQueue, sessionManager, shellIngress, delegations,
                     askChannel);
             PF4JPluginManager pluginManager = new PF4JPluginManager(pluginContextFactory, pluginRuntimeConfig,

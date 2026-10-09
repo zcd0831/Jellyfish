@@ -1070,16 +1070,18 @@ public class SessionManager {
      * 持久化与 {@code /resume} 拿到的会话都还是完整历史，只有发给模型的那条链路会按边界截断
      * （见 {@code core/prompt/PromptAssembler}）。
      * <p>
-     * <b>为什么要校验边界比旧边界更靠后</b>：边界只能向后移。允许它回退，就意味着「已经不在请求里的
-     * 那一段」会重新出现在请求里，而摘要仍然覆盖着它——同一段内容被讲两遍，且新旧摘要互相矛盾。
-     * 调用点在派发之前就拦住这种情况（那属于逻辑错误，不该走到落盘）。
+     * <b>边界只能向后移，回退由本方法自己拒绝</b>：回退意味着「已经不在请求里的那一段」会重新出现在
+     * 请求里，而摘要仍然覆盖着它——同一段内容被讲两遍。这条不变量此前只写在 javadoc 里、靠调用点
+     * 口头保证（今天唯一的调用点在结构上不可能后退），但边界是随会话落盘、跨进程恢复的一笔账，
+     * 将来多一个调用点就多一处「要记得」。因此判据挪到这里：它是契约的一部分，不是调用方的礼貌。
+     * 旧边界已失效（会话文件被手工改过）时按「从未压缩过」处理，不误伤。同一边界重复应用不算回退。
      *
      * @param sessionId         会话标识，不可为空白
      * @param summary           摘要正文，不可为空白
      * @param boundaryMessageId 摘要覆盖到的最后一条消息标识，不可为空白
      * @param droppedMessageCount 本次因超出摘要输入预算而被直接丢弃的条数，负数按 0 处理
      * @return 变更后的会话运行态
-     * @throws JellyfishException 会话不存在、参数为空白，或边界消息不在会话里时抛出
+     * @throws JellyfishException 会话不存在、参数为空白、边界消息不在会话里，或新边界早于旧边界时抛出
      */
     public Session applyCompaction(String sessionId, String summary, String boundaryMessageId,
                                    int droppedMessageCount) {
@@ -1088,7 +1090,14 @@ public class SessionManager {
         if (boundaryIndex < 0) {
             throw new JellyfishException("compaction boundary message not found: " + boundaryMessageId);
         }
-        int compressedCount = boundaryIndex + 1 - Math.max(0, droppedMessageCount);
+        SessionCompaction previous = session.getCompaction();
+        int previousIndex = previous == null ? -1 : session.indexOfMessage(previous.getBoundaryMessageId());
+        if (previousIndex >= 0 && boundaryIndex < previousIndex) {
+            throw new JellyfishException("compaction boundary must not move backwards: "
+                    + boundaryMessageId + " 早于 " + previous.getBoundaryMessageId());
+        }
+        // 钳到 0：它会被 CompactionAppliedEvent 广播出去并累加进指标，负数是一笔说不通的账
+        int compressedCount = Math.max(0, boundaryIndex + 1 - Math.max(0, droppedMessageCount));
         session.setCompaction(new SessionCompaction(summary, boundaryMessageId, System.currentTimeMillis(),
                 droppedMessageCount));
         persist(session);
@@ -1329,7 +1338,10 @@ public class SessionManager {
                 LOG.warn("会话已存在，跳过恢复: sessionId={}", session.getSessionId());
                 continue;
             }
-            publish(new SessionCreatedEvent(session.getAgentId(), session.getSessionId()));
+            // 恢复出来的会话同样带上它的父标识：与 fork 新建（上面那处）及关会话时同一口径。
+            // 此前这一处用的是 2 参构造器，于是同一字段在「恢复」这条路径上被静默丢弃
+            publish(new SessionCreatedEvent(session.getAgentId(), session.getSessionId(),
+                    session.getParentSessionId()));
             imported++;
         }
         return imported;

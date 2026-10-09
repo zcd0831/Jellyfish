@@ -1,6 +1,7 @@
 package zcd.jellyfish.di;
 
 import org.junit.jupiter.api.Test;
+import zcd.jellyfish.api.ask.AskPort;
 import zcd.jellyfish.api.event.RegisterOptions;
 import zcd.jellyfish.api.event.Subscription;
 import zcd.jellyfish.api.event.notification.SessionClosedEvent;
@@ -8,6 +9,9 @@ import zcd.jellyfish.api.extension.CommandDescriptor;
 import zcd.jellyfish.api.extension.CommandRequest;
 import zcd.jellyfish.api.extension.CommandResult;
 import zcd.jellyfish.api.extension.SessionBeforeCloseRequest;
+import zcd.jellyfish.api.plugin.PluginContext;
+import zcd.jellyfish.api.plugin.PluginDeclaration;
+import zcd.jellyfish.api.subagent.SubAgentPort;
 import zcd.jellyfish.infra.config.AppConfig;
 import zcd.jellyfish.infra.config.ConfigPaths;
 import zcd.jellyfish.infra.config.PluginPaths;
@@ -21,6 +25,8 @@ import java.util.function.Consumer;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -84,9 +90,10 @@ class JellyfishAssemblerTest {
 
     @Test
     void accessors_should_all_be_present_when_assembled() {
-        // Given / When / Then：21 个访问器一个都不能是 null，否则外壳会在第一次用到时才发现
+        // Given / When / Then：22 个访问器一个都不能是 null，否则外壳会在第一次用到时才发现
         forEachRuntime(assembly -> {
             assertNotNull(assembly.runtimeConfig(), "runtimeConfig");
+            assertNotNull(assembly.projectConfigTrust(), "projectConfigTrust");
             assertNotNull(assembly.agentHarness(), "agentHarness");
             assertNotNull(assembly.agentManager(), "agentManager");
             assertNotNull(assembly.modelManager(), "modelManager");
@@ -150,26 +157,75 @@ class JellyfishAssemblerTest {
     @Test
     void healthCheck_should_render_report_when_nothing_started() {
         // Given / When：四个检查项跨 infra 与 core 两层，装配错了这里就会空指针
-        String report = JellyfishAssembler.create(emptyAppConfig()).healthCheck().check().render();
-
-        // Then
-        assertNotNull(report);
-        assertFalse(report.trim().isEmpty(), "健康报告不应为空");
+        forEachRuntime(assembly -> {
+            // Then
+            String report = assembly.healthCheck().check().render();
+            assertNotNull(report);
+            assertFalse(report.trim().isEmpty(), "健康报告不应为空");
+        });
     }
 
     @Test
     void create_should_return_independent_graphs_when_called_twice() {
-        // Given：两次装配必须是两张图，不能靠静态状态串起来
-        JellyfishRuntime first = JellyfishAssembler.create(emptyAppConfig());
-        JellyfishRuntime second = JellyfishAssembler.create(emptyAppConfig());
+        // Given：两种装法各造一对图
+        JellyfishRuntime daggerFirst = DaggerJellyfishComponent.builder().appConfig(emptyAppConfig()).build();
+        JellyfishRuntime daggerSecond = DaggerJellyfishComponent.builder().appConfig(emptyAppConfig()).build();
+        JellyfishRuntime manualFirst = JellyfishAssembler.create(emptyAppConfig());
+        JellyfishRuntime manualSecond = JellyfishAssembler.create(emptyAppConfig());
 
-        // When：只往第一张图里注册
-        first.extensionRegistry().handle("parity-test", CommandRequest.class, "only-first",
+        // When / Then：只往每一对的第一张图里注册，第二张图必须看不见它——用静态字段串起来的实现会看见
+        assertTrue(registerOnlyIn(daggerFirst, daggerSecond).isError(), "Dagger：两张图共享了注册表");
+        assertTrue(registerOnlyIn(manualFirst, manualSecond).isError(), "手工装配：两张图共享了注册表");
+    }
+
+    /**
+     * 往 {@code writer} 注册一条只属于它的命令，返回在 {@code reader} 上执行该命令的结果。
+     *
+     * @param writer 注册方
+     * @param reader 读取方
+     * @return 执行结果；两张图共享注册表时会是一条成功结果
+     */
+    private static CommandResult registerOnlyIn(JellyfishRuntime writer, JellyfishRuntime reader) {
+        writer.extensionRegistry().handle("parity-test", CommandRequest.class, "only-first",
                 new CommandDescriptor("只存在于第一张图", null, null, false),
                 request -> CommandResult.ok("first"), RegisterOptions.DEFAULT);
+        return reader.commandManager().execute("/only-first", null);
+    }
 
-        // Then：第二张图看不见它，说明注册表没有跨图共享
-        assertTrue(second.commandManager().execute("/only-first", null).isError());
+    @Test
+    void both_strategies_should_share_the_same_TypeRegistry() {
+        // Given / When / Then：同步扩展点与事件通道必须落在**同一张**注册表上。
+        // 反例的代价很具体：插件停止时的回收（按 owner）只走过通道那一张表，
+        // 于是该插件的事件订阅全部残留——插件已经停了、监听器还在被回调的幽灵订阅
+        forEachRuntime(assembly -> {
+            Subscription subscription = assembly.extensionRegistry().handle("di-parity",
+                    CommandRequest.class, "shared-table", new CommandDescriptor("共享表探针", null, null, false),
+                    request -> CommandResult.ok("ok"), RegisterOptions.DEFAULT);
+            try {
+                // 一份表 ⇒ 从通道这一侧按 owner 回收，扩展点那一侧也必然空掉
+                assembly.eventChannel().unsubscribeAll("di-parity");
+                assertTrue(assembly.extensionRegistry().handlers(CommandRequest.class, "shared-table").isEmpty(),
+                        "通道与扩展点各拿一张表：从通道侧按 owner 回收，扩展点上的注册仍在");
+            } finally {
+                subscription.close();
+            }
+        });
+    }
+
+    @Test
+    void pluginContext_should_receive_real_outbound_ports() {
+        // Given：插件拿到的那两个出向端口（委派、提问）**必须是真实实现而非占位**。
+        // 装成 unavailable() 不会有任何编译期提示，插件照常启动，功能只在运行时悄悄不生效
+        JellyfishRuntime assembly = JellyfishAssembler.create(emptyAppConfig());
+
+        // When
+        PluginContext context = JellyfishAssembler.pluginContextFactoryOf(assembly)
+                .create(PluginDeclaration.of("di-parity"));
+
+        // Then：提问端口就是装配出来的那一个真通道（`attach()` 之前与占位区分不开，因此用同一性断言）
+        assertSame(assembly.askChannel(), context.askUser(), "插件拿到的提问端口不是装配的那一个");
+        assertNotSame(AskPort.unavailable(), context.askUser(), "提问端口是占位实现");
+        assertNotSame(SubAgentPort.unavailable(), context.delegations(), "委派端口是占位实现");
     }
 
     /**

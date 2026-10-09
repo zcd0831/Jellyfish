@@ -72,6 +72,16 @@ public final class ActionQueue {
     private final Map<String, Window> windows = new ConcurrentHashMap<String, Window>();
 
     /**
+     * 测试接缝：在「拿到窗口引用」与「真正入队」之间执行；缺省什么都不做。
+     * <p>
+     * <b>为什么需要它</b>：这段窗口（{@code endTurn} 摘窗口、{@code beginTurn} 换窗口恰好落在两次操作
+     * 之间）在真实代码里没有可注入的停顿点，而它是本类最硬那条契约——「任何路径都不会把动作留在
+     * {@link ActionStatus#QUEUED} 上无人认领」——唯一的易破处。包私有，只由同包测试设置；生产路径上
+     * 它永远是那个 no-op（不参与任何判定，也不影响时序）。
+     */
+    Runnable betweenWindowAndOffer = () -> { };
+
+    /**
      * 构造动作队列。
      */
     @Inject
@@ -230,6 +240,8 @@ public final class ActionQueue {
                             + "（会话不存在、或该会话只有子代理回合时同样如此）");
         }
         handle.owner = owner;
+        // 测试接缝：生产路径上是 no-op（见字段注释）
+        betweenWindowAndOffer.run();
         OfferOutcome outcome = window.offer(handle);
         if (outcome == OfferOutcome.CLOSED) {
             // 「拿到窗口引用」与「真正入队」之间发生的关闭（endTurn 摘窗口、或 beginTurn 换窗口）。

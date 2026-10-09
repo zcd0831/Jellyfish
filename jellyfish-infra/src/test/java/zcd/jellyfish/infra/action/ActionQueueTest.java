@@ -226,6 +226,39 @@ class ActionQueueTest {
     }
 
     @Test
+    void submit_should_fail_when_window_closes_between_lookup_and_offer() {
+        // Given：把交错摆出来——「拿到窗口引用」之后、真正入队之前，回合结束了
+        queue.beginTurn("s1");
+        queue.betweenWindowAndOffer = () -> queue.endTurn("s1");
+
+        // When
+        ActionHandle handle = queue.submit("plugin-a",
+                PluginAction.sendUserMessage("s1", "晚了一步", DeliverAs.STEER));
+
+        // Then：这是 N-32 的正题——窗口关闭时会取走队列里的动作并标失败，
+        // 但看不到「还没进队列」的这一条，因此必须由入队侧兜住
+        assertEquals(ActionStatus.FAILED, handle.getStatus());
+        assertEquals(ActionFailureReason.TURN_ENDED_UNREACHED, handle.getFailureReason());
+        // 它不能停在 QUEUED：插件据此等终态会永远等不到
+        assertTrue(handle.isFinished(), "任何路径都不该把动作留在 QUEUED 上无人认领");
+    }
+
+    @Test
+    void submit_should_fail_when_window_is_replaced_between_lookup_and_offer() {
+        // Given：同一段窗口里发生的是「窗口被同会话的新回合顶掉」（与 endTurn 是两种关闭）
+        queue.beginTurn("s1");
+        queue.betweenWindowAndOffer = () -> queue.beginTurn("s1");
+
+        // When
+        ActionHandle handle = queue.submit("plugin-a", PluginAction.compact("s1"));
+
+        // Then：同样必须落终态。旧窗口已经被收回，谁也不会再去取它
+        assertTrue(handle.isFinished());
+        assertEquals(ActionStatus.FAILED, handle.getStatus());
+        assertEquals(ActionFailureReason.TURN_ENDED_UNREACHED, handle.getFailureReason());
+    }
+
+    @Test
     void beginTurn_should_fail_leftovers_when_same_session_window_is_replaced() {
         // 同一会话两个顶层回合是外壳该拦的事；动作通道只能认一个，且只能认最新的那个
         queue.beginTurn("s1");

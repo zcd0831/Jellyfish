@@ -4,15 +4,17 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.event.EventPublisher;
 import zcd.jellyfish.api.event.RegisterOptions;
+import zcd.jellyfish.api.event.notification.SessionCreatedEvent;
 import zcd.jellyfish.api.extension.SessionDeleteRequest;
+import zcd.jellyfish.api.extension.SessionKind;
 import zcd.jellyfish.api.extension.SessionMessageSnapshot;
 import zcd.jellyfish.api.extension.SessionPersistRequest;
-import zcd.jellyfish.api.extension.SessionMessageSnapshot;
 import zcd.jellyfish.api.extension.SessionRestoreRequest;
 import zcd.jellyfish.api.extension.SessionRestoreResult;
 import zcd.jellyfish.api.extension.SessionSnapshot;
@@ -274,6 +276,26 @@ class SessionManagerPersistenceTest {
     }
 
     @Test
+    @DisplayName("恢复出的会话在创建通知里带着父标识，与 fork 新建同一口径")
+    void restore_should_publishCreatedEvent_withParentSessionId() {
+        // Given：一个分支会话（parentSessionId 非空）
+        contributeRestore(SessionRestoreResult.of(
+                Collections.singletonList(forkSnapshot("s-forked", "s-source"))));
+
+        // When
+        manager.restore();
+
+        // Then：此前这条路径用的是 2 参构造器，于是同一字段只在「恢复」这一条路上被静默丢弃——
+        // 事件订阅者据此判断派生关系时会看到两个来源不同的答案
+        ArgumentCaptor<SessionCreatedEvent> captor = ArgumentCaptor.forClass(SessionCreatedEvent.class);
+        verify(events, atLeastOnce()).publish(captor.capture());
+        assertTrue(captor.getAllValues().stream().anyMatch(event ->
+                        "s-forked".equals(event.getSessionId())
+                                && "s-source".equals(event.getParentSessionId())),
+                "恢复出的会话没有把父标识带进创建通知: " + captor.getAllValues());
+    }
+
+    @Test
     @DisplayName("恢复导入的会话同样广播创建通知，订阅者的会话集合才完整")
     void restore_should_publishCreatedEvent() {
         contributeRestore(SessionRestoreResult.of(Collections.singletonList(snapshot("s-1"))));
@@ -309,6 +331,24 @@ class SessionManagerPersistenceTest {
 
         assertThrows(JellyfishException.class,
                 () -> manager.applyCompaction(sessionId, "摘要", "ghost", 0));
+    }
+
+    @Test
+    @DisplayName("压缩边界只能向后移：新边界早于旧边界时当场抛错")
+    void applyCompaction_should_reject_backwardsBoundary() {
+        String sessionId = manager.create(null, null, null).getSessionId();
+        manager.appendMessage(sessionId, LlmMessage.user("一"), null);
+        manager.appendMessage(sessionId, LlmMessage.user("二"), null);
+        String first = manager.messagesOf(sessionId).get(0).getMessageId();
+        String second = manager.messagesOf(sessionId).get(1).getMessageId();
+        manager.applyCompaction(sessionId, "摘要一", second, 0);
+
+        // When / Then：回退意味着「已经不在请求里的那一段」重新出现在请求里，而摘要仍覆盖着它——
+        // 判据此前只在 javadoc 里由调用点口头保证，现在由本方法自己拒绝
+        assertThrows(JellyfishException.class,
+                () -> manager.applyCompaction(sessionId, "摘要二", first, 0));
+        // 同一边界重复应用不算回退：边界没动，只是把摘要重写一遍
+        assertDoesNotThrow(() -> manager.applyCompaction(sessionId, "摘要一改", second, 0));
     }
 
     @Test
@@ -560,6 +600,20 @@ class SessionManagerPersistenceTest {
      */
     private void contributeRestore(SessionRestoreResult result) {
         extensions.contribute("restorer", SessionRestoreRequest.class, null, request -> result, RegisterOptions.DEFAULT);
+    }
+
+    /**
+     * 构造一个「分支会话」快照：{@code kind=FORKED} 且带父会话标识。
+     *
+     * @param sessionId       会话标识
+     * @param parentSessionId 源会话标识
+     * @return 会话快照
+     */
+    private static SessionSnapshot forkSnapshot(String sessionId, String parentSessionId) {
+        return new SessionSnapshot(sessionId, 1L, 2L, "标题", "coder", "openai", "gpt-4o",
+                Collections.<SessionMessageSnapshot>emptyList(),
+                new SessionUsageSnapshot(0L, 0L, 0L, 0L, 0L, 0L),
+                null, SessionKind.FORKED, parentSessionId, null, null);
     }
 
     /**

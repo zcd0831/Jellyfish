@@ -23,6 +23,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -66,7 +67,26 @@ class ToolOutputStoreTest {
         assertNotNull(path);
         assertTrue(Paths.get(path).isAbsolute(), path);
         assertEquals("完整内容", new String(Files.readAllBytes(Paths.get(path)), StandardCharsets.UTF_8));
-        assertTrue(path.endsWith("read_file.txt"), path);
+        assertTrue(path.contains("read_file"), path);
+        assertTrue(path.endsWith(".txt"), path);
+    }
+
+    @Test
+    @DisplayName("同一个调用 id 的两次落盘不得互相覆盖")
+    void store_should_not_overwrite_when_callIdRepeats() throws IOException {
+        settings(0, 0);
+
+        // When：id 由外部给（模型 / 适配器），内核不保证它跨回合唯一；清洗还会把不同的 id 折叠成
+        // 同一个名字。文件名里那一段唯一片段就是为这一步准备的
+        String first = store.store("s-1", "call-1", "read_file", "第一次的内容", false);
+        String second = store.store("s-1", "call-1", "read_file", "第二次的内容", false);
+
+        // Then：两条信封里的 _path 必须各自指向自己的内容——「路径存在但内容不是它」比文件不存在更难发现
+        assertNotNull(first);
+        assertNotNull(second);
+        assertNotEquals(first, second);
+        assertEquals("第一次的内容", new String(Files.readAllBytes(Paths.get(first)), StandardCharsets.UTF_8));
+        assertEquals("第二次的内容", new String(Files.readAllBytes(Paths.get(second)), StandardCharsets.UTF_8));
     }
 
     @Test

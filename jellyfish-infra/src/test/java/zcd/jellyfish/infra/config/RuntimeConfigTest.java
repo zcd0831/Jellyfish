@@ -715,6 +715,69 @@ class RuntimeConfigTest {
         assertTrue(publisher.warnings().stream().anyMatch(warning -> "a".equals(warning.getSource())));
     }
 
+    @Test
+    void refresh_should_warn_when_approval_timeout_is_not_positive() throws IOException {
+        // Given：写 0 的本意是「立即拒绝」，而实现会把它换成「等 120 秒、期间人工批准仍然生效」
+        Path jellyfish = writeFile("jellyfish-permission.json",
+                "{\"permission\":{\"approvalTimeoutSeconds\":0}}");
+        RecordingPublisher publisher = new RecordingPublisher();
+        when(appConfig.getModel()).thenReturn(pathsTo(null, null));
+        when(appConfig.getAgent()).thenReturn(pathsTo(null, null));
+        when(appConfig.getJellyfish()).thenReturn(pathsTo(jellyfish, null));
+
+        // When
+        RuntimeConfig runtimeConfig = runtimeConfigOf(
+                new ConfigLoader(new SettingsReader(), new SettingsBinder()), publisher);
+        runtimeConfig.refresh();
+
+        // Then：生效的值与告警都要如实——入口是「填错了，闸门被悄悄放宽」而不是「什么都没发生」
+        assertEquals(PermissionApprovalSettings.DEFAULT_APPROVAL_TIMEOUT_SECONDS,
+                runtimeConfig.getPermissionApprovalSettings().getApprovalTimeoutSeconds());
+        assertTrue(publisher.warnings().stream().anyMatch(warning ->
+                "permission".equals(warning.getSource())
+                        && warning.getMessage().contains("approvalTimeoutSeconds=0")));
+    }
+
+    @Test
+    void refresh_should_warn_when_approval_timeout_is_absurdly_large() throws IOException {
+        // Given：写下一个远超人工审批所需的秒数（多半是笔误），而它会让 react 线程同步等这么久
+        Path jellyfish = writeFile("jellyfish-permission-long.json",
+                "{\"permission\":{\"approvalTimeoutSeconds\":99999}}");
+        RecordingPublisher publisher = new RecordingPublisher();
+        when(appConfig.getModel()).thenReturn(pathsTo(null, null));
+        when(appConfig.getAgent()).thenReturn(pathsTo(null, null));
+        when(appConfig.getJellyfish()).thenReturn(pathsTo(jellyfish, null));
+
+        // When
+        RuntimeConfig runtimeConfig = runtimeConfigOf(
+                new ConfigLoader(new SettingsReader(), new SettingsBinder()), publisher);
+        runtimeConfig.refresh();
+
+        // Then：值照旧生效（只是告警），因为回退与拒绝都不是这里该做的判断
+        assertEquals(99999, runtimeConfig.getPermissionApprovalSettings().getApprovalTimeoutSeconds());
+        assertTrue(publisher.warnings().stream().anyMatch(warning ->
+                "permission".equals(warning.getSource())
+                        && warning.getMessage().contains("99999")));
+    }
+
+    @Test
+    void refresh_should_not_warn_for_reasonable_approval_timeout() throws IOException {
+        // Given：一个正常的值不该带来任何关于审批超时的噪声
+        Path jellyfish = writeFile("jellyfish-permission-ok.json",
+                "{\"permission\":{\"approvalTimeoutSeconds\":45}}");
+        RecordingPublisher publisher = new RecordingPublisher();
+        when(appConfig.getModel()).thenReturn(pathsTo(null, null));
+        when(appConfig.getAgent()).thenReturn(pathsTo(null, null));
+        when(appConfig.getJellyfish()).thenReturn(pathsTo(jellyfish, null));
+
+        // When
+        runtimeConfigOf(new ConfigLoader(new SettingsReader(), new SettingsBinder()), publisher).refresh();
+
+        // Then
+        assertTrue(publisher.warnings().stream().noneMatch(warning ->
+                "permission".equals(warning.getSource())));
+    }
+
     /**
      * 用于验证 merger 返回 {@code null} 的场景。
      *

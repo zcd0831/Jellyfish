@@ -77,6 +77,10 @@ class TaskToolTest {
         assertTrue(result.getOutput().toString().startsWith("[子代理未开始]"));
         assertTrue(result.getOutput().toString().contains("subagent_type"));
         assertTrue(sink.chunks.isEmpty());
+        // 但它是「这次工具没跑」，不是「跑完了什么都没做」：不补 terminal，界面会按缺省
+        // （正常跑完）渲染，警示标记就此消失
+        assertEquals(ToolMetadata.TERMINAL_REJECTED, result.getMetadata().get(ToolMetadata.KEY_TERMINAL));
+        assertTrue(ToolMetadata.failed(result.getMetadata()));
     }
 
     @Test

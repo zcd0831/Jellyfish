@@ -30,9 +30,14 @@ public interface ReActTurn {
 
     /**
      * 阻塞等待回合结束。
+     * <p>
+     * <b>回合被丢弃时也走异常</b>：内核关闭会对 {@code react} 池 {@code shutdownNow}，排队中还没开跑的
+     * 回合从此不会有人来跑，{@link java.util.concurrent.Future#get()} 抛的是
+     * {@link java.util.concurrent.CancellationException}——实现把它一并翻成
+     * {@link zcd.jellyfish.api.JellyfishException}，等的人因此只会看到这一种失败形式。
      *
      * @return 回合结果，保证非 {@code null}
-     * @throws zcd.jellyfish.api.JellyfishException 回合失败或等待被中断时抛出
+     * @throws zcd.jellyfish.api.JellyfishException 回合失败、被丢弃，或等待被中断时抛出
      */
     ReActResult await();
 

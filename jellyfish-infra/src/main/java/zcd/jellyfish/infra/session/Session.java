@@ -346,6 +346,27 @@ public final class Session {
     }
 
     /**
+     * 在实例锁内做一次一致投影。
+     * <p>
+     * <b>为什么需要它</b>：{@link SessionSnapshots#capture} 是逐个调本类的同步 getter（消息、用量、
+     * 更新时间、标题…），而每个 getter 各加一次锁、这些锁之间没有任何东西把「读消息」与「读用量」
+     * 绑在一起。别的线程在两次读之间推进过一次状态，快照里就会出现「用量含某条消息、消息列表里
+     * 却没有它」这种自相矛盾的一对字段，且它会随落盘留在磁盘上，直到同一会话的下一次落盘才被覆盖。
+     * 本方法把这些读放进同一段临界区，因此快照里的字段是同一个瞬间的。
+     * <p>
+     * <b>为什么放在本类</b>：锁是实例私有的，从外部 lock 属于绕过封装；且「哪些 getter 要一起读」
+     * 是与本类状态形状绑定的知识。
+     * <p>
+     * 与 {@link #underPersistLock(Runnable)} 的加锁顺序一致（落盘锁 → 实例锁），因此调用它不会
+     * 引入第二种顺序。
+     *
+     * @return 会话快照，保证非 {@code null}
+     */
+    synchronized SessionSnapshot captureSnapshot() {
+        return SessionSnapshots.capture(this);
+    }
+
+    /**
      * 在「落盘锁」内执行动作，用于串行化「捕获快照 + 交给持久化插件」这一整段。
      * <p>
      * 可见性为包级：只有 {@link SessionManager} 需要它，而且只有它知道哪些变更要落盘。

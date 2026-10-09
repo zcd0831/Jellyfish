@@ -91,6 +91,16 @@ class LlmTransportRequestTest {
     }
 
     @Test
+    void builder_should_ignore_null_message_elements_in_batch() {
+        // javadoc 承诺「null 会被忽略」；批量入口此前只挡了 null 列表，把 null 元素原样带下去
+        LlmTransportRequest request = LlmTransportRequest.builder("t", "m")
+                .messages(Arrays.asList(LlmTransportMessage.text(LlmTransportMessage.ROLE_USER, "a"), null))
+                .build();
+
+        assertEquals(1, request.getMessages().size());
+    }
+
+    @Test
     void collections_should_be_unmodifiable_and_defensive() {
         List<LlmTransportMessage> messages = new java.util.ArrayList<LlmTransportMessage>();
         messages.add(LlmTransportMessage.text(LlmTransportMessage.ROLE_USER, "a"));

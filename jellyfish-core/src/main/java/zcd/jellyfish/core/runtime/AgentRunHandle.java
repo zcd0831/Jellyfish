@@ -43,6 +43,14 @@ public final class AgentRunHandle implements CancellationToken {
     private volatile boolean timedOut;
 
     /**
+     * 执行体是否已经返回（此后本 run 只剩收尾）。
+     * <p>
+     * 与 {@link #timedOut} 不同，它由执行线程在 {@code body.run} 返回后立刻置上，因此
+     * {@link #markTimedOut()} 能据此分辨「超时发生在跑的过程中」与「超时晚到、run 其实已经跑完了」。
+     */
+    private boolean bodyFinished;
+
+    /**
      * 构造句柄，仅供 {@code AgentRuntime} 调用。
      *
      * @param runId run 标识，不可为空白
@@ -125,12 +133,32 @@ public final class AgentRunHandle implements CancellationToken {
     }
 
     /**
-     * 标记这次 run 因墙钟到点被中断。
+     * 标记执行体已经返回。
+     * <p>
+     * 由调度器的执行线程在 {@code body.run} 返回之后立即调用；它把「超时」这件事的判定点钉在
+     * 「run 还在跑吗」上——看门狗的任务可能排在墙钟到点的那一刻才被调度到，而那时 run 恰好已经
+     * 跑完，此时再打超时标记就会把一个<b>完整的结果</b>说成「被墙钟截断」。
+     * <p>
+     * 与 {@link #markTimedOut()}、{@link #complete(AgentRunResult)} 共用本对象的监视器：
+     * 谁先拿到锁谁说话，没有第三种交错。
+     */
+    synchronized void markBodyFinished() {
+        bodyFinished = true;
+    }
+
+    /**
+     * 标记这次 run 因墙钟到点被中断；run 已经跑完（或在收尾）时不再生效。
      * <p>
      * 由超时看门狗在 {@link #cancel()} 之前调用；调度器据此把「被取消」改标为「截断」。
+     *
+     * @return 标记生效返回 {@code true}；run 的执行体已返回或已落终态返回 {@code false}
      */
-    void markTimedOut() {
+    synchronized boolean markTimedOut() {
+        if (bodyFinished || result != null) {
+            return false;
+        }
         timedOut = true;
+        return true;
     }
 
     /**

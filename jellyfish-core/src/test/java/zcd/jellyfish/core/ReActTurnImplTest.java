@@ -2,11 +2,19 @@ package zcd.jellyfish.core;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import zcd.jellyfish.api.JellyfishException;
 
+import java.util.Collections;
+import java.util.List;
+import java.util.concurrent.AbstractExecutorService;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -91,6 +99,53 @@ class ReActTurnImplTest {
 
         // Then
         assertEquals("ab", order.toString());
+    }
+
+    @Test
+    @DisplayName("回合的任务被取消掉时，await 抛契约内的 JellyfishException")
+    void await_should_wrapCancellation_whenTaskCancelledBeforeStart() {
+        // Given：一个「拿到任务就把它取消掉」的执行器——模拟这次回合还没开跑就被取消/丢弃
+        // （Future.get() 在这种情况下抛的是 CancellationException，而它不是 JellyfishException）
+        ExecutorService executor = new AbstractExecutorService() {
+            @Override
+            public void shutdown() {
+            }
+
+            @Override
+            public List<Runnable> shutdownNow() {
+                return Collections.emptyList();
+            }
+
+            @Override
+            public boolean isShutdown() {
+                return false;
+            }
+
+            @Override
+            public boolean isTerminated() {
+                return false;
+            }
+
+            @Override
+            public boolean awaitTermination(long timeout, TimeUnit unit) {
+                return true;
+            }
+
+            @Override
+            public void execute(Runnable command) {
+                ((FutureTask<?>) command).cancel(true);
+            }
+        };
+        ReActTurnImpl turn = new ReActTurnImpl("t-cancelled");
+        turn.submit(executor, () -> {
+            throw new AssertionError("被取消的回合不该真的跑起来");
+        });
+
+        // When / Then
+        JellyfishException failure = assertThrows(JellyfishException.class, turn::await);
+
+        // 等的人只会看到这一种失败形式，且消息里带着是哪个回合
+        assertTrue(failure.getMessage().contains("t-cancelled"));
     }
 
     @Test

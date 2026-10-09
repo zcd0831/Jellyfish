@@ -583,7 +583,16 @@ public class ToolOutputStore {
     }
 
     /**
-     * 构造文件名：调用 id + 工具名，非法字符替换、去重路径分隔。
+     * 构造文件名：调用 id + 工具名 + 本次调用的唯一片段。
+     * <p>
+     * <b>为什么要那个唯一片段</b>：id 与工具名都来自进程外部（模型 / 适配器），内核只保证「空 id 换
+     * UUID」，<b>不保证跨回合唯一</b>；清洗还会把非法字符折叠成同一个（{@code call/1} 与 {@code call:1}
+     * 同名）、超长时截断。于是两次不同的调用可能得到同一个文件名，而写入是带替换的原子改名——
+     * 先写的那份被覆盖，可它那条信封里的 {@code _path} 还在，指向的却已经是别人的内容
+     * （比「文件不存在」更难察觉：路径存在、内容不是它）。
+     * <p>
+     * 唯一片段取纳秒时间戳，与本仓库另一处落盘命名（媒体暂存）同口径：同一调用内只调本方法一次，
+     * 两次调用之间至少隔着一次磁盘写，因此不会落在同一刻度上。
      *
      * @param toolCallId 工具调用标识，可为 {@code null}
      * @param toolName   工具名，可为 {@code null}
@@ -593,7 +602,7 @@ public class ToolOutputStore {
     private static String fileName(String toolCallId, String toolName, boolean structured) {
         String id = sanitize(toolCallId == null ? "call" : toolCallId);
         String name = sanitize(toolName == null ? "tool" : toolName);
-        return id + '-' + name + (structured ? JSON_SUFFIX : TEXT_SUFFIX);
+        return id + '-' + name + '-' + System.nanoTime() + (structured ? JSON_SUFFIX : TEXT_SUFFIX);
     }
 
     /**

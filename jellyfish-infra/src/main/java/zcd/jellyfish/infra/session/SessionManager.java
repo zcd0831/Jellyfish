@@ -1302,7 +1302,7 @@ public class SessionManager {
             return;
         }
         session.underPersistLock(() -> {
-            SessionPersistRequest request = new SessionPersistRequest(SessionSnapshots.capture(session));
+            SessionPersistRequest request = new SessionPersistRequest(session.captureSnapshot());
             for (HandlerBinding<SessionPersistRequest, Void> binding : bindings) {
                 extensions.invoke(binding.getHandler(), request);
             }

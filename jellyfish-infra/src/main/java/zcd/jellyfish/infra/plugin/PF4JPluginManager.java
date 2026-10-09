@@ -54,7 +54,17 @@ public final class PF4JPluginManager implements AutoCloseable {
     private final Set<String> blocked = new LinkedHashSet<>();
 
     /** 内部管理器，启动时创建。 */
-    private JellyfishPluginManager manager;
+    private volatile JellyfishPluginManager manager;
+
+    /**
+     * 是否已开始关闭。
+     * <p>
+     * <b>为什么光有一把锁不够</b>：{@link #reload(Set)} 与 {@link #close()} 争的是同一条启动路径，
+     * 而「检查是否已关闭」与「在插件类加载器上启动」之间隔着好几次插件调用（插件代码可以阻塞）。
+     * 立一个旗之后，即使将来又多出一条不拿锁的调用路径，也不会在关停中把插件「启动」起来——
+     * 那时的注册在 {@code release} 之后无人再回收，表现为「插件已经停了、工具还能调」。
+     */
+    private volatile boolean closed;
 
     /**
      * 构造门面。
@@ -78,6 +88,9 @@ public final class PF4JPluginManager implements AutoCloseable {
      * @throws JellyfishException 已经启动过时抛出
      */
     public void bootstrap() {
+        if (closed) {
+            throw new JellyfishException("plugin manager already closed");
+        }
         if (manager != null) {
             throw new JellyfishException("plugin manager already bootstrapped");
         }
@@ -97,7 +110,8 @@ public final class PF4JPluginManager implements AutoCloseable {
      * @return 插件包装器列表；尚未启动时为空列表
      */
     public List<PluginWrapper> plugins() {
-        return manager == null ? Collections.<PluginWrapper>emptyList() : manager.getPlugins();
+        JellyfishPluginManager current = manager;
+        return current == null ? Collections.<PluginWrapper>emptyList() : current.getPlugins();
     }
 
     /**
@@ -116,6 +130,12 @@ public final class PF4JPluginManager implements AutoCloseable {
      * @return 重载报告，保证非 {@code null}
      */
     public synchronized PluginReloadReport reload(Set<String> reconfiguredPluginIds) {
+        if (closed) {
+            // 关停已经开始：此刻再去停止 / 启动插件，就是在一套即将卸载的类加载器上做事。
+            // 空报告是如实的回答——这次重载什么也没做
+            LOG.debug("插件运行时已开始关闭，忽略本次重载");
+            return PluginReloadReport.empty();
+        }
         if (manager == null) {
             // 尚未启动过：没有插件可重载，调用方照常把配置刷进 PluginRuntimeConfig
             return PluginReloadReport.empty();
@@ -189,7 +209,12 @@ public final class PF4JPluginManager implements AutoCloseable {
         for (String pluginId : toStart) {
             PluginState state = current.safeStart(pluginId);
             if (state.isStarted()) {
-                report.recordStarted(pluginId);
+                // 刚被「重启」（停止 + 启动）过的插件已经在 restarted 里记过一次：再记一条 started，
+                // /reload 的输出里同一个插件会出现两行（「插件重启：x」+「插件启动：x」），
+                // 读起来像是又启动了一个本来没在跑的插件
+                if (!report.getRestarted().contains(pluginId)) {
+                    report.recordStarted(pluginId);
+                }
             } else {
                 report.recordFailed(pluginId);
             }
@@ -203,10 +228,11 @@ public final class PF4JPluginManager implements AutoCloseable {
      * @return 状态；插件不存在或尚未启动时为 {@code null}
      */
     public PluginState stateOf(String pluginId) {
-        if (manager == null) {
+        JellyfishPluginManager current = manager;
+        if (current == null) {
             return null;
         }
-        PluginWrapper wrapper = manager.getPlugin(pluginId);
+        PluginWrapper wrapper = current.getPlugin(pluginId);
         return wrapper == null ? null : wrapper.getPluginState();
     }
 
@@ -215,9 +241,14 @@ public final class PF4JPluginManager implements AutoCloseable {
      * <p>
      * 逐插件走 {@code safeStop}（停止 + 注册回收）而<b>不用</b> PF4J 的批量 {@code stopPlugins()}：
      * 批量方法不回收注册，会留下「已停止但工具还能调」的幽灵注册。
+     * <p>
+     * 与 {@link #reload(Set)} 共用本对象的锁，并在拿锁之前先立旗：关停期并发到达的 {@code /reload}
+     * 因此要么在锁外就看到旗子直接空跑，要么排在这段收尾之后——不会插进「取到管理器」与
+     * 「在它上面启动插件」之间。
      */
     @Override
-    public void close() {
+    public synchronized void close() {
+        closed = true;
         if (manager == null) {
             return;
         }

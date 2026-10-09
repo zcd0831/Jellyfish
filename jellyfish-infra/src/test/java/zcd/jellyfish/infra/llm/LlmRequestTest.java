@@ -69,6 +69,19 @@ class LlmRequestTest {
     }
 
     @Test
+    void messages_should_ignore_null_elements_when_adding_batch() {
+        // When：javadoc 承诺「null 会被忽略」，而它此前只挡了 null 列表、没挡 null 元素
+        LlmRequest request = LlmRequest.builder("gpt")
+                .messages(Arrays.asList(LlmMessage.user("a"), null, LlmMessage.assistant("b")))
+                .build();
+
+        // Then：批量与单条对同一个 null 必须是同一种语义，否则带下去的那个 null 在客户端是硬 NPE
+        assertEquals(2, request.getMessages().size());
+        assertEquals("a", request.getMessages().get(0).getContent());
+        assertEquals("b", request.getMessages().get(1).getContent());
+    }
+
+    @Test
     void getters_should_return_all_configured_values() {
         // Given
         LlmTool tool = new LlmTool("tool", "desc", null, null);

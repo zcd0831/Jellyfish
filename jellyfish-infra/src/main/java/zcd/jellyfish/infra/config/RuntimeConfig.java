@@ -770,8 +770,9 @@ public class RuntimeConfig {
     /**
      * 对合并后的运行期设置做一致性告警。
      * <p>
-     * 只查一处真实歧义：同一个 pluginId 同时出现在启用与禁用名单里。此时按既有语义
-     * （禁用优先）处理是对的，但用户多半写错了，值得一条告警。
+     * 查两处真实歧义：同一个 pluginId 同时出现在启用与禁用名单里（此时按既有语义「禁用优先」
+     * 处理是对的，但用户多半写错了）；以及权限段的审批超时被静默改过值——{@code 0} 的本意是
+     * 「立即拒绝」，而它会被换成「等 120 秒，期间人工批准仍然生效」，那是把审批闸门悄悄放宽了。
      *
      * @param merged 合并后的运行期设置
      */
@@ -782,6 +783,9 @@ public class RuntimeConfig {
         for (String pluginId : conflicted) {
             eventPublisher.publish(new ConfigWarningEvent(pluginId,
                     "插件同时出现在启用与禁用名单中，按禁用处理"));
+        }
+        for (String warning : merged.getPermission().warnings()) {
+            eventPublisher.publish(new ConfigWarningEvent("permission", warning));
         }
     }
 

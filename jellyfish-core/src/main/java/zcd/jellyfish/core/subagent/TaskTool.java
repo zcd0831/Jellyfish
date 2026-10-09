@@ -11,6 +11,7 @@ import zcd.jellyfish.core.ReActListener;
 
 import javax.inject.Inject;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -103,9 +104,14 @@ public final class TaskTool implements ExtensionHandler<ToolCallRequest, ToolCal
         Map<String, Object> arguments = request.getArguments();
         String agentId = text(arguments.get(ARG_SUBAGENT_TYPE));
         if (StringUtils.isBlank(agentId)) {
-            // 参数缺失是 schema 层面的问题，说清楚缺哪个即可；类型写错时由委派器给出可用清单
+            // 参数缺失是 schema 层面的问题，说清楚缺哪个即可；类型写错时由委派器给出可用清单。
+            // 但它是「这次工具没跑」而不是「跑完了什么都没做」——不补 terminal，界面会按缺省
+            // （正常跑完）渲染，于是模型与用户都看不到该有的警示标记
+            Map<String, Object> metadata = new LinkedHashMap<String, Object>();
+            metadata.put(ToolMetadata.KEY_TERMINAL, ToolMetadata.TERMINAL_REJECTED);
             return new ToolCallResult(NAME, "[子代理未开始] 缺少参数 subagent_type，"
-                    + "请指定一个可委派的子代理类型（见系统提示中的可委派类型列表）。");
+                    + "请指定一个可委派的子代理类型（见系统提示中的可委派类型列表）。",
+                    Collections.unmodifiableMap(metadata));
         }
         ToolOutputSink sink = request.getOutputSink();
         announce(sink, agentId, text(arguments.get(ARG_DESCRIPTION)));

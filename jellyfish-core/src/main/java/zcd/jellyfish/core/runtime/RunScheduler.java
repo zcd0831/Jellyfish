@@ -290,9 +290,14 @@ public final class RunScheduler implements AutoCloseable {
             return null;
         }
         return watchdog.schedule(() -> {
-            LOG.warn("子代理触达墙钟上限，取消: runId={} timeoutMillis={}", runId, runTimeoutMillis);
-            handle.markTimedOut();
-            handle.cancel();
+            if (handle.markTimedOut()) {
+                LOG.warn("子代理触达墙钟上限，取消: runId={} timeoutMillis={}", runId, runTimeoutMillis);
+                handle.cancel();
+            } else {
+                // 看门狗排在墙钟到点的那一刻才被调度到，而 run 恰好已经跑完收尾了。
+                // 不取消、也不改标：它没被墙钟打断，把完整结果说成「截断」会让模型去调配置
+                LOG.debug("看门狗晚到，run 已经跑完，超时标记不生效: runId={}", runId);
+            }
         }, runTimeoutMillis, TimeUnit.MILLISECONDS);
     }
 
@@ -341,6 +346,9 @@ public final class RunScheduler implements AutoCloseable {
             LOG.warn("agent run 执行体抛错: runId={}", runId, e);
             result = AgentRunResult.failed(messageOf(e));
         } finally {
+            // 第一件事就是宣告「执行体已经返回」：从这一刻起，看门狗再触发也不再算超时
+            // （它的判据是「run 还在跑吗」，而不是「定时器有没有响过」）
+            handle.markBodyFinished();
             contexts.close();
             permit.suspend();
             cancelTimeout(timeout);
@@ -350,7 +358,9 @@ public final class RunScheduler implements AutoCloseable {
         }
         AgentRunResult terminal = normalize(result);
         if (handle.isTimedOut()) {
-            // 看门狗先取消、执行体随之以 CANCELLED 收敛；这里把它如实改标为「截断」
+            // 看门狗先取消、执行体随之以 CANCELLED 收敛；这里把它如实改标为「截断」。
+            // 标记只在「run 还没跑完」时打得进来（见 AgentRunHandle#markBodyFinished），
+            // 因此一个正常跑完的 run 不会因为看门狗晚到而被说成截断
             terminal = terminal.asTruncated("已达到单个子代理的墙钟上限（" + runTimeoutMillis
                     + " ms）：如需继续请调大 subAgent.runTimeoutMillis。");
         }

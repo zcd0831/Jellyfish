@@ -7,6 +7,7 @@ import zcd.jellyfish.infra.support.CancellationTokenSource;
 
 import java.util.UUID;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
@@ -131,6 +132,11 @@ final class ReActTurnImpl implements ReActTurn, CancellationToken {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new JellyfishException("react turn interrupted: " + turnId, e);
+        } catch (CancellationException e) {
+            // get() 抛它的成因只有一个：任务被取消、或从未开跑就被执行器丢弃（内核关闭时
+            // ReActLooper 对 react 池调 shutdownNow，排队中的回合从此不会有人来跑）。
+            // 那时回合不会有结果，而等它的调用方只认「结果」或 JellyfishException 两种返回方式
+            throw new JellyfishException("react turn was discarded before it started: " + turnId, e);
         } catch (ExecutionException e) {
             Throwable cause = e.getCause();
             if (cause instanceof JellyfishException) {

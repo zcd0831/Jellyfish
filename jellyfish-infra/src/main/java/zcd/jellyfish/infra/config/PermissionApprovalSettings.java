@@ -3,6 +3,9 @@ package zcd.jellyfish.infra.config;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * {@code jellyfish.json} 的 {@code permission} 段：权限判定里「需要人工审批」分支的运行期参数。
  * <p>
@@ -24,8 +27,24 @@ public class PermissionApprovalSettings {
     /** 审批等待超时缺省秒数。 */
     public static final int DEFAULT_APPROVAL_TIMEOUT_SECONDS = 120;
 
+    /**
+     * 超过这个秒数就告警（但不拒绝）。
+     * <p>
+     * 审批请求是在 {@code react} 线程上同步等待的，写下一个远超「人看清一次工具调用」所需的
+     * 秒数（一个笔误的 {@code 99999}）会让那条线程挂很久，而原先这件事完全无声。
+     */
+    public static final int WARN_ABOVE_TIMEOUT_SECONDS = 3600;
+
     /** 审批等待超时秒数。 */
     private final int approvalTimeoutSeconds;
+
+    /**
+     * 配置里实际写下的值；未配置时为 {@code null}。
+     * <p>
+     * <b>为什么把它留下</b>：构造器把非法值静默换成缺省值（见类注释），换完之后「用户写过什么」
+     * 就再也看不出来了。留下原始值，才能把「写错了」这件事如实报出来（见 {@link #warnings()}）。
+     */
+    private final Integer configuredTimeoutSeconds;
 
     /**
      * 构造缺省审批设置。
@@ -41,17 +60,41 @@ public class PermissionApprovalSettings {
      */
     @JsonCreator
     public PermissionApprovalSettings(@JsonProperty("approvalTimeoutSeconds") Integer approvalTimeoutSeconds) {
+        this.configuredTimeoutSeconds = approvalTimeoutSeconds;
         this.approvalTimeoutSeconds = approvalTimeoutSeconds != null && approvalTimeoutSeconds > 0
                 ? approvalTimeoutSeconds : DEFAULT_APPROVAL_TIMEOUT_SECONDS;
     }
 
     /**
-     * 获取审批等待超时秒数。
+     * 取审批等待超时秒数。
      *
      * @return 超时秒数，保证为正
      */
     public int getApprovalTimeoutSeconds() {
         return approvalTimeoutSeconds;
+    }
+
+    /**
+     * 汇报「配置里写的值被改过」这件事，没有时返回空列表。
+     * <p>
+     * 只报事实（写了什么、生效的是什么、为什么），不替用户改判——回退本身是本仓库的既定口径
+     * （配置问题不阻断启动），这里补的只是「让它可见」。
+     *
+     * @return 告警文本列表，没有问题时为空
+     */
+    public List<String> warnings() {
+        List<String> warnings = new ArrayList<String>();
+        if (configuredTimeoutSeconds != null && configuredTimeoutSeconds <= 0) {
+            warnings.add("approvalTimeoutSeconds=" + configuredTimeoutSeconds
+                    + " 不是合法值（必须为正），已按缺省 " + DEFAULT_APPROVAL_TIMEOUT_SECONDS + " 秒生效。"
+                    + "注意这不是「立即拒绝」：审批闸门会等满 " + DEFAULT_APPROVAL_TIMEOUT_SECONDS
+                    + " 秒，期间人工批准仍然生效");
+        } else if (approvalTimeoutSeconds > WARN_ABOVE_TIMEOUT_SECONDS) {
+            warnings.add("approvalTimeoutSeconds=" + approvalTimeoutSeconds + " 超过 "
+                    + WARN_ABOVE_TIMEOUT_SECONDS + " 秒：审批请求在 react 线程上同步等待，"
+                    + "这么大的值会让它挂很久（写错了？）");
+        }
+        return warnings;
     }
 
     /**

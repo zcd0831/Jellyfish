@@ -519,14 +519,19 @@ public final class LlmTransportRequest {
         }
 
         /**
-         * 批量追加消息，{@code null} 会被忽略。
+         * 批量追加消息，{@code null} 元素与 {@code null} 列表都会被忽略。
+         * <p>
+         * 与单条入口同一口径：两个入口对同一个 {@code null} 给出不同语义只会让人误判，
+         * 而带下去的那个 {@code null} 在下游是硬 NPE，不是「跳过这一条」。
          *
          * @param messages 对话消息列表
          * @return 当前构建器
          */
         public Builder messages(List<LlmTransportMessage> messages) {
             if (messages != null) {
-                this.messages.addAll(messages);
+                for (LlmTransportMessage message : messages) {
+                    message(message);
+                }
             }
             return this;
         }

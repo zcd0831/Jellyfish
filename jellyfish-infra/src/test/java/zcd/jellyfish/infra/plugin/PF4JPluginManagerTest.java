@@ -27,6 +27,7 @@ import zcd.jellyfish.infra.metrics.MetricsRegistry;
 import zcd.jellyfish.infra.shell.ShellIngress;
 
 import java.io.IOException;
+import java.lang.reflect.Modifier;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -265,6 +266,35 @@ class PF4JPluginManagerTest {
     }
 
     @Test
+    void bootstrap_should_be_rejected_after_close() throws IOException {
+        // Given
+        writePlugin("sample", RecordingPlugin.class.getName(), "");
+        PF4JPluginManager manager = newManager(null, null);
+        manager.bootstrap();
+        manager.close();
+
+        // When / Then：关停之后再启动会造出第二套插件类加载器，而前一套正在卸载
+        assertThrows(JellyfishException.class, manager::bootstrap);
+        // 关停之后的重载一律空跑——那一刻在即将卸载的类加载器上启停插件，只会留下
+        // 「插件已经卸了、工具还能调」的幽灵注册
+        assertTrue(manager.reload(Collections.singleton("sample")).isEmpty());
+        assertNull(manager.stateOf("sample"));
+    }
+
+    @Test
+    void close_should_share_the_lock_with_reload() throws Exception {
+        // 「关停期并发 /reload 在将关闭的类加载器上启动插件」这个窗口没有便宜的注入口
+        // （需要在插件的 stop() 里停住、再让关停抢进来），因此这里钉住排除它的结构事实：
+        // 两个方法共用同一把锁（另有「关停立旗」一条，见上一个用例）
+        assertTrue(Modifier.isSynchronized(
+                        PF4JPluginManager.class.getDeclaredMethod("close").getModifiers()),
+                "close 必须与 reload 共用同一把锁");
+        assertTrue(Modifier.isSynchronized(
+                        PF4JPluginManager.class.getDeclaredMethod("reload", Set.class).getModifiers()),
+                "reload 必须与 close 共用同一把锁");
+    }
+
+    @Test
     void reload_should_restart_reconfigured_plugin_with_new_configuration() throws IOException {
         // Given：插件在 start 时记录自己的配置段
         writePlugin("sample", ConfigEchoPlugin.class.getName(), "");
@@ -282,6 +312,8 @@ class PF4JPluginManagerTest {
         assertTrue(RECORDED.contains("stop"), "重启应先停止旧实例");
         assertTrue(RECORDED.contains("config:v2"), "重启后的上下文必须读到新配置段");
         assertEquals(Collections.singletonList("sample"), report.getRestarted());
+        // 同一个插件不该在报告里出现两行（「重启」+「启动」）——那读起来像是又启动了一个本来没跑的插件
+        assertTrue(report.getStarted().isEmpty(), "被重启的插件不该再记一条「启动」: " + report.getStarted());
         assertEquals(PluginState.STARTED, manager.stateOf("sample"));
         // 重启后注册仍可用：旧注册已按 owner 回收，新注册已建立
         assertEquals("ok", callTool("echo").getOutput());

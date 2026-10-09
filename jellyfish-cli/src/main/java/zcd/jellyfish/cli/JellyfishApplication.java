@@ -3,6 +3,7 @@ package zcd.jellyfish.cli;
 import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.cli.console.ConsoleIO;
 import zcd.jellyfish.cli.console.SystemConsoleIO;
+import zcd.jellyfish.di.ConfigModule;
 import zcd.jellyfish.di.DaggerJellyfishComponent;
 
 /**
@@ -85,7 +86,10 @@ public final class JellyfishApplication {
             return ExitCodes.OK;
         }
         try {
-            return new Launcher(DaggerJellyfishComponent.create(), console).launch(options);
+            // 配置来源由本外壳决定：CLI 用的就是最常用的那一份（classpath:config.json）
+            return new Launcher(DaggerJellyfishComponent.builder()
+                    .appConfig(ConfigModule.loadDefault())
+                    .build(), console).launch(options);
         } catch (RuntimeException e) {
             // DI 装配或组件创建失败：此刻还没有 harness 可收敛，只能报错退出
             console.writeErrLine("初始化失败：" + e.getMessage());
@@ -117,7 +121,7 @@ public final class JellyfishApplication {
      * 若启动参数要求 TUI 模式，则把日志输出目标切到文件。
      * <p>
      * <b>为什么必须在 DI 装配之前做</b>：Log4j2 在<b>第一个 Logger 被创建</b>时读取配置并固定下来，
-     * 而 {@code DaggerJellyfishComponent.create()} 之后的调用链（配置加载、插件运行时）就会创建 Logger。
+     * 而 {@code DaggerJellyfishComponent.builder()} 之后的调用链（配置加载、插件运行时）就会创建 Logger。
      * 因此设置系统属性必须发生在那之前，否则后到的设置不生效，日志继续写 stderr、继续撕坏画面。
      * <p>
      * <b>为什么不编程式操作 Appenders</b>：业务代码里出现日志框架实现类会把这些类硬绑到 Log4j2 上，

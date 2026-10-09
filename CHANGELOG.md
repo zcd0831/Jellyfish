@@ -40,6 +40,13 @@
 
 ### Changed
 
+- **`DaggerJellyfishComponent.create()` 换成了构建者**（破坏性，仅嵌入方）：`AppConfig` 不再由 `ConfigModule`
+  固定从 `classpath:config.json` 读，改为由调用方注入——
+  `DaggerJellyfishComponent.builder().appConfig(...).build()`。想要原来那份来源（classpath）时用
+  `ConfigModule.loadDefault()`。**为什么改**：手工装配侧（`JellyfishAssembler`）一直是调用方传入，
+  而 Dagger 侧固定读 classpath，「两种装法交付同一契约」这句话在**配置来源**上并不成立——
+  而配置来源是部署事实，本就该由各外壳决定（CLI 要的是 classpath，Spring 侧要的是它自己的来源）。
+  现在两侧都由调用方给，`JellyfishAssemblerTest` 里的行为等价断言也改成喂**同一份**配置。
 - **`InputDirectives.submit` / `start` 多了一个「结束通知」参数**（破坏性，仅内核内部与嵌入方）：
   `submit(sessionId, input, listener, completion)`，`completion` 在指令结束（成功 / 失败 / 取消）时
   恰好回调一次。参数**必须**在提交时给（而不是拿到句柄后再注册）——指令可能短到在你拿到句柄之前就结束，

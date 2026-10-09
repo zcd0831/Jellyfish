@@ -1,5 +1,6 @@
 package zcd.jellyfish.di;
 
+import dagger.BindsInstance;
 import dagger.Component;
 import zcd.jellyfish.core.AgentHarness;
 import zcd.jellyfish.core.conversation.ConversationService;
@@ -34,6 +35,10 @@ import javax.inject.Singleton;
  * <b>它继承 {@link JellyfishRuntime}</b>：那 21 个访问器是「装配完成后对外交付什么」的契约，
  * 与具体装法无关；本组件是 Dagger 侧的实现，{@link JellyfishAssembler} 是手工装配侧的实现。
  * 继承而非各写一份，是为了让「两边少交付一个入口」在编译期就暴露，而不是等某个外壳用到时才发现。
+ * <p>
+ * <b>{@link AppConfig} 由构建者注入，不由模块提供</b>：配置来源是部署事实，两种装法都该由调用方决定
+ * （见 {@link ConfigModule} 的类注释）。只想要最常用的那份来源（classpath）时用
+ * {@link ConfigModule#loadDefault()}。
  *
  * @author zcd
  */
@@ -42,6 +47,36 @@ import javax.inject.Singleton;
         PluginModule.class, AgentModule.class, PermissionModule.class, AskModule.class, CommandModule.class,
         MetricsModule.class})
 public interface JellyfishComponent extends JellyfishRuntime {
+
+    /**
+     * 组件构建者：把 {@link AppConfig} 作为实例绑定交给组件。
+     * <p>
+     * <b>为什么要有它</b>：此前 {@code AppConfig} 由 {@code ConfigModule} 固定从
+     * {@code classpath:config.json} 读，而手工装配侧（{@link JellyfishAssembler}）是调用方传入——
+     * 「两种装法交付同一契约」这句话在配置来源上并不成立。现在两侧都由调用方给，
+     * 差异只剩各自的调用方想给什么。
+     *
+     * @author zcd
+     */
+    @Component.Builder
+    interface Builder {
+
+        /**
+         * 绑定应用级配置（配置来源由调用方决定）。
+         *
+         * @param appConfig 应用级配置，不可为 {@code null}
+         * @return 本构建者，便于链式调用
+         */
+        @BindsInstance
+        Builder appConfig(AppConfig appConfig);
+
+        /**
+         * 构建组件。
+         *
+         * @return 组件实例，保证非 {@code null}
+         */
+        JellyfishComponent build();
+    }
 
     /**
      * 获取 LLM 客户端工厂。

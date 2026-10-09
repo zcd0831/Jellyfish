@@ -1,6 +1,7 @@
 package zcd.jellyfish.cli.mode;
 
 import org.junit.jupiter.api.Test;
+import zcd.jellyfish.di.ConfigModule;
 import zcd.jellyfish.di.DaggerJellyfishComponent;
 import zcd.jellyfish.di.JellyfishComponent;
 import zcd.jellyfish.core.AgentHarness;
@@ -42,7 +43,9 @@ class ServerEndToEndIT {
 
     @Test
     void server_should_expose_sessions_commands_health_and_stream_over_http() throws IOException {
-        JellyfishComponent component = DaggerJellyfishComponent.create();
+        JellyfishComponent component = DaggerJellyfishComponent.builder()
+                .appConfig(ConfigModule.loadDefault())
+                .build();
         AgentHarness harness = component.agentHarness();
         harness.bootstrap();
         JellyfishServer server = new JellyfishServer(ServerConfig.builder("127.0.0.1", 0).build(),
@@ -119,7 +122,9 @@ class ServerEndToEndIT {
 
     @Test
     void server_should_require_api_key_when_configured() throws IOException {
-        JellyfishComponent component = DaggerJellyfishComponent.create();
+        JellyfishComponent component = DaggerJellyfishComponent.builder()
+                .appConfig(ConfigModule.loadDefault())
+                .build();
         AgentHarness harness = component.agentHarness();
         harness.bootstrap();
         JellyfishServer server = new JellyfishServer(

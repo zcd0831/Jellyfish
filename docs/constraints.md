@@ -184,6 +184,10 @@ flowchart TB
   `config.json` / `log4j2*.xml` 归 cli）。
 - **新增依赖绑定两处都要改**：`@Module` 的每条 `@Provides` 在 `JellyfishAssembler` 里都有一行对应物，
   一致性由 `JellyfishAssemblerTest` 守。
+- **`AppConfig` 两侧都由调用方注入**，模块里没有它的 `@Provides`：配置来源是**部署事实**
+  （CLI 要 `classpath:config.json`，Spring 侧要它自己的来源），不由「用哪种装法」决定。
+  Dagger 侧走 `JellyfishComponent.Builder.appConfig(...)`，只要缺省来源时用 `ConfigModule.loadDefault()`。
+  **不要**把它改回模块提供——那会让两种装法在配置来源上重新分叉（`N-07`）。
 
 ## 扩展层与插件运行时
 
@@ -313,7 +317,7 @@ handler 抛错**按放行处理**。它只管「结束运行态、保留快照�
 | 回合内消息追加 | 只标脏，由 `ReActLooper.execute` 的 `finally` 调 `flush` 落一次；**回合收敛 = 已落盘** |
 | 恢复 `SessionRestoreRequest` | 单插件读不出只告警跳过；**必须排在 `pluginManager.bootstrap()` 之后** |
 | 延迟落盘 `flush` 失败 | 只记 WARN 并**保留脏标记**等下次重试（不得升级为回合失败） |
-| `AgentHarness.shutdown` | **必须在 `pluginManager.close()` 之前**调 `flushAll()` |
+| `AgentHarness.shutdown` | **必须在 `pluginManager.close()` 之前**调 `flushAll()`；顺序是「先静默所有写者、再兜底落盘」，因此在途 run（`RunScheduler.close()`）与在途指令（`InputDirectives.close()`）都排在那次 `flushAll()` **之前** |
 
 - 只有消息追加被挂起；命令、`recordUsage`、`applyCompaction`、`close` 仍即时落盘
   （独立线程上的自动压缩不受回合作用域影响）。

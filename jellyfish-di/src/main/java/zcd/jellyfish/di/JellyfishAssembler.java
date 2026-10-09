@@ -103,7 +103,10 @@ import java.util.concurrent.TimeUnit;
  * 而它们一旦分叉，现场表现是「配置告警发进了没人订阅的通道」这种极难排查的静默故障。
  * <p>
  * <b>与 {@link JellyfishComponent} 的关系</b>：两者是同一张图的两种装法，交付同一个
- * {@link JellyfishRuntime} 契约。{@code @Module} 里的每一条 {@code @Provides} 在这里都有一行对应物，
+ * {@link JellyfishRuntime} 契约。<b>配置来源也由各自的调用方决定</b>——本工厂的入参是
+ * {@link AppConfig}，Dagger 侧的 {@link JellyfishComponent.Builder} 同样要求调用方给一份
+ * （`N-07` 之前 Dagger 侧固定从 classpath 读，两侧在此并不等价）。
+ * {@code @Module} 里的每一条 {@code @Provides} 在这里都有一行对应物，
  * 因此内核新增绑定时<b>两处都要改</b>——这是本方案已知的代价，用
  * {@code JellyfishAssemblerTest} 的「共享实例」断言把分叉风险压到可发现。
  * <p>

@@ -53,6 +53,36 @@ class JellyfishAssemblerTest {
     }
 
     @Test
+    void both_assemblies_should_use_the_app_config_given_by_the_caller() {
+        // Given：两份可辨认的配置。**给两次不同的输入**是为了排掉「固定从某个来源读」那种实现——
+        // 它最多只能命中其中一份，而这里要求两次都命中调用方给的那一份
+        AppConfig first = appConfigNamed("jellyfish-di-test-a");
+        AppConfig second = appConfigNamed("jellyfish-di-test-b");
+
+        // When / Then：两种装法读到的都是**那一次**给的那一份（配置来源是部署事实，由调用方决定）。
+        // 这份断言钉住的正是 N-07：此前 Dagger 侧固定从 classpath 读，与手工装配侧不等价
+        assertEquals("jellyfish-di-test-a",
+                DaggerJellyfishComponent.builder().appConfig(first).build().appConfig().getProcessName());
+        assertEquals("jellyfish-di-test-b",
+                DaggerJellyfishComponent.builder().appConfig(second).build().appConfig().getProcessName());
+        assertEquals("jellyfish-di-test-a",
+                JellyfishAssembler.create(first).appConfig().getProcessName());
+        assertEquals("jellyfish-di-test-b",
+                JellyfishAssembler.create(second).appConfig().getProcessName());
+    }
+
+    /**
+     * 造一份带指定进程名的配置：进程名是这份配置的可辨认标记。
+     *
+     * @param processName 进程名
+     * @return 应用级配置，保证非 {@code null}
+     */
+    private static AppConfig appConfigNamed(String processName) {
+        return new AppConfig(processName, new ConfigPaths(), new ConfigPaths(), new ConfigPaths(),
+                new PluginPaths(null));
+    }
+
+    @Test
     void accessors_should_all_be_present_when_assembled() {
         // Given / When / Then：21 个访问器一个都不能是 null，否则外壳会在第一次用到时才发现
         forEachRuntime(assembly -> {
@@ -145,16 +175,17 @@ class JellyfishAssemblerTest {
     /**
      * 对两种装配各跑一遍同一段断言：Dagger 组件与手工装配。
      * <p>
-     * 两者的 {@link AppConfig} 不同是刻意的——Dagger 组件从 classpath 读（测试 classpath 上没有
-     * {@code config.json}，于是退化为缺省配置），手工装配则显式给一个空配置。这一点差异不影响
-     * 这里要验的装配结构。
+     * <b>两者的 {@link AppConfig} 是同一份</b>（此前刻意不同：Dagger 侧固定从 classpath 读、
+     * 手工侧由调用方给）。{@code N-07} 之后两侧都由调用方给，因此这里可以也确实应当喂同一份——
+     * 「同一段行为对两种装配各跑一遍」只有在输入也相同的时候才说明问题。
      *
      * @param assertions 针对单个装配结果的断言
      */
     private static void forEachRuntime(Consumer<JellyfishRuntime> assertions) {
+        AppConfig appConfig = emptyAppConfig();
         List<JellyfishRuntime> assemblies = new ArrayList<JellyfishRuntime>();
-        assemblies.add(DaggerJellyfishComponent.create());
-        assemblies.add(JellyfishAssembler.create(emptyAppConfig()));
+        assemblies.add(DaggerJellyfishComponent.builder().appConfig(appConfig).build());
+        assemblies.add(JellyfishAssembler.create(appConfig));
         for (JellyfishRuntime assembly : assemblies) {
             assertions.accept(assembly);
         }

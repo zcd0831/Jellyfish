@@ -249,14 +249,19 @@ class MetricsSubscriberTest {
         // Given
         subscriber.start();
         channel.start();
-        subscriber.close();
 
-        // When：退订之后再发，计数不应增长
+        // 正向对照：**先证明订阅确实生效**。没有这一步，「退订后不计数」在订阅压根
+        // 没建立时也成立——那句 assertNull 只能证明「这 100 毫秒里没发生」
+        channel.publish(command(CommandResult.Kind.OK));
+        awaitCounter(MetricNames.COMMAND_EXECUTED, 1L);
+
+        // When：退订之后再发一次
+        subscriber.close();
         channel.publish(command(CommandResult.Kind.OK));
         Thread.sleep(100L);
 
-        // Then
-        assertNull(metrics.snapshot().getCounters().get(MetricNames.COMMAND_EXECUTED));
+        // Then：计数**没有继续增长**（键还在，值仍是 1）
+        assertEquals(1L, counter(MetricNames.COMMAND_EXECUTED), "退订之后不该再计数");
     }
 
     /**

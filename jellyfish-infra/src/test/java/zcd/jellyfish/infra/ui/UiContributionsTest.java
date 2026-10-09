@@ -421,13 +421,22 @@ class UiContributionsTest {
     void close_should_stopNotifying() {
         AtomicInteger notifications = new AtomicInteger();
         contributions.onInvalidated(notifications::incrementAndGet);
-        contributions.close();
 
+        // 正向对照：先证明这条通路**能**触发。没有这一步，「关闭后没通知」在监听器
+        // 压根没接上、或者事件压根没派发时也成立——那样这条防线只是「睡了 200 毫秒」
         events.publish(new UiInvalidatedEvent());
-        // 事件通道是异步的，等一小会儿再断言「始终没通知」
+        awaitTrue(notifications, 1);
+
+        // When：关闭之后再发一次
+        contributions.close();
+        int before = notifications.get();
+        events.publish(new UiInvalidatedEvent());
+        // 事件通道是异步的，因此要给「不该来的那一次」留出到达的时间；
+        // 而上一条正向对照已经证明通路是活的，所以这个等待是在等一个**反例**
         sleep(200L);
 
-        assertEquals(0, notifications.get());
+        // Then
+        assertEquals(before, notifications.get(), "关闭之后不该再通知已建立的监听器");
     }
 
     @Test

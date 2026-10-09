@@ -3,6 +3,7 @@ package zcd.jellyfish.infra.permission;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import zcd.jellyfish.api.extension.PermissionDecision;
+import zcd.jellyfish.infra.config.PermissionApprovalSettings;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
@@ -37,6 +38,12 @@ import java.util.concurrent.TimeUnit;
  * 策略已经明确表示「这个工具要人看一眼」，审批者缺席时放行等于静默放宽权限；而拒绝的代价只是
  * 工具执行失败、可被用户察觉。这条同时也是 {@code -cli} / {@code -server} 的现状保持路径：
  * 它们不 {@code attach()}，因此行为与审批通道落地前完全一致。
+ * <p>
+ * <b>等待有上限，但可以配成「没有」</b>：超时来自 {@code permission.approvalTimeoutSeconds}，
+ * 写 {@code 0} 表示永不超时（{@link PermissionApprovalSettings}）——此时
+ * {@link #waitForever(Pending)} 一直等到有人裁决，只有通道关闭（外壳退出）与回合取消会把它放开。
+ * 它是刻意留出的口子，但它改的是 fail-closed 的形状：从「等不到人就拒绝」变成「等不到人就一直卡住」，
+ * 被占住的 {@code react} 线程因而不会自愈。
  * <p>
  * <b>为什么一次只交接一个（每个会话）</b>：审批在界面上是一个模态选择框，同屏只能显示一个。
  * 因此<b>每个会话</b>同时只有一个「当前待审批项」（读侧每帧读它），该会话其余请求按到达顺序排队；
@@ -260,15 +267,41 @@ public class ApprovalChannel {
     }
 
     /**
+     * 请求人工审批并一直等到有人裁决（配置里写了 {@code 0} 时走这条）。
+     * <p>
+     * <b>没有「超时」这条出口</b>：只有批准、拒绝、通道关闭（外壳退出）与中断（回合取消）能放开它。
+     * 也就是说没人裁决时这条线程不会自愈，而它占住的正是 fail-closed 原本要拦住的那次调用——
+     * 该口径的代价写在 {@link PermissionApprovalSettings} 的类注释里，且配 {@code 0} 会在启动时告警。
+     *
+     * @param request 审批请求，不可为 {@code null}
+     * @return 判定结果：批准为 ALLOW，其余一切情况（无审批者 / 排队满 / 通道关闭 / 中断）均为 DENY
+     */
+    public PermissionDecision waitForever(Pending request) {
+        Objects.requireNonNull(request, "request must not be null");
+        return await(request, null);
+    }
+
+    /**
      * 请求人工审批并阻塞等待结论（{@code react} 线程调用）。
      *
      * @param request 审批请求，不可为 {@code null}
-     * @param timeout 等待超时，不可为 {@code null} 且必须为正
+     * @param timeout 等待超时，不可为 {@code null} 且必须为正；非正值按 1 毫秒处理（等价于立刻超时）
      * @return 判定结果：批准为 ALLOW，其余一切情况（无审批者 / 超时 / 排队满 / 通道关闭 / 中断）均为 DENY
      */
     public PermissionDecision request(Pending request, Duration timeout) {
         Objects.requireNonNull(request, "request must not be null");
         Objects.requireNonNull(timeout, "timeout must not be null");
+        return await(request, timeout);
+    }
+
+    /**
+     * 入队并同步等待结论的内部实现。
+     *
+     * @param request 审批请求，不可为 {@code null}
+     * @param timeout 等待超时；{@code null} 表示永不超时（等到有人裁决、通道关闭或中断）
+     * @return 判定结果，保证非 {@code null}
+     */
+    private PermissionDecision await(Pending request, Duration timeout) {
         if (!attached) {
             return PermissionDecision.deny(NO_APPROVER);
         }
@@ -279,7 +312,10 @@ public class ApprovalChannel {
         }
         String unanswered = null;
         try {
-            if (!waiter.latch.await(Math.max(1L, timeout.toMillis()), TimeUnit.MILLISECONDS)) {
+            if (timeout == null) {
+                // 永不超时：等到有人裁决，或通道关闭 / 回合取消把它放开
+                waiter.latch.await();
+            } else if (!waiter.latch.await(Math.max(1L, timeout.toMillis()), TimeUnit.MILLISECONDS)) {
                 unanswered = timeoutReason(timeout);
             }
         } catch (InterruptedException e) {

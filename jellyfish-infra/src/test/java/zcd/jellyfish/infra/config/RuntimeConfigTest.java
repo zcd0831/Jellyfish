@@ -656,6 +656,98 @@ class RuntimeConfigTest {
     }
 
     @Test
+    void refresh_should_fall_back_to_global_ask_when_project_does_not_declare_it() throws IOException {
+        // Given：全局级把提问配成「永不超时」，项目级只写了别的段
+        Path global = writeFile("jellyfish-global-ask.json", "{\"ask\":{\"timeoutSeconds\":0}}");
+        Path project = writeFile("jellyfish-project-other.json",
+                "{\"permission\":{\"approvalTimeoutSeconds\":5}}");
+
+        // When
+        RuntimeConfig runtimeConfig = newRuntimeConfig(pathsTo(null, null), pathsTo(null, null),
+                pathsTo(global, project));
+
+        // Then：项目级没写这一段，全局级配的「永不超时」必须留下来——
+        // 按「取到的段是否非空」判断时它会顶成缺省 120，且不产生任何告警
+        assertTrue(runtimeConfig.getAskSettings().isInfinite());
+    }
+
+    @Test
+    void refresh_should_fall_back_to_global_permission_when_project_does_not_declare_it() throws IOException {
+        // Given
+        Path global = writeFile("jellyfish-global-permission.json",
+                "{\"permission\":{\"approvalTimeoutSeconds\":45}}");
+        Path project = writeFile("jellyfish-project-ask.json", "{\"ask\":{\"timeoutSeconds\":30}}");
+
+        // When
+        RuntimeConfig runtimeConfig = newRuntimeConfig(pathsTo(null, null), pathsTo(null, null),
+                pathsTo(global, project));
+
+        // Then
+        assertEquals(45, runtimeConfig.getPermissionApprovalSettings().getApprovalTimeoutSeconds());
+        assertEquals(30, runtimeConfig.getAskSettings().getTimeoutSeconds(),
+                "项目级写了 ask 段，这一份就该按项目级生效");
+    }
+
+    @Test
+    void refresh_should_fall_back_to_global_react_when_project_does_not_declare_it() throws IOException {
+        // Given
+        Path global = writeFile("jellyfish-global-react.json", "{\"react\":{\"maxRounds\":9}}");
+        Path project = writeFile("jellyfish-project-ask-only.json", "{\"ask\":{\"timeoutSeconds\":30}}");
+
+        // When
+        RuntimeConfig runtimeConfig = newRuntimeConfig(pathsTo(null, null), pathsTo(null, null),
+                pathsTo(global, project));
+
+        // Then：项目级没写 react 段，回退全局级（缺省是 16，因此 9 只有来自全局级才可能出现）
+        assertEquals(9, runtimeConfig.getReactSettings().getMaxRounds());
+    }
+
+    @Test
+    void refresh_should_fall_back_to_global_sub_agent_when_project_does_not_declare_it() throws IOException {
+        // Given
+        Path global = writeFile("jellyfish-global-subagent.json", "{\"subAgent\":{\"maxDepth\":3}}");
+        Path project = writeFile("jellyfish-project-ask.json", "{\"ask\":{\"timeoutSeconds\":30}}");
+
+        // When
+        RuntimeConfig runtimeConfig = newRuntimeConfig(pathsTo(null, null), pathsTo(null, null),
+                pathsTo(global, project));
+
+        // Then
+        assertEquals(3, runtimeConfig.getSubAgentSettings().getMaxDepth());
+    }
+
+    @Test
+    void refresh_should_fall_back_to_global_plugins_when_project_does_not_declare_it() throws IOException {
+        // Given：插件段的段内合并本就是逐键的，这里钉住「整段层面的未声明」不会连累它
+        Path global = writeFile("jellyfish-global-plugins.json", "{\"plugins\":{\"enabled\":[\"plugin-a\"]}}");
+        Path project = writeFile("jellyfish-project-ask.json", "{\"ask\":{\"timeoutSeconds\":30}}");
+
+        // When
+        RuntimeConfig runtimeConfig = newRuntimeConfig(pathsTo(null, null), pathsTo(null, null),
+                pathsTo(global, project));
+
+        // Then
+        assertEquals(Collections.singletonList("plugin-a"),
+                runtimeConfig.getJellyfishSettings().getPlugins().getEnabled());
+    }
+
+    @Test
+    void refresh_should_treat_empty_section_as_declared() throws IOException {
+        // Given：全局级把提问配成「永不超时」，项目级显式写了空的 ask 段
+        Path global = writeFile("jellyfish-global-ask.json", "{\"ask\":{\"timeoutSeconds\":0}}");
+        Path project = writeFile("jellyfish-project-empty-ask.json", "{\"ask\":{}}");
+
+        // When
+        RuntimeConfig runtimeConfig = newRuntimeConfig(pathsTo(null, null), pathsTo(null, null),
+                pathsTo(global, project));
+
+        // Then：写了这一段就是声明，整段覆盖（哪怕内容全是缺省值）——这是不逐字段合并的必然结果，
+        // 也是把「没写」与「写了空对象」分开判定的意义所在
+        assertEquals(AskSettings.DEFAULT_TIMEOUT_SECONDS,
+                runtimeConfig.getAskSettings().getTimeoutSeconds());
+    }
+
+    @Test
     void refresh_should_merge_sub_agent_with_project_override() throws IOException {
         // Given：项目级只配了 maxDepth，其余字段应按缺省而不是按全局级（整对象覆盖）
         Path global = writeFile("jellyfish-global.json",
@@ -716,9 +808,33 @@ class RuntimeConfigTest {
     }
 
     @Test
-    void refresh_should_warn_when_approval_timeout_is_not_positive() throws IOException {
-        // Given：写 0 的本意是「立即拒绝」，而实现会把它换成「等 120 秒、期间人工批准仍然生效」
+    void refresh_should_warn_when_approval_timeout_is_negative() throws IOException {
+        // Given：负数不是合法值，会被换成缺省 120 秒——而用户可能以为它立刻生效或立刻拒绝
         Path jellyfish = writeFile("jellyfish-permission.json",
+                "{\"permission\":{\"approvalTimeoutSeconds\":-1}}");
+        RecordingPublisher publisher = new RecordingPublisher();
+        when(appConfig.getModel()).thenReturn(pathsTo(null, null));
+        when(appConfig.getAgent()).thenReturn(pathsTo(null, null));
+        when(appConfig.getJellyfish()).thenReturn(pathsTo(jellyfish, null));
+
+        // When
+        RuntimeConfig runtimeConfig = runtimeConfigOf(
+                new ConfigLoader(new SettingsReader(), new SettingsBinder()), publisher);
+        runtimeConfig.refresh();
+
+        // Then：生效的值与告警都要如实
+        assertEquals(PermissionApprovalSettings.DEFAULT_APPROVAL_TIMEOUT_SECONDS,
+                runtimeConfig.getPermissionApprovalSettings().getApprovalTimeoutSeconds());
+        assertTrue(publisher.warnings().stream().anyMatch(warning ->
+                "permission".equals(warning.getSource())
+                        && warning.getMessage().contains("approvalTimeoutSeconds=-1")),
+                publisher.warnings().toString());
+    }
+
+    @Test
+    void refresh_should_keep_zero_approval_timeout_and_warn_about_never_timeout() throws IOException {
+        // Given：0 表示永不超时（不是非法值），因此它必须生效，但代价要让人看见
+        Path jellyfish = writeFile("jellyfish-permission-forever.json",
                 "{\"permission\":{\"approvalTimeoutSeconds\":0}}");
         RecordingPublisher publisher = new RecordingPublisher();
         when(appConfig.getModel()).thenReturn(pathsTo(null, null));
@@ -730,12 +846,60 @@ class RuntimeConfigTest {
                 new ConfigLoader(new SettingsReader(), new SettingsBinder()), publisher);
         runtimeConfig.refresh();
 
-        // Then：生效的值与告警都要如实——入口是「填错了，闸门被悄悄放宽」而不是「什么都没发生」
-        assertEquals(PermissionApprovalSettings.DEFAULT_APPROVAL_TIMEOUT_SECONDS,
-                runtimeConfig.getPermissionApprovalSettings().getApprovalTimeoutSeconds());
+        // Then：值照用户写的生效，同时有一条来源为 permission 的告警说清后果
+        assertTrue(runtimeConfig.getPermissionApprovalSettings().isInfinite());
         assertTrue(publisher.warnings().stream().anyMatch(warning ->
                 "permission".equals(warning.getSource())
-                        && warning.getMessage().contains("approvalTimeoutSeconds=0")));
+                        && warning.getMessage().contains("approvalTimeoutSeconds=0")
+                        && warning.getMessage().contains("永不超时")),
+                publisher.warnings().toString());
+    }
+
+    @Test
+    void refresh_should_keep_zero_ask_timeout_and_warn_about_never_timeout() throws IOException {
+        // Given：提问侧同口径——0 表示永不超时，且此前它会被静默换成 120 秒
+        Path jellyfish = writeFile("jellyfish-ask-forever.json",
+                "{\"ask\":{\"timeoutSeconds\":0}}");
+        RecordingPublisher publisher = new RecordingPublisher();
+        when(appConfig.getModel()).thenReturn(pathsTo(null, null));
+        when(appConfig.getAgent()).thenReturn(pathsTo(null, null));
+        when(appConfig.getJellyfish()).thenReturn(pathsTo(jellyfish, null));
+
+        // When
+        RuntimeConfig runtimeConfig = runtimeConfigOf(
+                new ConfigLoader(new SettingsReader(), new SettingsBinder()), publisher);
+        runtimeConfig.refresh();
+
+        // Then
+        assertTrue(runtimeConfig.getAskSettings().isInfinite());
+        assertTrue(publisher.warnings().stream().anyMatch(warning ->
+                "ask".equals(warning.getSource())
+                        && warning.getMessage().contains("timeoutSeconds=0")
+                        && warning.getMessage().contains("永不超时")),
+                publisher.warnings().toString());
+    }
+
+    @Test
+    void refresh_should_warn_when_ask_timeout_is_negative() throws IOException {
+        // Given：提问侧的负数同样是写错了，回退缺省并报出
+        Path jellyfish = writeFile("jellyfish-ask-negative.json",
+                "{\"ask\":{\"timeoutSeconds\":-5}}");
+        RecordingPublisher publisher = new RecordingPublisher();
+        when(appConfig.getModel()).thenReturn(pathsTo(null, null));
+        when(appConfig.getAgent()).thenReturn(pathsTo(null, null));
+        when(appConfig.getJellyfish()).thenReturn(pathsTo(jellyfish, null));
+
+        // When
+        RuntimeConfig runtimeConfig = runtimeConfigOf(
+                new ConfigLoader(new SettingsReader(), new SettingsBinder()), publisher);
+        runtimeConfig.refresh();
+
+        // Then
+        assertEquals(AskSettings.DEFAULT_TIMEOUT_SECONDS, runtimeConfig.getAskSettings().getTimeoutSeconds());
+        assertTrue(publisher.warnings().stream().anyMatch(warning ->
+                "ask".equals(warning.getSource())
+                        && warning.getMessage().contains("timeoutSeconds=-5")),
+                publisher.warnings().toString());
     }
 
     @Test

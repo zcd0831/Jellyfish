@@ -40,6 +40,17 @@
 
 ### Changed
 
+- **审批与提问的等待超时可以把「超时」这一档关掉**：`permission.approvalTimeoutSeconds` /
+  `ask.timeoutSeconds` 写 `0` 表示**永不超时**（一直等到有人裁决 / 作答），不配仍是 120 秒。
+  **此前的 `0` 与负数一律被静默换成 120 秒**，于是「想让审批多等一会儿」只能写一个大数
+  （超过 3600 秒会给告警），而那个大数终究会到点。现在两条出口语义分开：**`0` = 无限**，
+  **负数 = 非法**（回退 120 秒并告警）。两处都走 `ConfigWarningEvent`（来源 `permission` / `ask`）：
+  `0` 报一条说明代价，负数报一条说明「写了什么、按什么生效」——原先负数告警只说「非正数」，
+  与「我其实想写 100」这件事对不上。提问侧的非法值此前**完全没有告警**（`AskSettings` 没有
+  `warnings()`，事件面也没收它），现在与权限侧同口径。
+  **代价要明知**：审批是 fail-closed，配 `0` 把它从「等不到人就拒绝」变成「等不到人就一直卡住」；
+  两处等待都发生在 `react` 线程上，而那个池只有 8 条线程（= 并发顶层回合上限），
+  占住的那条不会自愈——外壳退出（通道关闭）与回合被取消仍会放开。
 - **jline 从 3.25.1 升到 3.30.17（`jdk8` 分类器）**（安全，依赖）：3.25.1 落在 jline 那几件 ReDoS 公告的
   受影响区间里（`<3.30.15`：`HISTORY_IGNORE` 的 `CVE-2026-77420`、`less` 视图与内置 `grep` 的
   `CVE-2026-77423`）。jline 是从 `dev.tamboui:tamboui-jline3-backend` 传递进来的，因此 `jellyfish-tui`
@@ -143,6 +154,18 @@
 
 ### Fixed
 
+- **项目级配置里没写的段不再把全局级的同名段顶成缺省值**：`jellyfish.json` 的 `react` / `permission` /
+  `subAgent` / `ask` 四段是「项目级整对象覆盖全局级」，而合并层的那句 `project != null ? project : global`
+  实际永远走左支——`JellyfishSettings` 把没写的段填成了缺省对象，于是「项目级没写这一段」被当成
+  「写了、只是内容全是缺省值」。后果是：只要项目级配置被加载（`--trust-project-config`、TUI 里信任过，
+  或 Spring 侧用 `classpath:` 指定，后者不受信任闸管辖），一份只写了别的段的文件就会让全局级配好的
+  整段静默失效——例如全局级的 `ask.timeoutSeconds=0`（永不超时）回到 120、`react.maxRounds=9` 回到 16——
+  而且**不产生任何告警**，用户只看得到「我配了却没生效」。现在按段级声明标记判定
+  （`JellyfishSettings.isPluginsDeclared()` / `isReactDeclared()` / `isPermissionDeclared()` /
+  `isSubAgentDeclared()` / `isAskDeclared()`），「没写就整段回退全局级」这句注释终于成立。
+  **「不逐字段合并」这条语义一个字没变**：项目级写了这一段（哪怕写成空对象 `"ask": {}`）就整段覆盖，
+  段内不与全局级混合。判据是「JSON 里有没有这个键」，而不是「值是否等于缺省」——
+  后者会把 `"ask": {"timeoutSeconds": -1}`（非法值回退成缺省）误判成「没写」。
 - **异常补上 `serialVersionUID`（七处）**：`CompactionUnavailableException`、`TurnInProgressException`、
   `ApiException`，以及插件侧的 `ScriptCallException` / `ScriptTimeoutException` / `ScriptCancelledException` /
   `ScriptConnectionException` / `ScriptNotHandledException`。**这不是修了一个能触发的故障**——核对过：

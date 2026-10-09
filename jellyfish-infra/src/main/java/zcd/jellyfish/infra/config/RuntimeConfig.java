@@ -506,6 +506,11 @@ public class RuntimeConfig {
 
     /**
      * 合并全局级与项目级运行期设置，产出不可变结果。
+     * <p>
+     * 五个段一律「项目级<b>写了这一段</b>才覆盖，没写就整段回退全局级」：判据是
+     * {@link JellyfishSettings#isPluginsDeclared()} 这类声明标记，而不是「取到的段非空」——
+     * 后者永远成立（构造器会把缺失的段填成缺省对象），于是「项目级没写这一段」会被当成
+     * 「写了、内容全是缺省值」，把全局级配好的整段静默顶掉。
      *
      * @param global  全局级配置，可为 {@code null}
      * @param project 项目级配置，可为 {@code null}
@@ -521,13 +526,16 @@ public class RuntimeConfig {
     }
 
     /**
-     * 取一份运行期设置里的提问段，缺省时返回 {@code null}，交给合并函数按缺省处理。
+     * 取一份运行期设置里的提问段。
+     * <p>
+     * <b>没写这一段时返回 {@code null}</b>：口径与 {@link #reactOf(JellyfishSettings)} 相同，
+     * 判据是 {@link JellyfishSettings#isAskDeclared()}。
      *
      * @param settings 运行期设置，可为 {@code null}
-     * @return 提问段，未配置时为 {@code null}
+     * @return 提问段；该份文件未配置这一段时为 {@code null}
      */
     private static AskSettings askOf(JellyfishSettings settings) {
-        return settings == null ? null : settings.getAsk();
+        return settings != null && settings.isAskDeclared() ? settings.getAsk() : null;
     }
 
     /**
@@ -545,13 +553,16 @@ public class RuntimeConfig {
     }
 
     /**
-     * 取一份运行期设置里的子代理段，缺省时返回 {@code null}，交给合并函数按缺省处理。
+     * 取一份运行期设置里的子代理段。
+     * <p>
+     * <b>没写这一段时返回 {@code null}</b>：口径与 {@link #reactOf(JellyfishSettings)} 相同，
+     * 判据是 {@link JellyfishSettings#isSubAgentDeclared()}。
      *
      * @param settings 运行期设置，可为 {@code null}
-     * @return 子代理段，未配置时为 {@code null}
+     * @return 子代理段；该份文件未配置这一段时为 {@code null}
      */
     private static SubAgentSettings subAgentOf(JellyfishSettings settings) {
-        return settings == null ? null : settings.getSubAgent();
+        return settings != null && settings.isSubAgentDeclared() ? settings.getSubAgent() : null;
     }
 
     /**
@@ -571,13 +582,16 @@ public class RuntimeConfig {
     }
 
     /**
-     * 取一份运行期设置里的权限段，缺省时返回 {@code null}，交给合并函数按缺省处理。
+     * 取一份运行期设置里的权限段。
+     * <p>
+     * <b>没写这一段时返回 {@code null}</b>：口径与 {@link #reactOf(JellyfishSettings)} 相同，
+     * 判据是 {@link JellyfishSettings#isPermissionDeclared()}。
      *
      * @param settings 运行期设置，可为 {@code null}
-     * @return 权限段，未配置时为 {@code null}
+     * @return 权限段；该份文件未配置这一段时为 {@code null}
      */
     private static PermissionApprovalSettings permissionOf(JellyfishSettings settings) {
-        return settings == null ? null : settings.getPermission();
+        return settings != null && settings.isPermissionDeclared() ? settings.getPermission() : null;
     }
 
     /**
@@ -596,13 +610,18 @@ public class RuntimeConfig {
     }
 
     /**
-     * 取一份运行期设置里的 ReAct 段，缺省时返回 {@code null}，交给合并函数按缺省处理。
+     * 取一份运行期设置里的 ReAct 段。
+     * <p>
+     * <b>没写这一段时返回 {@code null}</b>：{@code react} / {@code permission} / {@code subAgent}
+     * / {@code ask} 四段是「整对象」覆盖，因此必须把「项目级没写这一段」与「写了、只是内容恰好
+     * 与缺省值相同」分开——否则一份只写了别的段的项目级文件会把全局级的这一整段顶成缺省值，
+     * 而用户看不出任何痕迹。判据是 {@link JellyfishSettings#isReactDeclared()}。
      *
      * @param settings 运行期设置，可为 {@code null}
-     * @return ReAct 段，未配置时为 {@code null}
+     * @return ReAct 段；该份文件未配置这一段时为 {@code null}
      */
     private static ReactSettings reactOf(JellyfishSettings settings) {
-        return settings == null ? null : settings.getReact();
+        return settings != null && settings.isReactDeclared() ? settings.getReact() : null;
     }
 
     /**
@@ -621,13 +640,17 @@ public class RuntimeConfig {
     }
 
     /**
-     * 取一份运行期设置里的插件段，缺省时返回 {@code null}，交给合并函数按空处理。
+     * 取一份运行期设置里的插件段。
+     * <p>
+     * <b>没写这一段时返回 {@code null}</b>：口径与 {@link #reactOf(JellyfishSettings)} 相同，
+     * 判据是 {@link JellyfishSettings#isPluginsDeclared()}。段内的名单与各插件配置段另有各自的
+     * 声明判定（见 {@link PluginsSettings}），那一级不受本方法影响。
      *
      * @param settings 运行期设置，可为 {@code null}
-     * @return 插件段，未配置时为 {@code null}
+     * @return 插件段；该份文件未配置这一段时为 {@code null}
      */
     private static PluginsSettings pluginsOf(JellyfishSettings settings) {
-        return settings == null ? null : settings.getPlugins();
+        return settings != null && settings.isPluginsDeclared() ? settings.getPlugins() : null;
     }
 
     /**
@@ -778,11 +801,12 @@ public class RuntimeConfig {
      * 对合并后的运行期设置做一致性告警。
      * <p>
      * 查两处真实歧义：同一个 pluginId 同时出现在启用与禁用名单里（此时按既有语义「禁用优先」
-     * 处理是对的，但用户多半写错了）；以及权限段的审批超时被静默改过值——{@code 0} 的本意是
-     * 「立即拒绝」，而它会被换成「等 120 秒，期间人工批准仍然生效」，那是把审批闸门悄悄放宽了。
+     * 处理是对的，但用户多半写错了）；以及权限段与提问段的等待超时被写成负数——那是非法值，
+     * 会被换成缺省 120 秒，而「我以为它立刻生效 / 立刻拒绝」与「它其实等了 120 秒」在外表上一样。
      * <p>
-     * <b>数值项写错也在这条通道上</b>：{@code react} 段（含 {@code react.toolOutput}）把每一次
-     * 「非法值回退缺省」记在 {@code warnings()} 里，由这里逐条发出去。它们此前要么只写日志
+     * <b>数值项写错也在这条通道上</b>：{@code react} 段（含 {@code react.toolOutput}）、
+     * {@code permission} 段与 {@code ask} 段把每一次「非法值回退缺省」、以及「刻意配成永不超时」
+     * 都记在 {@code warnings()} 里，由这里逐条发出去。它们此前要么只写日志
      * （TUI 下日志只进文件），要么什么都不说——用户调了半天配置没生效，其实是那个值一开始
      * 就被判非法了。事件面是配置问题的<b>唯一出口</b>：设置类不该各自长出一条发布路径。
      *
@@ -798,6 +822,9 @@ public class RuntimeConfig {
         }
         for (String warning : merged.getPermission().warnings()) {
             eventPublisher.publish(new ConfigWarningEvent("permission", warning));
+        }
+        for (String warning : merged.getAsk().warnings()) {
+            eventPublisher.publish(new ConfigWarningEvent("ask", warning));
         }
         for (String warning : merged.getReact().warnings()) {
             eventPublisher.publish(new ConfigWarningEvent("react", warning));

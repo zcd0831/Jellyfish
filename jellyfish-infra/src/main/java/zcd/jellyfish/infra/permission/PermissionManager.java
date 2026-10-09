@@ -29,7 +29,8 @@ import java.util.function.Predicate;
  *     （{@code DENY > ASK > ABSTAIN}），遇 {@code DENY} 短路；<b>插件抛错或不给裁定按 {@code DENY}
  *     处理</b>（fail-closed，理由见 {@code intercept}）；</li>
  *     <li><b>ASK 处理</b>：经 {@link ApprovalChannel} 向审批者提问，无审批者 / 超时 / 异常一律拒绝，
- *     绝不静默放行。</li>
+ *     绝不静默放行。<b>等待上限可配</b>：{@code permission.approvalTimeoutSeconds} 写 {@code 0}
+ *     表示永不超时（此时只剩「有人裁决 / 通道关闭 / 回合取消」三条出口，见 {@code ApprovalChannel}）。</li>
  * </ol>
  * 无论结果如何都会发一条 {@link PermissionDecidedEvent} 供可观测性使用（放行也发），
  * 但事件只是观察者，改不了判定结果。
@@ -230,6 +231,9 @@ public class PermissionManager {
      * 让审计既能看到真实意图、又能看到实际行为。
      * <p>
      * 超时每轮现读：配置刷新后不必重启，与「不持有全局当前态」同口径。
+     * <b>配置里写 {@code 0} 表示永不超时</b>（见 {@link PermissionApprovalSettings}）：此时
+     * 交给审批通道的等待不再有上限，只有有人裁决、通道关闭（外壳退出）或回合取消能放开它。
+     * 这条口子由配置显式要求，因此这里不再替它兜一层超时。
      *
      * @param request  权限检查请求
      * @param decision 策略给出的 ASK 判定
@@ -237,11 +241,12 @@ public class PermissionManager {
      */
     private PermissionDecision resolveApproval(PermissionCheckRequest request, PermissionDecision decision) {
         PermissionApprovalSettings settings = runtimeConfig.getPermissionApprovalSettings();
-        Duration timeout = Duration.ofSeconds(settings.getApprovalTimeoutSeconds());
         ApprovalChannel.Pending pending = new ApprovalChannel.Pending(request.getSessionId(),
                 request.getAgentId(), request.getToolName(), request.getArguments(),
                 decision.getReason());
-        PermissionDecision verdict = approvals.request(pending, timeout);
+        // 0 是「永不超时」而不是「零秒超时」，因此必须先看 isInfinite 再取值
+        PermissionDecision verdict = settings.isInfinite() ? approvals.waitForever(pending)
+                : approvals.request(pending, Duration.ofSeconds(settings.getApprovalTimeoutSeconds()));
         String reason = reasonOf(decision) + "；" + reasonOf(verdict);
         return verdict.isAllowed() ? PermissionDecision.allow(reason) : PermissionDecision.deny(reason);
     }

@@ -63,7 +63,8 @@ import java.util.concurrent.Semaphore;
  * <p>
  * <b>审批</b>：空闲 tick 时检查审批头槽位，把属于本会话的那一条以 {@code approval_required} 推给客户端；
  * 槽位消失时推一次 {@code approval_resolved}。断连时主动拒绝仍待审的那条，否则 react 线程会一直
- * 阻塞到审批超时（缺省 120 秒）。
+ * 阻塞到审批超时（缺省 120 秒）；把 {@code permission.approvalTimeoutSeconds} 配成 {@code 0}
+ * （永不超时）时，这条主动拒绝就是它唯一的出口。
  * <p>
  * 无状态（只持有协作者与一个信号量），可安全跨线程调用。
  *

@@ -5,6 +5,7 @@ import org.slf4j.LoggerFactory;
 import zcd.jellyfish.api.ask.AskAnswer;
 import zcd.jellyfish.api.ask.AskPort;
 import zcd.jellyfish.api.ask.AskRequest;
+import zcd.jellyfish.infra.config.AskSettings;
 import zcd.jellyfish.infra.config.RuntimeConfig;
 
 import javax.inject.Inject;
@@ -41,6 +42,11 @@ import java.util.concurrent.TimeUnit;
  * {@link AskAnswer.Status#UNAVAILABLE}，而不是「拒绝」——提问不涉及权限，拿不到答案不等于
  * 哪次调用被禁止。这条差异是刻意的：审批者缺席时放行等于静默放宽权限，而提问缺席时
  * 让模型照自己的判断继续，代价只是它可能猜错并说出来。
+ * <p>
+ * <b>等待有上限，但可以配成「没有」</b>：超时来自 {@code ask.timeoutSeconds}，写 {@code 0} 表示
+ * 永不超时（{@link AskSettings}）——此时 {@link #waitForever(AskRequest)} 一直等到有人作答，
+ * 只有通道关闭（外壳退出）与回合取消会把它放开。它是刻意留给人「离开一会儿再回来」的口子，
+ * 代价是那条 {@code react} 线程不会自愈。
  * <p>
  * <b>为什么一次只交接一个（每个会话）</b>：提问在界面上是一个模态选择框，同屏只能显示一个。
  * 因此<b>每个会话</b>同时只有一个「当前待答问题」（读侧每帧读它），该会话其余提问按到达顺序排队；
@@ -151,20 +157,50 @@ public class AskChannel implements AskPort {
     public AskAnswer ask(AskRequest request) {
         Objects.requireNonNull(request, "request must not be null");
         // 超时现读而不是构造时缓存：与审批超时同口径，改配置后无需重启即可生效
-        return request(request, Duration.ofSeconds(runtimeConfig.getAskSettings().getTimeoutSeconds()));
+        AskSettings settings = runtimeConfig.getAskSettings();
+        // 0 是「永不超时」而不是「零秒超时」，因此必须先看 isInfinite 再取值
+        return settings.isInfinite() ? waitForever(request)
+                : request(request, Duration.ofSeconds(settings.getTimeoutSeconds()));
+    }
+
+    /**
+     * 向用户提问并一直等到有人作答（配置里写了 {@code 0} 时走这条）。
+     * <p>
+     * <b>它只有一条出口是「有答案」之外的</b>：通道关闭（外壳退出）与等待线程被中断（回合取消）。
+     * 也就是说没人作答时这条线程不会自愈——该口径的代价写在 {@link AskSettings} 的类注释里，
+     * 且配 {@code 0} 会在启动时告警。
+     *
+     * @param request 提问请求，不可为 {@code null}
+     * @return 答复：拿到答案为 ANSWERED，其余情况（无答复者 / 排队满 / 通道关闭 / 中断）为对应终态，
+     *         绝不抛异常
+     */
+    public AskAnswer waitForever(AskRequest request) {
+        Objects.requireNonNull(request, "request must not be null");
+        return await(request, null);
     }
 
     /**
      * 向用户提问并阻塞等待答复（{@code react} 线程调用）。
      *
      * @param request 提问请求，不可为 {@code null}
-     * @param timeout 等待超时，不可为 {@code null} 且必须为正
+     * @param timeout 等待超时，不可为 {@code null} 且必须为正；非正值按 1 毫秒处理（等价于立刻超时）
      * @return 答复：拿到答案为 ANSWERED，其余一切情况（无答复者 / 超时 / 排队满 / 通道关闭 / 中断）
      *         均为对应终态，绝不抛异常
      */
     public AskAnswer request(AskRequest request, Duration timeout) {
         Objects.requireNonNull(request, "request must not be null");
         Objects.requireNonNull(timeout, "timeout must not be null");
+        return await(request, timeout);
+    }
+
+    /**
+     * 入队并同步等待答复的内部实现。
+     *
+     * @param request 提问请求，不可为 {@code null}
+     * @param timeout 等待超时；{@code null} 表示永不超时（等到有人作答、通道关闭或中断）
+     * @return 答复，保证非 {@code null}
+     */
+    private AskAnswer await(AskRequest request, Duration timeout) {
         if (!attached) {
             return AskAnswer.unavailable(NO_ASKER);
         }
@@ -176,7 +212,10 @@ public class AskChannel implements AskPort {
         }
         AskAnswer unanswered = null;
         try {
-            if (!waiter.latch.await(Math.max(1L, timeout.toMillis()), TimeUnit.MILLISECONDS)) {
+            if (timeout == null) {
+                // 永不超时：等到有人作答，或通道关闭 / 回合取消把它放开
+                waiter.latch.await();
+            } else if (!waiter.latch.await(Math.max(1L, timeout.toMillis()), TimeUnit.MILLISECONDS)) {
                 unanswered = AskAnswer.timedOut(timeoutReason(timeout));
             }
         } catch (InterruptedException e) {

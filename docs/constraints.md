@@ -386,7 +386,10 @@ handler 抛错**按放行处理**。它只管「结束运行态、保留快照�
 - 配置驱动索引在启动期建立：构造期只建空索引，`AgentHarness.bootstrap()` 里 `runtimeConfig.refresh()` 之后才装载；
   **`PluginRuntimeConfig` 必须在 `pluginManager.bootstrap()` 之前刷新**。
 - `global` / `project` 合并：同名 provider / agent / 插件配置段以 project **整对象**覆盖；
-  列表段项目级已声明则整体替换（写 `[]` 即清空）；`react` / `permission` / `subAgent` 段同口径。
+  列表段项目级已声明则整体替换（写 `[]` 即清空）；`react` / `permission` / `subAgent` / `ask` 段为
+  「**project 写了这一段才覆盖，没写就整段回退 global**」——判据是段级声明标记
+  （`JellyfishSettings.isReactDeclared()` 等），而不是「取到的段非空」：构造器会把缺失的段填成缺省对象，
+  后者永远成立，于是「没写」会被当成「写了、内容全是缺省值」而把全局级那一整段顶掉。
 - **插件能问出「我这个配置段是哪一级给的」**：`PluginContext.configScope()` 给来源层级，
   `globalConfiguration()` 给**只由全局级决定**的那一份。整对象替换意味着项目级一旦写了某个插件段，
   `configuration()` 里就是项目级那份——而有一类键（提示内联上限、加载目录范围）**只能认全局级**：
@@ -461,7 +464,11 @@ handler 抛错**按放行处理**。它只管「结束运行态、保留快照�
 ### 审批：fail-closed
 
 - **ASK 由 `ApprovalChannel` 收口，只有明确批准才放行**：**无审批者、超时、溢出、通道关闭、中断一律拒绝**。
-- 超时来自 `permission.approvalTimeoutSeconds`（缺省 120，**每轮现读**）。
+- 超时来自 `permission.approvalTimeoutSeconds`（缺省 120，**每轮现读**）；**写 `0` 表示永不超时**
+  （`ApprovalChannel.waitForever`，见 `PermissionApprovalSettings`）——那时「超时」这一条出口不再存在，
+  只剩「有人裁决 / 通道关闭 / 回合被取消」三条，因此 fail-closed 的形状从「等不到人就拒绝」变成
+  「等不到人就一直卡住」。这是配置显式要求的行为，配 `0` 会在启动时发一条 `ConfigWarningEvent`（来源 `permission`）；
+  负数按非法回退 120 并告警。
 - **`Esc` 是「拒绝 + 中断回合」**，不是只拒绝。
 - **头槽位是每会话一个**：同一会话内是「一个头槽位 + FIFO 队列 + 只对头生效 + 首次结论胜出」，
   **会话之间互不排队**。`resolve` 返回「是否真的落定了一条头槽位」，供 HTTP 层区分 404；排队中的请求裁决它等于无事发生。
@@ -506,7 +513,8 @@ handler 抛错**按放行处理**。它只管「结束运行态、保留快照�
   选项状态仍复用 `CommandChoicePicker`（`↑`/`↓`/`Enter` 的语义与窗口逻辑只写一份）。
 - 载荷是 api 侧值类型（`AskRequest` / `AskOption` / `AskAnswer` / `AskPort`），**恰好一个可见构造器 + 静态工厂**。
 - 超时来自 `ask.timeoutSeconds`（缺省 120，**每次提问现读**）；**不复用** `permission.approvalTimeoutSeconds`——
-  两者的合理等待长度不同，共用一个键会让改审批顺带改掉提问。
+  两者的合理等待长度不同，共用一个键会让改审批顺带改掉提问。**写 `0` 与审批侧同口径地表示永不超时**
+  （`AskChannel.waitForever`）：此时等待只剩「有人作答 / 通道关闭 / 回合被取消」三条出口，配 `0` 同样会告警（来源 `ask`）。
 
 ## ReAct 循环、上下文与子代理
 

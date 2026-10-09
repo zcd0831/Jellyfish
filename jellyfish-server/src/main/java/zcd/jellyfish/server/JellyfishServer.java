@@ -49,7 +49,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * 收了内核，{@code shutdown()} 也是幂等的，最坏结果只是正在流式返回的请求被中断。
  * <p>
  * <b>为什么审批者归本类挂载</b>：它必须与 HTTP 服务的存活期一致——HTTP 停了就没人能裁决，
- * 此时未决请求必须被 {@code detach()} 一次性拒绝，否则 react 线程会一直等到审批超时。
+ * 此时未决请求必须被 {@code detach()} 一次性拒绝，否则 react 线程会一直等到审批超时
+ * （{@code permission.approvalTimeoutSeconds} 配成 {@code 0} 时更是永远等不到——那时这条
+ * {@code detach()} 是唯一的收敛路径）。
  *
  * @author zcd
  */

@@ -10,10 +10,11 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * {@link AskSettings} 的单元测试：钉住「缺省 120 秒」与「非正数回退缺省」两条口径。
+ * {@link AskSettings} 的单元测试：钉住「缺省 120 秒」「{@code 0} = 永不超时」「负数按非法回退」三条口径。
  * <p>
- * 后者是刻意的选择：配置写错不阻断启动，而「超时为 0」在语义上只会退化成「一律超时」，
- * 与「没配」撞成同一种表现，不如直接当没配。
+ * 前两条是同一件事的两侧：{@code 0} 必须是<b>无限</b>而不是「零秒超时」——后者会让等待立刻结束，
+ * 而用户写 {@code 0} 想要的恰恰相反。第三条是刻意的选择：配置写错不阻断启动，但「写了个负数、
+ * 却按 120 秒生效」这件事必须报出来，否则用户以为它立刻生效。
  *
  * @author zcd
  */
@@ -21,14 +22,16 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class AskSettingsTest {
 
     @Test
-    @DisplayName("不配置时使用缺省超时")
+    @DisplayName("不配置时使用缺省超时，且不产生告警")
     void constructor_should_use_default_when_absent() {
         // When
         AskSettings settings = new AskSettings(null);
 
         // Then
         assertEquals(AskSettings.DEFAULT_TIMEOUT_SECONDS, settings.getTimeoutSeconds());
+        assertFalse(settings.isInfinite());
         assertTrue(settings.isDefault());
+        assertTrue(settings.warnings().isEmpty(), settings.warnings().toString());
     }
 
     @Test
@@ -39,26 +42,52 @@ class AskSettingsTest {
 
         // Then
         assertEquals(300, settings.getTimeoutSeconds());
+        assertFalse(settings.isInfinite());
         assertFalse(settings.isDefault());
+        assertTrue(settings.warnings().isEmpty(), settings.warnings().toString());
+    }
+
+    @Test
+    @DisplayName("写 0 表示永不超时：取值就是 0，但要靠 isInfinite 区分「无限」与「零秒」")
+    void constructor_should_treat_zero_as_never_timeout() {
+        // When
+        AskSettings settings = new AskSettings(AskSettings.INFINITE_TIMEOUT_SECONDS);
+
+        // Then
+        assertTrue(settings.isInfinite());
+        assertEquals(AskSettings.INFINITE_TIMEOUT_SECONDS, settings.getTimeoutSeconds());
+        assertFalse(settings.isDefault(), "永不超时是刻意配的，不能算「什么都没配」");
+        assertEquals(1, settings.warnings().size(), settings.warnings().toString());
+        assertTrue(settings.warnings().get(0).contains("timeoutSeconds=0"), settings.warnings().get(0));
+        assertTrue(settings.warnings().get(0).contains("8 条线程"), settings.warnings().get(0));
     }
 
     @ParameterizedTest
-    @DisplayName("非正数一律回退缺省值，不报错")
-    @ValueSource(ints = {0, -1, -120})
-    void constructor_should_fall_back_to_default_when_not_positive(int value) {
+    @DisplayName("负数按非法处理：回退缺省值并告警")
+    @ValueSource(ints = {-1, -120})
+    void constructor_should_fall_back_to_default_when_negative(int value) {
         // When
         AskSettings settings = new AskSettings(value);
 
         // Then
         assertEquals(AskSettings.DEFAULT_TIMEOUT_SECONDS, settings.getTimeoutSeconds());
+        assertFalse(settings.isInfinite());
         assertTrue(settings.isDefault());
+        assertEquals(1, settings.warnings().size(), settings.warnings().toString());
+        assertTrue(settings.warnings().get(0).contains("timeoutSeconds=" + value),
+                settings.warnings().get(0));
+        assertTrue(settings.warnings().get(0).contains("必须 ≥0"), settings.warnings().get(0));
     }
 
     @Test
-    @DisplayName("无参构造等价于全缺省")
+    @DisplayName("无参构造等价于全缺省，且不产生告警")
     void default_constructor_should_equal_defaults() {
-        // When / Then
-        assertEquals(new AskSettings(null).getTimeoutSeconds(), new AskSettings().getTimeoutSeconds());
-        assertTrue(new AskSettings().isDefault());
+        // When
+        AskSettings settings = new AskSettings();
+
+        // Then
+        assertEquals(new AskSettings(null).getTimeoutSeconds(), settings.getTimeoutSeconds());
+        assertTrue(settings.isDefault());
+        assertTrue(settings.warnings().isEmpty(), settings.warnings().toString());
     }
 }

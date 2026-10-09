@@ -81,6 +81,50 @@ class AskChannelTest {
     }
 
     @Test
+    @DisplayName("配置成永不超时（timeoutSeconds=0）时一直等到有人作答，而不是立刻超时")
+    void ask_should_wait_forever_when_configured_never_timeout() throws Exception {
+        // Given：0 是「无限」而不是「零秒」——若被当成零秒，这次等待早已结束，槽位上不会有待答项
+        Mockito.when(runtimeConfig.getAskSettings())
+                .thenReturn(new AskSettings(AskSettings.INFINITE_TIMEOUT_SECONDS));
+        channel.attach();
+        AtomicReference<AskAnswer> result = new AtomicReference<AskAnswer>();
+
+        // When
+        Thread worker = askInBackgroundForever(ask(), result);
+        AskChannel.Pending shown = awaitPending();
+        assertNull(result.get(), "没人作答时这条等待不该自己结束");
+        channel.resolve(shown.getId(), AskAnswer.answered("1"));
+        worker.join(TimeUnit.SECONDS.toMillis(5));
+
+        // Then
+        assertNotNull(result.get());
+        assertTrue(result.get().isAnswered());
+        assertEquals("1", result.get().getOptionId());
+    }
+
+    @Test
+    @DisplayName("永不超时的等待在通道关闭时立刻放开，不会真的挂死")
+    void waitForever_should_be_released_when_detached() throws Exception {
+        // Given：外壳退出（detach）是无限等待的两条出口之一，另一条是回合被取消
+        Mockito.when(runtimeConfig.getAskSettings())
+                .thenReturn(new AskSettings(AskSettings.INFINITE_TIMEOUT_SECONDS));
+        channel.attach();
+        AtomicReference<AskAnswer> result = new AtomicReference<AskAnswer>();
+
+        // When
+        Thread worker = askInBackgroundForever(ask(), result);
+        awaitPending();
+        channel.detach();
+        worker.join(TimeUnit.SECONDS.toMillis(5));
+
+        // Then：拿到「问不到人」，回合照常往下走
+        assertFalse(worker.isAlive(), "通道关闭必须把等待中的提问一起收敛");
+        assertNotNull(result.get());
+        assertEquals(AskAnswer.Status.UNAVAILABLE, result.get().getStatus());
+        assertEquals(AskChannel.DETACHED, result.get().getReason());
+    }
+
+    @Test
     @DisplayName("选中候选项时把选项标识回填给等待线程")
     void request_should_return_option_id_when_answered_with_choice() throws Exception {
         // Given
@@ -425,6 +469,23 @@ class AskChannelTest {
      */
     private Thread askInBackground(AskRequest request, Duration timeout, AtomicReference<AskAnswer> result) {
         Thread thread = new Thread(() -> result.set(channel.request(request, timeout)), "ask-test-worker");
+        thread.setDaemon(true);
+        thread.start();
+        return thread;
+    }
+
+    /**
+     * 在后台线程发起一次「永不超时」的提问并记录答复。
+     * <p>
+     * 走的是 {@link AskChannel#ask}（读配置决定有没有上限），因此它同时验证了「配置里的 0 被当成
+     * 无限而不是零秒」这件事。
+     *
+     * @param request 提问请求
+     * @param result  答复出口
+     * @return 已启动的线程
+     */
+    private Thread askInBackgroundForever(AskRequest request, AtomicReference<AskAnswer> result) {
+        Thread thread = new Thread(() -> result.set(channel.ask(request)), "ask-test-worker-forever");
         thread.setDaemon(true);
         thread.start();
         return thread;

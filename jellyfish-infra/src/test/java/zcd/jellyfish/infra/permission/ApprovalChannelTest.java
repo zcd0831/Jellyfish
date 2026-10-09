@@ -16,6 +16,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -67,6 +68,45 @@ class ApprovalChannelTest {
         assertTrue(decision.isDenied());
         assertTrue(decision.getReason().contains("审批超时"), decision.getReason());
         assertFalse(channel.pending().isPresent(), "超时的请求必须从当前槽位摘掉，否则界面会一直显示它");
+    }
+
+    @Test
+    @DisplayName("永不超时的等待一直等到有人裁决")
+    void waitForever_should_wait_until_resolved() throws Exception {
+        // Given：配置里写了 0（永不超时）时，上层走的就是这条
+        channel.attach();
+        AtomicReference<PermissionDecision> result = new AtomicReference<PermissionDecision>();
+
+        // When
+        Thread worker = waitForeverInBackground(pending(), result);
+        ApprovalChannel.Pending shown = awaitPending();
+        assertNull(result.get(), "没人裁决时这条等待不该自己结束");
+        channel.resolve(shown.getId(), true);
+        worker.join(TimeUnit.SECONDS.toMillis(5));
+
+        // Then
+        assertNotNull(result.get());
+        assertTrue(result.get().isAllowed());
+    }
+
+    @Test
+    @DisplayName("永不超时的等待在通道关闭时按拒绝放开，不会真的挂死")
+    void waitForever_should_be_denied_when_detached() throws Exception {
+        // Given：外壳退出（detach）是无限等待的两条出口之一，另一条是回合被取消
+        channel.attach();
+        AtomicReference<PermissionDecision> result = new AtomicReference<PermissionDecision>();
+
+        // When
+        Thread worker = waitForeverInBackground(pending(), result);
+        awaitPending();
+        channel.detach();
+        worker.join(TimeUnit.SECONDS.toMillis(5));
+
+        // Then：fail-closed 仍然成立——没有批准就是拒绝
+        assertFalse(worker.isAlive(), "通道关闭必须把等待中的审批一起收敛");
+        assertNotNull(result.get());
+        assertTrue(result.get().isDenied());
+        assertEquals(ApprovalChannel.DETACHED, result.get().getReason());
     }
 
     @Test
@@ -563,6 +603,22 @@ class ApprovalChannelTest {
                                       AtomicReference<PermissionDecision> result) {
         Thread thread = new Thread(() -> result.set(channel.request(request, timeout)),
                 "approval-test-worker");
+        thread.setDaemon(true);
+        thread.start();
+        return thread;
+    }
+
+    /**
+     * 在后台线程发起一次「永不超时」的审批请求并记录结论。
+     *
+     * @param request 请求
+     * @param result  结论出口
+     * @return 已启动的线程
+     */
+    private Thread waitForeverInBackground(ApprovalChannel.Pending request,
+                                          AtomicReference<PermissionDecision> result) {
+        Thread thread = new Thread(() -> result.set(channel.waitForever(request)),
+                "approval-test-worker-forever");
         thread.setDaemon(true);
         thread.start();
         return thread;

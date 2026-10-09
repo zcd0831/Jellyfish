@@ -296,6 +296,26 @@ class PermissionManagerTest {
     }
 
     @Test
+    void decide_should_wait_forever_and_still_answer_when_approval_timeout_is_zero() {
+        // Given：approvalTimeoutSeconds=0 表示永不超时——判定仍然要等人裁决，只是不再有等待上限
+        when(runtimeConfig.getPermissionApprovalSettings())
+                .thenReturn(new PermissionApprovalSettings(PermissionApprovalSettings.INFINITE_TIMEOUT_SECONDS));
+        channel.attach();
+        when(policies.policyOf("agent-a")).thenReturn(PermissionPolicy.unrestricted());
+        ExtensionHandler<PermissionCheckRequest, PermissionVerdict> guard =
+                request -> PermissionVerdict.ask("需要审批");
+        extensions.contribute("guard", PermissionCheckRequest.class, null, guard, RegisterOptions.DEFAULT);
+        answerApproval(true);
+
+        // When
+        PermissionDecision decision = manager.decide(new PermissionCheckRequest("agent-a", "shell", null));
+
+        // Then：无限等待同样在被裁决时收敛，判定结果与有超时时一致
+        assertTrue(decision.isAllowed());
+        assertEquals(PermissionManager.APPROVAL_SOURCE, captureEvent().getSource());
+    }
+
+    @Test
     void decide_should_let_later_deny_win_over_earlier_ask() {
         // Given：order 靠前的插件 ASK、靠后的插件 DENY
         // 刻意不 stub 审批超时：若 DENY 没短路，后面的审批路径会因为拿不到超时配置而直接报错

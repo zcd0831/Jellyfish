@@ -133,6 +133,19 @@
 
 ### Fixed
 
+- **客户端连上 SSE 却不读时，那次卡住的写会被掐断**（N-40 收口，新增配置 `writeTimeoutSeconds`，缺省 60 秒）：
+  给监听器装上 `Options.WRITE_TIMEOUT`，到点由 Undertow 关连接并让那次写抛 `IOException`，
+  随后走既有的断连收尾——取消回合、关订阅、**归还 stream 许可**。此前没有这道闸，而这条流唯一的写线程
+  同时也是它唯一的消费者（连 keepalive 都由它发），于是它停在 `write` 里就再也没人发现、也没人归还许可：
+  缺省 `maxStreams=16`，16 个「连上不读」的连接就能让之后所有 `/chat` 一律 503。
+  **为什么必须放 `setSocketOption` 而不是 `setServerOption`**：`Options.WRITE_TIMEOUT` 是 XNIO 的**通道选项**，
+  `HttpOpenListener` 是从连接自己的选项表里读它并据此装上 `WriteTimeoutStreamSinkConduit`；
+  `setServerOption` 放的是 UndertowOptions 那张表，写超时会**静默不生效**（实测：放错表时写线程永远卡在
+  `write` 里、连 `Undertow.stop()` 都跟着卡；放对之后 1 秒的时限就把它掐断）。
+  **时限必须大于 keepalive 间隔**：实测它不只约束「一次写多久没写完」，也约束「两帧之间最长静默多久」——
+  静默超过时限的连接会被判死，因此 60 秒对 15 秒留了 4 倍余量。
+  `StalledSseClientTest` 用生产那一段配置真起 Undertow + 真 socket 守着（正反两条：卡住的写被掐断 /
+  静默短于时限的流照常活着），把选项放错表或摘掉即红。
 - **「有人在订阅、只是它过滤器坏了」不再被报成「没人订阅」**：`EventChannel` 派发时，订阅者的
   过滤器抛错会让命中数停在 0，于是既记 `unmatchedNotifications` 又打「通知无订阅者命中」——
   而事实是有人命中、它自己的过滤器炸了（已计入 `subscriberErrors`）。两条诊断的修法完全不同

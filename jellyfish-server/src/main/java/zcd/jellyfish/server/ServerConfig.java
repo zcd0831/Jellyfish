@@ -31,6 +31,21 @@ public final class ServerConfig {
     public static final int DEFAULT_KEEPALIVE_SECONDS = 15;
 
     /**
+     * 单次写 socket 的缺省时限（秒）。
+     * <p>
+     * <b>它是「连上不读」的客户端的唯一出口</b>：SSE 的写是阻塞写，客户端不读时 socket 缓冲区填满，
+     * 这条流唯一的写线程（也是它唯一的消费者，连 keepalive 都由它发）就停在 {@code write} 里——
+     * 于是既没人发现它卡住、也没人归还 {@code streamPermit}。缺省 {@code maxStreams=16}，
+     * 16 个这样的连接就能让之后所有 {@code /chat} 一律 503。
+     * <p>
+     * <b>必须大于 {@link #DEFAULT_KEEPALIVE_SECONDS}</b>：活着的流每 15 秒有一帧 keepalive 要写，
+     * 时限比它短就会把正常的流也判死——实测（`StalledSseClientTest`）证明它不只约束「一次写多久没写完」，
+     * 也约束「两帧之间最长静默多久」：静默超过时限的连接会被判死并关掉。缺省的 60 秒对 15 秒的
+     * keepalive 留了 4 倍余量。
+     */
+    public static final int DEFAULT_WRITE_TIMEOUT_SECONDS = 60;
+
+    /**
      * 提供 API key 的环境变量名。
      * <p>
      * <b>为什么把环境变量名定义在这里</b>：它是「这个服务的密钥从哪来」的一部分，而不是某一侧的私事——
@@ -65,6 +80,9 @@ public final class ServerConfig {
     /** keepalive 间隔（秒）。 */
     private final int keepaliveSeconds;
 
+    /** 单次写 socket 的时限（秒）。 */
+    private final int writeTimeoutSeconds;
+
     /** Undertow 工作线程数。 */
     private final int workerThreads;
 
@@ -82,6 +100,7 @@ public final class ServerConfig {
         this.maxBodyBytes = builder.maxBodyBytes;
         this.maxStreams = builder.maxStreams;
         this.keepaliveSeconds = builder.keepaliveSeconds;
+        this.writeTimeoutSeconds = builder.writeTimeoutSeconds;
         this.workerThreads = builder.workerThreads;
         this.apiKey = blankToNull(builder.apiKey);
     }
@@ -140,6 +159,15 @@ public final class ServerConfig {
      */
     public int getKeepaliveSeconds() {
         return keepaliveSeconds;
+    }
+
+    /**
+     * 获取单次写 socket 的时限。
+     *
+     * @return 时限秒数
+     */
+    public int getWriteTimeoutSeconds() {
+        return writeTimeoutSeconds;
     }
 
     /**
@@ -203,6 +231,9 @@ public final class ServerConfig {
         /** keepalive 间隔（秒）。 */
         private int keepaliveSeconds = DEFAULT_KEEPALIVE_SECONDS;
 
+        /** 单次写 socket 的时限（秒）。 */
+        private int writeTimeoutSeconds = DEFAULT_WRITE_TIMEOUT_SECONDS;
+
         /** 工作线程数。 */
         private int workerThreads = defaultWorkerThreads();
 
@@ -261,6 +292,17 @@ public final class ServerConfig {
          */
         public Builder keepaliveSeconds(int keepaliveSeconds) {
             this.keepaliveSeconds = keepaliveSeconds;
+            return this;
+        }
+
+        /**
+         * 设置单次写 socket 的时限。
+         *
+         * @param writeTimeoutSeconds 时限秒数
+         * @return 本构建器
+         */
+        public Builder writeTimeoutSeconds(int writeTimeoutSeconds) {
+            this.writeTimeoutSeconds = writeTimeoutSeconds;
             return this;
         }
 

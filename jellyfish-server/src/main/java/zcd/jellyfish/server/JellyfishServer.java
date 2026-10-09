@@ -4,6 +4,7 @@ import io.undertow.Undertow;
 import io.undertow.server.HttpHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.xnio.Options;
 import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.core.conversation.ConversationService;
 import zcd.jellyfish.core.conversation.ShellStreams;
@@ -172,10 +173,10 @@ public final class JellyfishServer {
             router = new ApiKeyGuard(config.getApiKey(), router);
         }
         try {
-            server = Undertow.builder()
+            server = applyConnectionLimits(Undertow.builder()
                     .addHttpListener(config.getPort(), config.getHost())
                     .setWorkerThreads(config.getWorkerThreads())
-                    .setHandler(router)
+                    .setHandler(router), config)
                     .build();
             server.start();
         } catch (RuntimeException e) {
@@ -187,6 +188,35 @@ public final class JellyfishServer {
         logReady();
         hook = new Thread(this::stop, "jellyfish-server-shutdown");
         Runtime.getRuntime().addShutdownHook(hook);
+    }
+
+    /**
+     * 给 Undertow 构建器加上连接级限制：单次写 socket 的时限。
+     * <p>
+     * <b>为什么必须是 {@code setSocketOption} 而不是 {@code setServerOption}</b>：{@code Options.WRITE_TIMEOUT}
+     * 是 <b>XNIO 的通道选项</b>，而 {@code HttpOpenListener} 是从连接自己的选项表里读它
+     * （{@code channel.getOption(Options.WRITE_TIMEOUT)}）并据此装上
+     * {@code WriteTimeoutStreamSinkConduit}；{@code setServerOption} 放的是 UndertowOptions 那张表，
+     * 写超时会**静默不生效**。这一点实测过：放错表时，客户端连上不读，写线程永远停在
+     * {@code write} 里、连 {@code Undertow.stop()} 都跟着卡；放对之后 1 秒的时限就能把它掐断。
+     * <p>
+     * <b>它挡的正是 SSE 最大的那条占用</b>：客户端不读 → 缓冲区填满 → 这条流唯一的写线程（也是它唯一的
+     * 消费者）停在 {@code write} 里。写超时到点由 Undertow 关连接并让那次写抛
+     * {@link java.io.IOException}，随后走既有的断连收尾——取消回合、关订阅、**归还 stream 许可**。
+     * 没有它，一条不读的连接会永久占住一个 {@code maxStreams} 名额（16 个就能让 `/chat` 全线 503）。
+     * <p>
+     * <b>时限与 keepalive 的关系不能反</b>：实测表明它同时约束「两帧之间最长静默多久」——静默超过时限的
+     * 连接会被判死（`StalledSseClientTest` 第二条钉的是反面：静默短于时限的流照常活着）。因此它必须大于
+     * keepalive 间隔，缺省的 60 秒对 15 秒留了 4 倍余量。
+     * <p>
+     * 抽成方法，是为了让用例能拿到与生产完全相同的这一段配置（真起 Undertow、真 socket、客户端不读）。
+     *
+     * @param builder Undertow 构建器
+     * @param config  运行参数
+     * @return 同一个构建器
+     */
+    static Undertow.Builder applyConnectionLimits(Undertow.Builder builder, ServerConfig config) {
+        return builder.setSocketOption(Options.WRITE_TIMEOUT, config.getWriteTimeoutSeconds() * 1000);
     }
 
     /**

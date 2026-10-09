@@ -40,6 +40,14 @@
 
 ### Changed
 
+- **Undertow `2.2.39.Final` → `2.2.40.Final`**（安全，依赖）：修 `CVE-2026-28367`/`28368`/`28369`
+  三件 HTTP 请求走私。**升级依据不是公告**——官方只把 `2.4.0.Final` 列为修复版，而 `2.2.x` 是否
+  回移了修复无法从公告判断；依据是 tag `2.2.40.Final` 的 `Connectors.java` 历史里有那条
+  `[UNDERTOW-2594][2595][2596] … Switching to strict HTTP parser`（`pom.xml` 里写明了这一点，
+  以及升级后必须重跑 `-Pserver-it`）。JDK 1.8 上实测 `-Pserver-it` 绿。同一轮里 `jline` 的 CVE
+  **判为不可行**：Maven Central 上最新稳定是 3.26.3，且自 3.26.0 起主线 jar 另发 `-jdk8` 分类器
+  （主线已抬到 Java 11+），在 JDK 1.8 上拿不到修复版；Spring Boot 2.7.18 已 EOL 属基座问题，
+  需平台级决策。两条都不在本文件里做，理由记在 `CODE-REVIEW.md` 第八节。
 - **`DaggerJellyfishComponent.create()` 换成了构建者**（破坏性，仅嵌入方）：`AppConfig` 不再由 `ConfigModule`
   固定从 `classpath:config.json` 读，改为由调用方注入——
   `DaggerJellyfishComponent.builder().appConfig(...).build()`。想要原来那份来源（classpath）时用
@@ -101,6 +109,13 @@
 
 ### Fixed
 
+- **日志这条终端的第四条出口也过滤控制字符**（安全）：落进日志的正是脚本、工具与对面进程喂进来的
+  原文（含未捕获异常），而日志同样进终端与文件。此前两轮按渲染器清点出口都没把它算上
+  （`SEC-10` 清 `StyledSegment`、`SEC-17` 清 `-cli` 的 `SystemConsoleIO`），于是「往日志里打一行
+  带 `ESC` 的东西」能清屏、能伪造日志行。现在两份配置（`log4j2.xml` 的 `Console SYSTEM_ERR` 与
+  `log4j2-tui.xml` 的 `RollingFile`）的 pattern 都用 `%replace` 剥掉除 `\n`/`\t` 外的控制字符，
+  并加 `alwaysWriteExceptions="false"`（异常栈不再绕过 pattern 里的过滤）。
+  `LogLayoutSanitizingTest` **从两份配置里取出 pattern 真渲染**敌意内容来守（撤掉过滤即红 2 条）。
 - **`RunScheduler` 有了显式关闭，关停不再把在途 / 排队的 run 丢下**：关停时此前只关线程池
   （子代理 run 跑在自己的 `agent-run` 池上），而这一步有两个后果：**在途 run 会继续跑下去**——
   它还会写子会话、还会调已经停掉的插件（AGENTS 明令禁止）；而 `shutdownNow()` 会把**排队等许可**的任务

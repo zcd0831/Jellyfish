@@ -955,6 +955,14 @@ handler 抛错**按放行处理**。它只管「结束运行态、保留快照�
   **`-cli` 的收口点是 `SystemConsoleIO` 的三个写出方法**（它是该外壳唯一往终端写字节的地方，
   调用点无一直连 `System.out` / `System.err`）；日志行与 CLI 整行诊断共用的「压成单行」
   规则在 `ControlChars.singleLine` 里只有一份。
+  **日志是第四条出口**（`log4j2.xml` 的 `Console SYSTEM_ERR` 与 `log4j2-tui.xml` 的 `RollingFile`）：
+  落进日志的正是脚本、工具与对面进程喂进来的原文（含未捕获异常），而它同样进终端与文件。
+  这一条在**两份配置的 pattern 上**收口（`%replace` 剥掉除 `\n`/`\t` 外的控制字符 +
+  `alwaysWriteExceptions="false"`，避免异常栈被当成渲染路径外的第二条通道），
+  由 `LogLayoutSanitizingTest` **从配置里取出 pattern 真渲染**敌意内容来守（撤掉过滤即红）。
+  **它漏了整整两轮**：`SEC-10` 按渲染器清点（`StyledSegment`）、`SEC-17` 清 `-cli` 的展示面
+  （`SystemConsoleIO`），两轮都没把日志算作出口。教训与 `SEC-17` 同一条——
+  「不可信文本 → 终端」的清点必须按**出口**列，而日志不经过任何渲染器。
 - **插件通知按来源封顶**：淘汰的是**该来源最早的那一条**。
 - **推送事件、拉取状态**：面板 / 状态栏的**内容**仍走拉取；推送只负责说「内容脏了」。
 - **插件只能贡献渲染无关数据**；**插件不可能自己造 TamboUI 组件**（子优先类加载器会让 `Element`

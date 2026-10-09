@@ -285,13 +285,18 @@ class PF4JPluginManagerTest {
     void close_should_share_the_lock_with_reload() throws Exception {
         // 「关停期并发 /reload 在将关闭的类加载器上启动插件」这个窗口没有便宜的注入口
         // （需要在插件的 stop() 里停住、再让关停抢进来），因此这里钉住排除它的结构事实：
-        // 两个方法共用同一把锁（另有「关停立旗」一条，见上一个用例）
+        // 两个方法共用同一把锁（另有「关停立旗」一条，见上一个用例）。
+        //
+        // **这是一条结构断言，会随锁的实现方式变化而误红**：把 synchronized 换成
+        // ReentrantLock/读写锁时，它必然失败，而失败的原因不是「出了缺陷」，只是
+        // 「断言与实现方式绑定」。真要换锁，请**改写这三行**（描述新实现下两者如何互斥，
+        // 例如断言两处引用的是同一个锁字段），而不是删掉它——删掉等于取消这条防线。
         assertTrue(Modifier.isSynchronized(
                         PF4JPluginManager.class.getDeclaredMethod("close").getModifiers()),
-                "close 必须与 reload 共用同一把锁");
+                "close 必须与 reload 互斥（当前实现是共用同一把锁；换锁实现时请同步改写这条结构断言）");
         assertTrue(Modifier.isSynchronized(
                         PF4JPluginManager.class.getDeclaredMethod("reload", Set.class).getModifiers()),
-                "reload 必须与 close 共用同一把锁");
+                "reload 必须与 close 互斥（当前实现是共用同一把锁；换锁实现时请同步改写这条结构断言）");
     }
 
     @Test

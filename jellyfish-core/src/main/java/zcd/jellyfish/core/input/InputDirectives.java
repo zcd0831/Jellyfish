@@ -9,6 +9,7 @@ import zcd.jellyfish.api.extension.InputDirectiveRequest;
 import zcd.jellyfish.api.extension.InputDirectiveResult;
 import zcd.jellyfish.api.extension.InputReferenceChoice;
 import zcd.jellyfish.api.extension.InputReferenceDescriptor;
+import zcd.jellyfish.api.extension.InputReferenceEscapes;
 import zcd.jellyfish.api.extension.InputReferenceRequest;
 import zcd.jellyfish.api.extension.InputReferenceResult;
 import zcd.jellyfish.api.extension.ToolCallResult;
@@ -449,6 +450,11 @@ public class InputDirectives implements AutoCloseable {
 
     /**
      * 从光标位置向前扫到空白或行首。
+     * <p>
+     * <b>转义过的空白不算边界</b>：{@code @my\ file.txt} 是一个片段，否则含空格的文件名
+     * 根本没法补全，模型拿到的也会是半截路径。判据由
+     * {@link zcd.jellyfish.api.extension.InputReferenceEscapes#isEscapedAt(String, int)} 给出——
+     * 转义规则只有那一处定义，与补全插文本的那一侧共用。
      *
      * @param text     输入全文
      * @param position 光标位置
@@ -456,14 +462,21 @@ public class InputDirectives implements AutoCloseable {
      */
     private static int scanBack(String text, int position) {
         int start = position;
-        while (start > 0 && !Character.isWhitespace(text.charAt(start - 1))) {
-            start--;
+        while (start > 0) {
+            int previous = start - 1;
+            if (Character.isWhitespace(text.charAt(previous))
+                    && !InputReferenceEscapes.isEscapedAt(text, previous)) {
+                break;
+            }
+            start = previous;
         }
         return start;
     }
 
     /**
      * 从光标位置向后扫到空白或行尾。
+     * <p>
+     * 与 {@link #scanBack(String, int)} 同一条判据：转义过的空白不算边界。
      *
      * @param text     输入全文
      * @param position 光标位置
@@ -471,7 +484,10 @@ public class InputDirectives implements AutoCloseable {
      */
     private static int scanForward(String text, int position) {
         int end = position;
-        while (end < text.length() && !Character.isWhitespace(text.charAt(end))) {
+        while (end < text.length()) {
+            if (Character.isWhitespace(text.charAt(end)) && !InputReferenceEscapes.isEscapedAt(text, end)) {
+                break;
+            }
             end++;
         }
         return end;

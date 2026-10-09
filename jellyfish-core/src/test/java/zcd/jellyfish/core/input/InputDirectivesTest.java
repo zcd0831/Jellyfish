@@ -213,6 +213,50 @@ class InputDirectivesTest {
     }
 
     @Test
+    void complete_should_keepEscapedWhitespaceInsideToken() {
+        // Given
+        registerReference("@", request -> InputReferenceResult.of(Arrays.asList(
+                new InputReferenceChoice("占位", null, null))));
+
+        // When：文件名叫「my file.txt」，补全插进去的是转义过的 @my\ file.txt，
+        // 光标停在末尾（接着往下敲也要能继续补全）
+        String input = "看看 @my\\ file.txt";
+        InputReferenceCompletion completion = directives.complete(input, input.length(), session.getSessionId());
+
+        // Then：片段必须包含整个转义过的路径，替换区间也要覆盖它
+        assertTrue(completion.isPresent());
+        assertEquals(3, completion.getReplaceStart());
+        assertEquals(input.length(), completion.getReplaceEnd());
+        assertEquals("my\\ file.txt", tokenOf(input, completion));
+    }
+
+    @Test
+    void complete_should_breakAtWhitespace_when_escapeIsDoubled() {
+        // Given
+        registerReference("@", request -> InputReferenceResult.of(Arrays.asList(
+                new InputReferenceChoice("占位", null, null))));
+
+        // When：「\\ 」是「一个真的反斜杠 + 一个真边界」，因此片段在它那里断开，
+        // 光标后面的 b 已经是另一个片段（不以标记开头）
+        String input = "@a\\\\ b";
+        InputReferenceCompletion completion = directives.complete(input, input.length(), session.getSessionId());
+
+        // Then
+        assertFalse(completion.isPresent());
+    }
+
+    /**
+     * 取补全结果覆盖的那一段原文（去掉标记）。
+     *
+     * @param input      输入全文
+     * @param completion 补全结果
+     * @return 片段里的 token
+     */
+    private static String tokenOf(String input, InputReferenceCompletion completion) {
+        return input.substring(completion.getReplaceStart() + 1, completion.getReplaceEnd());
+    }
+
+    @Test
     void complete_should_return_empty_choices_when_no_match() {
         // Given
         registerReference("@", request -> InputReferenceResult.empty());

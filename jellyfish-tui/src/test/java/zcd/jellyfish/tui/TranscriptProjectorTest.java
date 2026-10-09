@@ -86,6 +86,45 @@ class TranscriptProjectorTest {
     }
 
     @Test
+    @DisplayName("上一轮以工具结尾时，流式正文不再另起表头与空行——落库后它们会消失，画面会跳一下")
+    void project_should_not_add_header_for_inflight_body_inside_assistant_block() {
+        // 上一轮的工具轨迹已经把表头打在「助手块」内，流式正文接着这个块写
+        List<SessionMessage> messages = Collections.singletonList(
+                SessionMessage.of(LlmMessage.tool("c1", "read_file", "内容")));
+        InflightTurn turn = new InflightTurn();
+        turn.begin();
+        turn.appendText("模型接着说");
+
+        List<VisualLine> lines = project(messages, turn.snapshot());
+
+        assertEquals(Arrays.asList(
+                "",
+                "  \u23fa jellyfish",
+                "      \u23bf read_file",
+                "    模型接着说"), texts(lines));
+    }
+
+    @Test
+    @DisplayName("上一轮以工具结尾时，运行中的工具轨迹同样不另起表头与空行")
+    void project_should_not_add_header_for_running_tool_inside_assistant_block() {
+        List<SessionMessage> messages = Collections.singletonList(
+                SessionMessage.of(LlmMessage.tool("c1", "read_file", "内容")));
+        InflightTurn turn = new InflightTurn();
+        turn.begin();
+        turn.beginTool("bash");
+        turn.appendToolOutput("输出\n");
+
+        List<VisualLine> lines = project(messages, turn.snapshot());
+
+        assertEquals(Arrays.asList(
+                "",
+                "  \u23fa jellyfish",
+                "      \u23bf read_file",
+                "      \u23bf bash",
+                "      \u2502 输出"), texts(lines));
+    }
+
+    @Test
     @DisplayName("助手正文按 markdown 渲染：标题带块前缀、行内标记换成样式而不是字面量")
     void project_should_render_assistant_body_as_markdown() {
         List<VisualLine> lines = project(

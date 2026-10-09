@@ -398,7 +398,8 @@ public final class TuiApp extends ToolkitApp {
         this.sessionDefaults = Objects.requireNonNull(sessionDefaults, "sessionDefaults must not be null");
         this.uiCache = new UiCache(uiContributions);
         this.pluginPanelsEnabled = pluginPanelsEnabled();
-        this.input = new ChatInputView(inputKeys);
+        this.input = new ChatInputView(inputKeys,
+                text -> chatState.appendNotice(text, ShellNotice.Kind.WARN));
         this.shell = new ChatShell(input);
         // 启动期一律折叠：展开与否是运行期的全局开关（Ctrl+T / /thinking），没有启动参数这一条路
     }
@@ -848,16 +849,23 @@ public final class TuiApp extends ToolkitApp {
      * 声明自己的策略（{@link SubmissionPolicy#tui()}：命令 + 指令 + 首页按需建会话），
      * 以及把 {@link Submission} 的判别式结果变成界面上的一步动作。
      * <p>
+     * <b>外壳自有命令为什么排在「回合进行中」之前</b>：它们不写会话（不起新回合、不追加消息），
+     * 而同一批动作经 {@code Ctrl+T} / {@code Ctrl+E} / {@code Ctrl+O}、退出键与插件快捷键
+     * 在回合进行中本来就能执行（见 {@code InputKeys}）。少了这一步，同一个动作就有两条语义——
+     * 回合中连 {@code /exit} 都敲不了，只能去找键位。普通文本不受影响：它仍要等回合结束，
+     * 且草稿留在输入框里（敲了一半被吃掉是净损失）。判定本身在 {@link #routeOf}。
+     * <p>
      * <b>暂存区为什么在提交之前重置</b>：回合 / 指令一提交，{@code react} 线程就可能开始产出实时输出，
      * 晚一步重置就会把那一段抹掉。但提交之前我们还不知道会落进哪一条路，因此先重置（
      * {@link ChatState#beginWork}），落进非回合路时再静默收回——两者在同一渲染帧内完成，
      * 用户看不到任何中间态。
      */
     private void submit() {
-        if (input.isBlank()) {
+        SubmitRoute route = routeOf(input.text(), chatState.isTurnRunning());
+        if (route == SubmitRoute.IGNORED) {
             return;
         }
-        if (chatState.isTurnRunning()) {
+        if (route == SubmitRoute.REJECTED) {
             chatState.appendNotice("回合进行中：按 Esc 可中断。", ShellNotice.Kind.INFO);
             return;
         }
@@ -866,8 +874,9 @@ public final class TuiApp extends ToolkitApp {
         // 用户再度开口就说明那一轮已经翻篇；而新命令的结果会由 applyCommandResult 重新开面板，
         // 因此这里先关不会丢东西
         shellOutput.close();
-        // 外壳自有命令必须先截胡：交给命令域只会得到 UNKNOWN，而外壳其实完全听得懂
-        if (executeShellOwned(text)) {
+        if (route == SubmitRoute.SHELL_COMMAND) {
+            // 判定已经做过，这里必然命中；返回值因此没有第二种可能
+            executeShellOwned(text);
             return;
         }
         String sessionId = currentSessionIdOrNull();
@@ -884,6 +893,53 @@ public final class TuiApp extends ToolkitApp {
             // 提交是插件内容可能变化的起点（回合可能马上改待办），也可能刚改了当前会话
             uiCache.invalidate();
         }
+    }
+
+    /**
+     * 提交入口的分流判定。
+     * <p>
+     * <b>为什么单独抽出来</b>：这条判定里唯一容易写反的就是「外壳自有命令与回合进行中谁先判」，
+     * 而它决定了「回合中能不能敲 {@code /exit}」。抽成纯函数后这条顺序可以被直接断言，
+     * 不必去驱动一个真实界面。
+     * <p>
+     * <b>为什么外壳命令要在检查之前</b>：那些命令不写会话，与 {@code Ctrl+T} 等键位是同一个动作，
+     * 键位在回合进行中照常生效，命令也就必须照常生效——否则同一个动作有两条语义。
+     *
+     * @param input       输入原文，可为 {@code null}
+     * @param turnRunning 当前是否有回合或输入指令在跑
+     * @return 处置方式，保证非 {@code null}
+     */
+    static SubmitRoute routeOf(String input, boolean turnRunning) {
+        if (input == null || input.trim().isEmpty()) {
+            return SubmitRoute.IGNORED;
+        }
+        // 首词判定与分派共用 ShellCommand 这一处，不在这里另立一套
+        if (ShellCommand.isShellCommand(input)) {
+            return SubmitRoute.SHELL_COMMAND;
+        }
+        return turnRunning ? SubmitRoute.REJECTED : SubmitRoute.SUBMIT;
+    }
+
+    /**
+     * {@link #routeOf} 的四种处置方式。
+     */
+    enum SubmitRoute {
+
+        /** 空白输入：什么都不做，也不提示。 */
+        IGNORED,
+
+        /**
+         * 外壳自有命令：不写会话，因此回合进行中也执行。
+         * <p>
+         * 与「回合进行中拒收」互斥，且优先级更高。
+         */
+        SHELL_COMMAND,
+
+        /** 普通文本而回合进行中：拒收，草稿留在输入框里。 */
+        REJECTED,
+
+        /** 普通文本且当前空闲：交给内核提交管线。 */
+        SUBMIT
     }
 
     /**

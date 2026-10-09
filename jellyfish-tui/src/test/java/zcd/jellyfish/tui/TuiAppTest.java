@@ -103,6 +103,45 @@ class TuiAppTest {
     }
 
     @Test
+    @DisplayName("回合进行中，外壳自有命令照常执行：与 Ctrl+T / Ctrl+E / Ctrl+O 是同一个动作，不能有两条语义")
+    void routeOf_should_run_shell_command_while_turn_running() {
+        // 五条命令各取一条代表（/ui 带参数那一条正是两级页面的级联形式）
+        assertTrue(TuiApp.routeOf("/exit", true) == TuiApp.SubmitRoute.SHELL_COMMAND);
+        assertTrue(TuiApp.routeOf("/quit", true) == TuiApp.SubmitRoute.SHELL_COMMAND);
+        assertTrue(TuiApp.routeOf("/thinking", true) == TuiApp.SubmitRoute.SHELL_COMMAND);
+        assertTrue(TuiApp.routeOf("/toolargs", true) == TuiApp.SubmitRoute.SHELL_COMMAND);
+        assertTrue(TuiApp.routeOf("/mouse on", true) == TuiApp.SubmitRoute.SHELL_COMMAND);
+        assertTrue(TuiApp.routeOf("/ui dock", true) == TuiApp.SubmitRoute.SHELL_COMMAND);
+        // 前后空白不参与判定（与 takeText() 的 trim 同一口径）
+        assertTrue(TuiApp.routeOf("  /exit  ", true) == TuiApp.SubmitRoute.SHELL_COMMAND);
+    }
+
+    @Test
+    @DisplayName("回合进行中的普通文本仍被拒收：草稿留在输入框，等回合结束再发")
+    void routeOf_should_reject_plain_text_while_turn_running() {
+        assertTrue(TuiApp.routeOf("你好", true) == TuiApp.SubmitRoute.REJECTED);
+        // 内核命令域的命令不算外壳自有命令：它们要写会话（起回合 / 改会话），回合中仍该拦下
+        assertTrue(TuiApp.routeOf("/help", true) == TuiApp.SubmitRoute.REJECTED);
+        assertTrue(TuiApp.routeOf("/new", true) == TuiApp.SubmitRoute.REJECTED);
+    }
+
+    @Test
+    @DisplayName("空闲时普通文本进提交管线，外壳自有命令同样先被外壳截胡")
+    void routeOf_should_submit_plain_text_when_idle() {
+        assertTrue(TuiApp.routeOf("你好", false) == TuiApp.SubmitRoute.SUBMIT);
+        assertTrue(TuiApp.routeOf("/help", false) == TuiApp.SubmitRoute.SUBMIT);
+        assertTrue(TuiApp.routeOf("/exit", false) == TuiApp.SubmitRoute.SHELL_COMMAND);
+    }
+
+    @Test
+    @DisplayName("空白输入什么都不做，且不因回合进行中而变成一条提示")
+    void routeOf_should_ignore_blank_input() {
+        assertTrue(TuiApp.routeOf(null, false) == TuiApp.SubmitRoute.IGNORED);
+        assertTrue(TuiApp.routeOf("", true) == TuiApp.SubmitRoute.IGNORED);
+        assertTrue(TuiApp.routeOf("   \n  ", true) == TuiApp.SubmitRoute.IGNORED);
+    }
+
+    @Test
     @DisplayName("只有无参 /help（含别名）才算「查键位」的那次帮助")
     void isBareHelp_should_matchOnlyBareHelp() {
         assertTrue(TuiApp.isBareHelp("/help"));

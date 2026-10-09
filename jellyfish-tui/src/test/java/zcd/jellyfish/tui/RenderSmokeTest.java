@@ -207,7 +207,7 @@ class RenderSmokeTest {
         Frame frame = Frame.forTesting(buffer);
 
         // When：把整帧画进缓冲区
-        new ChatShell(new ChatInputView(keys -> EventResult.HANDLED))
+        new ChatShell(new ChatInputView(keys -> EventResult.HANDLED, text -> { }))
                 .render(view, "会话", "状态栏", Overlay.none(), null, Collections.emptyMap(), layout)
                 .render(frame, frame.area(), RenderContext.empty());
 
@@ -237,7 +237,7 @@ class RenderSmokeTest {
         // When
         Buffer buffer = Buffer.empty(Rect.of(TERMINAL_WIDTH, TERMINAL_HEIGHT));
         Frame frame = Frame.forTesting(buffer);
-        new ChatShell(new ChatInputView(keys -> EventResult.HANDLED))
+        new ChatShell(new ChatInputView(keys -> EventResult.HANDLED, text -> { }))
                 .render(view, null, "状态栏", Overlay.none(), panel, Collections.emptyMap(), layout)
                 .render(frame, frame.area(), RenderContext.empty());
 
@@ -294,7 +294,7 @@ class RenderSmokeTest {
                                       List<SessionMessage> messages, int width) {
         Buffer buffer = Buffer.empty(Rect.of(width, TERMINAL_HEIGHT));
         Frame frame = Frame.forTesting(buffer);
-        ChatShell shell = new ChatShell(new ChatInputView(keys -> EventResult.HANDLED));
+        ChatShell shell = new ChatShell(new ChatInputView(keys -> EventResult.HANDLED, text -> { }));
         shell.render(view, "会话", "状态栏", Overlay.none(), null, Collections.emptyMap(), layout)
                 .render(frame, frame.area(), RenderContext.empty());
         return lines(buffer);
@@ -330,7 +330,7 @@ class RenderSmokeTest {
      * @return 行数
      */
     private static int inputRows() {
-        return new ChatInputView(keys -> EventResult.HANDLED).panelRows();
+        return new ChatInputView(keys -> EventResult.HANDLED, text -> { }).panelRows();
     }
 
     /**

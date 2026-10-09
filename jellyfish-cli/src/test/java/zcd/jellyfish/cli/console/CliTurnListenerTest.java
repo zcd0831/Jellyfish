@@ -1,5 +1,6 @@
 package zcd.jellyfish.cli.console;
 
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import zcd.jellyfish.api.JellyfishException;
 import zcd.jellyfish.api.extension.ToolMetadata;
@@ -7,6 +8,7 @@ import zcd.jellyfish.core.conversation.ShellTurnEvent;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -589,6 +591,80 @@ class CliTurnListenerTest {
 
         assertTrue(console.err().contains("  │ bash\n  │ a\n"), console.err());
         assertTrue(console.err().contains("  │ curl\n  │ b\n"), console.err());
+    }
+
+    @Test
+    @DisplayName("思考行与工具输出共用一把锁：两段输出不会互相插进对方的一行中间")
+    void concurrent_thinking_and_tool_output_should_not_interleave() throws Exception {
+        RecordingConsoleIO console = new RecordingConsoleIO(null);
+        CliTurnListener listener = new CliTurnListener(console, true, false);
+        int rounds = 300;
+        CountDownLatch start = new CountDownLatch(1);
+
+        // 两条线程分别扮演 react 线程（思考增量）与工具输出泵线程。
+        // 每块内容刻意留长一点：交错窗口就在「写行首标记」与「写增量」这两次写之间，
+        // 块太短的话窗口跟着变短，这个用例就更难钉住它
+        Thread thinking = new Thread(() -> {
+            await(start);
+            for (int i = 0; i < rounds; i++) {
+                listener.onTurnEvent(ShellTurnEvent.thinking("s1", "t1", "思考" + i + padding() + "\n"));
+            }
+        });
+        Thread tool = new Thread(() -> {
+            await(start);
+            for (int i = 0; i < rounds; i++) {
+                listener.onTurnEvent(ShellTurnEvent.toolOutput("s1", "t1", "call-1", "bash",
+                        "输出" + i + padding() + "\n"));
+            }
+        });
+
+        thinking.start();
+        tool.start();
+        // 同时开跑：交错窗口只在两条线程真的并行时才存在
+        start.countDown();
+        thinking.join();
+        tool.join();
+
+        // 每一行必须整行属于同一段输出：思考行以 "· " 起、工具输出行以 "  │ " 起
+        for (String line : console.err().split("\n")) {
+            if (line.isEmpty()) {
+                continue;
+            }
+            boolean fromThinking = line.startsWith("· ");
+            boolean fromTool = line.startsWith("  │ ");
+            assertTrue(fromThinking || fromTool, "这一行被两段输出拼在了一起：" + line);
+        }
+        // 两段各自的最后一块都在：交错不该以丢内容为代价
+        assertTrue(console.err().contains("思考" + (rounds - 1)), console.err());
+        assertTrue(console.err().contains("输出" + (rounds - 1)), console.err());
+    }
+
+    /**
+     * 一段无换行的填充文本。
+     * <p>
+     * 只为把每次写入的窗口拉长（见上面的用例），不含任何需要断言的语义。
+     *
+     * @return 填充文本
+     */
+    private static String padding() {
+        StringBuilder text = new StringBuilder();
+        for (int i = 0; i < 60; i++) {
+            text.append("填充");
+        }
+        return text.toString();
+    }
+
+    /**
+     * 等闸门放行。
+     *
+     * @param gate 闸门
+     */
+    private static void await(CountDownLatch gate) {
+        try {
+            gate.await();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     @Test

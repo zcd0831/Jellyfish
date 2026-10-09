@@ -8,11 +8,16 @@ import dev.tamboui.toolkit.element.RenderContext;
 import dev.tamboui.toolkit.event.EventResult;
 import dev.tamboui.tui.event.KeyCode;
 import dev.tamboui.tui.event.KeyEvent;
+import dev.tamboui.tui.event.PasteEvent;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * {@link ChatInputView} 硬件光标定位的单元测试。
@@ -48,7 +53,7 @@ class ChatInputViewTest {
      * @return 输入区
      */
     private static ChatInputView input() {
-        return new ChatInputView(keys -> EventResult.UNHANDLED);
+        return new ChatInputView(keys -> EventResult.UNHANDLED, text -> { });
     }
 
     /**
@@ -59,6 +64,59 @@ class ChatInputViewTest {
      */
     private static Position cursorOf(Frame frame) {
         return frame.cursorPosition().orElse(null);
+    }
+
+    @Test
+    @DisplayName("超长粘贴整段不插入并提示：截断会让用户以为粘全了")
+    void paste_should_reject_oversized_text() {
+        List<String> notices = new ArrayList<String>();
+        ChatInputView view = new ChatInputView(keys -> EventResult.UNHANDLED, notices::add);
+
+        view.handlePasteEvent(new PasteEvent(repeat("a", ChatInputView.MAX_PASTE_CHARS + 1)));
+
+        assertEquals(0, view.text().length(), "整段都不该进来");
+        assertEquals(1, notices.size(), "必须有一条提示：否则用户以为粘全了");
+        assertTrue(notices.get(0).contains("过长"), notices.get(0));
+    }
+
+    @Test
+    @DisplayName("上限之内的粘贴照常插入，含换行的多行文本不被压成一行")
+    void paste_should_accept_within_limit() {
+        List<String> notices = new ArrayList<String>();
+        ChatInputView view = new ChatInputView(keys -> EventResult.UNHANDLED, notices::add);
+
+        view.handlePasteEvent(new PasteEvent("你好\n世界"));
+
+        assertEquals("你好\n世界", view.text());
+        assertTrue(notices.isEmpty());
+    }
+
+    @Test
+    @DisplayName("上限判的是插入后的总长：反复粘贴小段同样不能把输入框堆到失控")
+    void paste_should_count_existing_text_against_the_limit() {
+        List<String> notices = new ArrayList<String>();
+        ChatInputView view = new ChatInputView(keys -> EventResult.UNHANDLED, notices::add);
+        view.replaceText(repeat("a", ChatInputView.MAX_PASTE_CHARS));
+
+        view.handlePasteEvent(new PasteEvent("b"));
+
+        assertEquals(ChatInputView.MAX_PASTE_CHARS, view.text().length(), "已到上限，一个新字符都不该进来");
+        assertEquals(1, notices.size());
+    }
+
+    /**
+     * 重复一个字符若干次。
+     *
+     * @param text  字符
+     * @param times 次数
+     * @return 重复后的文本
+     */
+    private static String repeat(String text, int times) {
+        StringBuilder builder = new StringBuilder(text.length() * times);
+        for (int i = 0; i < times; i++) {
+            builder.append(text);
+        }
+        return builder.toString();
     }
 
     @Test

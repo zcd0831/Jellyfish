@@ -336,6 +336,26 @@ conversationCompactor = new ConversationCompactor(sessions, models, runtimeConfi
     }
 
     @Test
+    void launch_should_return_startup_error_when_bootstrap_throws_non_jellyfish_exception() {
+        // 归类看的是「失败发生在哪一步」，不是异常属于哪个类：bootstrap 里跑的是配置加载与
+        // 插件运行时，它们抛别的运行时异常同样是「内核没起成」，不该退成别的码
+        when(component.agentHarness()).thenReturn(harness);
+        when(component.conversationService()).thenReturn(conversations);
+        when(component.shellStreams()).thenReturn(shellStreams);
+        when(component.sessionManager()).thenReturn(sessions);
+        when(component.runtimeInfoHolder()).thenReturn(runtimeInfoHolder);
+        when(component.projectConfigTrust()).thenReturn(projectConfigTrust);
+        when(component.appConfig()).thenReturn(launcherAppConfig);
+        doThrow(new IllegalStateException("插件运行时初始化失败")).when(harness).bootstrap();
+
+        int code = launcher.launch(StartupOptions.builder(StartupOptions.Mode.CLI).prompt("你好").build());
+
+        assertEquals(ExitCodes.STARTUP_ERROR, code);
+        assertTrue(console.err().contains("插件运行时初始化失败"));
+        verify(harness).shutdown();
+    }
+
+    @Test
     void launch_should_return_usage_error_when_session_option_unsatisfiable() {
         givenComponentCollaborators();
 
@@ -355,6 +375,21 @@ conversationCompactor = new ConversationCompactor(sessions, models, runtimeConfi
         int code = launcher.launch(StartupOptions.builder(StartupOptions.Mode.CLI).prompt("boom").build());
 
         assertEquals(ExitCodes.RUNTIME_ERROR, code);
+        verify(harness).shutdown();
+    }
+
+    @Test
+    void launch_should_return_runtime_error_when_mode_throws_non_jellyfish_exception() {
+        // 归类看的是「失败发生在哪一步」：内核已经起来了，参数也通过了，那就是运行期故障。
+        // 此前只认 JellyfishException，这一条会一路穿到进程入口，被打成「初始化失败」退 3
+        givenComponentCollaborators();
+        when(conversations.submit(eq(session.getSessionId()), eq("boom"), any(), any()))
+                .thenThrow(new IllegalStateException("命令域故障"));
+
+        int code = launcher.launch(StartupOptions.builder(StartupOptions.Mode.CLI).prompt("boom").build());
+
+        assertEquals(ExitCodes.RUNTIME_ERROR, code);
+        assertTrue(console.err().contains("命令域故障"));
         verify(harness).shutdown();
     }
 

@@ -104,12 +104,15 @@ public final class ApiKeyGuard implements HttpHandler {
      * 判断是否为探活请求。
      * <p>
      * 只放行 {@code GET /health}：方法也一起判，免得将来某天有人在同一个路径上挂一个写操作。
+     * <p>
+     * 路径走 {@link RequestPath} 归一化后再比：路由按段匹配、本来就忽略尾斜杠，
+     * 这里若按请求原文精确比对，{@code GET /health/} 会先被 401 挡下——路由明明认得那个地址。
      *
      * @param exchange HTTP 交换对象
      * @return 是探活请求返回 {@code true}
      */
     private static boolean isHealthProbe(HttpServerExchange exchange) {
         return "GET".equalsIgnoreCase(exchange.getRequestMethod().toString())
-                && HEALTH_PATH.equals(exchange.getRequestPath());
+                && HEALTH_PATH.equals(RequestPath.normalize(exchange.getRequestPath()));
     }
 }

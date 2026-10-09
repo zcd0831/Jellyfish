@@ -158,6 +158,9 @@ echo "/help" | java -jar jellyfish-cli/target/jellyfish-cli-0.1.1.jar -cli
 
 单次模式里输入以 `/` 开头就走命令域（`/help` `/model` `/agent` `/new` …），否则走一次 LLM 对话。
 
+**归类看的是「失败发生在哪一步」，不是异常属于哪个类**：`bootstrap` 期间的任何运行时异常都算启动失败、
+退 `3`；内核起来之后的运行期故障一律是 `4`（哪怕它不是 `JellyfishException`）。
+
 单次模式的工具轨迹默认只给「开始」与「结束」两行（`→ shell` / `← shell 完成（N 字符）`）；
 加 `--show-tool-args` 会在其后补上**单行、最多 200 字**的调用参数（`→ shell {"command": "mvn -q test", "cwd": "/x"}`）。
 **参数不脱敏**：外壳按参数名猜不出哪个是密钥，遮不住命令原文与写入正文这些真正会出事的地方。

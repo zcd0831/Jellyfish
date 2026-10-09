@@ -820,13 +820,18 @@ public final class TranscriptProjector {
 
     /**
      * 投影进行中回合。
+     * <p>
+     * <b>表头与空行都看「是不是已经在助手块内」</b>：运行中的内容迟早会被落库的正式消息取代，
+     * 若这里无条件补一个空行加表头，而落库后的 {@code appendAssistant} / {@code appendToolTrace}
+     * 只在块外才补（它们本来就是这么做的），屏幕上就会出现「流式期多两行、落库后消失」的跳变——
+     * 两处判据必须同一份，否则用户会看到画面自己动了一下。
      *
      * @param out      输出列表
      * @param inflight 暂存区快照
      * @param thinkingExpanded 是否展开思考过程
      * @param toolArgumentsExpanded 是否展开工具调用参数
      * @param width    可用列数
-     * @param insideAssistantBlock 投影到这里时是否已在助手块内（决定要不要补表头）
+     * @param insideAssistantBlock 投影到这里时是否已在助手块内（与落库后的投影同一判据：在块内就不补）
      * @param hints    工具行渲染提示（按工具名），不可为 {@code null}
      */
     private static void appendInflight(List<VisualLine> out, InflightTurn.Snapshot inflight,
@@ -851,8 +856,10 @@ public final class TranscriptProjector {
                 out.add(VisualLine.of(new StyledSegment(NOTICE_PREFIX + "处理中\u2026", PENDING_STYLE)));
                 return;
             }
-            out.add(VisualLine.EMPTY);
-            out.add(VisualLine.of(new StyledSegment(ASSISTANT_HEADER, ASSISTANT_HEADER_STYLE)));
+            if (!insideAssistantBlock) {
+                out.add(VisualLine.EMPTY);
+                out.add(VisualLine.of(new StyledSegment(ASSISTANT_HEADER, ASSISTANT_HEADER_STYLE)));
+            }
             if (!isBlank(thinking)) {
                 appendThinking(out, thinking, thinkingExpanded, true, width);
             }
@@ -877,8 +884,10 @@ public final class TranscriptProjector {
      * 但工具一返回，这里就会被会话投影出的正式轨迹与结果取代。在这里标「已截断」
      * 会被读成「工具结果被截断了」，而真正会截断结果的是内核的截断中间件，它有自己的一套标识。
      * <p>
-     * <b>表头为什么不无条件补</b>：行到这里时通常已经在助手块内（上一轮 assistant 消息刚落库），
-     * 再打一个表头会让屏幕上出现两个连续的表头。沿用 {@code appendToolTrace} 的同一判断。
+     * <b>表头与空行为什么都不无条件补</b>：行到这里时通常已经在助手块内（上一轮 assistant 消息刚落库），
+     * 再打一个表头会让屏幕上出现两个连续的表头；空行同理——一落库就由 {@code appendToolTrace}
+     * 接管，那边在块内既不补表头也不补空行，多出来的每一行都会表现为「闪了一下又没了」。
+     * 两处共用同一判据，判据也只有这一个。
      *
      * @param out      输出列表
      * @param inflight 暂存区快照
@@ -896,8 +905,8 @@ public final class TranscriptProjector {
         if (toolName == null && lines.isEmpty()) {
             return false;
         }
-        out.add(VisualLine.EMPTY);
         if (!insideAssistantBlock) {
+            out.add(VisualLine.EMPTY);
             out.add(VisualLine.of(new StyledSegment(ASSISTANT_HEADER, ASSISTANT_HEADER_STYLE)));
         }
         String label = toolName == null || toolName.isEmpty() ? "工具" : toolName;

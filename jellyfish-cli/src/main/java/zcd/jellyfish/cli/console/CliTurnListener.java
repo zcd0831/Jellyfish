@@ -42,8 +42,12 @@ import zcd.jellyfish.infra.support.ToolArgumentsText;
  * 所以把「参数里可能有敏感信息」当作使用者自己知道的前提（与官方文档的警告同理）。
  * <p>
  * <b>线程语义</b>：{@link ShellTurnEvent.Kind#TOOL_OUTPUT} 不在 {@code react} 线程上，
- * 它由工具的 stdout / stderr 两条泵线程<b>并发</b>触发，因此本类里只有它需要加锁
- * （其余事件都发生在同一条 {@code react} 线程上，且工具执行期间那条线程正阻塞在工具里）。
+ * 它由工具的 stdout / stderr 两条泵线程<b>并发</b>触发（其余事件都发生在同一条 {@code react} 线程上，
+ * 且工具执行期间那条线程正阻塞在工具里）。<b>但行状态是跨线程共享的</b>：思考行开没开由 {@code react}
+ * 线程写（{@link #onThinking}），而工具输出在写之前要把它收尾，因此读它的是泵线程。
+ * 所以读写这两个行状态的方法都在<b>同一把锁</b>（本对象锁）下——只给工具输出那几个字段加锁等于没有锁：
+ * {@link #thinkingLineOpen} 既非 {@code volatile}、又有一半访问在锁外，泵线程可能读到陈旧值，
+ * 表现为 stderr 多一个或少一个换行，乃至两段输出交错。
  * <p>
  * <b>终态闩锁</b>：CLI 是单次模式，需要阻塞到回合结束才能决定退出码。终态事件恰好一条，
  * 因此一个 {@link CountDownLatch} 就够，不需要超时（没有终态就是内核的 bug，而不是需要容忍的情形）。
@@ -205,10 +209,18 @@ public final class CliTurnListener implements ShellTurnListener {
 
     /**
      * 收到一段思考过程增量。
+     * <p>
+     * <b>为什么加锁</b>：它写 {@link #thinkingLineOpen}，而泵线程（工具输出）会读同一个字段决定
+     * 要不要先补一个换行（见 {@link #closeThinkingLine()}）。锁同时保证两件事：状态可见，
+     * 以及「行首标记 + 这一块增量」不会被工具输出插到中间——否则 stderr 上会出现半行思考、
+     * 半行工具输出。
+     * <p>
+     * <b>锁内做写出是刻意的</b>：这一段的原子单位就是「前缀 + 增量」，把它拆到锁外就等于把窗口
+     * 重新打开。写的是 stderr 的一段增量，不含等待用户的操作。
      *
      * @param delta 增量
      */
-    private void onThinking(String delta) {
+    private synchronized void onThinking(String delta) {
         if (!showThinking || delta == null || delta.isEmpty()) {
             return;
         }
@@ -277,8 +289,10 @@ public final class CliTurnListener implements ShellTurnListener {
     /**
      * 把工具执行期的输出写到 stderr。
      * <p>
-     * <b>为什么加锁</b>：这个方法由工具的 stdout 与 stderr 两条泵线程并发调用（见类注释）。
-     * 锁只保护本类自己的几个行状态，不做任何耗时动作。
+     * <b>为什么加锁</b>：这个方法由工具的 stdout 与 stderr 两条泵线程并发调用，且它与思考行
+     * 共享同一把锁（见类注释）——工具输出绝不能插进一段思考行中间，落笔位置由这把锁定序。
+     * <b>为什么锁内写出</b>：一次「缩进 + 片段」是一个不可拆的书写单元，拆开就会与另一条泵线程交错。
+     * 写的是 stderr 的一段片段，不含等待用户的操作。
      * <p>
      * <b>为什么只在行首补缩进</b>：一段 chunk 里可能含多个换行（工具按块给输出），逐行插入缩进
      * 需要扫描每个字符并重新拼字符串，而这是子进程与内核之间的路径——不值得为了好看付这个代价。
@@ -490,8 +504,12 @@ public final class CliTurnListener implements ShellTurnListener {
 
     /**
      * 结束进行中的思考行：补一个换行，避免与后续输出粘在同一行。
+     * <p>
+     * 加锁的原因与 {@link #onToolOutput(String, String, String)} 相同：它读写的 {@link #thinkingLineOpen}
+     * 由 {@code react} 线程写，而本方法可能正被泵线程调用。只在「已经半行未收尾」时才写一个换行，
+     * 因此不会把终端输出切开。
      */
-    private void closeThinkingLine() {
+    private synchronized void closeThinkingLine() {
         if (thinkingLineOpen) {
             console.writeErr("\n");
             thinkingLineOpen = false;

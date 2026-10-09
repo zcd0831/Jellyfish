@@ -118,15 +118,13 @@ public final class Router implements HttpHandler {
      * 把请求路径切成段。
      * <p>
      * 末尾的 {@code /} 被忽略（{@code /sessions/} 与 {@code /sessions} 等价），根路径切成空列表。
+     * 归一化本身在 {@link RequestPath}（守门人判断探活路径时用的是同一份判据，两处不能各写一份）。
      *
      * @param path 请求路径
      * @return 段列表，保证非 {@code null}
      */
     private static List<String> split(String path) {
-        String normalized = path;
-        while (normalized.length() > 1 && normalized.endsWith("/")) {
-            normalized = normalized.substring(0, normalized.length() - 1);
-        }
+        String normalized = RequestPath.normalize(path);
         if ("/".equals(normalized) || normalized.isEmpty()) {
             return Collections.emptyList();
         }

@@ -61,6 +61,8 @@ public final class Launcher {
      * 失败按<b>类别</b>返回不同退出码：内核没起成 {@link ExitCodes#STARTUP_ERROR}、
      * 参数不可满足（{@code --session} / {@code --agent} / {@code --model} 不存在）
      * {@link ExitCodes#USAGE_ERROR}、模式运行中抛出 {@link ExitCodes#RUNTIME_ERROR}。
+     * <b>归类看的是失败发生在哪一步，而不是异常属于哪个类</b>：每处都接 {@link RuntimeException}，
+     * 否则别的运行时异常会穿透到进程入口，被当成「初始化失败」退 3。
      * 模式自报环境不满足（如 TUI 无可交互终端）也归 {@link ExitCodes#STARTUP_ERROR}——它发生在内核启动之前，
      * 性质是「启动条件不具备」，与「配置写错」属于同一类，脚本都应当直接放弃。
      * 无论哪一类，{@code finally} 都会收敛内核。
@@ -94,11 +96,16 @@ public final class Launcher {
         try {
             // 三类失败分开：内核没起成 3、参数不可满足 2、跑挂了 4。
             // 混在一起会让脚本分不清「配置错了」与「参数写错了」。
+            //
+            // 三处都按类别而不是按异常类型归类（都接 RuntimeException，不只 JellyfishException）：
+            // 只认 JellyfishException 的话，别的运行时异常会一路穿透到进程入口，被当成「初始化失败」
+            // 退 3——而那时内核往往已经起来了，脚本会据此去改一份本来没问题的配置。
             try {
                 harness.bootstrap();
-            } catch (JellyfishException e) {
-                LOG.error("启动失败：{}", e.getMessage(), e);
-                console.writeErrLine("启动失败：" + e.getMessage());
+            } catch (RuntimeException e) {
+                // 启动期抛出的任何异常都属于「内核没起成」：这一步跑的是配置加载与插件运行时
+                LOG.error("启动失败：{}", messageOf(e), e);
+                console.writeErrLine("启动失败：" + messageOf(e));
                 return ExitCodes.STARTUP_ERROR;
             }
             try {
@@ -110,12 +117,17 @@ public final class Launcher {
                 LOG.error("会话准备失败：{}", e.getMessage());
                 console.writeErrLine("错误：" + e.getMessage());
                 return ExitCodes.USAGE_ERROR;
+            } catch (RuntimeException e) {
+                // 参数本身没问题却仍然出错：内核已经起来了，这是运行期故障（4），不是用法错误
+                LOG.error("会话准备失败：{}", messageOf(e), e);
+                console.writeErrLine("运行失败：" + messageOf(e));
+                return ExitCodes.RUNTIME_ERROR;
             }
             try {
                 return mode.run(options);
-            } catch (JellyfishException e) {
-                LOG.error("运行失败：{}", e.getMessage(), e);
-                console.writeErrLine("运行失败：" + e.getMessage());
+            } catch (RuntimeException e) {
+                LOG.error("运行失败：{}", messageOf(e), e);
+                console.writeErrLine("运行失败：" + messageOf(e));
                 return ExitCodes.RUNTIME_ERROR;
             }
         } finally {
@@ -152,6 +164,20 @@ public final class Launcher {
                 return new CliRunMode(component.conversationService(), component.shellStreams(),
                         component.sessionManager(), console);
         }
+    }
+
+    /**
+     * 取异常的可读描述。
+     * <p>
+     * 归到哪个类别不看异常类型，因此错误文案不能直接取 {@code getMessage()}——那样遇到一个
+     * 没带描述的异常就会打出一句空白提示。取不到描述时退到类名，至少说明它是哪一类故障。
+     *
+     * @param error 异常，保证非 {@code null}
+     * @return 错误描述，保证非空
+     */
+    private static String messageOf(Throwable error) {
+        String message = error.getMessage();
+        return message == null || message.isEmpty() ? error.getClass().getSimpleName() : message;
     }
 
     /**

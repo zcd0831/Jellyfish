@@ -21,6 +21,7 @@ import zcd.jellyfish.tui.text.DisplayWidth;
 
 import java.util.List;
 import java.util.Objects;
+import java.util.function.Consumer;
 
 /**
  * 输入区：多行输入元素，自带键位分流。
@@ -79,8 +80,28 @@ public final class ChatInputView implements Element {
     private static final String PLACEHOLDER =
             "\u8bf4\u70b9\u4ec0\u4e48\u2026\uff08Enter \u6362\u884c\u00b7Ctrl+S \u53d1\u9001\u00b7Esc \u4e2d\u65ad\uff09";
 
+    /**
+     * 一次粘贴的字符上限。
+     * <p>
+     * <b>为什么需要上限</b>：粘贴的文本会整块进输入框状态，而输入框每帧都要按宽度重算显示行；
+     * 误粘一份日志或一段二进制就能让界面卡住，提交之后它还会成为一条用户消息进会话、进模型上下文。
+     * <p>
+     * <b>为什么取 1 MiB</b>：与 Server 的请求体上限（{@code ServerConfig.DEFAULT_MAX_BODY_BYTES}，
+     * 也是 1 MiB）同一量级——三个外壳共用同一份「一次输入多大」的预算。按<b>码点</b>数而不是
+     * UTF-16 长度：一个 emoji 算一个字符，与界面上说的「字符」是同一个口径。
+     */
+    static final int MAX_PASTE_CHARS = 1024 * 1024;
+
     /** 外壳的按键截胡处理器。 */
     private final KeyEventHandler shortcuts;
+
+    /**
+     * 提示通道：输入被拒时把一句可展示的说明交回外壳。
+     * <p>
+     * 之所以要把它交出去而不是由本类自己显示：输入区没有「消息区」这一层，而这条提示属于
+     * 外壳状态（与「回合进行中」同类），落点由外壳决定。
+     */
+    private final Consumer<String> noticeSink;
 
     /** 编辑状态：插入、删除、光标移动等原语都由它提供。 */
     private final TextAreaState state = new TextAreaState();
@@ -88,10 +109,12 @@ public final class ChatInputView implements Element {
     /**
      * 构造输入区。
      *
-     * @param shortcuts 外壳按键截胡处理器，不可为 {@code null}
+     * @param shortcuts  外壳按键截胡处理器，不可为 {@code null}
+     * @param noticeSink 提示通道，不可为 {@code null}
      */
-    public ChatInputView(KeyEventHandler shortcuts) {
+    public ChatInputView(KeyEventHandler shortcuts, Consumer<String> noticeSink) {
         this.shortcuts = Objects.requireNonNull(shortcuts, "shortcuts must not be null");
+        this.noticeSink = Objects.requireNonNull(noticeSink, "noticeSink must not be null");
     }
 
     @Override
@@ -211,12 +234,34 @@ public final class ChatInputView implements Element {
     public EventResult handlePasteEvent(PasteEvent event) {
         // 粘贴进来的文本同样是不可信内容：它会被渲染到输入框（转义序列能改写屏幕），
         // 提交后还会进模型上下文。这里与屏幕文本同一条口径——滤掉控制字符
-        String text = ControlChars.strip(event.text());
-        if (text == null || text.isEmpty()) {
+        String pasted = ControlChars.strip(event.text());
+        if (pasted == null || pasted.isEmpty()) {
             return EventResult.UNHANDLED;
         }
-        state.insert(text);
+        // 上限判在「插入之后的总长」而不是「这一段有多长」：真正要封住的是输入框状态与那一帧的
+        // 渲染开销，反复粘贴小段同样能把它堆到失控。超限时整段不插入，也不截断——截断会让用户
+        // 以为粘全了，而这条提示是他唯一能知道「刚才那一下没生效」的地方
+        // 上限判在「插入之后的总长」而不是「这一段有多长」：真正要封住的是输入框状态与那一帧的
+        // 渲染开销，反复粘贴小段同样能把它堆到失控。超限时整段不插入，也不截断——截断会让用户
+        // 以为粘全了，而这条提示是他唯一能知道「刚才那一下没生效」的地方
+        int total = charCount(text()) + charCount(pasted);
+        if (total > MAX_PASTE_CHARS) {
+            noticeSink.accept("粘贴内容过长（共 " + total + " 字符，上限 " + MAX_PASTE_CHARS
+                    + "）：把它存成文件再让模型读。");
+            return EventResult.HANDLED;
+        }
+        state.insert(pasted);
         return EventResult.HANDLED;
+    }
+
+    /**
+     * 数一段文本的码点数。
+     *
+     * @param text 文本，保证非 {@code null}
+     * @return 码点数
+     */
+    private static int charCount(String text) {
+        return text.codePointCount(0, text.length());
     }
 
     @Override

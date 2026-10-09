@@ -91,7 +91,9 @@ public final class JellyfishApplication {
                     .appConfig(ConfigModule.loadDefault())
                     .build(), console).launch(options);
         } catch (RuntimeException e) {
-            // DI 装配或组件创建失败：此刻还没有 harness 可收敛，只能报错退出
+            // 走到这里说明失败发生在能归类之前：DI 装配 / 组件创建，或启动最早的那几步
+            // （项目级配置的信任表态、选模式）。此刻还没有 harness 可收敛，也没有「运行期」可言，
+            // 因此一律归启动失败。launch() 内部的失败由它自己分成 3 / 2 / 4，不会到这里
             console.writeErrLine("初始化失败：" + e.getMessage());
             return ExitCodes.STARTUP_ERROR;
         }

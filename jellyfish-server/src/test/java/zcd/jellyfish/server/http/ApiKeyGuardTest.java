@@ -201,6 +201,19 @@ class ApiKeyGuardTest {
     }
 
     @Test
+    @DisplayName("带尾斜杠的探活地址同样放行：路由认得 /health/，守门人不能比路由更严")
+    void handleRequest_should_passThrough_healthProbeWithTrailingSlash() throws Exception {
+        AtomicInteger calls = downstream();
+        ApiKeyGuard guard = new ApiKeyGuard(KEY, handler(calls));
+
+        // 路径判据与路由共用 RequestPath：两处各写一份就会出现「路由认得、守门人不认得」的分裂
+        guard.handleRequest(exchange("GET", "/health/", null));
+        guard.handleRequest(exchange("GET", "/health//", null));
+
+        assertEquals(2, calls.get());
+    }
+
+    @Test
     @DisplayName("同一个路径的写方法仍然要校验：例外只给探活那一个方法")
     void handleRequest_should_reject_when_healthPathWithOtherMethod() throws Exception {
         AtomicInteger calls = downstream();

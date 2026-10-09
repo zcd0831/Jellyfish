@@ -67,9 +67,10 @@ class AgentModuleTest {
         // When
         PermissionPolicyProvider provider = AgentModule.providePermissionPolicyProvider(agentManager);
 
-        // Then
+        // Then：声明过的按声明；没声明的（身份不成立）是全拦，不再落进 fail-open
         assertTrue(provider.policyOf("coder").denies("bash"));
-        assertTrue(provider.policyOf("ghost").isEmpty());
+        assertFalse(provider.policyOf("ghost").isEmpty());
+        assertFalse(provider.policyOf("ghost").allows("bash"));
     }
 
     @Test

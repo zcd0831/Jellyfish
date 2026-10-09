@@ -255,7 +255,9 @@ class ActionQueueTest {
         // Then：同样必须落终态。旧窗口已经被收回，谁也不会再去取它
         assertTrue(handle.isFinished());
         assertEquals(ActionStatus.FAILED, handle.getStatus());
-        assertEquals(ActionFailureReason.TURN_ENDED_UNREACHED, handle.getFailureReason());
+        // 而且原因要与「回合跑完了」分开：这条动作本可以属于那个新回合，插件据此可以做别的决定
+        assertEquals(ActionFailureReason.TURN_SUPERSEDED, handle.getFailureReason());
+        assertTrue(handle.getResult().contains("被同一会话的新回合取代"), handle.getResult());
     }
 
     @Test

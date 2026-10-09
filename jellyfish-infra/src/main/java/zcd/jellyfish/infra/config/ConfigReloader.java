@@ -149,6 +149,11 @@ public final class ConfigReloader {
     /**
      * 广播重载完成事件，发布失败只记日志。
      * <p>
+     * <b>带的是「被重启」而不是「被动过」</b>：事件字段与指标名（{@code config.reloadRestartedPlugins}）
+     * 说的都是「停止后重新启动」，而 {@code PluginReloadReport} 里那四张表是互斥的——
+     * 传 {@code touchedPluginIds()} 会把「只是被停掉」和「启动失败」的插件也算进来，
+     * 于是「一个插件被禁用」在指标与订阅方那里长得像「它被重启了一次」。
+     * <p>
      * best-effort：重载本身已经成功，不可能因为一条通知发不出去而失败。
      *
      * @param report   插件侧变动报告
@@ -156,7 +161,7 @@ public final class ConfigReloader {
      */
     private void publishReloaded(PluginReloadReport report, long duration) {
         try {
-            events.publish(new ConfigReloadedEvent(report.touchedPluginIds(), duration));
+            events.publish(new ConfigReloadedEvent(new LinkedHashSet<String>(report.getRestarted()), duration));
         } catch (RuntimeException e) {
             LOG.warn("配置重载事件发布失败", e);
         }

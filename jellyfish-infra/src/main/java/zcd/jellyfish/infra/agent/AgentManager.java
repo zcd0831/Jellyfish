@@ -29,10 +29,12 @@ import java.util.Set;
  * 想用自定义 agent 只能显式 {@code /agent} 切换。因此 {@link #resolveDefault()} 在内置定义缺失时
  * 不再返回 {@code null}——那是启动期就该拖住的错误，已由 {@code RuntimeConfig} 直接抛错。
  * <p>
- * <b>fail-open 的边界</b>：引用到未被声明的 {@code agentId} 时，{@link #policyOf(String)} 返回
- * {@link PermissionPolicy#unrestricted()}（放行），与 permission 方案的 fail-open 口径一致——
- * 但不再静默：登记在案的索引里查不到这个标识时会发一条 {@code ConfigWarningEvent}（每个标识一次），
- * 「配错了 agent 名」因此不会再与「权限本来就这么宽」长得一模一样。
+ * <b>「没绑 agent」按 fail-open，而「绑了一个查不到的身份」是硬拒绝</b>：{@code null} 时
+ * {@link #policyOf(String)} 返回 {@link PermissionPolicy#unrestricted()}（与 permission 方案的
+ * fail-open 口径一致）；非 {@code null} 但索引里查不到时返回「全拦」，并让 {@code AgentRegistry}
+ * 发一条 {@code ConfigWarningEvent}（每个标识一次）。后者的理由是那条路径今天可达——
+ * 调用方直接给 agentId、落盘恢复沿用当初记下的 agentId、{@code /reload} 之后 agent 被改名或删除——
+ * 让它继续放行等于「配置里改个名字就悄悄把一批旧会话提权」。
  * 需要「硬失败」的调用点（{@code /agent} 切换命令）改用 {@link #require(String)}。
  * <p>
  * <b>本类不接触扩展层</b>：不知道工具是否存在、不感知插件与提示词拼装。提示词只提供原文，
@@ -163,9 +165,9 @@ public class AgentManager implements PermissionPolicyProvider {
     /**
      * 取某个 agent 的权限策略。
      * <p>
-     * 这是 permission 模块的窄接口实现：未命中一律返回 {@link PermissionPolicy#unrestricted()}，
-     * 因此调用方不需要判空，「取不到策略就 fail-open」这条规则只有这一个落点
-     * （未声明的标识由 {@code AgentRegistry} 发一条配置告警，本层不再重复判定）。
+     * 这是 permission 模块的窄接口实现：未命中一律返回非 {@code null} 的策略，因此调用方不需要判空。
+     * 「取不到策略就 fail-open」只落在「没绑 agent」（{@code null}）这一支上，「绑了一个查不到的身份」
+     * 是另一回事——它返回「全拦」（由 {@code AgentRegistry} 判定并附一条配置告警，本层不再重复判定）。
      *
      * @param agentId agent 标识，可为 {@code null}
      * @return 权限策略，保证非 {@code null}

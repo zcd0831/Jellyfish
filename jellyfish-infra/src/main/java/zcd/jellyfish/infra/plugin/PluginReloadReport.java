@@ -2,9 +2,7 @@ package zcd.jellyfish.infra.plugin;
 
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Set;
 
 /**
  * 插件重载报告：一次配置重载里，插件运行时实际做了什么。
@@ -114,20 +112,6 @@ public final class PluginReloadReport {
      */
     public List<String> getFailed() {
         return Collections.unmodifiableList(failed);
-    }
-
-    /**
-     * 汇总「被动过」的全部插件标识（启动 ∪ 停止 ∪ 重启），供事件与指标使用。
-     *
-     * @return 不可修改集合，按首次出现顺序；可能为空但不会为 {@code null}
-     */
-    public Set<String> touchedPluginIds() {
-        Set<String> touched = new LinkedHashSet<String>();
-        touched.addAll(restarted);
-        touched.addAll(started);
-        touched.addAll(stopped);
-        touched.addAll(failed);
-        return Collections.unmodifiableSet(touched);
     }
 
     /**

@@ -337,8 +337,9 @@ class PF4JPluginManagerTest {
                 new PluginsSettings(null, null, configurations("sample", "v1")));
         PluginReloadReport report = manager.reload(Collections.<String>emptySet());
 
-        // Then
-        assertFalse(report.touchedPluginIds().contains("sample"));
+        // Then：什么都没变——四个名单都该是空的（此前这里查的是「被动过」的汇总集合）
+        assertTrue(report.isEmpty(), report.getRestarted() + "/" + report.getStarted() + "/"
+                + report.getStopped() + "/" + report.getFailed());
     }
 
     @Test

@@ -82,6 +82,28 @@ class EventChannelTest {
         assertEquals(0, brokenReceived.size());
         assertEquals(1, healthyReceived.size(), "一个订阅者的过滤器抛错不该影响其它订阅者");
         assertEquals(1L, channel.stats().getSubscriberErrors());
+
+        // 而且它不算「无订阅者命中」：命中是有的，只是那个订阅者自己的过滤器抛了异常。
+        // 两条诊断的修法完全不同（一个是「没人要这条通知」，一个是「我的过滤器配错了」）
+        assertEquals(0L, channel.stats().getUnmatchedNotifications(),
+                "有人订阅、只是过滤器坏了，不该被记成「没人订阅」");
+    }
+
+    @Test
+    void deliver_should_count_unmatched_when_predicate_declines_without_throwing() {
+        // Given：注册了一个订阅者，它的过滤器「正常地说了不」（没有抛错）
+        List<ConfigWarningEvent> received = new ArrayList<>();
+        channel.start();
+        channel.subscribe("picky", ConfigWarningEvent.class, event -> false, received::add);
+
+        // When
+        channel.publish(new ConfigWarningEvent("path", "message"));
+        queued.forEach(Runnable::run);
+
+        // Then：这才是「这条通知没有受众」，与上一条的区别正是过滤器抛没抛
+        assertEquals(0, received.size());
+        assertEquals(1L, channel.stats().getUnmatchedNotifications());
+        assertEquals(0L, channel.stats().getSubscriberErrors());
     }
 
     @Test

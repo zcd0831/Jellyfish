@@ -279,12 +279,18 @@ public final class EventChannel implements EventPublisher, AutoCloseable {
      * {@code deliver} 抛错是同一类事——坏掉的订阅者只该影响自己。此前它被留在 try 之外，
      * 于是一个谓词抛错会逃出整个派发循环：该事件对它之后的<b>全部</b>订阅者静默丢失、
      * 不计入错误计数，任务异常还会让广播线程被替换掉。
+     * <p>
+     * <b>「没人订阅」与「有人订阅、只是它的过滤器坏了」要分开报</b>：两者都会让
+     * {@code matched} 停在 0，但前者是「这条通知没有受众」（值得计 {@code unmatchedNotifications}），
+     * 后者是「有一个受众，它自己的过滤器抛了异常」（已经计入 {@code subscriberErrors}）。
+     * 合成一条会让「我的过滤器是不是配错了」这个唯一线索变成一句「无订阅者命中」。
      *
      * @param event 通知事件
      */
     private void deliver(JellyfishEvent event) {
         int matched = 0;
         int errors = 0;
+        int brokenFilters = 0;
         List<HandlerRegistration> registrations;
         try {
             registrations = registry.resolve(event.getClass(), null);
@@ -305,7 +311,9 @@ public final class EventChannel implements EventPublisher, AutoCloseable {
                     continue;
                 }
             } catch (RuntimeException e) {
-                // 收不到这条事件是「它的过滤器坏了」的正确结果：不 matched、不 deliver，但也不影响别人
+                // 收不到这条事件是「它的过滤器坏了」的正确结果：不 matched、不 deliver，但也不影响别人。
+                // 单独记一笔，因为它与「没人订阅」是两件事——那条「无订阅者命中」的诊断不该被它触发
+                brokenFilters++;
                 errors++;
                 LOG.warn("通知订阅者谓词异常: owner={} event={}", subscriber.getOwner(),
                         event.getClass().getName(), e);
@@ -320,7 +328,7 @@ public final class EventChannel implements EventPublisher, AutoCloseable {
                         event.getClass().getName(), e);
             }
         }
-        if (matched == 0) {
+        if (matched == 0 && brokenFilters == 0) {
             stats.unmatchedNotifications.increment();
             LOG.debug("通知无订阅者命中: {}", event.getClass().getName());
         }

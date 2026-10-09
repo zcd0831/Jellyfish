@@ -38,9 +38,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * <b>本类自己发配置告警</b>：索引的职责就是决定「哪些条目能成为索引项」，非法条目（空白 key）在这里
  * 被跳过并告警，与内核其它「配置可疑只告警、不中断启动」的处理一致。
  * <p>
- * <b>「查不到策略」也要告警一次</b>：{@link #policyOf(String)} 对未声明的 agentId 仍按不受限处理
- * （fail-open 口径不变），但这种会话享受的是「无限制」而外表上看不出任何异常，因此第一次遇到
- * 就发一条 {@link ConfigWarningEvent}；同一个标识只报一次，避免刷屏（去重表随刷新复位）。
+ * <b>「查不到策略」这一支是硬结论，不是 fail-open</b>：{@link #policyOf(String)} 对未声明的 agentId
+ * 返回「全拦」策略，因为那不是「没有策略」，而是「策略指向的身份已经不成立了」；同时发一条
+ * {@link ConfigWarningEvent} 说清是哪个标识，同一个标识只报一次，避免刷屏（去重表随刷新复位）。
+ * 真正按 fail-open 走的是「没绑 agent」（{@code null}）那一支，它一个字没动。
  *
  * @author zcd
  */
@@ -151,15 +152,25 @@ public final class AgentRegistry {
     /**
      * 按 agentId 取权限策略。
      * <p>
-     * <b>未命中仍然是 fail-open</b>：返回 {@link PermissionPolicy#unrestricted()}，与 permission 方案的
-     * 口径一致（见 {@code AgentManager} 的类注释）。但<b>不再静默</b>——一个非 {@code null} 的
-     * agentId 查不到策略，说明有会话绑了一个从未声明的身份，而它正享受着「不受限」，
-     * 这种情况必须让人看见，否则「配置写错了 agent 名」与「权限本来就这么宽」在外表上毫无区别。
+     * <b>「没绑 agent」与「绑了一个不存在的 agent」是两个相反的结论</b>：
+     * <ul>
+     *   <li>{@code null}（没绑 agent）按 {@link PermissionPolicy#unrestricted()} 处理——那是
+     *       「这条会话没有身份可依据」，与 permission 方案的 fail-open 口径一致，
+     *       也正是「一个 agent 都没配」这个合法状态的落点。</li>
+     *   <li>非 {@code null} 但查不到（绑了一个查不到声明的身份）返回
+     *       {@link PermissionPolicy#denyAll()}：它此前享受的是「不受限」，而这条路径**今天可达**——
+     *       调用方直接给 agentId（{@code SessionManager.create} 不校验存在性）、
+     *       落盘恢复出来的会话沿用它当初记下的 agentId、以及 {@code /reload} 之后 agent
+     *       被改名或删除（{@code refresh} 重建两张表，但不回头校验既有会话）。也就是说
+     *       「配置里改个名字」会让一批旧会话在无人察觉的情况下拿到全部工具权限。</li>
+     * </ul>
+     * 这一支不静默：{@code ConfigWarningEvent} 说明是哪个标识、以及为什么它被拒。
      * <p>
-     * {@code null} 不算：那是「没绑 agent」，不是「绑了一个不存在的 agent」。
+     * 收窄只发生在这一支上，{@code null} 那支的口径一个字没动——这两件事必须分开看，
+     * 否则「默认 agent 能不能干活」会被一起改掉。
      *
      * @param agentId agent 标识，可为 {@code null}
-     * @return 策略；未命中时返回 {@link PermissionPolicy#unrestricted()}，恒非 {@code null}
+     * @return 策略；恒非 {@code null}
      */
     public PermissionPolicy policyOf(String agentId) {
         if (agentId == null) {
@@ -170,11 +181,15 @@ public final class AgentRegistry {
             return policy;
         }
         warnUnknownOnce(agentId);
-        return PermissionPolicy.unrestricted();
+        return PermissionPolicy.denyAll();
     }
 
     /**
      * 就「配置里没有这个 agentId」告警一次。
+     * <p>
+     * <b>为什么要说清后果</b>：这条告警是「这批会话为什么突然一个工具都用不了」的唯一线索，
+     * 所以要同时给出标识与原因（配置里查不到这个身份），并指出怎么修——报「未声明的 agentId」
+     * 而让读者自己猜后果，等于把一次可诊断的拒绝变成一次莫名其妙的失败。
      * <p>
      * <b>为什么每个标识只报一次</b>：本方法在工具调用的同步路径上被调用（经
      * {@code PermissionManager}），同一个会话里的每一次工具调用都会问到同一个标识；
@@ -196,7 +211,8 @@ public final class AgentRegistry {
             return;
         }
         if (warnedUnknownIds.add(agentId)) {
-            warn(agentId, "未声明的 agentId，权限按不受限处理：" + agentId);
+            warn(agentId, "agentId 在配置里查不到，该会话的工具调用一律拒绝（请检查 agent 是否改名或删除）："
+                    + agentId);
         }
     }
 

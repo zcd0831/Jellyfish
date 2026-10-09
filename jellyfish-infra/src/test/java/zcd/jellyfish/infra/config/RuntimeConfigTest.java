@@ -739,6 +739,53 @@ class RuntimeConfigTest {
     }
 
     @Test
+    void refresh_should_warn_when_react_values_are_invalid() throws IOException {
+        // Given：react 段写错两个值（一个非正、一个越界），而实现是回退缺省
+        Path jellyfish = writeFile("jellyfish-react.json",
+                "{\"react\":{\"maxRounds\":0,\"autoCompactPercent\":150}}");
+        RecordingPublisher publisher = new RecordingPublisher();
+        when(appConfig.getModel()).thenReturn(pathsTo(null, null));
+        when(appConfig.getAgent()).thenReturn(pathsTo(null, null));
+        when(appConfig.getJellyfish()).thenReturn(pathsTo(jellyfish, null));
+
+        // When
+        RuntimeConfig runtimeConfig = runtimeConfigOf(
+                new ConfigLoader(new SettingsReader(), new SettingsBinder()), publisher);
+        runtimeConfig.refresh();
+
+        // Then：事件面是这类问题的唯一出口（TUI 下日志只进文件），因此两条都要能看见
+        assertEquals(ReactSettings.DEFAULT_MAX_ROUNDS, runtimeConfig.getReactSettings().getMaxRounds());
+        assertEquals(100, runtimeConfig.getReactSettings().getAutoCompactPercent());
+        assertTrue(publisher.warnings().stream().anyMatch(warning ->
+                "react".equals(warning.getSource()) && warning.getMessage().contains("maxRounds=0")),
+                publisher.warnings().toString());
+        assertTrue(publisher.warnings().stream().anyMatch(warning ->
+                "react".equals(warning.getSource()) && warning.getMessage().contains("autoCompactPercent=150")),
+                publisher.warnings().toString());
+    }
+
+    @Test
+    void refresh_should_warn_when_sampling_values_are_invalid() throws IOException {
+        // Given：provider 的 sampling 段写了一组非法值（内核的处理是静默丢弃该项）
+        Path models = writeFile("models-sampling.json",
+                "{\"providers\":{\"openai\":{\"type\":\"openai\",\"sampling\":{\"temperature\":-1,\"topK\":0}}}}");
+        RecordingPublisher publisher = new RecordingPublisher();
+        when(appConfig.getModel()).thenReturn(pathsTo(models, null));
+        when(appConfig.getJellyfish()).thenReturn(pathsTo(null, null));
+
+        // When
+        runtimeConfigOf(new ConfigLoader(new SettingsReader(), new SettingsBinder()), publisher).refresh();
+
+        // Then：来源是 provider 名（同一份文件里可能有好几个 provider），消息里带键名与原值
+        assertTrue(publisher.warnings().stream().anyMatch(warning ->
+                "openai".equals(warning.getSource()) && warning.getMessage().contains("sampling.temperature=-1.0")),
+                publisher.warnings().toString());
+        assertTrue(publisher.warnings().stream().anyMatch(warning ->
+                "openai".equals(warning.getSource()) && warning.getMessage().contains("sampling.topK=0")),
+                publisher.warnings().toString());
+    }
+
+    @Test
     void refresh_should_warn_when_approval_timeout_is_absurdly_large() throws IOException {
         // Given：写下一个远超人工审批所需的秒数（多半是笔误），而它会让 react 线程同步等这么久
         Path jellyfish = writeFile("jellyfish-permission-long.json",

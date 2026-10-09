@@ -84,6 +84,9 @@ public class SamplingSettings {
     /** 停止序列，空列表表示不下发。 */
     private final List<String> stop;
 
+    /** 配置里写错（并已忽略该项）的地方，交给配置装载层报进事件面。 */
+    private final List<String> warnings;
+
     /**
      * 构造一份「什么都不表态」的采样设置。
      */
@@ -122,13 +125,28 @@ public class SamplingSettings {
                             @JsonProperty("frequencyPenalty") Double frequencyPenalty,
                             @JsonProperty("presencePenalty") Double presencePenalty,
                             @JsonProperty("stop") List<String> stop) {
-        this.temperature = cleanTemperature(temperature);
-        this.topP = cleanTopP(topP);
-        this.topK = cleanTopK(topK);
+        List<String> collected = new ArrayList<String>();
+        this.temperature = cleanTemperature(temperature, collected);
+        this.topP = cleanTopP(topP, collected);
+        this.topK = cleanTopK(topK, collected);
         this.seed = seed;
-        this.frequencyPenalty = cleanPenalty(frequencyPenalty, "frequencyPenalty");
-        this.presencePenalty = cleanPenalty(presencePenalty, "presencePenalty");
+        this.frequencyPenalty = cleanPenalty(frequencyPenalty, "frequencyPenalty", collected);
+        this.presencePenalty = cleanPenalty(presencePenalty, "presencePenalty", collected);
         this.stop = cleanStop(stop);
+        this.warnings = Collections.unmodifiableList(collected);
+    }
+
+    /**
+     * 获取「配置里写错的地方」（键名 + 原值 + 为什么非法 + 按什么处理）。
+     * <p>
+     * <b>这些错误此前只进日志</b>：TUI 下的日志只写文件，用户在界面上看不到任何动静，
+     * 于是「我调了 temperature 却没变化」与「它被当成非法值丢掉了」在外表上一样。
+     * 现在同一句话也交给配置装载层报进事件面（{@code ConfigWarningEvent}）。
+     *
+     * @return 不可修改列表，可能为空但不会为 {@code null}
+     */
+    public List<String> warnings() {
+        return warnings;
     }
 
     /**
@@ -245,13 +263,12 @@ public class SamplingSettings {
      * @param value 原始值，可为 {@code null}
      * @return 合法值，非法时为 {@code null}
      */
-    private static Double cleanTemperature(Double value) {
+    private static Double cleanTemperature(Double value, List<String> warnings) {
         if (value == null) {
             return null;
         }
         if (value.isNaN() || value.isInfinite() || value < 0d) {
-            LOG.warn("sampling.temperature 非法（要求非负且有限），已忽略该项: value={}", value);
-            return null;
+            return reject("sampling.temperature", value, "要求非负且有限", warnings);
         }
         return value;
     }
@@ -262,13 +279,12 @@ public class SamplingSettings {
      * @param value 原始值，可为 {@code null}
      * @return 合法值，非法时为 {@code null}
      */
-    private static Double cleanTopP(Double value) {
+    private static Double cleanTopP(Double value, List<String> warnings) {
         if (value == null) {
             return null;
         }
         if (value.isNaN() || value <= 0d || value > TOP_P_MAX) {
-            LOG.warn("sampling.topP 非法（要求位于 (0, 1]），已忽略该项: value={}", value);
-            return null;
+            return reject("sampling.topP", value, "要求位于 (0, 1]", warnings);
         }
         return value;
     }
@@ -282,13 +298,12 @@ public class SamplingSettings {
      * @param value 原始值，可为 {@code null}
      * @return 合法值，非法时为 {@code null}
      */
-    private static Integer cleanTopK(Integer value) {
+    private static Integer cleanTopK(Integer value, List<String> warnings) {
         if (value == null) {
             return null;
         }
         if (value <= 0) {
-            LOG.warn("sampling.topK 非法（要求为正整数），已忽略该项: value={}", value);
-            return null;
+            return reject("sampling.topK", value, "要求为正整数", warnings);
         }
         return value;
     }
@@ -300,15 +315,34 @@ public class SamplingSettings {
      * @param name  字段名，仅用于告警文本
      * @return 合法值，非法时为 {@code null}
      */
-    private static Double cleanPenalty(Double value, String name) {
+    private static Double cleanPenalty(Double value, String name, List<String> warnings) {
         if (value == null) {
             return null;
         }
         if (value.isNaN() || value < PENALTY_MIN || value > PENALTY_MAX) {
-            LOG.warn("sampling.{} 非法（要求位于 [-2, 2]），已忽略该项: value={}", name, value);
-            return null;
+            return reject("sampling." + name, value, "要求位于 [-2, 2]", warnings);
         }
         return value;
+    }
+
+    /**
+     * 丢掉一个非法项，并把「为什么丢」同时写进日志与告警清单。
+     * <p>
+     * 措辞只有这一处：日志与事件面是同一件事的两个出口（前者给排障、后者给用户），
+     * 各写一句必然越走越远。
+     *
+     * @param key         配置键名
+     * @param value       原始值
+     * @param requirement 合法区间或要求的措辞
+     * @param warnings    告警收集目标
+     * @param <T>         值的类型
+     * @return 恒为 {@code null}，供调用点直接返回
+     */
+    private static <T> T reject(String key, T value, String requirement, List<String> warnings) {
+        String message = key + "=" + value + " 非法（" + requirement + "），已忽略该项";
+        LOG.warn("{}", message);
+        warnings.add(message);
+        return null;
     }
 
     /**

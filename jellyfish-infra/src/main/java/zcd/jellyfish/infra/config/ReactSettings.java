@@ -3,6 +3,10 @@ package zcd.jellyfish.infra.config;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
 /**
  * {@code jellyfish.json} 的 {@code react} 段：ReAct 循环的运行期参数。
  * <p>
@@ -19,6 +23,11 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * 是本仓库的既有口径，真正的轮次约束与裁剪在运行期由 {@code ReActLooper} 与 {@code ContextWindow}
  * 兜底。预留 token 数与自动压缩百分比允许显式配 {@code 0}，因此缺省判定以 {@code null} 区分
  * 「未配置」与「配了 0」。
+ * <p>
+ * <b>回退但不静默</b>：每一次回退都记进 {@link #warnings()}（键名、原值、为什么非法、按什么处理），
+ * 由 {@code RuntimeConfig} 在配置装载后统一发成 {@code ConfigWarningEvent}。此前这里没有
+ * {@code Logger}，于是「写错了」与「照缺省跑」在外表上完全一样——调了半天 {@code maxRounds}
+ * 没生效，其实是那个值一开始就被判非法了。
  * <p>
  * 不可变：所有字段在构造时确定，不存在 setter。
  *
@@ -83,6 +92,9 @@ public class ReactSettings {
 
     /** 提示词缓存的治理参数。 */
     private final ReactCacheSettings cache;
+
+    /** 配置里写错（并已按缺省值兜底）的地方，交给 {@code RuntimeConfig} 报进事件面。 */
+    private final List<String> warnings;
 
     /**
      * 构造缺省运行期参数。
@@ -155,19 +167,35 @@ public class ReactSettings {
                          @JsonProperty("autoCompactPercent") Integer autoCompactPercent,
                          @JsonProperty("toolOutput") ToolOutputSettings toolOutput,
                          @JsonProperty("cache") ReactCacheSettings cache) {
-        this.maxRounds = maxRounds != null && maxRounds > 0 ? maxRounds : DEFAULT_MAX_ROUNDS;
-        this.contextReserveTokens = contextReserveTokens != null && contextReserveTokens >= 0
-                ? contextReserveTokens : DEFAULT_CONTEXT_RESERVE_TOKENS;
-        this.maxToolOutputChars = maxToolOutputChars != null && maxToolOutputChars > 0
-                ? maxToolOutputChars : DEFAULT_MAX_TOOL_OUTPUT_CHARS;
-        this.compactKeepRecentMessages = compactKeepRecentMessages != null && compactKeepRecentMessages >= 0
-                ? compactKeepRecentMessages : DEFAULT_COMPACT_KEEP_RECENT_MESSAGES;
-        this.compactMaxSummaryChars = compactMaxSummaryChars != null && compactMaxSummaryChars > 0
-                ? compactMaxSummaryChars : DEFAULT_COMPACT_MAX_SUMMARY_CHARS;
-        this.autoCompactPercent = autoCompactPercent != null && autoCompactPercent >= 0
-                ? Math.min(autoCompactPercent, 100) : DEFAULT_AUTO_COMPACT_PERCENT;
+        List<String> collected = new ArrayList<String>();
+        this.maxRounds = SettingsGuard.positiveOrDefault(maxRounds, DEFAULT_MAX_ROUNDS,
+                "react.maxRounds", collected);
+        this.contextReserveTokens = SettingsGuard.nonNegativeOrDefault(contextReserveTokens,
+                DEFAULT_CONTEXT_RESERVE_TOKENS, "react.contextReserveTokens", collected);
+        this.maxToolOutputChars = SettingsGuard.positiveOrDefault(maxToolOutputChars,
+                DEFAULT_MAX_TOOL_OUTPUT_CHARS, "react.maxToolOutputChars", collected);
+        this.compactKeepRecentMessages = SettingsGuard.nonNegativeOrDefault(compactKeepRecentMessages,
+                DEFAULT_COMPACT_KEEP_RECENT_MESSAGES, "react.compactKeepRecentMessages", collected);
+        this.compactMaxSummaryChars = SettingsGuard.positiveOrDefault(compactMaxSummaryChars,
+                DEFAULT_COMPACT_MAX_SUMMARY_CHARS, "react.compactMaxSummaryChars", collected);
+        this.autoCompactPercent = SettingsGuard.percentOrDefault(autoCompactPercent,
+                DEFAULT_AUTO_COMPACT_PERCENT, "react.autoCompactPercent", collected);
         this.toolOutput = toolOutput == null ? new ToolOutputSettings() : toolOutput;
         this.cache = cache == null ? new ReactCacheSettings() : cache;
+        collected.addAll(this.toolOutput.warnings());
+        this.warnings = Collections.unmodifiableList(collected);
+    }
+
+    /**
+     * 获取「配置里写错的地方」：每一项都是「键名 + 原值 + 为什么非法 + 按什么处理」。
+     * <p>
+     * 本类自己不发事件（那是 {@code RuntimeConfig} 的活儿），只把事实交出去；
+     * 返回空列表表示这份配置的数值项全都合法（或没配）。
+     *
+     * @return 不可修改列表，可能为空但不会为 {@code null}
+     */
+    public List<String> warnings() {
+        return warnings;
     }
 
     /**

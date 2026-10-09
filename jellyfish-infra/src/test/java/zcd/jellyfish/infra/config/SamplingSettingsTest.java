@@ -75,6 +75,29 @@ class SamplingSettingsTest {
     }
 
     @Test
+    void warnings_should_report_every_dropped_field() {
+        // When：五项各写一个非法值（丢掉的字段此前只进日志，TUI 下用户看不见）
+        SamplingSettings settings = new SamplingSettings(-1d, 1.5d, 0, null, -3d, Double.NaN, null);
+
+        // Then：一条不落，且键名是配置文件里那个名字
+        assertEquals(5, settings.warnings().size(), settings.warnings().toString());
+        assertTrue(settings.warnings().toString().contains("sampling.temperature=-1.0"));
+        assertTrue(settings.warnings().toString().contains("sampling.topP=1.5"));
+        assertTrue(settings.warnings().toString().contains("sampling.topK=0"));
+        assertTrue(settings.warnings().toString().contains("sampling.frequencyPenalty=-3.0"));
+        assertTrue(settings.warnings().toString().contains("sampling.presencePenalty=NaN"));
+    }
+
+    @Test
+    void warnings_should_be_empty_when_values_valid_or_missing() {
+        // When：「没表态」不是写错，合法值当然也不是
+        SamplingSettings settings = new SamplingSettings(0.7d, 1d, 40, 42L, -2d, 2d, null);
+
+        // Then
+        assertTrue(settings.warnings().isEmpty(), settings.warnings().toString());
+    }
+
+    @Test
     void constructor_should_leave_new_fields_unset_with_three_arg_constructor() {
         // When：旧的便捷构造器只表态三个基础参数
         SamplingSettings settings = new SamplingSettings(0.2d, 0.9d, Collections.singletonList("x"));

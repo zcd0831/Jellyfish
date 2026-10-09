@@ -80,16 +80,34 @@ class AgentRegistryTest {
     }
 
     @Test
-    void policyOf_should_return_unrestricted_when_agent_not_declared() {
-        // Given
+    void policyOf_should_deny_everything_when_agent_not_declared() {
+        // Given：会话绑了一个配置里查不到的身份（改名 / 删除 / 从别处恢复出来的会话）
         AgentRegistry registry = new AgentRegistry(events);
         registry.refresh(settings(definition(CODER, null)), null);
 
-        // When / Then
+        // When
         PermissionPolicy unknown = registry.policyOf("ghost");
-        assertTrue(unknown.isEmpty());
-        assertTrue(registry.policyOf(null).isEmpty());
-        assertTrue(unknown.allows("bash"));
+
+        // Then：那是「全拦」而不是「无策略」——身份不成立时不该落进 fail-open
+        assertFalse(unknown.isEmpty());
+        assertFalse(unknown.allows("bash"));
+        assertFalse(unknown.allows(null));
+        assertTrue(unknown.denies("bash") == false, "它不是「显式拒绝」那条口径，而是允许名单为空");
+    }
+
+    @Test
+    void policyOf_should_stay_unrestricted_when_agent_is_null() {
+        // Given：这是上面那条的对照——「没绑 agent」与「绑了一个查不到的身份」必须分开
+        AgentRegistry registry = new AgentRegistry(events);
+        registry.refresh(settings(definition(CODER, null)), null);
+
+        // When
+        PermissionPolicy unbound = registry.policyOf(null);
+
+        // Then：没绑 agent 仍是 fail-open（一条告警都不发）
+        assertTrue(unbound.isEmpty());
+        assertTrue(unbound.allows("bash"));
+        verifyNoInteractions(events);
     }
 
     @Test
@@ -135,7 +153,7 @@ class AgentRegistryTest {
         assertNull(registry.find(CODER));
         assertNull(registry.find("writer"));
         assertEquals("reviewer", registry.find("reviewer").getAgentId());
-        assertTrue(registry.policyOf(CODER).isEmpty());
+        assertFalse(registry.policyOf(CODER).allows("bash"), "不在新表里的标识落到「全拦」而不是放行");
     }
 
     @Test
@@ -211,7 +229,7 @@ class AgentRegistryTest {
 
         // Then
         assertTrue(registry.all().isEmpty());
-        assertTrue(registry.policyOf("ghost").isEmpty());
+        assertFalse(registry.policyOf("ghost").allows("bash"));
         ArgumentCaptor<ConfigWarningEvent> captor = ArgumentCaptor.forClass(ConfigWarningEvent.class);
         // 两条：一条说这个条目被跳过，一条说 policyOf 撞上了没声明的标识（见 policyOf_should_warn_once_*）
         verify(events, times(2)).publish(captor.capture());
@@ -233,7 +251,7 @@ class AgentRegistryTest {
         ArgumentCaptor<ConfigWarningEvent> captor = ArgumentCaptor.forClass(ConfigWarningEvent.class);
         verify(events).publish(captor.capture());
         assertEquals("ghost", captor.getValue().getSource());
-        assertTrue(captor.getValue().getMessage().contains("不受限"));
+        assertTrue(captor.getValue().getMessage().contains("查不到"));
     }
 
     @Test

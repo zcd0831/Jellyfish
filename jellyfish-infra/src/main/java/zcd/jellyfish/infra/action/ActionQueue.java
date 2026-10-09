@@ -68,6 +68,12 @@ public final class ActionQueue {
     /** 每会话待排空上界。 */
     private final int capacity;
 
+    /** 窗口被同会话新回合替换时给插件的说明（关闭方与「恰好卡在关闭那一刻」的动作共用一句话）。 */
+    private static final String SUPERSEDED_MESSAGE = "回合窗口被同一会话的新回合取代，动作未能在本回合内排空";
+
+    /** 回合结束时给插件的说明。 */
+    private static final String TURN_ENDED_MESSAGE = "回合已结束，动作未能在本回合内排空";
+
     /** {@code sessionId} → 该会话的投递窗口；有在途回合才有窗口。 */
     private final Map<String, Window> windows = new ConcurrentHashMap<String, Window>();
 
@@ -143,12 +149,12 @@ public final class ActionQueue {
         if (previous == null) {
             return;
         }
-        List<Pending> superseded = previous.closeAndTakeAll();
+        List<Pending> superseded = previous.closeAndTakeAll(ActionFailureReason.TURN_SUPERSEDED,
+                SUPERSEDED_MESSAGE);
         LOG.warn("会话已有在途回合窗口，动作通道改认新回合: sessionId={} 未排空动作={}",
                 sessionId, superseded.size());
         for (Pending leftover : superseded) {
-            leftover.fail(ActionFailureReason.TURN_SUPERSEDED,
-                    "回合窗口被同一会话的新回合取代，动作未能在本回合内排空");
+            leftover.fail(ActionFailureReason.TURN_SUPERSEDED, SUPERSEDED_MESSAGE);
         }
     }
 
@@ -166,8 +172,9 @@ public final class ActionQueue {
         if (window == null) {
             return;
         }
-        for (Pending leftover : window.closeAndTakeAll()) {
-            leftover.fail(ActionFailureReason.TURN_ENDED_UNREACHED, "回合已结束，动作未能在本回合内排空");
+        for (Pending leftover : window.closeAndTakeAll(ActionFailureReason.TURN_ENDED_UNREACHED,
+                TURN_ENDED_MESSAGE)) {
+            leftover.fail(ActionFailureReason.TURN_ENDED_UNREACHED, TURN_ENDED_MESSAGE);
         }
     }
 
@@ -245,9 +252,15 @@ public final class ActionQueue {
         OfferOutcome outcome = window.offer(handle);
         if (outcome == OfferOutcome.CLOSED) {
             // 「拿到窗口引用」与「真正入队」之间发生的关闭（endTurn 摘窗口、或 beginTurn 换窗口）。
-            // 窗口关闭时会取走队列里的全部动作并标失败，但看不到还没进队列的这一条，因此由这里兜住
-            return handle.onFailed(ActionFailureReason.TURN_ENDED_UNREACHED,
-                    "回合窗口已关闭，动作未能在本回合内排空");
+            // 窗口关闭时会取走队列里的全部动作并标失败，但看不到还没进队列的这一条，因此由这里兜住。
+            // 原因码取**关闭时的那个**：两种关闭对插件的处境的不同的——「被新回合顶掉」的那条动作
+            // 本可以属于新回合，而「回合跑完了」就是这一轮没赶上。原因码是插件分流的凭据，不合并
+            Closure closure = window.closure();
+            if (closure == null) {
+                // 结构上到不了：closed 与 closedBy 在同一把锁里写入。留着只是不让一次投递失败变成 NPE
+                return handle.onFailed(ActionFailureReason.TURN_ENDED_UNREACHED, TURN_ENDED_MESSAGE);
+            }
+            return handle.onFailed(closure.reason(), closure.message());
         }
         if (outcome == OfferOutcome.FULL) {
             LOG.warn("动作队列已满，丢弃: owner={} sessionId={} capacity={}",
@@ -282,6 +295,50 @@ public final class ActionQueue {
     }
 
     /**
+     * 一次窗口关闭：原因码 + 给插件的说明。
+     * <p>
+     * 成一个值而不是两个字段，是因为它们必须同时成立——只记原因码而漏掉说明，
+     * 会让插件拿到一条没有来龙去脉的失败；反之只记说明则分流不了。
+     */
+    private static final class Closure {
+
+        /** 关闭原因码。 */
+        private final ActionFailureReason reason;
+
+        /** 给插件的说明。 */
+        private final String message;
+
+        /**
+         * 构造关闭原因。
+         *
+         * @param reason  原因码
+         * @param message 给插件的说明
+         */
+        private Closure(ActionFailureReason reason, String message) {
+            this.reason = reason;
+            this.message = message;
+        }
+
+        /**
+         * 取原因码。
+         *
+         * @return 原因码
+         */
+        private ActionFailureReason reason() {
+            return reason;
+        }
+
+        /**
+         * 取给插件的说明。
+         *
+         * @return 给插件的说明
+         */
+        private String message() {
+            return message;
+        }
+    }
+
+    /**
      * 一个会话的投递窗口。
      * <p>
      * 动作句柄不在这里定义——它们是 {@link Handle}，本类只负责按顺序暂存与取走。
@@ -293,6 +350,9 @@ public final class ActionQueue {
 
         /** 是否已关闭：关闭之后一律拒绝入队，且不会再变回未关闭。 */
         private boolean closed;
+
+        /** 关闭原因，与 {@link #closed} 在同一把锁里写入；未关闭时为 {@code null}。 */
+        private Closure closedBy;
 
         /**
          * 入队。
@@ -344,14 +404,29 @@ public final class ActionQueue {
          * <b>置关闭标志与取走动作必须在同一把锁里</b>：分两步做的话，两步之间入队的动作
          * 既不在取走的名单里、又已经进了队列——它会永远停在 {@link ActionStatus#QUEUED} 上。
          * 关闭后 {@link #offer} 会拒绝，因此「取走之后再有人想入队」这条路径是闭的。
+         * <p>
+         * <b>关闭原因一并记下</b>：{@code offer} 撞上关闭时只能看到「关了」，看不到是谁关的，
+         * 而「回合跑完了」与「窗口被新回合顶掉了」对插件是两种处境（后者那条动作本该属于新回合）。
          *
+         * @param reason  关闭原因码
+         * @param message 给插件的说明
          * @return 剩余动作
          */
-        private synchronized List<Pending> closeAndTakeAll() {
+        private synchronized List<Pending> closeAndTakeAll(ActionFailureReason reason, String message) {
             closed = true;
+            this.closedBy = new Closure(reason, message);
             List<Pending> taken = new ArrayList<Pending>(pending);
             pending.clear();
             return taken;
+        }
+
+        /**
+         * 取本窗口的关闭原因，未关闭时为 {@code null}。
+         *
+         * @return 关闭原因，未关闭时为 {@code null}
+         */
+        private synchronized Closure closure() {
+            return closedBy;
         }
 
         /**

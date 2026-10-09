@@ -18,6 +18,10 @@ import java.util.Set;
  * 「显式拒绝 &gt; 需审批 &gt; 允许范围收窄」，因此同一个工具既出现在 {@code deniedTools}
  * 又出现在 {@code allowedTools} 时结论是拒绝——收窄永远优先于放宽。
  * <p>
+ * <b>fail-open 只覆盖「取不到策略」</b>（{@link #unrestricted()}），不覆盖「身份不成立」：
+ * 会话引用了一个查不到声明的 {@code agentId} 时用 {@link #denyAll()}，因为那不是「没有策略」，
+ * 而是「有一个策略，只是它指向的身份已经不存在了」。
+ * <p>
  * 不可变，可安全跨线程传递；构造时忽略空白项与重复项。
  *
  * @author zcd
@@ -26,6 +30,15 @@ public final class PermissionPolicy {
 
     /** 无策略实例：三个集合都为空，判定结果恒为「不限制」。 */
     private static final PermissionPolicy UNRESTRICTED = new PermissionPolicy(null, null, null);
+
+    /**
+     * 全拦实例：允许名单已声明且为空，判定结果对任何工具都是「不允许」。
+     * <p>
+     * 与 {@link #unrestricted()} 是两个相反方向的载体：那个是「取不到策略」，这个是
+     * 「取到了，但结论是一个都不许」。
+     */
+    private static final PermissionPolicy DENY_ALL = new PermissionPolicy(
+            Collections.<String>emptySet(), Collections.<String>emptySet(), Collections.<String>emptySet());
 
     /** 显式拒绝的工具名。 */
     private final Set<String> deniedTools;
@@ -58,6 +71,20 @@ public final class PermissionPolicy {
      */
     public static PermissionPolicy unrestricted() {
         return UNRESTRICTED;
+    }
+
+    /**
+     * 构造全拦策略：允许名单声明为空，任何工具都不放行。
+     * <p>
+     * <b>它是 fail-closed 的载体，不是「无策略」</b>：{@link #isEmpty()} 为 {@code false}，
+     * 判定结果明确是拒绝（理由为「工具不在 agent 允许范围内」）。用途是「身份不成立」——
+     * 会话绑了一个查不到声明的 {@code agentId} 时，与其让它享受「无限制」，不如让它什么都做不了，
+     * 而且这件事本身另有 {@code ConfigWarningEvent} 说明。
+     *
+     * @return 全拦策略
+     */
+    public static PermissionPolicy denyAll() {
+        return DENY_ALL;
     }
 
     /**

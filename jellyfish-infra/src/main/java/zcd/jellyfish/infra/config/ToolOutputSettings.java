@@ -3,6 +3,10 @@ package zcd.jellyfish.infra.config;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
 /**
  * {@code jellyfish.json} 的 {@code react.toolOutput} 段：工具结果的落盘与上下文治理参数。
  * <p>
@@ -66,6 +70,9 @@ public class ToolOutputSettings {
     /** 上下文中保留完整工具结果的最近消息条数，{@code 0} 表示不裁剪。 */
     private final int keepRecentMessages;
 
+    /** 配置里写错（并已按缺省值兜底）的地方，交给配置装载层报进事件面。 */
+    private final List<String> warnings;
+
     /**
      * 构造缺省工具结果设置。
      */
@@ -92,13 +99,33 @@ public class ToolOutputSettings {
                               @JsonProperty("maxBytes") Long maxBytes,
                               @JsonProperty("spillMaxBytes") Long spillMaxBytes,
                               @JsonProperty("keepRecentMessages") Integer keepRecentMessages) {
+        List<String> collected = new ArrayList<String>();
+        if (dir != null && dir.trim().isEmpty()) {
+            collected.add("react.toolOutput.dir 为空白，已按缺省值 " + DEFAULT_DIR + " 处理");
+        }
         this.dir = dir == null || dir.trim().isEmpty() ? DEFAULT_DIR : dir.trim();
-        this.keepFiles = keepFiles != null && keepFiles >= 0 ? keepFiles : DEFAULT_KEEP_FILES;
-        this.maxBytes = maxBytes != null && maxBytes >= 0 ? maxBytes : DEFAULT_MAX_BYTES;
-        this.spillMaxBytes = spillMaxBytes != null && spillMaxBytes >= 0
-                ? spillMaxBytes : DEFAULT_SPILL_MAX_BYTES;
-        this.keepRecentMessages = keepRecentMessages != null && keepRecentMessages >= 0
-                ? keepRecentMessages : DEFAULT_KEEP_RECENT_MESSAGES;
+        this.keepFiles = SettingsGuard.nonNegativeOrDefault(keepFiles, DEFAULT_KEEP_FILES,
+                "react.toolOutput.keepFiles", collected);
+        this.maxBytes = SettingsGuard.nonNegativeOrDefault(maxBytes, DEFAULT_MAX_BYTES,
+                "react.toolOutput.maxBytes", collected);
+        this.spillMaxBytes = SettingsGuard.nonNegativeOrDefault(spillMaxBytes, DEFAULT_SPILL_MAX_BYTES,
+                "react.toolOutput.spillMaxBytes", collected);
+        this.keepRecentMessages = SettingsGuard.nonNegativeOrDefault(keepRecentMessages,
+                DEFAULT_KEEP_RECENT_MESSAGES, "react.toolOutput.keepRecentMessages", collected);
+        this.warnings = Collections.unmodifiableList(collected);
+    }
+
+    /**
+     * 获取「配置里写错的地方」（键名 + 原值 + 为什么非法 + 按什么处理）。
+     * <p>
+     * 与 {@code ReactSettings#warnings()} 同口径：本类不发事件，只把事实交给配置装载层，
+     * 由它统一报进事件面。{@code dir} 为空白也在这里说一声——那多半是环境变量占位符没展开，
+     * 而它的后果是「结果文件落进了别处」，只看最终目录是看不出来的。
+     *
+     * @return 不可修改列表，可能为空但不会为 {@code null}
+     */
+    public List<String> warnings() {
+        return warnings;
     }
 
     /**

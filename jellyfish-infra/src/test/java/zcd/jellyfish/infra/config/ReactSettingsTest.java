@@ -39,6 +39,55 @@ class ReactSettingsTest {
     }
 
     @Test
+    void warnings_should_report_every_invalid_value_with_key_and_fallback() {
+        // When：六个键各写一个非法值
+        ReactSettings settings = new ReactSettings(0, -1, -5, -1, 0, -3);
+
+        // Then：一条不落，且每条都说清「哪个键、原值多少、按什么处理」
+        assertEquals(6, settings.warnings().size(), settings.warnings().toString());
+        assertTrue(settings.warnings().toString().contains("react.maxRounds=0"));
+        assertTrue(settings.warnings().toString().contains("react.contextReserveTokens=-1"));
+        assertTrue(settings.warnings().toString().contains("react.maxToolOutputChars=-5"));
+        assertTrue(settings.warnings().toString().contains("react.compactKeepRecentMessages=-1"));
+        assertTrue(settings.warnings().toString().contains("react.compactMaxSummaryChars=0"));
+        assertTrue(settings.warnings().toString().contains("react.autoCompactPercent=-3"));
+        assertTrue(settings.warnings().toString().contains(String.valueOf(ReactSettings.DEFAULT_MAX_ROUNDS)),
+                "要说清按什么值兜底，否则用户不知道实际生效的是哪个");
+    }
+
+    @Test
+    void warnings_should_be_empty_when_values_valid_or_missing() {
+        // When：「没配」不是写错，合法值当然也不是
+        ReactSettings settings = new ReactSettings(3, 0, 100, 0, 5000, 0);
+
+        // Then
+        assertTrue(settings.warnings().isEmpty(), settings.warnings().toString());
+    }
+
+    @Test
+    void warnings_should_mention_over_limit_percent_separately() {
+        // When：超过 100 是「写大了」而不是「写错了」，两者的修法不同
+        ReactSettings settings = new ReactSettings(null, null, null, null, null, 150);
+
+        // Then
+        assertEquals(100, settings.getAutoCompactPercent());
+        assertEquals(1, settings.warnings().size(), settings.warnings().toString());
+        assertTrue(settings.warnings().get(0).contains("超出上限"), settings.warnings().get(0));
+    }
+
+    @Test
+    void warnings_should_include_tool_output_section() {
+        // When：子段写错也要能在这一个出口上看到（否则它只能靠日志）
+        ReactSettings settings = new ReactSettings(null, null, null, null, null, null,
+                new ToolOutputSettings(null, -1, null, null, -2));
+
+        // Then
+        assertEquals(2, settings.warnings().size(), settings.warnings().toString());
+        assertTrue(settings.warnings().toString().contains("react.toolOutput.keepFiles=-1"));
+        assertTrue(settings.warnings().toString().contains("react.toolOutput.keepRecentMessages=-2"));
+    }
+
+    @Test
     void constructor_should_keep_explicit_zero_reserve() {
         // When：显式 0 预留是合法配置，不能被当成「未配置」
         ReactSettings settings = new ReactSettings(null, 0, null, null, null, null);

@@ -142,18 +142,19 @@ class ConfigReloaderTest {
     }
 
     @Test
-    void reload_should_publish_config_reloaded_event_with_touched_plugins_and_duration() {
-        // Given
+    void reload_should_publish_config_reloaded_event_with_restarted_plugins_and_duration() {
+        // Given：事件字段与指标名说的都是「被重启（停止后重新启动）」，因此只带重启那一张表
+        // （报告里另有「只被停掉」「启动失败」两张表，它们不算重启——汇总集合已因此删掉）
         when(runtimeConfig.getPluginRoots()).thenReturn(ROOTS);
         when(runtimeConfig.getPluginsSettings()).thenReturn(null);
         PluginReloadReport report = mock(PluginReloadReport.class);
-        when(report.touchedPluginIds()).thenReturn(new LinkedHashSet<String>(Arrays.asList("a", "b")));
+        when(report.getRestarted()).thenReturn(Arrays.asList("a", "b"));
         when(pluginManager.reload(any())).thenReturn(report);
 
         // When
         ReloadOutcome outcome = newReloader().reload();
 
-        // Then
+        // Then：事件（以及跟着它走的指标）说的是「被重启」，与字段注释、指标名一致
         ArgumentCaptor<ConfigReloadedEvent> captor = ArgumentCaptor.forClass(ConfigReloadedEvent.class);
         verify(events).publish(captor.capture());
         assertEquals(new LinkedHashSet<String>(Arrays.asList("a", "b")),

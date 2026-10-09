@@ -22,6 +22,7 @@ import java.util.LinkedHashSet;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -245,16 +246,25 @@ class AgentManagerTest {
     }
 
     @Test
-    void policyOf_should_be_unrestricted_when_agent_not_declared() {
+    void policyOf_should_stay_unrestricted_when_agent_is_null() {
         // Given
         when(runtimeConfig.getAgentSettings()).thenReturn(settings(definition(CODER, null)));
         AgentManager manager = newManager();
 
-        // When / Then：fail-open 只覆盖「取不到策略」
+        // When / Then：fail-open 只覆盖「没绑 agent」
         assertNotNull(manager.policyOf(null));
         assertTrue(manager.policyOf(null).isEmpty());
-        assertTrue(manager.policyOf("ghost").isEmpty());
-        assertTrue(manager.policyOf("ghost").allows("bash"));
+    }
+
+    @Test
+    void policyOf_should_deny_everything_when_agent_not_declared() {
+        // Given
+        when(runtimeConfig.getAgentSettings()).thenReturn(settings(definition(CODER, null)));
+        AgentManager manager = newManager();
+
+        // When / Then：绑了一个查不到的身份是硬拒绝，不是 fail-open
+        assertFalse(manager.policyOf("ghost").isEmpty());
+        assertFalse(manager.policyOf("ghost").allows("bash"));
     }
 
     @Test

@@ -739,6 +739,10 @@ public class RuntimeConfig {
     /**
      * 对合并后的模型配置做一致性告警：默认值指向不存在的 provider / model 时只发出
      * {@link ConfigWarningEvent}，交由选择模型的 {@code ModelManager} 在真正用到时决定如何处理。
+     * <p>
+     * 每个 provider 的 {@code sampling} 段也在这里一并报：采样值非法时内核是「静默丢弃该项」
+     * （各家对 {@code top_k = 0} 的语义都不一样，因此不猜），而「丢掉了」这件事必须说出来，
+     * 否则用户只会看到「我调了温度却没变化」。
      *
      * @param merged 合并后的模型配置
      */
@@ -752,6 +756,9 @@ public class RuntimeConfig {
             if (StringUtils.isBlank(provider.getType())) {
                 eventPublisher.publish(new ConfigWarningEvent(provider.getName(),
                         "provider 缺少 type，无法路由到具体客户端"));
+            }
+            for (String warning : provider.getSampling().warnings()) {
+                eventPublisher.publish(new ConfigWarningEvent(provider.getName(), warning));
             }
         }
         String defaultProvider = merged.getDefaultProvider();
@@ -773,6 +780,11 @@ public class RuntimeConfig {
      * 查两处真实歧义：同一个 pluginId 同时出现在启用与禁用名单里（此时按既有语义「禁用优先」
      * 处理是对的，但用户多半写错了）；以及权限段的审批超时被静默改过值——{@code 0} 的本意是
      * 「立即拒绝」，而它会被换成「等 120 秒，期间人工批准仍然生效」，那是把审批闸门悄悄放宽了。
+     * <p>
+     * <b>数值项写错也在这条通道上</b>：{@code react} 段（含 {@code react.toolOutput}）把每一次
+     * 「非法值回退缺省」记在 {@code warnings()} 里，由这里逐条发出去。它们此前要么只写日志
+     * （TUI 下日志只进文件），要么什么都不说——用户调了半天配置没生效，其实是那个值一开始
+     * 就被判非法了。事件面是配置问题的<b>唯一出口</b>：设置类不该各自长出一条发布路径。
      *
      * @param merged 合并后的运行期设置
      */
@@ -786,6 +798,9 @@ public class RuntimeConfig {
         }
         for (String warning : merged.getPermission().warnings()) {
             eventPublisher.publish(new ConfigWarningEvent("permission", warning));
+        }
+        for (String warning : merged.getReact().warnings()) {
+            eventPublisher.publish(new ConfigWarningEvent("react", warning));
         }
     }
 

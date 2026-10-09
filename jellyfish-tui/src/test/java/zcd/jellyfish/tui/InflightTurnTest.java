@@ -356,7 +356,12 @@ class InflightTurnTest {
         start.countDown();
         assertTrue(done.await(10, TimeUnit.SECONDS), "写入线程应在超时前结束");
 
-        assertNotNull(turn.snapshot());
+        // 断言「不丢增量」不能只看快照非空：4 线程 × 500 次各追加一个字符，
+        // 快照里的正文必须是全部那 2000 个字符（少一个就说明有增量被并发写吃掉）
+        InflightTurn.Snapshot snapshot = turn.snapshot();
+        assertNotNull(snapshot);
+        assertEquals(writers * perWriter, snapshot.getText().length(),
+                "并发写入丢了增量: " + snapshot.getText().length());
         for (Thread thread : threads) {
             thread.interrupt();
         }

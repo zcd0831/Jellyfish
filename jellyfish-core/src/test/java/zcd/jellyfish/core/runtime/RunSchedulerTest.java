@@ -28,10 +28,14 @@ import static org.mockito.Mockito.lenient;
  * <p>
  * 直接调包私有的 {@link RunScheduler#submit} 而不是走 {@code AgentRuntime.spawn}：本类测的是调度，
  * 父子关系与登记由 {@code AgentRuntimeTest} 覆盖。
+ * <p>
+ * <b>类级 {@code @Timeout}</b>：本类多条用例走 {@code AgentRunHandle.await()}（{@code CountDownLatch.await()}
+ * 无时限），而它要防的正是「run 被丢掉、句柄永不落终态」——那种回归表现为<b>挂死</b>。
  *
  * @author zcd
  */
 @ExtendWith(MockitoExtension.class)
+@Timeout(value = 60, unit = TimeUnit.SECONDS)
 class RunSchedulerTest {
 
     /** 运行时配置门面：只用来给调度器喂 {@code subAgent} 段。 */

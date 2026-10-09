@@ -12,8 +12,16 @@
         <Property name="logLevel">${sys:jellyfish.log.level:-WARN}</Property>
     </Properties>
     <Appenders>
+        <!-- 日志出口是「不可信文本 → 终端」的第四条出口（前三条是 TUI 的 StyledSegment、
+             Server 的 SseContributionListener、CLI 的 SystemConsoleIO）：本 appender 在 -cli / -server
+             模式下把日志写进 stderr，而日志里会拼进模型输出、工具参数、子进程原始字节、文件路径与异常消息。
+             一个 ESC 就能清屏、一个 OSC 就能改窗口标题。过滤放在这一层而不是各调用点：出口只有一处，
+             而拼进外部文本的调用点有几十处。
+             正则剥掉全部控制字符、只留换行与制表：栈要能读，但换行之外的控制字节没有正当用途。
+             alwaysWriteExceptions 关掉是为了让异常也走同一条 replace（否则框架会再补一份未过滤的）。 -->
         <Console name="Stderr" target="SYSTEM_ERR">
-            <PatternLayout pattern="%d{HH:mm:ss.SSS} %-5level %logger{36} - %msg%n"/>
+            <PatternLayout alwaysWriteExceptions="false"
+                           pattern="%d{HH:mm:ss.SSS} %-5level %logger{36} - %replace{%msg}{[\p{Cntrl}&amp;&amp;[^\n\t]]}{}%n%replace{%xEx}{[\p{Cntrl}&amp;&amp;[^\n\t]]}{}"/>
         </Console>
     </Appenders>
     <Loggers>

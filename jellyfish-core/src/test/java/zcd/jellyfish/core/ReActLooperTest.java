@@ -103,10 +103,15 @@ import static org.mockito.Mockito.when;
  * 用真实 {@code SessionManager} / {@code ExtensionRegistry} / {@code PromptAssembler}，
  * 只 mock 外部协作者（模型、权限、事件、配置）；{@code chatStream} 用同步触发回调解的桩，
  * 回合仍经专用单线程执行器异步推进，由 {@link ReActTurn#await()} 汇合。
+ * <p>
+ * <b>类级 {@code @Timeout}</b>：{@code ReActTurnImpl.await()} 是 {@code Future.get()}，没有任何时限——
+ * 「回合不收敛」这类回归的失败模式是<b>永久挂死</b>而不是变红，CI 卡住比失败更糟。
+ * 逐条加容易漏（此前 58 条里只有 5 条带），因此加在类上。
  *
  * @author zcd
  */
 @ExtendWith(MockitoExtension.class)
+@Timeout(value = 60, unit = TimeUnit.SECONDS)
 class ReActLooperTest {
 
     /** agent 门面。 */

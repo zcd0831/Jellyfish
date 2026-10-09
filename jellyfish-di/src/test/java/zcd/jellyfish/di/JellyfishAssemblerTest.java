@@ -93,7 +93,12 @@ class JellyfishAssemblerTest {
         // Given / When / Then：22 个访问器一个都不能是 null，否则外壳会在第一次用到时才发现
         forEachRuntime(assembly -> {
             assertNotNull(assembly.runtimeConfig(), "runtimeConfig");
+            // projectConfigTrust 的**真实**不变量是「这里暴露的就是 RuntimeConfig 用来判信任的那一个」，
+            // 非空断言证明不了它（换成一个新建的占位对象照样非空）——这里只补能做到的一半：
+            // 重复取到的是同一个实例（拒绝「每次调用新建一个」），完整的那半由 RuntimeConfigTest
+            // 的信任闸用例从行为侧覆盖
             assertNotNull(assembly.projectConfigTrust(), "projectConfigTrust");
+            assertSame(assembly.projectConfigTrust(), assembly.projectConfigTrust(), "projectConfigTrust");
             assertNotNull(assembly.agentHarness(), "agentHarness");
             assertNotNull(assembly.agentManager(), "agentManager");
             assertNotNull(assembly.modelManager(), "modelManager");

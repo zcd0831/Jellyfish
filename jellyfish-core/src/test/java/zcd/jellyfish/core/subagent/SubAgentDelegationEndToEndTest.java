@@ -2,6 +2,7 @@ package zcd.jellyfish.core.subagent;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.Mock;
@@ -46,6 +47,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -68,10 +70,14 @@ import static org.mockito.Mockito.when;
  * <b>它补的是哪一段</b>：{@code SubAgentLauncherTest} 验的是「{@code task} 那条路」，
  * {@code SubAgentDelegationAdapterTest} 只验翻译（委派器是 mock）。这里把两者接起来，
  * 并断言只有真实链路才会产生的那些副作用。
+ * <p>
+ * <b>类级 {@code @Timeout}</b>：这里等的是真实调度器上的 {@code AgentRunHandle}（{@code CountDownLatch}
+ * 无时限），失败模式同样是挂死而不是红。
  *
  * @author zcd
  */
 @ExtendWith(MockitoExtension.class)
+@Timeout(value = 60, unit = TimeUnit.SECONDS)
 class SubAgentDelegationEndToEndTest {
 
     /** 可委派的 agent 标识。 */

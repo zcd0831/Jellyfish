@@ -28,7 +28,11 @@
         <!-- 当前日志始终写在 logFile 这个名字上（用户与文档引用的就是它），滚出来的历史是 logFile.1、.2……
              这样「看最新日志」永远不需要先找文件在哪儿。 -->
         <RollingFile name="TuiFile" fileName="${logFile}" filePattern="${logFile}.%i" append="true">
-            <PatternLayout pattern="%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level %logger{36} - %msg%n"/>
+            <!-- 与 log4j2.xml 同一条过滤（控制字符剥掉、换行与制表保留）：TUI 模式的日志虽写文件，
+                 但读它的人是拿终端读的（tail / less），而未过滤的控制字节会在那一刻作用于终端。
+                 口径与 console 那份完全一致，见 log4j2.xml 处的注释。 -->
+            <PatternLayout alwaysWriteExceptions="false"
+                           pattern="%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level %logger{36} - %replace{%msg}{[\p{Cntrl}&amp;&amp;[^\n\t]]}{}%n%replace{%xEx}{[\p{Cntrl}&amp;&amp;[^\n\t]]}{}"/>
             <!-- 按大小滚动：没有按时间滚动的必要——TUI 可能整天不在写日志，按时间只会滚出一堆空文件 -->
             <SizeBasedTriggeringPolicy size="${logMaxSize}"/>
             <!-- 超出保留档数的旧文件从这里被删掉，这就是「无限增长」被终结的地方 -->

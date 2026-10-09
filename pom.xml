@@ -60,12 +60,19 @@
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
         <dagger.version>2.16</dagger.version>
         <javax-inject.version>1</javax-inject.version>
-        <!-- Undertow：2.2.39.Final 是 2.2.x（Java 8 维护线）的末版。
-             2.3.0 起最低要求 Java 11，且 undertow-servlet 已迁到 jakarta.*；本项目是 JDK 1.8。
-             实测：2.2.39.Final 的 class 主版本号为 52（Java 8），且 7 个 artifact 全为 Java 8。
-             本仓库只用 undertow-core 自带的 HttpHandler，不引 undertow-servlet，故 jakarta 迁移不影响。
-             升级前必须重新验证这条边界。 -->
-        <undertow.version>2.2.39.Final</undertow.version>
+        <!-- Undertow：2.2.40.Final（2026-06-27）是 2.2.x（Java 8 维护线）的当前末版，
+             并已包含 CVE-2026-28367/28368/28369 三件请求走私的修复（回移）。
+             实证：`Connectors.java` 在 tag 2.2.40.Final 的历史里有提交
+             `[UNDERTOW-2594][UNDERTOW-2595][UNDERTOW-2596] CVE-2026-28368 CVE-2026-28369
+             CVE-2026-28367 Switching to strict HTTP parser`；OSV/GHSA 只把 2.4.0.Final 列为修复版，
+             发布说明也只在那一版列出，因此这条回移只能靠标签历史确认——升级前请照做一次。
+             为什么不能升 2.3/2.4：2.3.0 起最低要求 Java 11，且 undertow-servlet 已迁到 jakarta.*；
+             本项目是 JDK 1.8。本仓库只用 undertow-core 自带的 HttpHandler，不引 undertow-servlet，
+             故 jakarta 迁移不影响。
+             实测：在 JDK 1.8 上跑通 `-Pserver-it`（端到端真起 Undertow），说明该 artifact 的运行期字节码兼容 Java 8；
+             jar 自身的 class 主版本号未再用工具逐个体检（此前 2.2.39.Final 体检过，为 52）。
+             升级前必须重新验证这两条边界。 -->
+        <undertow.version>2.2.40.Final</undertow.version>
         <okhttp.version>4.12.0</okhttp.version>
         <pf4j.version>3.14.1</pf4j.version>
         <jackson.version>2.21.6</jackson.version>

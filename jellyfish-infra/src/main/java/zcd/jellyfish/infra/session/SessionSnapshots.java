@@ -39,15 +39,24 @@ public final class SessionSnapshots {
 
     /**
      * 把内核会话投影成 api 快照。
+     * <p>
+     * <b>不要从外部调它</b>：本方法逐个读 {@code session} 的同步 getter，两次读之间没有任何东西
+     * 把它们绑在一起，因此只有在**持着会话实例锁**的情况下调用才能得到一致的投影。唯一入口是
+     * {@link Session#captureSnapshot()}——本方法收成包私有正是为了这一点：以前它是 public，
+     * 于是「一致投影」只被修在落盘路径上，而归档、HTTP 响应与 Spring 查询三处仍在逐个读。
+     * 包内只有 {@link Session#captureSnapshot()} 调它（测试里另有一处，用来对照「不持锁会怎样」）。
      *
      * @param session 会话运行态，不可为 {@code null}
      * @return 会话快照
      */
-    public static SessionSnapshot capture(Session session) {
+    static SessionSnapshot capture(Session session) {
         List<SessionMessageSnapshot> messages = new ArrayList<SessionMessageSnapshot>(session.size());
         for (SessionMessage message : session.getMessages()) {
             messages.add(captureMessage(message));
         }
+        // 一致投影的易破处就在这一行：消息已经读完、用量还没读。持着实例锁时它是无害的
+        // （别的线程进不来），不持锁时别的线程能在这里插进来，快照随即自相矛盾
+        Session.betweenSnapshotReads.run();
         return new SessionSnapshot(session.getSessionId(), session.getCreatedAt(), session.getUpdatedAt(),
                 session.getTitle(), session.getAgentId(), session.getProvider(), session.getModel(),
                 messages, captureUsage(session.getUsage()),

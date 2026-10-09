@@ -10,7 +10,6 @@ import zcd.jellyfish.infra.agent.AgentManager;
 import zcd.jellyfish.infra.model.ModelManager;
 import zcd.jellyfish.infra.session.Session;
 import zcd.jellyfish.infra.session.SessionManager;
-import zcd.jellyfish.infra.session.SessionSnapshots;
 import zcd.jellyfish.infra.session.SessionUsage;
 import zcd.jellyfish.server.ServerConfig;
 import zcd.jellyfish.core.conversation.TurnRegistry;
@@ -96,7 +95,7 @@ public final class SessionHandlers {
         requireAgentExists(agentId);
         requireModelExists(provider, model);
         Session session = sessions.create(agentId, provider, model);
-        Responses.writeJson(exchange, Responses.CREATED, SessionSnapshots.capture(session));
+        Responses.writeJson(exchange, Responses.CREATED, session.captureSnapshot());
     }
 
     /**
@@ -124,7 +123,7 @@ public final class SessionHandlers {
      */
     public void get(HttpServerExchange exchange, PathParams params) {
         Session session = requireSession(params.get("id"));
-        Responses.writeJson(exchange, Responses.OK, SessionSnapshots.capture(session));
+        Responses.writeJson(exchange, Responses.OK, session.captureSnapshot());
     }
 
     /**

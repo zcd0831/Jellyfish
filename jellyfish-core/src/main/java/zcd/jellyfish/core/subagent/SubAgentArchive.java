@@ -6,7 +6,6 @@ import zcd.jellyfish.core.runtime.AgentRunSnapshot;
 import zcd.jellyfish.infra.config.RuntimeConfig;
 import zcd.jellyfish.infra.config.SubAgentSettings;
 import zcd.jellyfish.infra.session.Session;
-import zcd.jellyfish.infra.session.SessionSnapshots;
 import zcd.jellyfish.infra.support.ObjectMapperWrapper;
 import zcd.jellyfish.infra.tooloutput.ToolOutputStore;
 
@@ -115,8 +114,11 @@ public class SubAgentArchive {
         document.put("finishedAt", run.getFinishedAt());
         document.put("rounds", run.getRounds());
         document.put("totalTokens", run.getTotalTokens());
-        // 会话快照含完整 transcript 与用量明细：它是子代理「做了什么」的唯一原始记录
-        document.put("session", child == null ? null : SessionSnapshots.capture(child));
+        // 会话快照含完整 transcript 与用量明细：它是子代理「做了什么」的唯一原始记录。
+        // 走 captureSnapshot()（而不是 SessionSnapshots.capture）：这份文档会**落盘**，
+        // 而逐个 getter 读出来的快照可能自相矛盾（用量含某条消息、列表里却没有它），
+        // 那种矛盾会随归档留在磁盘上，且看不出是坏的
+        document.put("session", child == null ? null : child.captureSnapshot());
         return document;
     }
 }

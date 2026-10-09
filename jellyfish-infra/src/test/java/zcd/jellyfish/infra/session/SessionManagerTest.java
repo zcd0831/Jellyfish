@@ -1231,9 +1231,9 @@ class SessionManagerTest {
                 java.util.Collections.singletonMap("v", 1));
         Session forked = manager.fork(source.getSessionId(), null, "分支");
 
-        SessionSnapshot first = SessionSnapshots.capture(forked);
+        SessionSnapshot first = forked.captureSnapshot();
         Session restored = Session.restore(first);
-        SessionSnapshot second = SessionSnapshots.capture(restored);
+        SessionSnapshot second = restored.captureSnapshot();
 
         assertEquals(SessionKind.FORKED, restored.getKind());
         assertEquals(source.getSessionId(), restored.getParentSessionId());

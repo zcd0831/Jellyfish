@@ -78,6 +78,10 @@ class SessionHandlersTest {
         when(session.getMessages()).thenReturn(Collections.emptyList());
         when(session.size()).thenReturn(0);
         when(session.getUsage()).thenReturn(SessionUsage.EMPTY);
+        // 取快照的入口是实例方法（`Session.captureSnapshot()` 是唯一入口，见 `SessionSnapshots` 的注释），
+        // 因此 mock 上要让它走真实实现——真实实现读的就是上面这些已 stub 的 getter，
+        // 于是本夹具的语义与「handler 直接调 SessionSnapshots.capture」时完全一致
+        when(session.captureSnapshot()).thenCallRealMethod();
         return session;
     }
 

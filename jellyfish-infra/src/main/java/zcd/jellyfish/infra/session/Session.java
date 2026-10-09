@@ -354,6 +354,10 @@ public final class Session {
      * 却没有它」这种自相矛盾的一对字段，且它会随落盘留在磁盘上，直到同一会话的下一次落盘才被覆盖。
      * 本方法把这些读放进同一段临界区，因此快照里的字段是同一个瞬间的。
      * <p>
+     * <b>这是取快照的唯一入口</b>（`SessionSnapshots.capture` 已收成包私有）：一致投影不能靠
+     * 「每个调用方都记得别直接调那个工具方法」来保证——它此前只被修在落盘路径上，而归档、HTTP 响应
+     * 与 Spring 查询三处仍在逐个读。收口之后那三处**编译不过**，比断言更硬。
+     * <p>
      * <b>为什么放在本类</b>：锁是实例私有的，从外部 lock 属于绕过封装；且「哪些 getter 要一起读」
      * 是与本类状态形状绑定的知识。
      * <p>
@@ -362,9 +366,26 @@ public final class Session {
      *
      * @return 会话快照，保证非 {@code null}
      */
-    synchronized SessionSnapshot captureSnapshot() {
+    public synchronized SessionSnapshot captureSnapshot() {
         return SessionSnapshots.capture(this);
     }
+
+    /**
+     * 测试接缝：在「读完消息、还没读用量」之间执行；缺省什么都不做。
+     * <p>
+     * <b>为什么需要它</b>：那一段空隙正是「快照里出现自相矛盾的一对字段」唯一的易破处，而它在真实
+     * 代码里没有可注入的停顿点（要让**另一个线程**恰好落在两次 getter 之间；同一个线程里的注入在
+     * {@code synchronized} 面前是可重入的，区分不出持锁与不持锁）。包私有，只由同包测试设置；
+     * 生产路径上它永远是那个 no-op（不参与任何判定，也不改变时序），因此与
+     * {@code ActionQueue.betweenWindowAndOffer} 是同一类接缝。
+     * <p>
+     * <b>为什么是静态而不是实例字段</b>：投影的调用方会拿到 {@code Session} 的 mock（HTTP handler
+     * 那类测试只关心响应码与正文），而 mock 实例**不会跑字段初始化**——实例接缝在它上面是
+     * {@code null}，于是 `SessionSnapshots.capture` 一调就 NPE。静态字段属于类，与实例怎么来的无关。
+     * 代价是它跨用例共享，因此**用完必须立即复位**（本仓库的测试默认顺序执行，不并行）。
+     */
+    static Runnable betweenSnapshotReads = () -> {
+    };
 
     /**
      * 在「落盘锁」内执行动作，用于串行化「捕获快照 + 交给持久化插件」这一整段。

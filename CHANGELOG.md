@@ -40,6 +40,16 @@
 
 ### Changed
 
+- **jline 从 3.25.1 升到 3.30.17（`jdk8` 分类器）**（安全，依赖）：3.25.1 落在 jline 那几件 ReDoS 公告的
+  受影响区间里（`<3.30.15`：`HISTORY_IGNORE` 的 `CVE-2026-77420`、`less` 视图与内置 `grep` 的
+  `CVE-2026-77423`）。jline 是从 `dev.tamboui:tamboui-jline3-backend` 传递进来的，因此 `jellyfish-tui`
+  把它**排除掉再显式声明**——classifier 不同的 artifact 在 Maven 眼里是两回事，不排除就会两个 jar
+  同时在类路径上。**必须带 `jdk8` 分类器**：3.26.0 起主线 jar 里混着更高版本的字节码（实测主线
+  `3.30.17.jar` 里有 **21 个 major 66 即 Java 22 的类**，全是 `org/jline/terminal/impl/ffm/*` 那批
+  FFM provider），按需加载在 JDK 1.8 上虽然侥幸能用，但全类路径扫描、类加载校验与某些容器都会撞上；
+  `jdk8` 分类器是官方给出的干净那份（整份 jar 里没有一个高于 52 的类）。
+  判据 `JlineBackendCompatibilityTest`：来源是 jdk8 那份 + 整份 jar 无高版本类 + dumb 终端能真建起来 +
+  TamboUI 后端引用的 jline 类型都还能解析（撤掉分类器即红，失败信息会列出那 21 个类）。
 - **取会话快照收成唯一入口**（破坏性，仅直接调用过 `SessionSnapshots.capture(Session)` 的嵌入方）：
   该方法收为包私有，改用 `session.captureSnapshot()`。**为什么**：一致投影（整份读取在同一段临界区）
   此前只是写在注释里的纪律——`SessionSnapshots.capture` 逐个读同步 getter，调用方若忘了持有实例锁，
@@ -133,6 +143,13 @@
 
 ### Fixed
 
+- **异常补上 `serialVersionUID`（七处）**：`CompactionUnavailableException`、`TurnInProgressException`、
+  `ApiException`，以及插件侧的 `ScriptCallException` / `ScriptTimeoutException` / `ScriptCancelledException` /
+  `ScriptConnectionException` / `ScriptNotHandledException`。**这不是修了一个能触发的故障**——核对过：
+  内核没有把异常跨进程序列化的路径（无 RPC、不写进落盘文件），脚本那一侧协议帧里传的是错误码与文本
+  而不是 Java 对象。补它的理由是它们都是**公共契约**：哪天真要跨边界传一个异常，缺这个字段会让
+  「版本不同」表现为一次反序列化失败，而不是一句可读提示；而子类必须各自声明（序列化机制只看类
+  自身声明的那个字段，不继承）。
 - **客户端连上 SSE 却不读时，那次卡住的写会被掐断**（N-40 收口，新增配置 `writeTimeoutSeconds`，缺省 60 秒）：
   给监听器装上 `Options.WRITE_TIMEOUT`，到点由 Undertow 关连接并让那次写抛 `IOException`，
   随后走既有的断连收尾——取消回合、关订阅、**归还 stream 许可**。此前没有这道闸，而这条流唯一的写线程

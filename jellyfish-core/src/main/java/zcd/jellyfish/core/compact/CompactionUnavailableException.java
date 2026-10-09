@@ -20,6 +20,15 @@ import zcd.jellyfish.api.JellyfishException;
 public class CompactionUnavailableException extends JellyfishException {
 
     /**
+     * 序列化版本号。
+     * <p>
+     * 内核没有把异常跨进程序列化的路径（无 RPC，也不把异常写进落盘文件），因此它眼下只满足
+     * 可序列化类的规范；显式声明而不是交给默认计算，是因为异常是<b>公共契约</b>——哪天真要跨边界传它时，
+     * 缺这个字段会让「版本不同」表现为一次反序列化失败，而不是一句可读提示。
+     */
+    private static final long serialVersionUID = 1L;
+
+    /**
      * 构造压缩不可用异常。
      *
      * @param message 失败原因，会原样呈现给用户

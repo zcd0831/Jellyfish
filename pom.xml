@@ -83,6 +83,13 @@
              0.22.0 起改为 major 55（Java 11），在 JDK 1.8 下会 UnsupportedClassVersionError。
              实测：0.21.0 的三个 artifact 均为 major 51。升级前必须重新验证这条边界。 -->
         <commonmark.version>0.21.0</commonmark.version>
+        <!-- 终端后端：TamboUI 的 jline3 backend 传递进来的版本是 3.25.1，而它落在
+             jline 那几件 ReDoS 公告的受影响区间里（<3.30.15，`CVE-2026-77420` 的
+             `HISTORY_IGNORE`、`CVE-2026-77423` 的 `less` 与内置 `grep`）。
+             3.26.0 起主线 jar 抬到 Java 11+，但**每个版本同时发 `-jdk8` 分类器**（就是给
+             Java 8 的构建），因此 3.30.17 在 JDK 1.8 上可用——它由 jellyfish-tui 显式声明，
+             并在那里排除传递依赖，理由见那份 pom。 -->
+        <jline.version>3.30.17</jline.version>
         <maven-compiler-plugin.version>3.11.0</maven-compiler-plugin.version>
         <!-- 打包：shade 3.5.x 是仍支持 JDK 8 + Maven 3.2.5 的版本线 -->
         <maven-shade-plugin.version>3.5.1</maven-shade-plugin.version>

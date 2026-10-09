@@ -18,6 +18,14 @@ import zcd.jellyfish.api.JellyfishException;
  */
 public final class ApiException extends JellyfishException {
 
+    /**
+     * 序列化版本号。
+     * <p>
+     * 服务端没有把异常跨进程序列化的路径（它总是被翻译成一个状态码与一段 JSON 应答），
+     * 因此它眼下只满足可序列化类的规范。
+     */
+    private static final long serialVersionUID = 1L;
+
     /** HTTP 状态码。 */
     private final int status;
 

@@ -38,10 +38,27 @@
             <groupId>dev.tamboui</groupId>
             <artifactId>tamboui-toolkit</artifactId>
         </dependency>
-        <!-- 终端后端：必须显式选一个，TamboUI 自身不带默认后端 -->
+        <!-- 终端后端：必须显式选一个，TamboUI 自身不带默认后端。
+             它传递进来的 jline 是 3.25.1，落在几件 ReDoS 公告的受影响区间里，因此这里排除掉、
+             改用下面显式声明的 3.30.17-jdk8（jline 3.x 每个版本都发 jdk8 分类器；
+             主线 jar 从 3.26.0 起是 Java 11+ 字节码，JDK 1.8 下不能用）。
+             排除是必需的：classifier 不同的 artifact 在 Maven 眼里是两回事，
+             不排除就会两个 jar 同时在类路径上（谁先被加载取决于顺序）。 -->
         <dependency>
             <groupId>dev.tamboui</groupId>
             <artifactId>tamboui-jline3-backend</artifactId>
+            <exclusions>
+                <exclusion>
+                    <groupId>org.jline</groupId>
+                    <artifactId>jline</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>org.jline</groupId>
+            <artifactId>jline</artifactId>
+            <version>${jline.version}</version>
+            <classifier>jdk8</classifier>
         </dependency>
 
         <!-- Markdown：只用它的 AST 解析器，渲染由我们自己的 text/MarkdownRenderer 承担。

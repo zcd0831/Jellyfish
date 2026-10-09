@@ -16,6 +16,14 @@ import zcd.jellyfish.api.JellyfishException;
  */
 public class TurnInProgressException extends JellyfishException {
 
+    /**
+     * 序列化版本号。
+     * <p>
+     * 内核没有把异常跨进程序列化的路径，因此它眼下只满足可序列化类的规范；显式声明而不是交给默认计算，
+     * 是因为异常是<b>公共契约</b>——子类必须各自声明（序列化机制只看类自身声明的那个字段，不继承）。
+     */
+    private static final long serialVersionUID = 1L;
+
     /** 冲突的会话标识。 */
     private final String sessionId;
 

@@ -290,7 +290,7 @@ public final class TuiApp extends ToolkitApp {
      * 回合进行中，插件内容的最长刷新间隔（毫秒）。
      * <p>
      * <b>为什么需要它</b>：外壳只在「有理由相信内容变了」时重新收集（见 {@code UiCache}），
-     * 而子代理面板要显示「已运行 Ns」这类<b>持续推进</b>的信息——它没有对应的事件：
+     * 而子代理面板要显示「已等待 Ns / 已运行 Ns」这类<b>持续推进</b>的信息——它没有对应的事件：
      * run 的起止都发生在回合内部，外壳看不到。回合进行中按一秒一下补失效，正好是这个粒度的代价：
      * 面板与状态栏片段的处理器都是「快、只读」的约定，一秒一次的调用量远低于它们的预算，
      * 而空闲时（没有回合）一次都不多问。
@@ -504,7 +504,7 @@ public final class TuiApp extends ToolkitApp {
             uiCache.invalidate();
         }
         renderedTurnRunning = turnRunning;
-        // 回合进行中每秒补一次失效：子代理面板要显示「已运行 Ns」这种持续变化的数字，
+        // 回合进行中每秒补一次失效：子代理面板要显示「已等待 / 已运行 Ns」这种持续变化的数字，
         // 而 run 的起止没有对应事件（见 LIVE_REFRESH_MILLIS 的注释）
         if (turnRunning && System.currentTimeMillis() - lastLiveInvalidateMillis >= LIVE_REFRESH_MILLIS) {
             lastLiveInvalidateMillis = System.currentTimeMillis();

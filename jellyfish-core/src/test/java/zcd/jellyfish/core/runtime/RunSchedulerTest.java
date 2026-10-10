@@ -10,21 +10,28 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import zcd.jellyfish.infra.config.RuntimeConfig;
 import zcd.jellyfish.infra.config.SubAgentSettings;
 
+import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /**
  * {@link RunScheduler} 的单元测试：有界队列的吸收能力、满员时的拒绝、排队期被取消的处理，
- * 以及墙钟的起算点。
+ * 墙钟的起算点，以及「配置在什么时候读」。
  * <p>
  * 这些行为一起回答的是同一个用户问题——「这一批派得比并发多会怎样」：多出来的应当排队等许可，
  * 而不是当场失败；排队等的时间不该算进它的墙钟；等它的那个回合要是已经结束了，也就不必再跑。
+ * 最后一组用例守的是另一件更隐蔽的事：<b>装配发生在配置装载之前</b>，因此构造期读到的参数
+ * 永远只是缺省值——「配了却完全没生效」不会报错、不会有日志，只会让人一直怀疑自己写错了键。
  * <p>
  * 直接调包私有的 {@link RunScheduler#submit} 而不是走 {@code AgentRuntime.spawn}：本类测的是调度，
  * 父子关系与登记由 {@code AgentRuntimeTest} 覆盖。
@@ -239,6 +246,101 @@ class RunSchedulerTest {
         assertFalse(result.getError().contains("排队已满"), String.valueOf(result.getError()));
     }
 
+    @Test
+    @DisplayName("构造期不读 subAgent 配置：此刻快照还没装载，读了只会拿到缺省值")
+    void constructor_should_not_read_subagent_settings() {
+        // When：只构造，不提交任何 run
+        scheduler = new RunScheduler(contexts, registry, new RunEventBus(), runtimeConfig);
+
+        // Then：一次都没问过配置。装配发生在 runtimeConfig.refresh() 之前，构造期读到的永远是缺省值——
+        // 那正是「runTimeoutMillis 写了 20 分钟却仍按 300 秒掐」的成因，而这个失效没有任何症状
+        verify(runtimeConfig, never()).getSubAgentSettings();
+    }
+
+    @Test
+    @Timeout(30)
+    @DisplayName("执行资源在第一次提交时按当时的配置建：构造之后才配上的并发同样生效")
+    void execution_should_be_created_with_config_at_first_submit() {
+        // Given：构造时配置还没装载（真实启动就是这样：快照由 refresh() 稍后装上）
+        scheduler = new RunScheduler(contexts, registry, new RunEventBus(), runtimeConfig);
+
+        // When：配置到位之后才提交，并发只给 1
+        when(runtimeConfig.getSubAgentSettings()).thenReturn(settings(1, 0, 8, 0L));
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        AgentRunHandle running = submitRun(handle -> {
+            started.countDown();
+            return blockingUntil(release).run(handle);
+        });
+        awaitLatch(started);
+        AgentRunHandle queued = submitRun(done());
+
+        // Then：第二个进了等待区——并发 1 是「提交那一刻」的配置说了算，放掉第一个之后它照跑
+        assertEquals(AgentRunStatus.PENDING, registry.snapshot(queued.getRunId())
+                .orElseThrow(AssertionError::new).getStatus());
+        release.countDown();
+        assertEquals(AgentRunStatus.DONE, await(running).getStatus());
+        assertEquals(AgentRunStatus.DONE, await(queued).getStatus());
+    }
+
+    @Test
+    @Timeout(30)
+    @DisplayName("墙钟按 run 开始时的配置取：构造之后改配置，下一个 run 就按新值计时")
+    void runTimeout_should_follow_config_change_after_construction() {
+        // Given：构造时写的是「不看门狗」
+        scheduler = scheduler(1, 8, 0L);
+        assertEquals(AgentRunStatus.DONE, await(submitRun(done())).getStatus());
+
+        // When：配置改成 200ms 之后，再来一个自己不会收敛的 run
+        when(runtimeConfig.getSubAgentSettings()).thenReturn(settings(1, 0, 8, 200L));
+        AgentRunHandle slow = submitRun(handle -> {
+            long deadline = System.currentTimeMillis() + 5_000L;
+            while (!handle.isCancelled() && System.currentTimeMillis() < deadline) {
+                sleepQuietly();
+            }
+            return AgentRunResult.of(AgentRunStatus.CANCELLED, null, 0, null, null);
+        });
+
+        // Then：它被 200ms 的墙钟掐断，且原因里写的也是 200 ms——上限读的是「开始跑的这一刻」，
+        // 不是构造期那份（那份永远是缺省值）
+        AgentRunResult timedOut = await(slow);
+        assertEquals(AgentRunStatus.TRUNCATED, timedOut.getStatus());
+        assertTrue(String.valueOf(timedOut.getError()).contains("200 ms"),
+                String.valueOf(timedOut.getError()));
+    }
+
+    @Test
+    @Timeout(30)
+    @DisplayName("等并发许可期间被取消：立刻落终态，父回合不会一直等下去")
+    void run_should_settle_immediately_when_cancelled_while_waiting_for_permit() {
+        // Given：并发 1、池上界 2（深度 1）——第一个 run 拿住许可不放，第二个拿到线程却只能等许可
+        scheduler = scheduler(1, 1, 8, 0L);
+        CountDownLatch release = new CountDownLatch(1);
+        AgentRunHandle running = submitRun(blockingUntil(release));
+        AtomicBoolean waitingBodyRan = new AtomicBoolean(false);
+        AgentRunHandle waiting = submitRun(handle -> {
+            waitingBodyRan.set(true);
+            return AgentRunResult.of(AgentRunStatus.DONE, "ok", 1, null, null);
+        });
+        // 让第二个真正卡到「取许可」那一步：抢在它拿到线程之前取消，走的是另一条（同样该收敛的）路径
+        sleepQuietly();
+
+        // When：回合结束了（用户按了中断 / 父 run 失败），等许可的那个也被取消
+        waiting.cancel();
+
+        // Then：它必须<b>当场</b>收敛。旧实现卡在不可中断的取许可上，要等前一个 run 跑完才认账——
+        // 于是它的句柄长时间不落终态，等它的父回合与驱动它的插件就迟迟拿不到结果，
+        // 界面上看起来正是「按了中断没反应」。这里用 3 秒的硬上限把这个回归钉住。
+        AgentRunResult result = assertTimeoutPreemptively(Duration.ofSeconds(3), () -> await(waiting),
+                "等许可期间被取消的 run 必须立刻收敛");
+        assertEquals(AgentRunStatus.CANCELLED, result.getStatus());
+        assertFalse(waitingBodyRan.get(), "等许可期间被取消的 run 不该再执行执行体");
+
+        // 收尾：放掉第一个，免得后台线程继续挂着
+        release.countDown();
+        assertEquals(AgentRunStatus.DONE, await(running).getStatus());
+    }
+
     /**
      * 等待一个闩锁开闸。
      *
@@ -254,7 +356,7 @@ class RunSchedulerTest {
     }
 
     /**
-     * 构造一套调度装配。
+     * 构造一套调度装配（委派深度 0：线程数上界恰好等于并发数）。
      *
      * @param maxConcurrentRuns 全局并发许可数
      * @param maxQueuedRuns     排队上限
@@ -262,10 +364,42 @@ class RunSchedulerTest {
      * @return 调度器
      */
     private RunScheduler scheduler(int maxConcurrentRuns, int maxQueuedRuns, long runTimeoutMillis) {
-        SubAgentSettings settings = new SubAgentSettings(true, 0, 8, 8, maxConcurrentRuns, maxQueuedRuns,
-                runTimeoutMillis, 0L, 0L, null, null);
-        lenient().when(runtimeConfig.getSubAgentSettings()).thenReturn(settings);
+        return scheduler(maxConcurrentRuns, 0, maxQueuedRuns, runTimeoutMillis);
+    }
+
+    /**
+     * 构造一套调度装配。
+     * <p>
+     * <b>深度不是随便给的</b>：池上界 = {@code 并发 × (深度 + 1)}。深度 0 时池只有并发那么多条线程，
+     * 「等许可」的 run 其实还留在执行器的队列里（走的是另一条收敛路径）；要真正压到
+     * {@code acquirePermit} 上，就得让池比许可多（深度 ≥ 1）。
+     *
+     * @param maxConcurrentRuns 全局并发许可数
+     * @param maxDepth          委派深度（决定池上界）
+     * @param maxQueuedRuns     排队上限
+     * @param runTimeoutMillis  单 run 墙钟上限（毫秒），{@code <= 0} 表示不看门狗
+     * @return 调度器
+     */
+    private RunScheduler scheduler(int maxConcurrentRuns, int maxDepth, int maxQueuedRuns,
+                                   long runTimeoutMillis) {
+        lenient().when(runtimeConfig.getSubAgentSettings())
+                .thenReturn(settings(maxConcurrentRuns, maxDepth, maxQueuedRuns, runTimeoutMillis));
         return new RunScheduler(contexts, registry, new RunEventBus(), runtimeConfig);
+    }
+
+    /**
+     * 造一份 {@code subAgent} 段。
+     *
+     * @param maxConcurrentRuns 全局并发许可数
+     * @param maxDepth          委派深度
+     * @param maxQueuedRuns     排队上限
+     * @param runTimeoutMillis  单 run 墙钟上限（毫秒），{@code <= 0} 表示不看门狗
+     * @return 子代理设置
+     */
+    private static SubAgentSettings settings(int maxConcurrentRuns, int maxDepth, int maxQueuedRuns,
+                                             long runTimeoutMillis) {
+        return new SubAgentSettings(true, maxDepth, 8, 8, maxConcurrentRuns, maxQueuedRuns,
+                runTimeoutMillis, 0L, 0L, null, null);
     }
     /**
      * 登记并提交一个 run。
@@ -276,7 +410,7 @@ class RunSchedulerTest {
     private AgentRunHandle submitRun(AgentRunBody body) {
         String runId = registry.register(new AgentRunRequest("s-parent", "coder", "s-child", "call-1"), null, null);
         AgentRunHandle handle = new AgentRunHandle(runId);
-        registry.bindCanceller(runId, handle::cancel);
+        registry.bindHandle(runId, handle);
         scheduler.submit(runId, body, tree, 0, runId, handle);
         return handle;
     }

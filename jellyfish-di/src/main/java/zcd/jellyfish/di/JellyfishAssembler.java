@@ -112,9 +112,10 @@ import java.util.concurrent.TimeUnit;
  * <p>
  * <b>为什么是全量急切构造，而不是等到第一次访问</b>：Dagger 的组件是惰性的（第一次访问访问器时
  * 才建对象），而这里一次建完。两者的时间点都在 {@code AgentHarness.bootstrap()} 之前，
- * 而内核的纪律是「构造期只拿快照、{@code refresh()} 之后才读值」（例如
- * {@code RunScheduler} 在构造器里读 {@code subAgent.maxConcurrentRuns} 决定线程池大小），
- * 因此急切构造与惰性构造语义等价；换来的好处是「装配期出错立刻暴露」，而不是等到某次调用。
+ * 而配置要到那之后的 {@code refresh()} 才装载，<b>因此装配期读到的一切「配置」都只是缺省值</b>——
+ * 需要按配置定型的运行参数（线程池大小、许可数、超时上限）必须推迟到「真正用到的那一刻」再读，
+ * 见 {@code RunScheduler}。这是急切装配唯一需要留意的地方；换来的好处是「装配期出错立刻暴露」，
+ * 而不是等到某次调用。
  * <p>
  * 无状态、线程安全：{@link #create(AppConfig)} 每次返回一张独立的对象图。
  *

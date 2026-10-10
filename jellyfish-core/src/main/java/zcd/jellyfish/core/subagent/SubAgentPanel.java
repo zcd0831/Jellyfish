@@ -39,7 +39,7 @@ import java.util.Objects;
  * 与状态栏片段同口径。真正的「什么时候重新问」由外壳的失效触发源决定。
  * <p>
  * <b>建议落停靠区（{@code DOCK}）而不是任一纵向栏</b>：这块面板讲的是「此刻正在发生什么」的瞬时事实，
- * 行是固定的短句（类型 · 状态 · 已运行 Ns），横向放正合适；而纵向栏是插件面板的稀缺资源
+ * 行是固定的短句（类型 · 状态 · 已等待/已运行 Ns），横向放正合适；而纵向栏是插件面板的稀缺资源
  * （左右两侧合计不超过终端宽的 1/3，超了外壳先砍右栏），占一条的代价是中等宽度的终端上
  * 另一侧的面板会被整块挤掉。停靠区是内核文档里点名的「最通用的面板落点」；
  * 与同样建议落 {@code DOCK} 的插件面板并存时，按 {@link SubAgentTools} 声明的 {@code order}
@@ -103,29 +103,63 @@ public final class SubAgentPanel implements ExtensionHandler<PanelContributionRe
     }
 
     /**
-     * 渲染一个 run 的一行：{@code 类型 · 状态 · 已运行 Ns}。
+     * 渲染一个 run 的一行：{@code 类型 · 状态 · 已等待/已运行 Ns}。
+     * <p>
+     * <b>两个时长分开说</b>：排在等待区里的 run 还没开始跑，把它的排队时长写成「已运行」会让人以为
+     * 它已经在干活了——而「为什么一直没出结果」恰恰要从「它在排队、不在跑」里读出来。
+     * 「取消中」是第三种：状态还没变（要等它自己收敛），但取消已经请求过了。
      *
      * @param run run 快照
      * @return 界面行，保证非 {@code null}
      */
     private static UiLine lineOf(AgentRunSnapshot run) {
         return UiLine.of(UiSegment.of(run.getAgentId()),
-                UiSegment.of(" · " + statusTextOf(run.getStatus())),
-                UiSegment.of(" · 已运行 " + elapsedSeconds(run) + "s"));
+                UiSegment.of(" · " + statusLabelOf(run.getStatus(), run.isCancelling())),
+                UiSegment.of(" · " + elapsedText(run)));
     }
 
     /**
-     * 计算已运行秒数。
+     * 渲染时长片段：排队中说「已等待 Ns」，其余说「已运行 Ns」。
+     *
+     * @param run run 快照
+     * @return 时长文本，保证非 {@code null}
+     */
+    private static String elapsedText(AgentRunSnapshot run) {
+        if (run.getStatus() == AgentRunStatus.PENDING) {
+            return "已等待 " + secondsSince(run.getStartedAt()) + "s";
+        }
+        // 开始执行的时刻缺失（理论上的中间态）时回落登记时刻：宁可多算一点，也不要显示 0s 或负数
+        long since = run.getRunningAt() > 0L ? run.getRunningAt() : run.getStartedAt();
+        return "已运行 " + secondsSince(since) + "s";
+    }
+
+    /**
+     * 计算从某个时刻到现在的秒数。
      * <p>
      * 不用 {@code finishedAt} 相减：本面板只显示未终结的 run，而系统时钟回拨会让差值为负——
      * 夹到 0 比显示「已运行 -3s」好。
      *
-     * @param run run 快照
-     * @return 已运行秒数，保证不小于 0
+     * @param sinceMillis 起算时刻（epoch 毫秒）
+     * @return 秒数，保证不小于 0
      */
-    private static long elapsedSeconds(AgentRunSnapshot run) {
-        long elapsedMillis = System.currentTimeMillis() - run.getStartedAt();
+    private static long secondsSince(long sinceMillis) {
+        long elapsedMillis = System.currentTimeMillis() - sinceMillis;
         return Math.max(0L, elapsedMillis / 1000L);
+    }
+
+    /**
+     * 取状态那一格的一句话。
+     * <p>
+     * <b>「取消中」压过原状态</b>：取消是请求，收敛要等这个 run 自己走到检查点——那段时间里它的状态
+     * 仍然是「运行中/排队中」，而用户此刻最需要知道的是「我按下的中断已经被收到了、它在往外退」。
+     * 少了这一格，按完中断之后界面上什么都没有变化，与「没按上」无法区分。
+     *
+     * @param status     快照里的状态
+     * @param cancelling 取消是否已请求且尚未收敛
+     * @return 状态文本，保证非 {@code null}
+     */
+    static String statusLabelOf(AgentRunStatus status, boolean cancelling) {
+        return cancelling ? "取消中" : statusTextOf(status);
     }
 
     /**

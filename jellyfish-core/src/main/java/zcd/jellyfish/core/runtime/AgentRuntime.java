@@ -77,8 +77,8 @@ public final class AgentRuntime {
         String runId = registry.register(request, parentRunId, parentRootRunId);
         String rootRunId = parentRunId == null ? runId : parentRootRunId;
         AgentRunHandle handle = new AgentRunHandle(runId);
-        // 把取消钩子绑进登记表：这样「按 runId 取消一棵子树」不依赖外层还握着句柄
-        registry.bindCanceller(runId, handle::cancel);
+        // 把句柄绑进登记表：这样「按 runId 取消一棵子树」（以及面板上的「取消中」）不依赖外层还握着句柄
+        registry.bindHandle(runId, handle);
         if (parentCancellation != null) {
             parentCancellation.onCancel(handle::cancel);
         }

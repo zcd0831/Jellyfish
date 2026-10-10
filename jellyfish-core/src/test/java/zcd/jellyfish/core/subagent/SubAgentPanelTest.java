@@ -9,10 +9,12 @@ import zcd.jellyfish.api.extension.PanelContribution;
 import zcd.jellyfish.api.extension.PanelContributionRequest;
 import zcd.jellyfish.api.ui.UiRegion;
 import zcd.jellyfish.core.runtime.AgentRunRequest;
+import zcd.jellyfish.core.runtime.AgentRunStatus;
 import zcd.jellyfish.core.runtime.AgentRuntime;
 import zcd.jellyfish.core.runtime.RunRegistry;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.lenient;
 
@@ -76,6 +78,33 @@ class SubAgentPanelTest {
 
         // Then：并行的第二个必须也能看到——只显示一个正是「看不到并行」这个问题的原形
         assertEquals(2, contribution.getLines().size());
+    }
+
+    @Test
+    void handle_should_render_waiting_seconds_for_queued_run() {
+        // Given：一个还没开始跑的 run（并发满员，它排在等待区里）
+        register("s1", "coder");
+        lenient().when(runtime.activeRuns()).thenReturn(registry.active());
+
+        // When
+        String text = panel.handle(new PanelContributionRequest("s1")).getLines().get(0).text();
+
+        // Then：说的是「排队中 · 已等待 Ns」——把它写成「已运行」会让人以为它已经在干活，
+        // 而「为什么一直没出结果」恰恰要从「它还没开跑」里读出来
+        assertTrue(text.contains("排队中"), text);
+        assertTrue(text.contains("已等待 "), text);
+        assertFalse(text.contains("已运行 "), text);
+    }
+
+    @Test
+    void statusLabelOf_should_prefer_cancelling_over_current_status() {
+        // Then：取消已请求但还没收敛时，状态那一格说的是「取消中」——否则按完中断界面上毫无变化，
+        // 与「没按上」无法区分
+        assertEquals("取消中", SubAgentPanel.statusLabelOf(AgentRunStatus.RUNNING, true));
+        assertEquals("取消中", SubAgentPanel.statusLabelOf(AgentRunStatus.PENDING, true));
+        assertEquals("排队中", SubAgentPanel.statusLabelOf(AgentRunStatus.PENDING, false));
+        assertEquals("运行中", SubAgentPanel.statusLabelOf(AgentRunStatus.RUNNING, false));
+        assertEquals("等待子代理", SubAgentPanel.statusLabelOf(AgentRunStatus.WAITING_CHILDREN, false));
     }
 
     @Test

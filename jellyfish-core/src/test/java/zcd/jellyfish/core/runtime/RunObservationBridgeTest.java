@@ -203,6 +203,6 @@ class RunObservationBridgeTest {
      */
     private static AgentRunSnapshot snapshot(AgentRunStatus status, int rounds, long totalTokens) {
         return new AgentRunSnapshot("run-1", null, "run-root", "s-parent", "scout", "s-child", "tc-1",
-                status, 1L, 2L, rounds, totalTokens);
+                status, 1L, 1L, 2L, false, rounds, totalTokens);
     }
 }

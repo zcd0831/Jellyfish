@@ -14,9 +14,11 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * {@link RunRegistry} 的单元测试：身份、树根继承、状态转换的幂等与查询。
+ * {@link RunRegistry} 的单元测试：身份、树根继承、状态转换的幂等、取消的子树语义与查询。
  * <p>
  * 最要紧的一条是「终态恰好一个」：调度器与看门狗可能同时想终结同一个 run，先到的那个必须胜出。
+ * 其次是「开始执行时刻只记一次」与「取消中」这两件事——它们只服务于观测（面板的时长与状态词），
+ * 却必须准：显示不准比不显示更糟。
  *
  * @author zcd
  */
@@ -84,6 +86,97 @@ class RunRegistryTest {
     void markRunning_should_return_false_when_run_unknown() {
         // When / Then
         assertFalse(new RunRegistry().markRunning("missing"));
+    }
+
+    @Test
+    void markRunning_should_record_start_time_once() {
+        // Given：一个刚登记的 run——此刻还没开跑，快照里没有开始执行的时刻
+        RunRegistry registry = new RunRegistry();
+        String runId = registry.register(request("s-child"), null, null);
+        assertEquals(0L, registry.snapshot(runId).orElseThrow(AssertionError::new).getRunningAt());
+
+        // When：真正开始跑
+        registry.markRunning(runId);
+        long runningAt = registry.snapshot(runId).orElseThrow(AssertionError::new).getRunningAt();
+        assertTrue(runningAt > 0L);
+
+        // Then：等完孩子接着跑（WAITING_CHILDREN → RUNNING）不重新计时——
+        // 否则一个跑了十分钟的父 run 在界面上会显示成刚跑了一秒
+        registry.markWaitingChildren(runId);
+        registry.markRunning(runId);
+        assertEquals(runningAt,
+                registry.snapshot(runId).orElseThrow(AssertionError::new).getRunningAt());
+    }
+
+    @Test
+    void snapshot_should_report_cancelling_when_handle_cancelled_and_not_settled() {
+        // Given：一个在跑、句柄已绑定的 run
+        RunRegistry registry = new RunRegistry();
+        String runId = registry.register(request("s-child"), null, null);
+        AgentRunHandle handle = new AgentRunHandle(runId);
+        registry.bindHandle(runId, handle);
+        registry.markRunning(runId);
+        assertFalse(registry.snapshot(runId).orElseThrow(AssertionError::new).isCancelling());
+
+        // When：取消被请求，但它还没走到检查点（状态仍是运行中）
+        registry.cancelTree(runId);
+
+        // Then：快照如实说「取消中」——界面靠它才能把「按了中断」与「没按上」区分开
+        assertTrue(registry.snapshot(runId).orElseThrow(AssertionError::new).isCancelling());
+
+        // 收敛之后不再是「取消中」：终态就是终态
+        registry.finish(runId, AgentRunStatus.CANCELLED, 1, null);
+        assertFalse(registry.snapshot(runId).orElseThrow(AssertionError::new).isCancelling());
+    }
+
+    @Test
+    void cancelTree_should_cancel_self_and_descendants() {
+        // Given：一棵三层树，每层都绑了句柄
+        RunRegistry registry = new RunRegistry();
+        String root = registry.register(request("s-root"), null, null);
+        String child = registry.register(request("s-child"), root, root);
+        String grandChild = registry.register(request("s-grand"), child, root);
+        AgentRunHandle rootHandle = new AgentRunHandle(root);
+        AgentRunHandle childHandle = new AgentRunHandle(child);
+        AgentRunHandle grandChildHandle = new AgentRunHandle(grandChild);
+        registry.bindHandle(root, rootHandle);
+        registry.bindHandle(child, childHandle);
+        registry.bindHandle(grandChild, grandChildHandle);
+
+        // When：取消树根
+        int cancelled = registry.cancelTree(root);
+
+        // Then：三代都被取消——没有父收集者的子 run 继续跑毫无意义
+        assertEquals(3, cancelled);
+        assertTrue(rootHandle.isCancelled());
+        assertTrue(childHandle.isCancelled());
+        assertTrue(grandChildHandle.isCancelled());
+    }
+
+    @Test
+    void cancelDescendants_should_leave_self_alone() {
+        // Given：父 run 与它的孩子
+        RunRegistry registry = new RunRegistry();
+        String parent = registry.register(request("s-parent"), null, null);
+        String child = registry.register(request("s-child"), parent, parent);
+        AgentRunHandle parentHandle = new AgentRunHandle(parent);
+        AgentRunHandle childHandle = new AgentRunHandle(child);
+        registry.bindHandle(parent, parentHandle);
+        registry.bindHandle(child, childHandle);
+
+        // When：调度器在父 run 收尾时清理遗留子树
+        int cancelled = registry.cancelDescendants(parent);
+
+        // Then：只取消后代，父自己不动（它已经收尾了）
+        assertEquals(1, cancelled);
+        assertFalse(parentHandle.isCancelled());
+        assertTrue(childHandle.isCancelled());
+    }
+
+    @Test
+    void cancelTree_should_return_zero_when_run_unknown() {
+        // When / Then
+        assertEquals(0, new RunRegistry().cancelTree("missing"));
     }
 
     @Test

@@ -40,8 +40,19 @@ public final class AgentRunSnapshot {
     /** 登记时刻（epoch 毫秒）。 */
     private final long startedAt;
 
+    /**
+     * 真正开始执行的时刻（epoch 毫秒）；还没开跑时为 0。
+     * <p>
+     * 与 {@link #startedAt} 分开是必要的：登记发生在提交之前，而 run 可能要在等待区里排很久。
+     * 「已等待多久」与「已运行多久」是两件事，共用一个起算点会把排队时长说成运行时长。
+     */
+    private final long runningAt;
+
     /** 进入终态的时刻（epoch 毫秒）；未终结时为 0。 */
     private final long finishedAt;
+
+    /** 取消已请求、但还没收敛：状态仍是未终结，界面据此显示「取消中」。 */
+    private final boolean cancelling;
 
     /** 已完成的轮数；未终结时为 0。 */
     private final int rounds;
@@ -61,13 +72,16 @@ public final class AgentRunSnapshot {
      * @param toolCallId      关联的工具调用标识，可为 {@code null}
      * @param status          当前状态
      * @param startedAt       登记时刻（epoch 毫秒）
+     * @param runningAt       开始执行的时刻，还没开跑时为 0
      * @param finishedAt      进入终态的时刻，未终结时为 0
+     * @param cancelling      取消已请求但尚未收敛
      * @param rounds          已完成轮数
      * @param totalTokens     累计 token 用量
      */
     AgentRunSnapshot(String runId, String parentRunId, String rootRunId, String parentSessionId,
                      String agentId, String sessionId, String toolCallId, AgentRunStatus status,
-                     long startedAt, long finishedAt, int rounds, long totalTokens) {
+                     long startedAt, long runningAt, long finishedAt, boolean cancelling,
+                     int rounds, long totalTokens) {
         this.runId = runId;
         this.parentRunId = parentRunId;
         this.rootRunId = rootRunId;
@@ -77,7 +91,9 @@ public final class AgentRunSnapshot {
         this.toolCallId = toolCallId;
         this.status = status;
         this.startedAt = startedAt;
+        this.runningAt = runningAt;
         this.finishedAt = finishedAt;
+        this.cancelling = cancelling;
         this.rounds = rounds;
         this.totalTokens = totalTokens;
     }
@@ -156,11 +172,23 @@ public final class AgentRunSnapshot {
 
     /**
      * 获取登记时刻。
+     * <p>
+     * <b>它不是「开始跑的时刻」</b>：登记发生在提交之前，此后 run 可能要在等待区里排队。
+     * 要算运行时长请用 {@link #getRunningAt()}。
      *
      * @return 登记时刻（epoch 毫秒）
      */
     public long getStartedAt() {
         return startedAt;
+    }
+
+    /**
+     * 获取真正开始执行的时刻。
+     *
+     * @return 开始执行的时刻（epoch 毫秒）；还没开跑时为 0
+     */
+    public long getRunningAt() {
+        return runningAt;
     }
 
     /**
@@ -170,6 +198,15 @@ public final class AgentRunSnapshot {
      */
     public long getFinishedAt() {
         return finishedAt;
+    }
+
+    /**
+     * 判断是否「取消已请求、但还没收敛」。
+     *
+     * @return 已请求取消且尚未终结返回 {@code true}
+     */
+    public boolean isCancelling() {
+        return cancelling;
     }
 
     /**

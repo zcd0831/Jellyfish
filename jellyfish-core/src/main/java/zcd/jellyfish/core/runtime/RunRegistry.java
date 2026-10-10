@@ -71,19 +71,23 @@ public final class RunRegistry {
     }
 
     /**
-     * 把一个 run 的取消钩子绑到登记表上。
+     * 把一个 run 的句柄绑到登记表上。
      * <p>
-     * 登记发生在句柄创建之前，因此取消钩子只能事后补绑。绑上之后，{@link #cancelTree(String)} 才能
-     * 按 runId（而不是靠外层握着句柄）取消一个 run——这是「取消一棵子树」与将来的观测面板取消单个 run
-     * 的共同前提。
+     * 登记发生在句柄创建之前，因此只能事后补绑。绑上之后有两件事成为可能：
+     * <ul>
+     *     <li>{@link #cancelTree(String)} 能按 runId 取消一个 run（不必靠外层握着句柄）；</li>
+     *     <li>快照能如实回答「取消请求过没有」（{@link AgentRunSnapshot#isCancelling()}）——
+     *     取消有三条入口（父回合的取消令牌、{@code DelegationHandle.cancel()}、本表的子树取消），
+     *     句柄是三条的<b>公共汇合点</b>；在表里另立一个标志会漏掉前两条，而显示不准比不显示更糟。</li>
+     * </ul>
      *
-     * @param runId    run 标识
-     * @param canceller 取消动作，不可为 {@code null}
+     * @param runId  run 标识
+     * @param handle run 句柄，不可为 {@code null}
      */
-    public void bindCanceller(String runId, Runnable canceller) {
+    public void bindHandle(String runId, AgentRunHandle handle) {
         RunState state = runs.get(runId);
         if (state != null) {
-            state.canceller = canceller;
+            state.handle = handle;
         }
     }
 
@@ -143,9 +147,9 @@ public final class RunRegistry {
             if (state == null) {
                 continue;
             }
-            Runnable canceller = state.canceller;
-            if (canceller != null) {
-                canceller.run();
+            AgentRunHandle handle = state.handle;
+            if (handle != null) {
+                handle.cancel();
                 cancelled++;
             }
             collectChildren(current, queue);
@@ -172,6 +176,9 @@ public final class RunRegistry {
      * <p>
      * 只允许从 {@link AgentRunStatus#PENDING} 或 {@link AgentRunStatus#WAITING_CHILDREN} 进入——
      * 后者是并行场景里「父 run 等完孩子继续跑」的路径。终态之后的调用不生效。
+     * <p>
+     * <b>开始执行的时刻只在第一次转换时记</b>：{@code WAITING_CHILDREN → RUNNING} 是「等完孩子接着跑」，
+     * 不是重新开始计时；把它也算成一次开始，会让一个跑了十分钟的父 run 在界面上显示成刚跑了一秒。
      *
      * @param runId run 标识
      * @return 确实发生了转换返回 {@code true}
@@ -181,8 +188,11 @@ public final class RunRegistry {
         if (state == null) {
             return false;
         }
-        return state.status.compareAndSet(AgentRunStatus.PENDING, AgentRunStatus.RUNNING)
-                || state.status.compareAndSet(AgentRunStatus.WAITING_CHILDREN, AgentRunStatus.RUNNING);
+        if (state.status.compareAndSet(AgentRunStatus.PENDING, AgentRunStatus.RUNNING)) {
+            state.runningAt = System.currentTimeMillis();
+            return true;
+        }
+        return state.status.compareAndSet(AgentRunStatus.WAITING_CHILDREN, AgentRunStatus.RUNNING);
     }
 
     /**
@@ -294,8 +304,11 @@ public final class RunRegistry {
         private final AtomicReference<AgentRunStatus> status =
                 new AtomicReference<AgentRunStatus>(AgentRunStatus.PENDING);
 
-        /** 取消钩子；句柄创建后由 {@link RunRegistry#bindCanceller(String, Runnable)} 补绑。 */
-        private volatile Runnable canceller;
+        /** 取消钩子；句柄创建后由 {@link RunRegistry#bindHandle(String, AgentRunHandle)} 补绑。 */
+        private volatile AgentRunHandle handle;
+
+        /** 开始执行的时刻；还没开跑时为 0。 */
+        private volatile long runningAt;
 
         /** 进入终态的时刻；未终结时为 0。 */
         private volatile long finishedAt;
@@ -324,13 +337,20 @@ public final class RunRegistry {
 
         /**
          * 取当前状态的不可变快照。
+         * <p>
+         * 「取消中」由句柄回答（它是三条取消入口的公共汇合点），并且只在未终结时才算数：
+         * 已经落终态的 run 不该再被说成「正在取消」。
          *
          * @return 快照
          */
         private AgentRunSnapshot snapshot() {
+            AgentRunHandle current = handle;
+            AgentRunStatus currentStatus = status.get();
+            boolean cancelling = current != null && current.isCancelled() && !currentStatus.isTerminal();
             return new AgentRunSnapshot(runId, parentRunId, rootRunId,
                     request.getParentSessionId(), request.getAgentId(), request.getSessionId(),
-                    request.getToolCallId(), status.get(), startedAt, finishedAt, rounds, totalTokens);
+                    request.getToolCallId(), currentStatus, startedAt, runningAt, finishedAt, cancelling,
+                    rounds, totalTokens);
         }
     }
 }

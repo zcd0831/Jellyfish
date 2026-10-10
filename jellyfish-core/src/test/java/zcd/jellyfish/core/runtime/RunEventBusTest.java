@@ -82,6 +82,7 @@ class RunEventBusTest {
      */
     private static AgentRunSnapshot snapshot(String runId) {
         return new AgentRunSnapshot(runId, null, runId, "s-parent", "coder", "s-child", null,
-                AgentRunStatus.RUNNING, System.currentTimeMillis(), 0L, 0, 0L);
+                AgentRunStatus.RUNNING, System.currentTimeMillis(), System.currentTimeMillis(), 0L, false, 0,
+                0L);
     }
 }

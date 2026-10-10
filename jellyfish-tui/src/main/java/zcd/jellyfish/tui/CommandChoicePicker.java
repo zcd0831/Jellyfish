@@ -9,7 +9,7 @@ import java.util.List;
 /**
  * 二级选择页状态：命令给出候选后，用户在候选里挑一个。
  * <p>
- * <b>它解决什么问题</b>：{@code /agent}、{@code /model}、{@code /mode}、{@code /resume} 这类命令
+ * <b>它解决什么问题</b>：{@code /agent}、{@code /model}、{@code /resume} 这类命令
  * 不带参数时，需要用户从若干取值里挑一个。命令域只给出候选清单（{@link CommandChoice}），
  * 「怎么显示、光标停在哪、选中后拼什么命令」是外壳的事——本类就是后者的纯逻辑部分。
  * <p>

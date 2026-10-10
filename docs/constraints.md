@@ -8,7 +8,7 @@
 ## 整体架构图
 
 内核模块、扩展层、外壳与外部依赖之间的调用关系（`==>` 同步调用；`-->` 内核内部调用；`-.->` 异步通知）。
-模块级的依赖方向与包结构见 [AGENTS.md](../AGENTS.md) 的「仓库结构与模块边界」。
+模块级的依赖方向与包结构见 [AGENTS.md](../AGENTS.md) 的「技术架构」。
 
 ```mermaid
 flowchart TB
@@ -29,7 +29,7 @@ flowchart TB
                 CommandMgr["CommandManager<br>解析 / 分发 / 清单（无状态，对外壳中立）"]
                 InputMgr["InputDirectives<br>输入指令：! / @（外壳中立）"]
                 ModelMgr["ModelManager<br>Provider/Model 注册与路由"]
-                LLMClient["LLMClient<br>统一 LLM 调用抽象"]
+                LlmClient["LlmClient<br>统一 LLM 调用抽象"]
                 PermMgr["PermissionManager<br>核心策略 → 插件拦截"]
                 SubAgentMgr["SubAgentLauncher + task 工具<br>子代理委派 + 嵌套回合"]
             end
@@ -71,7 +71,7 @@ flowchart TB
 
     subgraph "外部依赖·插件"
         direction LR
-        Plugins["PF4J 插件（独立仓库 Jellyfish-Plugins）<br>tools / session-file / todo / project / compact / shell / skills / mcp<br>+ python / node 桥接（脚本进程由它承载）"]
+        Plugins["PF4J 插件（独立仓库 Jellyfish-Plugins）<br>tools / session-file / todo / project / compact / shell / skills / mcp / plan / resmon / workflow<br>+ python / node 桥接（脚本进程由它承载）"]
     end
 
     %% ===================== 外壳入口：命令走用户输入，不走 LLM =====================
@@ -85,7 +85,7 @@ flowchart TB
     ReAct -->|"消息 / 上下文 / 当前态 / token"| SessionMgr
     ReAct ==>|"beginTurn / flush：回合级落盘（不可丢）"| SessionMgr
     ReAct -->|"解析本次模型（SessionModelResolver）"| ModelMgr
-    ReAct -->|"调用 LLM"| LLMClient
+    ReAct -->|"调用 LLM"| LlmClient
     ReAct -->|"同步权限检查"| PermMgr
     ReAct ==>|"task 工具 → 委派（派生 run）"| SubAgentMgr
     SubAgentMgr ==>|"AgentRuntime.spawn → 调度到 agent-run 池跑完这个 run；run 事件走 RunEventBus"| ReAct
@@ -94,9 +94,9 @@ flowchart TB
     SubAgentMgr -->|"瞬时会话 / 用量归集到父会话"| SessionMgr
     SubAgentMgr -->|"工具清单过滤判据（与执行期同一份）"| PermMgr
     SubAgentMgr -->|"取子代理的偏好模型"| ModelMgr
-    SessionMgr -->|"按 currentAgentId 取定义"| AgentMgr
-    ModelMgr -->|"管理/创建/路由"| LLMClient
-    LLMClient -->|"HTTP/API"| LLM
+    SessionMgr -->|"按会话的 agentId 取定义"| AgentMgr
+    ModelMgr -->|"管理/创建/路由"| LlmClient
+    LlmClient -->|"HTTP/API"| LLM
 
     %% ===================== 扩展层·同步派发：需要结果或必须完成（粗线） =====================
     ReAct ==>|"list：工具清单（LlmTool）"| ExtReg
@@ -159,7 +159,7 @@ flowchart TB
     classDef ext fill:#FAFAFA,stroke:#AAA,color:#444
 
     class ReAct app
-    class SessionMgr,AgentMgr,ModelMgr,LLMClient,PermMgr,SubAgentMgr,CommandMgr,InputMgr kernel
+    class SessionMgr,AgentMgr,ModelMgr,LlmClient,PermMgr,SubAgentMgr,CommandMgr,InputMgr kernel
     class Registry,ExtReg,EventCh,PluginMgr,PluginCtx extlayer
     class Runtime,Reloader,Metrics support
     class LLM,Plugins,Jelly,Agents ext
@@ -266,7 +266,7 @@ flowchart TB
 
 - `registerUnique` 遇到已占用的键且声明了 `override(true)` 时，新登记**压在旧登记之上**；旧登记仍在表里，只是不生效。
   `handler(type, routeKey)` 的「同键唯一」语义对外逐字段不变（只看链顶）。
-- **解除链顶就是一次回退**：`Subscription.close()`、插件停止时的 `removeAllUnder(pluginId)` 都让被压住的那层自动重新生效。
+- **解除链顶就是一次回退**：`Subscription.close()`、插件停止时的 `removeAllUnder(pluginId, PluginOwnerNamespace.SEPARATOR)` 都让被压住的那层自动重新生效。
   若就地替换并丢弃旧登记，插件一走被它顶掉的内核工具 / 命令就**永久消失**。
 - **回收按 owner 判定，与是否生效无关**：收槽位里的**全部**登记，否则被压住的层会在覆盖者离开后悄悄复活。
 
@@ -300,8 +300,8 @@ flowchart TB
 
 ### 会话状态
 
-- 会话状态一律归 `Session`，进程内无全局当前态；agentId / 模型是会话字段。**不设 `session` 配置段**。
-- 唯一进程级字段是 `SessionDefaults`（新建会话的待生效默认值），**只在 `create` 那一刻被消费**。
+- 会话状态一律归 `Session`：agentId / 模型是会话字段，进程内**不另存全局副本**。**不设 `session` 配置段**。
+- 唯一的进程级「会话状态」是 `SessionDefaults`（新建会话的待生效默认值），**只在 `create` 那一刻被消费**；另有 `currentSessionId` 只是**「当前会话指针」**（指向哪个会话），不承载 agentId / 模型，不算会话状态。
 - `SessionManager.createDefault()` 三项全传 `null`；`null` = 按待生效默认值、其次按更下层默认。
 - **没有「权限模式」字段**：模式是插件能力（存于会话扩展条目），内核不存它，新建会话也不接收它。
 
@@ -418,7 +418,7 @@ handler 抛错**按放行处理**。它只管「结束运行态、保留快照�
 ### 热更新
 
 - 顺序固定：`modelManager.refresh(true)` → `agentManager.refresh(false)` → `pluginRuntimeConfig.refresh`
-  → 比对插件配置段 → `pluginManager.reload` → 广播 `ConfigReloadedEvent`。
+  → 比对插件配置段 → `pluginManager.reload` → `modelManager.refreshCatalogs` → 广播 `ConfigReloadedEvent`。
 - `synchronized` 单飞，**不回滚**，触发只有 `/reload`。
 - **`/reload` 与插件运行时关闭共用同一把锁**：`close()` 也 `synchronized`，并在拿锁前先立旗（关停开始后
   `reload` 空跑返回、`bootstrap` 直接拒绝）。没有这一条时，关停期并发到达的 `/reload` 会在即将卸载的
@@ -520,8 +520,8 @@ handler 抛错**按放行处理**。它只管「结束运行态、保留快照�
 
 ### ReAct 循环
 
-- **`AgentHarness.chat(sessionId, input, listener)` 是外壳唯一智能入口**，委托 `ReActLooper` 在 `react` 线程池
-  异步推进；**工具失败一律转成 tool 结果回灌，只有模型调用本身失败才上抛**。
+- **`AgentHarness.chat(sessionId, input, listener)` 是内核的回合入口，不是外壳接口**（外壳经 `ConversationService.submit` + `ShellStreams.subscribe`），
+  委托 `ReActLooper` 在 `react` 线程池异步推进；**工具失败一律转成 tool 结果回灌，只有模型调用本身失败才上抛**。
 - **`react` 池线程数上限 8**（即并发顶层回合数），队列 128，空闲回收 60 秒。
 - **收敛有两种「形状正常、内容不对」的例外，由内核兜底**（此前会被静默当成正常收敛，用户看不出区别）：
   - **空回复**（无正文且无工具调用）：同一回合内**自动重试 1 次**，且**不落库**——一条空的 assistant 消息
@@ -735,7 +735,7 @@ handler 抛错**按放行处理**。它只管「结束运行态、保留快照�
 - **区分文本与结构化，绝不按字符切**：字符串按行截断；`Map`/`List` 先序列化再按 JSON 子树截断。
   **不要在任何地方对可能是 JSON 的输出做 `substring`**。
 - **信封是唯一格式**：超限时完整内容落盘，回灌
-  `{_truncated, _tool, _total_chars, _total_lines, _path, _hint, preview}`。
+  `{_truncated, _tool, _total_chars, _total_lines, _path, _hint, _partial, preview}`。
   渲染与解析共用 `ToolOutputEnvelope` 的字段常量，**禁止两处各写一遍键名**。
 - **落盘失败不是回合失败**：只 WARN，信封记 `_path: null` 并说明不可恢复。
 - **清理只报告不阻断**：每会话按文件数 / 总字节上限从最旧删起，且**永不删刚落盘的那个**；写临时文件再原子改名。
@@ -820,7 +820,7 @@ handler 抛错**按放行处理**。它只管「结束运行态、保留快照�
   「能读但补全断了」这种只有一半成立的现场。含空格的路径因此在输入框里长成 `@my\ file.txt`，
   **这层转义会随消息一起发给模型**，所以插件侧的约定文本必须说明「`\ ` 是空格」。
 - **执行是异步的，界面每帧轮询句柄**；`Esc` 调 `cancel()`。
-  **`beginDirective` 必须早于提交执行**——晚一步重置会抹掉执行线程写出的第一段实时输出。
+  **`ChatState.beginWork()` 必须早于提交执行**——晚一步重置会抹掉执行线程写出的第一段实时输出。
 - **关闭顺序**：`AgentHarness.shutdown` 在 `reActLooper.close()` 之后依次调 `RunScheduler.close()` 与
   `InputDirectives.close()`（前者收在途 run、后者取消在途命令），
   **两者都必须早于 `flushAll()` 与 `pluginManager.close()`**——它们都会写子会话、都会调插件工具。
@@ -847,7 +847,7 @@ handler 抛错**按放行处理**。它只管「结束运行态、保留快照�
   **`true`（保守）**。判定入口是 `CommandManager.shouldRunAsCommand(input, hasSession)`。
   **未注册的名字与语法错误仍返回 `true`**——否则用户打错命令名会被静默当成提示词发给模型。
 - **`sessionRequired=false` 的命令分两类**：本来就不碰会话的（`/help` `/new` `/session` `/resume` `/delete` `/reload`），
-  与**降级**的（`/model` `/agent` `/mode`：有会话时改当前会话，没会话时改 `SessionDefaults`）。
+  与**降级**的（`/model` `/agent`：有会话时改当前会话，没会话时改 `SessionDefaults`）。
   **降级那一类必须保证「无会话时也真的能执行完」**，否则标志就在说谎。
 - **命令可以「接力」**：命令返回 `CommandResult.handoff(text)` 时，`ConversationService.submit` **不把结果交给外壳**，
   而是用该文本替换本次输入，继续走输入改写 → 指令 → 建会话 → 起回合那条路。
@@ -871,7 +871,7 @@ handler 抛错**按放行处理**。它只管「结束运行态、保留快照�
   「请指定启动模式」退 `2`（`jellyfish --verbose` 亦然），这样「敲了没反应」与「悄悄挂在等 stdin」
   两头都不会发生。兜底收在解析器里，因此 `Launcher` 与各 `RunMode` 只面对「模式已定」的世界。
 - **分流顺序由内核统一，外壳不再自己排**：提交入口是
-  `ConversationService.submit(sessionId, text, source, SubmissionPolicy, listener)`，顺序固定为
+  `ConversationService.submit(sessionId, text, source, SubmissionPolicy)`，顺序固定为
   **命令判定 → 输入改写 → 输入指令 → 起回合**。外壳只声明自己的 `SubmissionPolicy`，
   并 `switch` 返回的 `Submission.Kind` 做呈现；**外壳不得再自己复制这套顺序**。
   外壳仍自行截胡**外壳自有命令**（`/exit` `/ui` `/thinking` `/toolargs` `/mouse`：它们不进内核注册表），
@@ -1155,6 +1155,8 @@ handler 抛错**按放行处理**。它只管「结束运行态、保留快照�
 | `cancelled` | 终态：回合被取消 |
 | `turn_blocked` | 终态：回合被插件在开始前拦下，载荷 `{turnId,sessionId,reason}` |
 | `error` | 终态：回合出错 |
+| `run_started` | 子代理 run 开始（**与上面的回合事件穿插**，不参与流的终态判定） |
+| `run_finished` | 子代理 run 终结 |
 
 - `done` / `cancelled` / `turn_blocked` / `input_handled` / `error` 是终态，写出后流结束；
   空闲超时写 `: keepalive` 注释帧。

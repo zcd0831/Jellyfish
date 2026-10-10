@@ -183,7 +183,7 @@ public final class TuiApp extends ToolkitApp {
      * 本进程内新建会话的待生效默认值。
      * <p>
      * 首页状态栏要读它：那里展示的是「现在如果用，会用哪个 agent 与模型」，而
-     * {@code /model} {@code /agent} {@code /mode} 在首页改的就是这个值。不读它，用户改完会看到
+     * {@code /model} {@code /agent} 在首页改的就是这个值。不读它，用户改完会看到
      * 状态栏依旧显示配置默认值——展示与实际将要使用的值对不上。
      */
     private final SessionDefaults sessionDefaults;
@@ -1533,7 +1533,7 @@ public final class TuiApp extends ToolkitApp {
      * 装配首页（无会话）状态栏数据：展示「将要使用的」agent 与模型。
      * <p>
      * 首页没有会话，但状态栏也不应该是一片空白：用户正要看的就是「现在如果用，会用哪个 agent 与模型」，
-     * 而 {@code /model} {@code /agent} {@code /mode} 在首页改的就是这份待生效默认值
+     * 而 {@code /model} {@code /agent} 在首页改的就是这份待生效默认值
      * （{@link SessionDefaults}）。因此这里按「待生效默认值 → 配置默认值」两级解析：
      * 不读第一级的话，用户改完会看到状态栏仍显示旧值，与实际将要用到的对不上。
      * <p>

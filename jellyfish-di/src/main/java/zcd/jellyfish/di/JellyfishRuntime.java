@@ -30,7 +30,7 @@ import zcd.jellyfish.infra.session.SessionManager;
  * <b>为什么要有这个接口</b>：装配知识此前只以 Dagger2 组件的形式存在（{@link JellyfishComponent}），
  * 而 Dagger 的实现类是注解处理器生成的——任何想复用内核的外壳都必须先依赖 Dagger 代码生成。
  * 把入口抽成一个<b>不含任何 DI 注解的普通接口</b>之后，装配方式与交付形态解耦：
- * 外壳只认这 21 个访问器，至于对象图是 Dagger 生成的还是手写的，它不关心。
+ * 外壳只认这 23 个访问器，至于对象图是 Dagger 生成的还是手写的，它不关心。
  * <p>
  * <b>本接口刻意不声明生命周期</b>：启动与收敛是 {@link AgentHarness#bootstrap()} /
  * {@link AgentHarness#shutdown()} 的事，外壳按自己的时机调（CLI 在 {@code Launcher} 里，

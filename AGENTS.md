@@ -68,7 +68,7 @@ jellyfish-server/  路由、SSE、审批桥
 
 改动任何一处前先确认不会破坏它们（展开说明见 `docs/constraints.md`）：
 
-- **`AgentHarness.chat(sessionId, input, listener)` 是外壳唯一的智能入口**，在 `react` 线程池上异步推进。
+- **`AgentHarness.chat(sessionId, input, listener)` 是内核的回合入口，不是外壳接口**：外壳经 `ConversationService.submit` + `ShellStreams.subscribe` 两条边工作，回合在 `react` 线程池上异步推进。
 - **`SessionManager` 是会话的唯一变更入口**；落盘只有「创建不落盘」与「回合内只标脏」两个例外。
 - **`ToolExecutor` 是权限 → 路由 → 截断的唯一执行点**，模型调用与输入指令共用它。
 - **`ExtensionRegistry`（同步、不可丢）与 `EventChannel`（异步、可丢）是内核与插件之间唯一边界**；

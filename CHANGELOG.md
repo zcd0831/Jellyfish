@@ -5,7 +5,7 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [0.1.1] - 2026-10-10
 
 ### Added
 
@@ -37,6 +37,12 @@
   这是 `SessionKind` 的第二次收口：`parentSessionId` 只回答「从哪派生」，
   「归谁所有」这件事此前被各处按「有没有父」自行推断，而那个推断在分支会话上是错的。
   `default` 实现返回入参本身，老容器上的行为与改造前一致。
+- `CommandResult.handoff(String)`：命令可以只声明一段接力文本、由提交管线接着起回合（命令自己不必执行它）。
+  `-server` 的 `CommandResultDto` 随之多一个 `handoff` 字段，客户端要自己 `POST /sessions/{id}/chat` 接上。
+- `DelegationQuota` 与 `SubAgentPort.quota()`：编排方在 `spawn` 之前就能问出「本回合还能派几个」；
+  `SubAgentOutcome` / `DelegationResult` 带上 run 的归档路径，`task` 未收敛时在回灌末尾给出。
+- `PluginContext.parentSessionId(String)`（`default` 方法）：按会话树生效的策略（如 plan 模式只看不改）
+  在子代理会话上也要判定得到。会话不存在或标识空白返回 `null`。
 
 ### Changed
 
@@ -151,6 +157,18 @@
   Java 包名仍是 `zcd.jellyfish.*`——坐标与包名不要求一致。
 - 新增 `release` profile（`-P release`）承载 source / javadoc / GPG 签名 / Central 发布四个插件，
   日常构建不加载它们。
+- **委派不得提权**：子 agent 的工具授权必须是父 agent 的子集，比父宽就整次拒绝委派，并说明是哪个工具
+  让它变宽。堵的是「`subagent_type` 由模型自选」——一个受限 agent 只要定向到「没声明权限」（= 不受限）
+  的 agent，就能做自己被禁的写文件与跑命令。
+- **插件拦截抛错或返回 `null` 按拒绝处理**（此前按「无异议」放行）：异常不再穿出判定链，拒绝理由里
+  写明来源 owner。此前这种失败会让外壳拿到 `500`，而不是一句「工具被拒」。
+- **`-server` 绑非回环地址却没配 API key 就拒绝启动**（判据是 `InetAddress.isLoopbackAddress()`，
+  退出码 `3`；回环仍允许无密钥）；`POST/PUT/PATCH/DELETE` 校验 `Origin`（其次 `Referer`）与请求
+  `Host` 一致，不一致回 `403`（两个来源头都缺的 curl 类客户端不受影响）；命令端点开始校验会话存在。
+- **`-cli` 的退出码按失败发生的步骤归类**：`bootstrap` 失败退 `3`，会话准备与 `mode.run` 的运行时异常
+  退 `4`——此前别的运行时异常会穿到进程入口，被打成「初始化失败」退 `3`。
+- 子代理缺省值放宽：`subAgent.maxSpawnsPerTurn` 3 → 12、`treeTokenBudget` 1,500,000 → 6,000,000
+  （= 12 × 单 run 的 50 万）。
 
 ### Fixed
 
@@ -253,10 +271,6 @@
   现在它跑在专用线程池（`jellyfish-sse-N`，守护线程）上，池容量取 `maxStreams`，
   因此「拿到并发流许可一定拿得到线程」；`stop()` 时只 `shutdownNow`，不等它们收敛。
   代价说明：慢客户端仍会占住它那一条许可与一个线程，直到断开——`maxStreams` 就是用来限制这个的。
-- **MCP 子进程的输出加了行长上限**（4 MiB）：stdout（协议通道）与 stderr 哨兵此前都用
-  `BufferedReader.readLine()`，它会把一整行读进内存。对面是用户从 npm/pip 拉下来的第三方 server，
-  一个不换行、一直吐的进程能直接把宿主 JVM 撑爆——而它连「恶意」都不需要，一句把整个数据库 dump 到
-  stderr 的日志就够了。超过上限即报错并结束该行读取。
 - **`-cli` 的输出过了控制字符过滤**（安全修复）：此前 CLI 的 stdout / stderr 是**裸写**——
   它自己不打任何控制字符（前缀用空格缩进、无 ANSI 颜色），但写出去的文本几乎都来自不可信来源：
   模型回答、工具输出正文（`read_file` 读到一个含 `ESC` 的文件、`grep` 命中含 `ESC` 的行就够）、
@@ -298,11 +312,29 @@
   主机与路径（不复制 `Location` 的 query，那里可能挂着一次性凭据），据此把 `baseUrl` 改成最终地址即可。
   顺带把 OkHttpClient 的构造收敛到 `LlmClients.newHttpClient()` 一处：Dagger 侧与手写装配侧
   原先各有一份逐字段相同的复制品，安全取舍不该有两个落点。
-- **「取不到 agent 策略」不再静默放行**：会话绑了一个从未声明的 `agentId` 时，`policyOf` 仍按不受限
-  处理（fail-open 口径不变），但会发一条 `ConfigWarningEvent` 说明这件事——此前这种会话享受着「无限制」
-  而外表上看不出任何异常，「agent 名写错了」与「权限本来就这么宽」完全长得一样。同一个标识只报一次
-  （它跑在每次工具调用的同步路径上），且逐条告警的标识数有上限（`agentId` 可来自会话参数），
-  配置刷新后重新计数。
+- **`TypeRegistry` 的候选缓存改为按版本号失效**：清空若落在「开始收集」与「写回」之间，写回的就是一份
+  基于旧表的视图，而它此后一直命中——新注册在该类型下一次变更之前**永远不可见**，且没有一行日志
+  （现象是「装完插件，工具 / 命令没了」）。
+- **审批 / 提问的队列满时只拒新请求**：此前会摘掉整个排队区，而被摘掉的请求既排不到头、又留在表里，
+  用户点了「批准」或作答也无效（`resolve` 只认头槽位），只能各自等满超时。同时结论改为在锁内发布，
+  消除「超时线程读到 `null`」那条 NPE 竞态。
+- **`@` 引用认转义空白**：`@my\ file.txt` 现在是一个片段，含空格的文件名终于能补全、也能被当成路径
+  读对——规则收在新的公共类 `InputReferenceEscapes`（`escape` / `unescape` / `isEscapedAt`），
+  输入框补全与引用解析共用同一处。
+- **回合的前置语句抛错时不再把回合悬着**：配置读取与作用域开启移入 `try`，失败时补一条终态并归还槽位
+  （只在该回合没进过 `runTurn` 时补，避免发出第二条终态）——此前 `-cli` 会挂死，槽位与动作窗口都不归还。
+- **看门狗不再把已经收尾的 run 误标成「墙钟截断」**（`markTimedOut()` 与新增的 `markBodyFinished()`
+  共用实例锁）；工具结果的落盘文件名加一段唯一片段（调用 id 跨回合复用时撞名，撞上就是「`_path` 在、
+  内容不是它」）；`-cli` 的括起粘贴加上 1 MiB 上限（超限整段不插入并发提示）。
+- **`-tui` 的 `/reload` 输出不再把同一插件同时列成「插件重启」与「插件启动」两行**；`task` 缺
+  `subagent_type` 时补 `REJECTED` 终态（此前停在中间态）；`LlmRequest` 的消息列表逐元素挡 `null`
+  （此前的硬 NPE 会把它带下去）。
+- **恢复出来的会话带上 `parentSessionId`**：`SessionManager.importSnapshots` 此前用两参构造器发
+  `SessionCreatedEvent`，而同一字段在 fork 新建与关会话两条路径都传了，只有「恢复」这条静默丢了。
+  同一批里压缩边界的回退改由方法自身抛 `JellyfishException` 拒绝，`compressedCount` 钳到 ≥0
+  （它会被 `CompactionAppliedEvent` 广播并累加进指标）。
+- **`-tui` 回合进行中放行外壳自有命令**（`/exit`、`/ui`、`/thinking`、`/toolargs`、`/mouse`）：
+  此前它们被 `submit()` 里「回合运行中不提交」的检查挡掉，而 `Ctrl+T` 这类按键却照常生效。
 
 ## [0.1.0] - 2026-10-07
 
@@ -353,5 +385,6 @@
   两种装法交付同一个 `JellyfishRuntime` 门面。
 - 官方插件与脚本插件运行时在独立仓库 `Jellyfish-Plugins`。
 
-[Unreleased]: https://github.com/zcd0831/Jellyfish/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/zcd0831/Jellyfish/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/zcd0831/Jellyfish/releases/tag/v0.1.1
 [0.1.0]: https://github.com/zcd0831/Jellyfish/releases/tag/v0.1.0

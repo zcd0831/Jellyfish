@@ -7,36 +7,7 @@
 
 ## [Unreleased]
 
-### Changed
-
-- **压缩完成 / 失败的结果从消息区挪进 `DOCK` 命令输出面板**：它此前按时间戳插进消息流，可它既不是会话消息
-  （消息区是会话的投影），又与 `DOCK` 里那条「已开始压缩」是同一件事的两次回应——同一件事的回应被拆在了两处。
-  现在结果进面板（`Esc` 可关、下一条命令输出会顶掉它），**持续有效的那部分不变**：状态栏仍然常驻
-  「已压缩 N 条（丢弃 M 条）」。`CompactionView` 只负责判定「该不该报、报什么」，落点在 `TuiApp.syncCompaction`。
-
-### Fixed
-
-- **`subAgent` 的并发 / 等待区 / 墙钟不再「永远按缺省值跑」**：这几个参数由 `RunScheduler` 在**构造器**里读一次，
-  而它由装配根在 `RuntimeConfig.refresh()` **之前**构造——那时配置快照还是空的，读到的必然是缺省值。
-  于是把 `runTimeoutMillis` 写成 20 分钟照样按 300 秒掐断、把 `maxConcurrentRuns` 写成 6 照样只并发 3，
-  **没有任何日志或告警**，现场只表现为「配置里明明写着」。现在墙钟在**每次起看门狗时**按当时的配置取
-  （`/reload` 之后下一个 run 就按新值计时），并发 / 等待区 / 池上界在**第一次提交**时按当时的配置建一次
-  （此后不重建，语义仍是「改它们需重启」）。同类改动请照此办理：装配期读到的一切「配置」都只是缺省值。
-- **中断（`Esc`）不再「按了没反应」**：取消此前传得到 run 句柄上，但一个**正在等待区里等许可**的 run 收不到
-  ——`RunScheduler` 用的是不理会中断的 `acquireUninterruptibly()`，也没有任何地方会在取消时唤醒它，于是它的
-  句柄长时间不落终态，等它的父回合（与驱动它的插件，例如 workflow）就迟迟拿不到结果，界面上与「没按上」
-  无法区分。现在等许可改为一小步一轮询并查取消标记，拿到许可后**再复查一次**；顺带堵掉旧实现的另一个洞：
-  被中断（关停）之后它仍可能拿到许可并把执行体跑起来。
-- **子代理面板分开显示「已等待」与「已运行」**：两者此前共用一个起算点（登记时刻），于是排队中的 run 被显示成
-  「已运行 Ns」——它其实还没开跑，而「为什么一直没出结果」恰恰要从「它还在排队」里读出来。现在
-  `AgentRunSnapshot` 分开记 `startedAt`（登记）与 `runningAt`（拿到许可真正开跑），排队中说「已等待」、
-  运行中说「已运行」；取消已请求但尚未收敛的 run 显示成「取消中」。
-- **提问浮层里「自己输入答案」写不出换行**：编辑态此前拿 `Enter` 当提交键，可 `Enter` 是输入框里**唯一**
-  能打出换行的键（框架不解析修饰键编码，`Shift+Enter` 与裸 `Enter` 无法区分，见 `InputKeyMapper`），
-  多行答案因此根本没法写。现在编辑态跟随外壳的反转键位：**`Ctrl+S` 提交、`Enter` 换行**（与主输入框一致），
-  `Esc` 仍是退回选项态。选项态的 `Enter` 确认不受影响——那时没有文本在编辑。
-
-## [0.1.1] - 2026-10-10
+## [0.1.1] - 2026-10-11
 
 ### Added
 
@@ -126,10 +97,9 @@
   三件 HTTP 请求走私。**升级依据不是公告**——官方只把 `2.4.0.Final` 列为修复版，而 `2.2.x` 是否
   回移了修复无法从公告判断；依据是 tag `2.2.40.Final` 的 `Connectors.java` 历史里有那条
   `[UNDERTOW-2594][2595][2596] … Switching to strict HTTP parser`（`pom.xml` 里写明了这一点，
-  以及升级后必须重跑 `-Pserver-it`）。JDK 1.8 上实测 `-Pserver-it` 绿。同一轮里 `jline` 的 CVE
-  **判为不可行**：Maven Central 上最新稳定是 3.26.3，且自 3.26.0 起主线 jar 另发 `-jdk8` 分类器
-  （主线已抬到 Java 11+），在 JDK 1.8 上拿不到修复版；Spring Boot 2.7.18 已 EOL 属基座问题，
-  需平台级决策。两条都不在本文件里做，理由记在 `CODE-REVIEW.md` 第八节。
+  以及升级后必须重跑 `-Pserver-it`）。JDK 1.8 上实测 `-Pserver-it` 绿。同一轮复核过的另一件事是
+  `Spring Boot 2.7.18` 已 EOL，属基座问题、需平台级决策，理由记在 `CODE-REVIEW.md` 第八节。
+  （当时一并判为不可行的 `jline` 那条，后来按 `jdk8` 分类器做成了，见上面那条。）
 - **`DaggerJellyfishComponent.create()` 换成了构建者**（破坏性，仅嵌入方）：`AppConfig` 不再由 `ConfigModule`
   固定从 `classpath:config.json` 读，改为由调用方注入——
   `DaggerJellyfishComponent.builder().appConfig(...).build()`。想要原来那份来源（classpath）时用
@@ -183,8 +153,9 @@
   与实际原因不符，也会把排查带到错误的方向。
 - `agent-run` 线程池改为按上界固定（`maxConcurrentRuns × (maxDepth + 1)`）并常驻、不再空闲回收：
   引入队列后按需扩容不会发生（JDK 只在队列满时才扩线程），会把并发反过来压成一两条线程。
-- Maven 坐标由 `zcd` 改为 `io.github.zcd0831`，版本号 0.1.1；父 POM 与 `jellyfish-api` / `jellyfish-infra` /
-  `jellyfish-core` / `jellyfish-di` 已发布到 Maven Central，接入方不必再本地 `install`。
+- Maven 坐标由 `zcd` 改为 `io.github.zcd0831`，版本号 0.1.1。**0.1.1 是首次发布**：父 POM 与
+  `jellyfish-api` / `jellyfish-infra` / `jellyfish-core` / `jellyfish-di` 随本次发布上传到 Maven Central
+  （`jellyfish-tui` / `jellyfish-server` / `jellyfish-cli` 不发），本次发布之前接入方需要本地 `install`。
   Java 包名仍是 `zcd.jellyfish.*`——坐标与包名不要求一致。
 - 新增 `release` profile（`-P release`）承载 source / javadoc / GPG 签名 / Central 发布四个插件，
   日常构建不加载它们。
@@ -201,6 +172,11 @@
 - 子代理缺省值放宽：`subAgent.maxSpawnsPerTurn` 3 → 12、`treeTokenBudget` 1,500,000 → 6,000,000
   （= 12 × 单 run 的 50 万）。
 
+- **压缩完成 / 失败的结果从消息区挪进 `DOCK` 命令输出面板**：它此前按时间戳插进消息流，可它既不是会话消息
+  （消息区是会话的投影），又与 `DOCK` 里那条「已开始压缩」是同一件事的两次回应——同一件事的回应被拆在了两处。
+  现在结果进面板（`Esc` 可关、下一条命令输出会顶掉它），**持续有效的那部分不变**：状态栏仍然常驻
+  「已压缩 N 条（丢弃 M 条）」。`CompactionView` 只负责判定「该不该报、报什么」，落点在 `TuiApp.syncCompaction`。
+
 ### Fixed
 
 - **项目级配置里没写的段不再把全局级的同名段顶成缺省值**：`jellyfish.json` 的 `react` / `permission` /
@@ -215,7 +191,7 @@
   **「不逐字段合并」这条语义一个字没变**：项目级写了这一段（哪怕写成空对象 `"ask": {}`）就整段覆盖，
   段内不与全局级混合。判据是「JSON 里有没有这个键」，而不是「值是否等于缺省」——
   后者会把 `"ask": {"timeoutSeconds": -1}`（非法值回退成缺省）误判成「没写」。
-- **异常补上 `serialVersionUID`（七处）**：`CompactionUnavailableException`、`TurnInProgressException`、
+- **异常补上 `serialVersionUID`（八处：内核三处 + 插件侧五处）**：`CompactionUnavailableException`、`TurnInProgressException`、
   `ApiException`，以及插件侧的 `ScriptCallException` / `ScriptTimeoutException` / `ScriptCancelledException` /
   `ScriptConnectionException` / `ScriptNotHandledException`。**这不是修了一个能触发的故障**——核对过：
   内核没有把异常跨进程序列化的路径（无 RPC、不写进落盘文件），脚本那一侧协议帧里传的是错误码与文本
@@ -366,6 +342,26 @@
   （它会被 `CompactionAppliedEvent` 广播并累加进指标）。
 - **`-tui` 回合进行中放行外壳自有命令**（`/exit`、`/ui`、`/thinking`、`/toolargs`、`/mouse`）：
   此前它们被 `submit()` 里「回合运行中不提交」的检查挡掉，而 `Ctrl+T` 这类按键却照常生效。
+
+- **`subAgent` 的并发 / 等待区 / 墙钟不再「永远按缺省值跑」**：这几个参数由 `RunScheduler` 在**构造器**里读一次，
+  而它由装配根在 `RuntimeConfig.refresh()` **之前**构造——那时配置快照还是空的，读到的必然是缺省值。
+  于是把 `runTimeoutMillis` 写成 20 分钟照样按 300 秒掐断、把 `maxConcurrentRuns` 写成 6 照样只并发 3，
+  **没有任何日志或告警**，现场只表现为「配置里明明写着」。现在墙钟在**每次起看门狗时**按当时的配置取
+  （`/reload` 之后下一个 run 就按新值计时），并发 / 等待区 / 池上界在**第一次提交**时按当时的配置建一次
+  （此后不重建，语义仍是「改它们需重启」）。同类改动请照此办理：装配期读到的一切「配置」都只是缺省值。
+- **中断（`Esc`）不再「按了没反应」**：取消此前传得到 run 句柄上，但一个**正在等待区里等许可**的 run 收不到
+  ——`RunScheduler` 用的是不理会中断的 `acquireUninterruptibly()`，也没有任何地方会在取消时唤醒它，于是它的
+  句柄长时间不落终态，等它的父回合（与驱动它的插件，例如 workflow）就迟迟拿不到结果，界面上与「没按上」
+  无法区分。现在等许可改为一小步一轮询并查取消标记，拿到许可后**再复查一次**；顺带堵掉旧实现的另一个洞：
+  被中断（关停）之后它仍可能拿到许可并把执行体跑起来。
+- **子代理面板分开显示「已等待」与「已运行」**：两者此前共用一个起算点（登记时刻），于是排队中的 run 被显示成
+  「已运行 Ns」——它其实还没开跑，而「为什么一直没出结果」恰恰要从「它还在排队」里读出来。现在
+  `AgentRunSnapshot` 分开记 `startedAt`（登记）与 `runningAt`（拿到许可真正开跑），排队中说「已等待」、
+  运行中说「已运行」；取消已请求但尚未收敛的 run 显示成「取消中」。
+- **提问浮层里「自己输入答案」写不出换行**：编辑态此前拿 `Enter` 当提交键，可 `Enter` 是输入框里**唯一**
+  能打出换行的键（框架不解析修饰键编码，`Shift+Enter` 与裸 `Enter` 无法区分，见 `InputKeyMapper`），
+  多行答案因此根本没法写。现在编辑态跟随外壳的反转键位：**`Ctrl+S` 提交、`Enter` 换行**（与主输入框一致），
+  `Esc` 仍是退回选项态。选项态的 `Enter` 确认不受影响——那时没有文本在编辑。
 
 ## [0.1.0] - 2026-10-07
 

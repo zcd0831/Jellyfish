@@ -357,7 +357,7 @@ public final class TuiApp extends ToolkitApp {
     /** 上次因「回合进行中」而主动失效的时刻（毫秒），用于把活刷新的频率压到每秒一次。 */
     private long lastLiveInvalidateMillis;
 
-    /** 压缩在界面上的那一层：状态栏标记与「压完了」的一次性提示。 */
+    /** 压缩在界面上的那一层：状态栏标记与「压完了」的一次性结果（结果进命令输出面板）。 */
     private final CompactionView compactionView = new CompactionView();
 
     /**
@@ -584,10 +584,15 @@ public final class TuiApp extends ToolkitApp {
     }
 
     /**
-     * 对表压缩状态：把状态栏标记返回给调用方，并在「压缩中 → 终态」时贴一条提示。
+     * 对表压缩状态：把状态栏标记返回给调用方，并在「压缩中 → 终态」时把结果交给命令输出面板。
      * <p>
-     * <b>为什么状态栏也要有一份</b>：提示贴进消息流后会随滚动移出视野，而「这个会话的历史已被压过」
-     * 是一个<b>持续有效</b>的事实（模型确实看不到那些原文了），只贴一次提示不足以让人一直记得。
+     * <b>为什么结果进 DOCK 面板而不进消息区</b>：压缩的起头（{@code /compact} 那条「已开始压缩」）
+     * 本来就在那块面板里，结果却插进对话中间，同一件事的两次回应被拆到了两个地方；而消息区是
+     * <b>会话的投影</b>，压缩不是一条会话消息。
+     * <p>
+     * <b>为什么状态栏另外还要一份</b>：面板是「最近一次反馈」，会被下一条命令输出顶掉、也能被
+     * {@code Esc} 关掉；而「这个会话的历史已被压过」是一个<b>持续有效</b>的事实（模型确实看不到
+     * 那些原文了），只在那块面板里说一次不足以让人一直记得。
      *
      * @param session   当前会话，可为 {@code null}
      * @param sessionId 当前会话标识，可为 {@code null}
@@ -597,7 +602,8 @@ public final class TuiApp extends ToolkitApp {
         ConversationCompactor.State state = compactor.status(sessionId);
         CompactionView.Notice notice = compactionView.sync(sessionId, state);
         if (notice != null) {
-            chatState.appendNotice("/compact", notice.getText(), notice.getKind());
+            // 标题用命令原文：手动压缩敲的就是它；自动压缩的结果文本里已经自报了来源
+            shellOutput.show("/compact", notice.getText(), notice.getKind());
         }
         return CompactionView.label(session, state);
     }

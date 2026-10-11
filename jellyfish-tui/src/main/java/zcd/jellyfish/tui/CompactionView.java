@@ -7,10 +7,13 @@ import zcd.jellyfish.infra.session.Session;
 import java.util.Objects;
 
 /**
- * 压缩在界面上的那一层：状态栏标记 + 「压完了」的一次性提示。
+ * 压缩在界面上的那一层：状态栏标记 + 「压完了」的一次性结果。
+ * <p>
+ * <b>结果落在哪由外壳定</b>：本类只回答「该不该报、报什么」，TUI 把它放进 DOCK 的命令输出面板
+ * （压缩的起头也在那儿，同一件事的两次回应因此待在同一个地方）。
  * <p>
  * <b>为什么单独一个类而不是塞在 {@code TuiApp} 里</b>：这层逻辑有一处不显眼但会出错的判断——
- * <b>切换会话时不能补提示</b>。压缩期间用户可能切走再回来，回来时看到的是 {@code DONE}，
+ * <b>切换会话时不能补结果</b>。压缩期间用户可能切走再回来，回来时看到的是 {@code DONE}，
  * 那一下不是「刚发生的」；把它当跃迁贴出来，会让一条几分钟前的压缩结果混进当前会话的时间线。
  * 判断本身是纯状态迁移，放在渲染方法里就只能靠人眼盯着，因此提到这里用单测钉住。
  * <p>
@@ -28,11 +31,11 @@ final class CompactionView {
     private String renderedSessionId;
 
     /**
-     * 对表一帧的压缩状态，必要时给出一次性提示。
+     * 对表一帧的压缩状态，必要时给出一次性结果。
      *
      * @param sessionId 当前会话标识，可为 {@code null}
      * @param current   本帧读到的压缩状态，不可为 {@code null}
-     * @return 需要贴出的提示；无需提示时返回 {@code null}
+     * @return 需要呈现的结果；无需呈现时返回 {@code null}
      */
     Notice sync(String sessionId, ConversationCompactor.State current) {
         Objects.requireNonNull(current, "current must not be null");
@@ -53,7 +56,7 @@ final class CompactionView {
      * 判断本帧是否构成一条「压缩结果」。
      *
      * @param current 本帧读到的压缩状态
-     * @return 待贴出的提示；不构成结果时返回 {@code null}
+     * @return 待呈现的结果；不构成结果时返回 {@code null}
      */
     private Notice noticeOf(ConversationCompactor.State current) {
         if (!rendered.isRunning()) {
@@ -124,23 +127,25 @@ final class CompactionView {
     }
 
     /**
-     * 一条待贴出的提示。
+     * 一条待呈现的压缩结果。
+     * <p>
+     * 落点由外壳定（TUI 里是 DOCK 的命令输出面板），因此这里只带文本与语义。
      * <p>
      * 不可变。
      */
     static final class Notice {
 
-        /** 提示文本。 */
+        /** 结果文本。 */
         private final String text;
 
-        /** 提示语义。 */
+        /** 结果语义。 */
         private final ShellNotice.Kind kind;
 
         /**
-         * 构造提示。
+         * 构造结果。
          *
-         * @param text 提示文本，不可为 {@code null}
-         * @param kind 提示语义，不可为 {@code null}
+         * @param text 结果文本，不可为 {@code null}
+         * @param kind 结果语义，不可为 {@code null}
          */
         Notice(String text, ShellNotice.Kind kind) {
             this.text = text;
@@ -148,18 +153,18 @@ final class CompactionView {
         }
 
         /**
-         * 获取提示文本。
+         * 获取结果文本。
          *
-         * @return 提示文本
+         * @return 结果文本
          */
         String getText() {
             return text;
         }
 
         /**
-         * 获取提示语义。
+         * 获取结果语义。
          *
-         * @return 提示语义
+         * @return 结果语义
          */
         ShellNotice.Kind getKind() {
             return kind;

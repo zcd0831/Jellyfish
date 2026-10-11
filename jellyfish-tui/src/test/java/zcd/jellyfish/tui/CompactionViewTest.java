@@ -57,7 +57,7 @@ class CompactionViewTest {
     }
 
     @Test
-    @DisplayName("从压缩中落到成功：贴一条 INFO 提示")
+    @DisplayName("从压缩中落到成功：给一条 INFO 结果")
     void sync_should_noticeOnce_when_runningBecomesDone() {
         CompactionView view = new CompactionView();
         view.sync("s-1", ConversationCompactor.State.running(CompactionTrigger.MANUAL));
@@ -70,7 +70,7 @@ class CompactionViewTest {
     }
 
     @Test
-    @DisplayName("从压缩中落到失败：贴一条 ERROR 提示，带失败原因")
+    @DisplayName("从压缩中落到失败：给一条 ERROR 结果，带失败原因")
     void sync_should_noticeFailure_when_runningBecomesFailed() {
         CompactionView view = new CompactionView();
         view.sync("s-1", ConversationCompactor.State.running(CompactionTrigger.MANUAL));

@@ -274,7 +274,7 @@ TUI 下带上它会判用法错误退 `2`——展开与否在这里是运行期
 
 ```
 ╭ ⏸ 需要审批 ────────────────────────╮
-│ 工具 bash                          │
+│ 工具 shell                         │
 │ 参数 {"command": "rm -rf build"}   │
 │ 理由 agent 策略要求人工审批该工具   │
 │ 会话 a1b2c3d4… · 模式 normal       │
@@ -383,7 +383,7 @@ java -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=5005 \
 | `/reload` | | 重新加载配置（模型 / agent / 插件） |
 
 `-tui` 另有五个由外壳处理的命令，不在 `/help` 列表里：`/exit`、`/ui`、`/thinking`、`/toolargs`、`/mouse`。
-**插件会带来更多命令**（例如待办插件的 `/todo`、skills 插件的 `/skills`、shell 的 `/shell`），装了就出现在 `/help` 里。
+**插件会带来更多命令**（例如待办插件的 `/todo`、skills 插件的 `/skills`、项目约定插件的 `/init`），装了就出现在 `/help` 里（`jellyfish-plugin-shell` 不注册命令，它提供 `shell` 工具与 `!` 输入指令）。
 
 ### 命令「接力」：命令可以不把话说完
 
@@ -698,7 +698,7 @@ Gemini      { "vendorBody": { "generationConfig": { "thinkingConfig": { "thinkin
       "description": "通用编码助手",
       "permissions": {
         "deniedTools": ["write_file", "edit_file"],
-        "askTools": ["bash"]
+        "askTools": ["shell"]
       }
     },
     "scout": {

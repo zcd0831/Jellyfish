@@ -108,18 +108,8 @@
         <jacoco.version>0.8.12</jacoco.version>
     </properties>
 
-    <repositories>
-        <repository>
-            <id>ossrh-snapshots</id>
-            <url>https://central.sonatype.com/repository/maven-snapshots/</url>
-            <releases>
-                <enabled>false</enabled>
-            </releases>
-            <snapshots>
-                <enabled>true</enabled>
-            </snapshots>
-        </repository>
-    </repositories>
+    <!-- 注意：这里也不声明 dev.tamboui 所在的快照仓库。只有 jellyfish-tui 构建时要解析 TamboUI，
+         那条仓库已写进它自己的 POM；本 POM 会发布到中央仓库，不该让使用方继承到一条快照仓库声明。 -->
 
     <dependencyManagement>
         <dependencies>
@@ -135,15 +125,6 @@
                 <groupId>javax.inject</groupId>
                 <artifactId>javax.inject</artifactId>
                 <version>${javax-inject.version}</version>
-            </dependency>
-
-            <!-- tamboui -->
-            <dependency>
-                <groupId>dev.tamboui</groupId>
-                <artifactId>tamboui-bom</artifactId>
-                <version>0.5.0-SNAPSHOT</version>
-                <type>pom</type>
-                <scope>import</scope>
             </dependency>
 
             <!-- Undertow 嵌入式 Web 服务器 -->

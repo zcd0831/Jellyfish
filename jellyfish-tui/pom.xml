@@ -15,6 +15,30 @@
     <name>Jellyfish TUI</name>
     <description>TUI 外壳：TamboUI 声明式界面、TUI 版 ReActListener 与线程契约。</description>
 
+    <properties>
+        <!-- TamboUI 只发 SNAPSHOT，而父 POM 自己要发布到中央仓库（release 构件不得依赖 SNAPSHOT），
+             所以它的版本只写在 tui 这一层，不进父 POM 的 dependencyManagement：
+             tui 是唯一用 TamboUI 的模块，也是不发布的那一个，SNAPSHOT 就止步在这里。
+             升级时改这里一处，tamboui-toolkit 与 tamboui-jline3-backend 同步。 -->
+        <tamboui.version>0.5.0-SNAPSHOT</tamboui.version>
+    </properties>
+
+    <repositories>
+        <!-- TamboUI 只发 SNAPSHOT、不在中央仓库，解析它必须有这条快照仓库。
+             它只声明在 tui（唯一使用者，且不发布），父 POM 不带：父 POM 要发布到中央仓库，
+             不该让使用方继承到一条快照仓库声明。 -->
+        <repository>
+            <id>ossrh-snapshots</id>
+            <url>https://central.sonatype.com/repository/maven-snapshots/</url>
+            <releases>
+                <enabled>false</enabled>
+            </releases>
+            <snapshots>
+                <enabled>true</enabled>
+            </snapshots>
+        </repository>
+    </repositories>
+
     <dependencies>
         <dependency>
             <groupId>io.github.zcd0831</groupId>
@@ -33,10 +57,11 @@
         </dependency>
 
         <!-- TamboUI：声明式 DSL。toolkit 会传递 core / widgets / tui / css / annotations；
-             版本由父 POM 的 tamboui-bom 统一管理，这里刻意不带 version。 -->
+             版本由上面的 tamboui.version 给出（父 POM 不出现 TamboUI，理由见那里的注释）。 -->
         <dependency>
             <groupId>dev.tamboui</groupId>
             <artifactId>tamboui-toolkit</artifactId>
+            <version>${tamboui.version}</version>
         </dependency>
         <!-- 终端后端：必须显式选一个，TamboUI 自身不带默认后端。
              它传递进来的 jline 是 3.25.1，落在几件 ReDoS 公告的受影响区间里，因此这里排除掉、
@@ -47,6 +72,7 @@
         <dependency>
             <groupId>dev.tamboui</groupId>
             <artifactId>tamboui-jline3-backend</artifactId>
+            <version>${tamboui.version}</version>
             <exclusions>
                 <exclusion>
                     <groupId>org.jline</groupId>

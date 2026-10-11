@@ -105,7 +105,7 @@ class AskPromptTest {
     }
 
     @Test
-    @DisplayName("编辑态换成「输入答案」提示：此时按键放行给输入框")
+    @DisplayName("编辑态换成「输入答案」提示：提交是 Ctrl+S，Enter 留给输入框换行")
     void render_should_switchHintWhenEditing() {
         // When
         String body = String.join("\n", texts(render(activePicker(), true)));
@@ -113,6 +113,8 @@ class AskPromptTest {
         // Then
         assertTrue(body.contains("输入你的答案"), body);
         assertTrue(body.contains("Esc 返回选项"), body);
+        assertTrue(body.contains("Ctrl+S 提交"), body);
+        assertTrue(body.contains("Enter 换行"), body);
         assertFalse(body.contains("Enter 确认"), body);
     }
 

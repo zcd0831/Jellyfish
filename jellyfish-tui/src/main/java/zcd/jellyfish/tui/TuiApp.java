@@ -253,8 +253,8 @@ public final class TuiApp extends ToolkitApp {
     /**
      * 是否处于「自己输入答案」的编辑态。
      * <p>
-     * 编辑态下按键放行给常驻输入框（本外壳不新写文本编辑器），只有 {@code Enter} 与 {@code Esc}
-     * 被截走：前者提交答案，后者退回选项态。
+     * 编辑态下按键放行给常驻输入框（本外壳不新写文本编辑器），只有 {@code Ctrl+S}、{@code Esc}
+     * 与 {@code Ctrl+C} 被截走：依次是提交答案、退回选项态、退出外壳。判定见 {@link #askEditRouteOf}。
      */
     private boolean askEditing;
 
@@ -946,6 +946,59 @@ public final class TuiApp extends ToolkitApp {
 
         /** 普通文本且当前空闲：交给内核提交管线。 */
         SUBMIT
+    }
+
+    /**
+     * 提问编辑态（「其它（自己输入）」）的按键判定。
+     * <p>
+     * <b>为什么单独抽出来</b>：这里最容易写反的是「{@code Enter} 到底是提交还是换行」，
+     * 而它决定了用户能不能写出多行答案——偏偏{@code Enter} 是输入框里唯一能打出换行的键。
+     * 抽成纯函数后这条判定可以被直接断言，不必去驱动一个真实界面。
+     * <p>
+     * <b>为什么 {@code Enter} 是换行而不是提交</b>：与外壳的反转键位一致（{@code Ctrl+S} 发送 /
+     * 提交、{@code Enter} 换行），见 {@link InputKeyMapper}。选项态的 {@code Enter} 确认不受影响——
+     * 那时没有文本在编辑，也就无所谓换行。
+     *
+     * @param action 按键动作，可为 {@code null}
+     * @return 处置方式，保证非 {@code null}
+     */
+    static AskEditRoute askEditRouteOf(InputAction action) {
+        if (action == null) {
+            return AskEditRoute.EDIT;
+        }
+        switch (action) {
+            case SEND:
+                return AskEditRoute.SUBMIT;
+            case CANCEL:
+                return AskEditRoute.BACK;
+            case QUIT:
+                return AskEditRoute.EXIT;
+            default:
+                // 含 COMPLETE_ACCEPT（Enter）与所有编辑键：一律放行给输入框
+                return AskEditRoute.EDIT;
+        }
+    }
+
+    /**
+     * {@link #askEditRouteOf} 的四种处置方式。
+     */
+    enum AskEditRoute {
+
+        /** {@code Ctrl+S}：把输入框里的原文当作答案回填给等待中的提问。 */
+        SUBMIT,
+
+        /** {@code Esc}：退回选项态，并丢掉这段草稿。 */
+        BACK,
+
+        /** {@code Ctrl+C}：退出外壳。 */
+        EXIT,
+
+        /**
+         * 放行给输入框编辑。
+         * <p>
+         * {@code Enter} 属于这一类：输入框把它落成换行，答案因此可以是多行。
+         */
+        EDIT
     }
 
     /**
@@ -1979,17 +2032,23 @@ public final class TuiApp extends ToolkitApp {
         /**
          * 处理编辑态（自己输入答案）的按键。
          * <p>
-         * <b>为什么把编辑交给常驻输入框</b>：字符、退格、光标移动、粘贴、中文输入法这些
+         * <b>为什么把编辑交给常驻输入框</b>：字符、退格、光标移动、换行、粘贴、中文输入法这些
          * 输入框已经处理得很完整，在浮层里再写一个编辑器只会得到第二套（且更差的）行为。
-         * 因此编辑态只截住两个键——{@code Enter} 提交、{@code Esc} 退回选项态——其余一律放行。
-         * 代价是答案会显示在输入框里，而不是浮层里；对用户来说那是同一个位置（就在浮层下方）。
+         * 因此编辑态只截住三个键——{@code Ctrl+S} 提交、{@code Esc} 退回选项态、{@code Ctrl+C} 退出——
+         * 其余一律放行。代价是答案会显示在输入框里，而不是浮层里；对用户来说那是同一个位置（就在浮层下方）。
+         * <p>
+         * <b>提交为什么不是 {@code Enter}</b>：答案常常要写成多行（一次列几条要求），而
+         * {@code Enter} 是输入框里<b>唯一</b>能打出换行的键（框架不解析修饰键编码，{@code Shift+Enter}
+         * 与裸 {@code Enter} 无法区分，见 {@link InputKeyMapper}）。把它截走当提交，用户就只能写单行答案。
+         * 因此这里跟随外壳的反转键位：{@code Ctrl+S} 提交、{@code Enter} 换行——与主输入框同一套键位，
+         * 也与选项态的 {@code Enter} 确认（那时没有文本要编辑）不冲突。
          *
          * @param action 按键动作
          * @return 处理结果
          */
         private EventResult handleAskEditing(InputAction action) {
-            switch (action) {
-                case COMPLETE_ACCEPT:
+            switch (askEditRouteOf(action)) {
+                case SUBMIT:
                     String answer = input.takeText().trim();
                     if (answer.isEmpty()) {
                         // 空答案不是答复：留在编辑态，让用户把话说完或按 Esc 退回去
@@ -1997,18 +2056,16 @@ public final class TuiApp extends ToolkitApp {
                     }
                     resolveAsk(AskAnswer.custom(answer));
                     return EventResult.HANDLED;
-                case CANCEL:
+                case BACK:
                     // 退回选项态，并丢掉这段答案草稿：它是上一个选择的痕迹，不是下一条消息
                     askEditing = false;
                     input.clear();
                     return EventResult.HANDLED;
-                case SEND:
-                    // 编辑态是模态的：Ctrl+S 不能顺手把答案当成一条用户消息发出去
-                    return EventResult.HANDLED;
-                case QUIT:
+                case EXIT:
                     exitShell();
                     return EventResult.HANDLED;
                 default:
+                    // EDIT：{@code Enter} 也走这一条，由输入框落成换行
                     return EventResult.UNHANDLED;
             }
         }

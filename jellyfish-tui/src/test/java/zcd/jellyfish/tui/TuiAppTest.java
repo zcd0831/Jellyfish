@@ -142,6 +142,30 @@ class TuiAppTest {
     }
 
     @Test
+    @DisplayName("提问编辑态：Ctrl+S 提交答案，Enter 不是提交（它要留给输入框当换行）")
+    void askEditRouteOf_should_submitOnSendOnly() {
+        assertTrue(TuiApp.askEditRouteOf(InputAction.SEND) == TuiApp.AskEditRoute.SUBMIT);
+        // 反例：把它判成提交，用户就写不出多行答案——Enter 是输入框里唯一能打出换行的键
+        assertFalse(TuiApp.askEditRouteOf(InputAction.COMPLETE_ACCEPT) == TuiApp.AskEditRoute.SUBMIT);
+    }
+
+    @Test
+    @DisplayName("提问编辑态：Enter 与其余编辑键一律放行给输入框")
+    void askEditRouteOf_should_passThroughEditingKeys() {
+        assertTrue(TuiApp.askEditRouteOf(InputAction.COMPLETE_ACCEPT) == TuiApp.AskEditRoute.EDIT);
+        assertTrue(TuiApp.askEditRouteOf(InputAction.EDIT) == TuiApp.AskEditRoute.EDIT);
+        assertTrue(TuiApp.askEditRouteOf(InputAction.PAGE_UP) == TuiApp.AskEditRoute.EDIT);
+        assertTrue(TuiApp.askEditRouteOf(null) == TuiApp.AskEditRoute.EDIT);
+    }
+
+    @Test
+    @DisplayName("提问编辑态：Esc 退回选项态、Ctrl+C 退出，两者都不提交答案")
+    void askEditRouteOf_should_backAndExit() {
+        assertTrue(TuiApp.askEditRouteOf(InputAction.CANCEL) == TuiApp.AskEditRoute.BACK);
+        assertTrue(TuiApp.askEditRouteOf(InputAction.QUIT) == TuiApp.AskEditRoute.EXIT);
+    }
+
+    @Test
     @DisplayName("只有无参 /help（含别名）才算「查键位」的那次帮助")
     void isBareHelp_should_matchOnlyBareHelp() {
         assertTrue(TuiApp.isBareHelp("/help"));

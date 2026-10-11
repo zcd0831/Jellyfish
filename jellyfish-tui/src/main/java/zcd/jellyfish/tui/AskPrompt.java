@@ -51,7 +51,7 @@ public final class AskPrompt {
     private static final String HINT = "\u2191/\u2193 选择 \u00b7 Enter 确认 \u00b7 Esc 放弃作答";
 
     /** 编辑态底部键位提示：此时按键放行给输入框。 */
-    private static final String HINT_EDITING = "\u2328 输入你的答案 \u00b7 Enter 提交 \u00b7 Esc 返回选项";
+    private static final String HINT_EDITING = "\u2328 输入你的答案 \u00b7 Enter 换行 \u00b7 Ctrl+S 提交 \u00b7 Esc 返回选项";
 
     /** 问题文本最多占用的视觉行数，超出部分明确省略。 */
     private static final int MAX_QUESTION_ROWS = 6;

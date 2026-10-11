@@ -7,7 +7,7 @@
 
     <groupId>io.github.zcd0831</groupId>
     <artifactId>jellyfish</artifactId>
-    <version>0.1.1</version>
+    <version>0.1.2</version>
     <name>Jellyfish</name>
     <description>用 Java 8 编写的轻量级 AI Agent 工具：插件 SPI 与事件契约、内核实现与三种外壳。</description>
     <packaging>pom</packaging>

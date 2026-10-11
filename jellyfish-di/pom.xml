@@ -8,7 +8,7 @@
     <parent>
         <groupId>io.github.zcd0831</groupId>
         <artifactId>jellyfish</artifactId>
-        <version>0.1.1</version>
+        <version>0.1.2</version>
     </parent>
 
     <artifactId>jellyfish-di</artifactId>

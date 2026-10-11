@@ -7,6 +7,16 @@
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-10-11
+
+### Changed
+
+- **父 POM 不再 import TamboUI 的 BOM**：TamboUI 只发 SNAPSHOT，而父 POM 要随 release 一起发布到中央
+  仓库（release 构件不得依赖 SNAPSHOT，校验会拒收）。它的版本与解析它所需的快照仓库都下移到
+  `jellyfish-tui` 自己的 POM——tui 是唯一使用 TamboUI 的模块，也是不发布的那一个，SNAPSHOT 止步于此。
+  发布出去的那几个构件（父 POM 与 `jellyfish-api` / `-infra` / `-core` / `-di`）因此不含 SNAPSHOT 依赖，
+  使用方也不会从父 POM 继承到一条快照仓库声明。
+
 ## [0.1.1] - 2026-10-11
 
 ### Added
@@ -412,6 +422,7 @@
   两种装法交付同一个 `JellyfishRuntime` 门面。
 - 官方插件与脚本插件运行时在独立仓库 `Jellyfish-Plugins`。
 
-[Unreleased]: https://github.com/zcd0831/Jellyfish/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/zcd0831/Jellyfish/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/zcd0831/Jellyfish/releases/tag/v0.1.2
 [0.1.1]: https://github.com/zcd0831/Jellyfish/releases/tag/v0.1.1
 [0.1.0]: https://github.com/zcd0831/Jellyfish/releases/tag/v0.1.0

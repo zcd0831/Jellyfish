@@ -7,14 +7,13 @@
 
     <groupId>io.github.zcd0831</groupId>
     <artifactId>jellyfish</artifactId>
-    <version>0.1.2</version>
+    <version>1.0.0-alpha</version>
     <name>Jellyfish</name>
-    <description>用 Java 8 编写的轻量级 AI Agent 工具：插件 SPI 与事件契约、内核实现与三种外壳。</description>
+    <description>用 Java 8 编写的本地终端 AI Agent：领域分层、显式端口、文件系统持久化。</description>
     <packaging>pom</packaging>
 
     <!-- 发布到 Maven Central 的硬性元数据：url / licenses / developers / scm 缺一不可。
-         校验看的是「有效模型」，所以这里声明一次、子模块继承即可（父 POM 与子模块在同一批
-         上传，Central 能解析到它）。 -->
+         校验看的是「有效模型」，所以这里声明一次、子模块继承即可。 -->
     <url>https://github.com/zcd0831/Jellyfish</url>
     <licenses>
         <license>
@@ -30,8 +29,8 @@
             <url>https://github.com/zcd0831</url>
         </developer>
     </developers>
-    <!-- scm 的三个字段与 url 一样会被子模块继承，并追加 artifactId（Maven 的缺省行为），
-         拼出来的地址是 404。三个 child.scm.*.inherit.append.path="false" 让子模块沿用同一个仓库地址。 -->
+    <!-- scm 的三个字段会被子模块继承并追加 artifactId，拼出的地址是 404；
+         三个 child.scm.*.inherit.append.path="false" 让子模块沿用同一个仓库地址。 -->
     <scm child.scm.connection.inherit.append.path="false"
          child.scm.developerConnection.inherit.append.path="false"
          child.scm.url.inherit.append.path="false">
@@ -40,163 +39,68 @@
         <url>https://github.com/zcd0831/Jellyfish</url>
     </scm>
 
+    <!-- 全量重建：旧实现留在 tag v0.1.2-final。
+         模块按「技术决策 D15」的切片逐个加入，依赖方向见 AGENTS.md。 -->
     <modules>
-        <module>jellyfish-api</module>
-        <module>jellyfish-infra</module>
-        <module>jellyfish-core</module>
-        <module>jellyfish-tui</module>
-        <module>jellyfish-server</module>
-        <module>jellyfish-di</module>
-        <module>jellyfish-cli</module>
     </modules>
 
     <properties>
         <java.version>1.8</java.version>
         <maven.compiler.source>${java.version}</maven.compiler.source>
         <maven.compiler.target>${java.version}</maven.compiler.target>
-        <!-- 源码与文档编码：javadoc 插件按它读源码，不写就按机器平台编码取，
-             在中文 Windows（GBK）上产出的 javadoc jar 会整篇乱码。 -->
+        <!-- 源码与文档编码：不写就按机器平台编码取，中文 Windows 上会乱码。 -->
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
-        <dagger.version>2.16</dagger.version>
-        <javax-inject.version>1</javax-inject.version>
-        <!-- Undertow：2.2.40.Final（2026-06-27）是 2.2.x（Java 8 维护线）的当前末版，
-             并已包含 CVE-2026-28367/28368/28369 三件请求走私的修复（回移）。
-             实证：`Connectors.java` 在 tag 2.2.40.Final 的历史里有提交
-             `[UNDERTOW-2594][UNDERTOW-2595][UNDERTOW-2596] CVE-2026-28368 CVE-2026-28369
-             CVE-2026-28367 Switching to strict HTTP parser`；OSV/GHSA 只把 2.4.0.Final 列为修复版，
-             发布说明也只在那一版列出，因此这条回移只能靠标签历史确认——升级前请照做一次。
-             为什么不能升 2.3/2.4：2.3.0 起最低要求 Java 11，且 undertow-servlet 已迁到 jakarta.*；
-             本项目是 JDK 1.8。本仓库只用 undertow-core 自带的 HttpHandler，不引 undertow-servlet，
-             故 jakarta 迁移不影响。
-             实测：在 JDK 1.8 上跑通 `-Pserver-it`（端到端真起 Undertow），说明该 artifact 的运行期字节码兼容 Java 8；
-             jar 自身的 class 主版本号未再用工具逐个体检（此前 2.2.39.Final 体检过，为 52）。
-             升级前必须重新验证这两条边界。 -->
-        <undertow.version>2.2.40.Final</undertow.version>
-        <okhttp.version>4.12.0</okhttp.version>
-        <pf4j.version>3.14.1</pf4j.version>
-        <jackson.version>2.21.6</jackson.version>
-        <slf4j.version>1.7.36</slf4j.version>
-        <log4j2.version>2.25.4</log4j2.version>
-        <commons-lang3.version>3.18.0</commons-lang3.version>
-        <!-- Markdown：0.21.0 是最后一个以 Java 7 字节码（major 51）发布的版本线，
-             0.22.0 起改为 major 55（Java 11），在 JDK 1.8 下会 UnsupportedClassVersionError。
-             实测：0.21.0 的三个 artifact 均为 major 51。升级前必须重新验证这条边界。 -->
-        <commonmark.version>0.21.0</commonmark.version>
-        <!-- 终端后端：TamboUI 的 jline3 backend 传递进来的版本是 3.25.1，而它落在
-             jline 那几件 ReDoS 公告的受影响区间里（<3.30.15，`CVE-2026-77420` 的
-             `HISTORY_IGNORE`、`CVE-2026-77423` 的 `less` 与内置 `grep`）。
-             3.26.0 起主线 jar 抬到 Java 11+，但**每个版本同时发 `-jdk8` 分类器**（就是给
-             Java 8 的构建），因此 3.30.17 在 JDK 1.8 上可用——它由 jellyfish-tui 显式声明，
-             并在那里排除传递依赖，理由见那份 pom。 -->
-        <jline.version>3.30.17</jline.version>
-        <maven-compiler-plugin.version>3.11.0</maven-compiler-plugin.version>
-        <!-- 打包：shade 3.5.x 是仍支持 JDK 8 + Maven 3.2.5 的版本线 -->
-        <maven-shade-plugin.version>3.5.1</maven-shade-plugin.version>
 
-        <!-- 发布到 Maven Central：四个插件只在 release profile 里声明，版本集中在这里 -->
-        <maven-source-plugin.version>3.3.0</maven-source-plugin.version>
-        <maven-javadoc-plugin.version>3.6.3</maven-javadoc-plugin.version>
-        <maven-gpg-plugin.version>3.2.4</maven-gpg-plugin.version>
-        <central-publishing-maven-plugin.version>0.9.0</central-publishing-maven-plugin.version>
-
-        <!-- 单元测试：JUnit5 + Mockito（Mockito 4.x 是最后一条支持 JDK8 的主线） -->
+        <!-- 版本统一在此声明；Java 8 可用的较新版，实际编译验证以构建结果为准。 -->
+        <lombok.version>1.18.30</lombok.version>
+        <dagger.version>2.48</dagger.version>
+        <jackson.version>2.17.2</jackson.version>
         <junit.version>5.10.2</junit.version>
-        <mockito.version>4.11.0</mockito.version>
+        <jtokkit.version>0.6.1</jtokkit.version>
 
-        <!-- 覆盖率：JaCoCo 0.8.12 是仍支持 Java 1.8 运行时的最后一个主线 -->
-        <jacoco.version>0.8.12</jacoco.version>
+        <maven-compiler-plugin.version>3.11.0</maven-compiler-plugin.version>
+        <maven-surefire-plugin.version>3.2.5</maven-surefire-plugin.version>
     </properties>
-
-    <!-- 注意：这里也不声明 dev.tamboui 所在的快照仓库。只有 jellyfish-tui 构建时要解析 TamboUI，
-         那条仓库已写进它自己的 POM；本 POM 会发布到中央仓库，不该让使用方继承到一条快照仓库声明。 -->
 
     <dependencyManagement>
         <dependencies>
-            <!-- dagger2 -->
+            <!-- 值对象样板（技术决策 D04.1：只允许 domain 的值对象使用 @Value） -->
+            <dependency>
+                <groupId>org.projectlombok</groupId>
+                <artifactId>lombok</artifactId>
+                <version>${lombok.version}</version>
+                <scope>provided</scope>
+            </dependency>
+
+            <!-- 装配（技术决策 D04：DI 注解只允许出现在 jellyfish-di） -->
             <dependency>
                 <groupId>com.google.dagger</groupId>
                 <artifactId>dagger</artifactId>
                 <version>${dagger.version}</version>
             </dependency>
-
-            <!-- JSR-330：@Inject / @Singleton，dagger 运行期注解 -->
             <dependency>
-                <groupId>javax.inject</groupId>
-                <artifactId>javax.inject</artifactId>
-                <version>${javax-inject.version}</version>
+                <groupId>com.google.dagger</groupId>
+                <artifactId>dagger-compiler</artifactId>
+                <version>${dagger.version}</version>
+                <scope>provided</scope>
             </dependency>
 
-            <!-- Undertow 嵌入式 Web 服务器 -->
-            <dependency>
-                <groupId>io.undertow</groupId>
-                <artifactId>undertow-core</artifactId>
-                <version>${undertow.version}</version>
-            </dependency>
-
-            <!-- OkHttp HTTP 客户端（LLM 调用直接基于它实现） -->
-            <dependency>
-                <groupId>com.squareup.okhttp3</groupId>
-                <artifactId>okhttp</artifactId>
-                <version>${okhttp.version}</version>
-            </dependency>
-
-            <!-- Jackson JSON -->
+            <!-- 序列化（技术决策 D07：Jackson 2.17.x，camelCase、枚举名、epoch 毫秒） -->
             <dependency>
                 <groupId>com.fasterxml.jackson.core</groupId>
                 <artifactId>jackson-databind</artifactId>
                 <version>${jackson.version}</version>
             </dependency>
 
-            <!-- PF4J 插件框架 -->
+            <!-- token 计数策略链的默认实现（技术决策 D08） -->
             <dependency>
-                <groupId>org.pf4j</groupId>
-                <artifactId>pf4j</artifactId>
-                <version>${pf4j.version}</version>
+                <groupId>com.knuddels</groupId>
+                <artifactId>jtokkit</artifactId>
+                <version>${jtokkit.version}</version>
             </dependency>
 
-            <!-- 日志: SLF4J + Log4j2 -->
-            <dependency>
-                <groupId>org.slf4j</groupId>
-                <artifactId>slf4j-api</artifactId>
-                <version>${slf4j.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>org.apache.logging.log4j</groupId>
-                <artifactId>log4j-slf4j-impl</artifactId>
-                <version>${log4j2.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>org.apache.logging.log4j</groupId>
-                <artifactId>log4j-core</artifactId>
-                <version>${log4j2.version}</version>
-            </dependency>
-
-            <!-- 工具库 -->
-            <dependency>
-                <groupId>org.apache.commons</groupId>
-                <artifactId>commons-lang3</artifactId>
-                <version>${commons-lang3.version}</version>
-            </dependency>
-
-            <!-- markdown：解析交给 commonmark，渲染由外壳自己写（见 tui/text/MarkdownRenderer） -->
-            <dependency>
-                <groupId>org.commonmark</groupId>
-                <artifactId>commonmark</artifactId>
-                <version>${commonmark.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>org.commonmark</groupId>
-                <artifactId>commonmark-ext-gfm-tables</artifactId>
-                <version>${commonmark.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>org.commonmark</groupId>
-                <artifactId>commonmark-ext-gfm-strikethrough</artifactId>
-                <version>${commonmark.version}</version>
-            </dependency>
-
-            <!-- 单元测试：以 BOM 统一管理 JUnit5 / Mockito 全套构件版本，子模块只声明 GA 不带版本 -->
+            <!-- 测试（技术决策 D13：JUnit 5，不使用 Mockito） -->
             <dependency>
                 <groupId>org.junit</groupId>
                 <artifactId>junit-bom</artifactId>
@@ -205,11 +109,10 @@
                 <scope>import</scope>
             </dependency>
             <dependency>
-                <groupId>org.mockito</groupId>
-                <artifactId>mockito-bom</artifactId>
-                <version>${mockito.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
+                <groupId>org.junit.jupiter</groupId>
+                <artifactId>junit-jupiter</artifactId>
+                <version>${junit.version}</version>
+                <scope>test</scope>
             </dependency>
         </dependencies>
     </dependencyManagement>
@@ -217,19 +120,21 @@
     <build>
         <pluginManagement>
             <plugins>
-                <!-- 编译：Dagger 注解处理器配置与版本统一定义，子模块无需重复声明 -->
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-compiler-plugin</artifactId>
                     <version>${maven-compiler-plugin.version}</version>
                     <configuration>
-                        <!-- 保留构造器参数名（MethodParameters 属性）。
-                             这不是「为了调试方便」：jellyfish-api 的扩展点载荷（会话快照等）是
-                             「全字段构造器 + 无 setter」的不可变类型，插件侧用 Jackson 反序列化时
-                             只能靠构造器参数名把 JSON 字段对上。去掉它，会话持久化插件会在运行时
-                             「写得出、读不回」，而编译与大部分单测依然全绿。 -->
-                        <parameters>true</parameters>
+                        <source>${java.version}</source>
+                        <target>${java.version}</target>
+                        <encoding>UTF-8</encoding>
+                        <!-- Lombok 与 Dagger 同时挂在注解处理器路径上（D04、D04.1） -->
                         <annotationProcessorPaths>
+                            <path>
+                                <groupId>org.projectlombok</groupId>
+                                <artifactId>lombok</artifactId>
+                                <version>${lombok.version}</version>
+                            </path>
                             <path>
                                 <groupId>com.google.dagger</groupId>
                                 <artifactId>dagger-compiler</artifactId>
@@ -238,128 +143,12 @@
                         </annotationProcessorPaths>
                     </configuration>
                 </plugin>
-                <!-- 打包：可执行 fat jar 的版本唯一定义处，最外层（jellyfish-cli）声明执行 -->
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
-                    <artifactId>maven-shade-plugin</artifactId>
-                    <version>${maven-shade-plugin.version}</version>
-                </plugin>
-                <!-- 覆盖率：版本与执行绑定的唯一定义处，子模块无需重复声明 -->
-                <plugin>
-                    <groupId>org.jacoco</groupId>
-                    <artifactId>jacoco-maven-plugin</artifactId>
-                    <version>${jacoco.version}</version>
-                    <configuration>
-                        <excludes>
-                            <!-- 注解处理器生成代码与纯常量类不纳入覆盖率统计 -->
-                            <exclude>**/Dagger*</exclude>
-                            <exclude>**/*_Factory.*</exclude>
-                            <exclude>**/*_MembersInjector.*</exclude>
-                            <exclude>**/package-info.*</exclude>
-                        </excludes>
-                    </configuration>
-                    <executions>
-                        <!-- 在 initialize 阶段挂上 Jacoco agent，保证 surefire 跑测试时被采集 -->
-                        <execution>
-                            <id>jacoco-prepare-agent</id>
-                            <goals>
-                                <goal>prepare-agent</goal>
-                            </goals>
-                        </execution>
-                        <!-- 绑定到 test 阶段：mvn test 后即可在 target/site/jacoco/index.html 看到报告 -->
-                        <execution>
-                            <id>jacoco-report</id>
-                            <phase>test</phase>
-                            <goals>
-                                <goal>report</goal>
-                            </goals>
-                        </execution>
-                    </executions>
+                    <artifactId>maven-surefire-plugin</artifactId>
+                    <version>${maven-surefire-plugin.version}</version>
                 </plugin>
             </plugins>
         </pluginManagement>
-        <plugins>
-            <!-- 声明即生效：所有子模块继承同一份编译配置 -->
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-compiler-plugin</artifactId>
-            </plugin>
-            <!-- 声明即生效：所有子模块继承同一份 JaCoCo 配置 -->
-            <plugin>
-                <groupId>org.jacoco</groupId>
-                <artifactId>jacoco-maven-plugin</artifactId>
-            </plugin>
-        </plugins>
     </build>
-
-    <!-- 发布到 Maven Central：只有显式 -P release 才加载。
-         不放进常驻的 <build><plugins>：gpg:sign 绑在 verify 上，常驻就等于「本机没有 GPG 私钥
-         就 mvn verify / install 都跑不动」，把日常构建和发布绑死在一起。
-         本次发布的构件（tui 依赖 SNAPSHOT、cli 是 fat jar，都不发）：
-         mvn -P release -pl :jellyfish,:jellyfish-api,:jellyfish-infra,:jellyfish-core,:jellyfish-di deploy
-         父 POM 必须一起发：子模块的 <parent> 指向它，缺了它使用方连模型都构建不出来。 -->
-    <profiles>
-        <profile>
-            <id>release</id>
-            <build>
-                <plugins>
-                    <!-- sources jar：Central 对 packaging != pom 的构件强制要求 -->
-                    <plugin>
-                        <groupId>org.apache.maven.plugins</groupId>
-                        <artifactId>maven-source-plugin</artifactId>
-                        <version>${maven-source-plugin.version}</version>
-                        <executions>
-                            <execution>
-                                <id>attach-sources</id>
-                                <goals>
-                                    <goal>jar-no-fork</goal>
-                                </goals>
-                            </execution>
-                        </executions>
-                    </plugin>
-                    <!-- javadoc jar：同上 -->
-                    <plugin>
-                        <groupId>org.apache.maven.plugins</groupId>
-                        <artifactId>maven-javadoc-plugin</artifactId>
-                        <version>${maven-javadoc-plugin.version}</version>
-                        <executions>
-                            <execution>
-                                <id>attach-javadocs</id>
-                                <goals>
-                                    <goal>jar</goal>
-                                </goals>
-                            </execution>
-                        </executions>
-                    </plugin>
-                    <!-- GPG 签名：每个上传的构件都要有对应 .asc，POM 自己也在其中 -->
-                    <plugin>
-                        <groupId>org.apache.maven.plugins</groupId>
-                        <artifactId>maven-gpg-plugin</artifactId>
-                        <version>${maven-gpg-plugin.version}</version>
-                        <executions>
-                            <execution>
-                                <id>sign-artifacts</id>
-                                <phase>verify</phase>
-                                <goals>
-                                    <goal>sign</goal>
-                                </goals>
-                            </execution>
-                        </executions>
-                    </plugin>
-                    <!-- Central 发布：整个 reactor 的构件打成一次 deployment 传到 Central Portal。
-                         autoPublish 缺省 false，即传完由你在 Portal 里确认校验结果再点发布。 -->
-                    <plugin>
-                        <groupId>org.sonatype.central</groupId>
-                        <artifactId>central-publishing-maven-plugin</artifactId>
-                        <version>${central-publishing-maven-plugin.version}</version>
-                        <extensions>true</extensions>
-                        <configuration>
-                            <publishingServerId>central</publishingServerId>
-                        </configuration>
-                    </plugin>
-                </plugins>
-            </build>
-        </profile>
-    </profiles>
-
 </project>

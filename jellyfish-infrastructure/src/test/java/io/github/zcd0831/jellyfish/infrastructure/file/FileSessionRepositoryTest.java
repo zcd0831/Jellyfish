@@ -1,5 +1,6 @@
 package io.github.zcd0831.jellyfish.infrastructure.file;
 
+import io.github.zcd0831.jellyfish.domain.perception.session.Record;
 import io.github.zcd0831.jellyfish.domain.perception.session.Session;
 import io.github.zcd0831.jellyfish.domain.perception.session.SessionStatus;
 import io.github.zcd0831.jellyfish.domain.shared.AgentId;
@@ -29,8 +30,8 @@ class FileSessionRepositoryTest {
     }
 
     private static Session session(String id, SessionStatus status, SessionId parent) {
-        return new Session(SessionId.of(id), parent, AgentId.of("builtin.main"), ModelId.of("m1"),
-                status, "标题-" + id, 1739520600000L, null, null);
+        return Session.rehydrate(SessionId.of(id), parent, AgentId.of("builtin.main"), ModelId.of("m1"),
+                status, "标题-" + id, 1739520600000L, java.util.Collections.<Record>emptyList(), null);
     }
 
     @Test

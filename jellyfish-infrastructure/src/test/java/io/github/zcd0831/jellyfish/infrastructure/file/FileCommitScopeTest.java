@@ -32,9 +32,10 @@ class FileCommitScopeTest {
 
     @Test
     void 提交后既写入流水也替换会话头() {
-        Session session = new Session(SessionId.of("s1"), null, AgentId.of("a"), ModelId.of("m"),
-                SessionStatus.RUNNING, "t", 1L, null, null);
+        Session session = Session.create(SessionId.of("s1"), null, AgentId.of("a"), ModelId.of("m"), 1L, null);
         Record record = new Record(RecordId.of("r1"), RecordRole.USER, "你好", null, 1, 2L);
+        session.appendRecord(RecordRole.USER, "你好", null, 2L);
+        session.retitle("t");
 
         FileCommitScope scope = new FileCommitScope(dir(), new JsonCodec());
         scope.stageAppend(SessionId.of("s1"), record);

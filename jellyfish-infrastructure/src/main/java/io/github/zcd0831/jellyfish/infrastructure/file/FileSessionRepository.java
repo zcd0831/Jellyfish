@@ -148,6 +148,7 @@ public final class FileSessionRepository implements SessionRepository {
     }
 
     private static Session toDomain(SessionMetaDto d) {
-        return new Session(d.id, d.parentId, d.agentId, d.modelId, d.status, d.title, d.createdDate, null, null);
+        return Session.rehydrate(d.id, d.parentId, d.agentId, d.modelId, d.status, d.title, d.createdDate,
+                java.util.Collections.<io.github.zcd0831.jellyfish.domain.perception.session.Record>emptyList(), null);
     }
 }

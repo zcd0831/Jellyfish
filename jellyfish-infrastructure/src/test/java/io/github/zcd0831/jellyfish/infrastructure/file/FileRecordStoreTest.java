@@ -31,8 +31,7 @@ class FileRecordStoreTest {
 
     private void givenSession(String id) {
         new FileSessionRepository(dir(), new JsonCodec())
-                .save(new Session(SessionId.of(id), null, AgentId.of("a"), ModelId.of("m"),
-                        SessionStatus.RUNNING, "t", 1L, null, null));
+                .save(Session.create(SessionId.of(id), null, AgentId.of("a"), ModelId.of("m"), 1L, null));
     }
 
     private static Record record(String id, int seq) {

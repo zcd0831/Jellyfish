@@ -59,6 +59,7 @@
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
 
         <!-- 版本统一在此声明；Java 8 可用的较新版，实际编译验证以构建结果为准。 -->
+        <json-schema-validator.version>1.5.8</json-schema-validator.version>
         <lombok.version>1.18.30</lombok.version>
         <dagger.version>2.48</dagger.version>
         <jackson.version>2.17.2</jackson.version>
@@ -124,6 +125,13 @@
                 <groupId>com.fasterxml.jackson.core</groupId>
                 <artifactId>jackson-databind</artifactId>
                 <version>${jackson.version}</version>
+            </dependency>
+
+            <!-- 工具入参校验（技术决策 D17：完整 JSON Schema，draft-07） -->
+            <dependency>
+                <groupId>com.networknt</groupId>
+                <artifactId>json-schema-validator</artifactId>
+                <version>${json-schema-validator.version}</version>
             </dependency>
 
             <!-- token 计数策略链的默认实现（技术决策 D08） -->

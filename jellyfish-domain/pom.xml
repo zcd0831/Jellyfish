@@ -23,5 +23,10 @@
             <artifactId>junit-jupiter</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- D17：完整的工具入参校验；纯计算型库，只被 ToolDefinition 使用 -->
+        <dependency>
+            <groupId>com.networknt</groupId>
+            <artifactId>json-schema-validator</artifactId>
+        </dependency>
     </dependencies>
 </project>

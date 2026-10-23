@@ -28,7 +28,7 @@ public class RuntimePolicy {
     private final double experienceConfidenceStep;
     private final double experienceRetireThreshold;
     private final double budgetWarnRatio;
-    private final int budgetLimitTokens;
+    private final long budgetLimitTokens;
     private final List<ModelId> modelFallbackChain;
     private final List<ToolId> trustedToolIds;
 
@@ -38,7 +38,7 @@ public class RuntimePolicy {
                          int subagentExecutionTimeoutMillis, int experienceCapacity, int experienceTopN,
                          int experiencePerPlan, double experienceInitialConfidence,
                          double experienceConfidenceStep, double experienceRetireThreshold,
-                         double budgetWarnRatio, int budgetLimitTokens,
+                         double budgetWarnRatio, long budgetLimitTokens,
                          List<ModelId> modelFallbackChain, List<ToolId> trustedToolIds) {
         this.maxRetries = maxRetries;
         this.reflectionThreshold = reflectionThreshold;
@@ -67,7 +67,7 @@ public class RuntimePolicy {
     /** 平台初始化写入的默认值；规则出处：模块-感知 §7.2、D08/D10 的常量口径。 */
     public static RuntimePolicy defaults() {
         return new RuntimePolicy(3, 2, 2, 20, 100000, 10000, 20, 0.6, 4000, 60000,
-                200, 5, 3, 0.5, 0.1, 0.2, 0.8, 1000000,
+                200, 5, 3, 0.5, 0.1, 0.2, 0.8, 1000000L,
                 Collections.<ModelId>emptyList(), Collections.<ToolId>emptyList());
     }
 
@@ -154,7 +154,7 @@ public class RuntimePolicy {
     }
 
     /** 会话族总额度（token）：预警比例的**分母**。规则出处：模块-行动 §3.4、§7.5 规则 ③。 */
-    public int budgetLimitTokens() {
+    public long budgetLimitTokens() {
         return budgetLimitTokens;
     }
 

@@ -1,0 +1,22 @@
+package io.github.zcd0831.jellyfish.application.shared.port;
+
+import io.github.zcd0831.jellyfish.domain.perception.session.Record;
+import io.github.zcd0831.jellyfish.domain.shared.SessionId;
+
+/**
+ * 一次状态转移的写入作用域；实现固定按「事实 → 追加 → 替换」执行并 fsync。规则出处：模块-应用层 §8.8。
+ */
+public interface CommitScope {
+
+    /** 不可变事实：只新建，不覆盖。 */
+    void stageFact(Object fact);
+
+    /** 追加一条流水。 */
+    void stageAppend(SessionId sessionId, Record record);
+
+    /** 替换一个可变聚合（Session / Plan / Budget / RuntimePolicy 等）。 */
+    void stageReplace(Object aggregate);
+
+    /** 按固定顺序落盘；失败即整个作用域失败，不得返回成功。 */
+    void commit();
+}

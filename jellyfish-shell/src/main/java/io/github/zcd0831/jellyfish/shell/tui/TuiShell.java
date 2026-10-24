@@ -47,7 +47,7 @@ public final class TuiShell {
     }
 
     public void run() {
-        out.println("Jellyfish 1.0.0-alpha（S1：无计划对话）");
+        out.println("Jellyfish 1.0.0-alpha");
         out.println("直接输入问题；exit 退出");
         while (true) {
             out.print(currentSession == null ? "新会话> " : "继续> ");

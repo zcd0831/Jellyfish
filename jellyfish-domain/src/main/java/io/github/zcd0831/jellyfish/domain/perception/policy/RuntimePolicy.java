@@ -71,6 +71,138 @@ public class RuntimePolicy {
                 Collections.<ModelId>emptyList(), Collections.<ToolId>emptyList());
     }
 
+    /**
+     * 策略调整：逐项校验后返回**新实例**（调用方负责提交）。
+     * 规则出处：模块-感知 §7.2 规则 1/3/4/5/6、模块-应用层 §8.5、技术决策 D11（C_INVALID_VALUE）。
+     */
+    public RuntimePolicy adjust(java.util.Map<String, Object> changes) {
+        int retries = positiveInt(changes, "maxRetries", maxRetries);
+        int reflection = positiveInt(changes, "reflectionThreshold", reflectionThreshold);
+        int replan = positiveInt(changes, "maxReplanGeneration", maxReplanGeneration);
+        int rounds = positiveInt(changes, "maxReActRounds", maxReActRounds);
+        int summarization = positiveInt(changes, "summarizationTokenThreshold", summarizationTokenThreshold);
+        int margin = nonNegativeInt(changes, "inputSafetyMargin", inputSafetyMargin);
+        int windowRecords = positiveInt(changes, "contextWindowRecordCount", contextWindowRecordCount);
+        double systemRatio = ratio(changes, "systemRecordRatioLimit", systemRecordRatioLimit);
+        int truncate = positiveInt(changes, "toolResultTruncateLength", toolResultTruncateLength);
+        int subagentTimeout = positiveInt(changes, "subagentExecutionTimeoutMillis",
+                subagentExecutionTimeoutMillis);
+        int capacity = positiveInt(changes, "experienceCapacity", experienceCapacity);
+        int topN = positiveInt(changes, "experienceTopN", experienceTopN);
+        int perPlan = positiveInt(changes, "experiencePerPlan", experiencePerPlan);
+        double initialConfidence = ratio(changes, "experienceInitialConfidence", experienceInitialConfidence);
+        double confidenceStep = ratio(changes, "experienceConfidenceStep", experienceConfidenceStep);
+        double retireThreshold = ratio(changes, "experienceRetireThreshold", experienceRetireThreshold);
+        double warnRatio = ratio(changes, "budgetWarnRatio", budgetWarnRatio);
+        long limitTokens = nonNegativeLong(changes, "budgetLimitTokens", budgetLimitTokens);
+        List<ModelId> fallback = modelIds(changes, "modelFallbackChain", modelFallbackChain);
+        List<ToolId> trusted = toolIds(changes, "trustedToolIds", trustedToolIds);
+        return new RuntimePolicy(retries, reflection, replan, rounds, summarization, margin, windowRecords,
+                systemRatio, truncate, subagentTimeout, capacity, topN, perPlan, initialConfidence,
+                confidenceStep, retireThreshold, warnRatio, limitTokens, fallback, trusted);
+    }
+
+    private static int positiveInt(java.util.Map<String, Object> changes, String key, int current) {
+        Object raw = changes.get(key);
+        if (raw == null) {
+            return current;
+        }
+        int value = toInt(key, raw);
+        if (value <= 0) {
+            throw new io.github.zcd0831.jellyfish.domain.shared.DomainInvariantViolation(
+                    key + " 必须为正数：" + value);
+        }
+        return value;
+    }
+
+    private static int nonNegativeInt(java.util.Map<String, Object> changes, String key, int current) {
+        Object raw = changes.get(key);
+        if (raw == null) {
+            return current;
+        }
+        int value = toInt(key, raw);
+        if (value < 0) {
+            throw new io.github.zcd0831.jellyfish.domain.shared.DomainInvariantViolation(
+                    key + " 不能为负：" + value);
+        }
+        return value;
+    }
+
+    private static long nonNegativeLong(java.util.Map<String, Object> changes, String key, long current) {
+        Object raw = changes.get(key);
+        if (raw == null) {
+            return current;
+        }
+        long value;
+        try {
+            value = Long.parseLong(String.valueOf(raw).trim());
+        } catch (NumberFormatException e) {
+            throw new io.github.zcd0831.jellyfish.domain.shared.DomainInvariantViolation(
+                    key + " 不是整数：" + raw);
+        }
+        if (value < 0) {
+            throw new io.github.zcd0831.jellyfish.domain.shared.DomainInvariantViolation(
+                    key + " 不能为负：" + value);
+        }
+        return value;
+    }
+
+    private static double ratio(java.util.Map<String, Object> changes, String key, double current) {
+        Object raw = changes.get(key);
+        if (raw == null) {
+            return current;
+        }
+        double value;
+        try {
+            value = Double.parseDouble(String.valueOf(raw).trim());
+        } catch (NumberFormatException e) {
+            throw new io.github.zcd0831.jellyfish.domain.shared.DomainInvariantViolation(
+                    key + " 不是数字：" + raw);
+        }
+        if (value < 0 || value > 1) {
+            throw new io.github.zcd0831.jellyfish.domain.shared.DomainInvariantViolation(
+                    key + " 必须在 [0,1]：" + value);
+        }
+        return value;
+    }
+
+    private static int toInt(String key, Object raw) {
+        try {
+            return Integer.parseInt(String.valueOf(raw).trim());
+        } catch (NumberFormatException e) {
+            throw new io.github.zcd0831.jellyfish.domain.shared.DomainInvariantViolation(
+                    key + " 不是整数：" + raw);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<ModelId> modelIds(java.util.Map<String, Object> changes, String key,
+                                          List<ModelId> current) {
+        Object raw = changes.get(key);
+        if (raw == null) {
+            return current;
+        }
+        List<ModelId> ids = new ArrayList<ModelId>();
+        for (Object item : (List<Object>) raw) {
+            ids.add(ModelId.of(String.valueOf(item)));
+        }
+        return ids;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<ToolId> toolIds(java.util.Map<String, Object> changes, String key,
+                                        List<ToolId> current) {
+        Object raw = changes.get(key);
+        if (raw == null) {
+            return current;
+        }
+        List<ToolId> ids = new ArrayList<ToolId>();
+        for (Object item : (List<Object>) raw) {
+            ids.add(ToolId.of(String.valueOf(item)));
+        }
+        return ids;
+    }
+
     /** 规则出处：模块-感知 §7.2 规则 5（信任清单 = 免审批）。 */
     public boolean isToolTrusted(ToolId toolId) {
         return trustedToolIds.contains(toolId);

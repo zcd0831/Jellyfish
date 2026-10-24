@@ -4,6 +4,7 @@ import dagger.Module;
 import dagger.Provides;
 import io.github.zcd0831.jellyfish.application.action.BudgetService;
 import io.github.zcd0831.jellyfish.application.action.InternalToolHandlers;
+import io.github.zcd0831.jellyfish.application.action.ManageCatalogUseCase;
 import io.github.zcd0831.jellyfish.application.action.ToolExecutor;
 import io.github.zcd0831.jellyfish.application.action.port.BudgetRepository;
 import io.github.zcd0831.jellyfish.application.action.port.CatalogRepository;
@@ -27,6 +28,11 @@ public final class ActionModule {
                                 PolicyRepository policies, CommitScope commitScope,
                                 DomainEventPublisher publisher) {
         return new BudgetService(budgets, sessions, policies, commitScope, publisher);
+    }
+
+    @Provides
+    ManageCatalogUseCase manageCatalogUseCase(CatalogRepository catalog) {
+        return new ManageCatalogUseCase(catalog);
     }
 
     @Provides

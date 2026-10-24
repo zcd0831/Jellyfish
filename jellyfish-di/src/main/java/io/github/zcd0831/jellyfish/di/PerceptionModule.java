@@ -6,11 +6,14 @@ import io.github.zcd0831.jellyfish.application.action.BudgetService;
 import io.github.zcd0831.jellyfish.application.action.port.CatalogRepository;
 import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationPort;
 import io.github.zcd0831.jellyfish.application.perception.ContextWindowService;
+import io.github.zcd0831.jellyfish.application.perception.AdjustPolicyUseCase;
+import io.github.zcd0831.jellyfish.application.perception.ManageSessionUseCase;
 import io.github.zcd0831.jellyfish.application.perception.SessionTitleGenerator;
 import io.github.zcd0831.jellyfish.application.perception.StartSessionUseCase;
 import io.github.zcd0831.jellyfish.application.perception.port.PolicyRepository;
 import io.github.zcd0831.jellyfish.application.perception.port.SessionRepository;
 import io.github.zcd0831.jellyfish.application.action.port.BudgetRepository;
+import io.github.zcd0831.jellyfish.application.shared.port.ArtifactStore;
 import io.github.zcd0831.jellyfish.application.shared.port.Clock;
 import io.github.zcd0831.jellyfish.application.shared.port.CommitScope;
 import io.github.zcd0831.jellyfish.application.shared.port.DomainEventPublisher;
@@ -43,6 +46,19 @@ public final class PerceptionModule {
     @Provides
     SessionTitleGenerator sessionTitleGenerator(ModelInvocationPort model, BudgetService budgetService) {
         return new SessionTitleGenerator(model, budgetService);
+    }
+
+    @Provides
+    @Singleton
+    ManageSessionUseCase manageSessionUseCase(SessionRepository sessions, ArtifactStore artifacts,
+                                              CommitScope commitScope, DomainEventPublisher publisher) {
+        return new ManageSessionUseCase(sessions, artifacts, commitScope, publisher);
+    }
+
+    @Provides
+    AdjustPolicyUseCase adjustPolicyUseCase(PolicyRepository policies, CommitScope commitScope,
+                                            DomainEventPublisher publisher) {
+        return new AdjustPolicyUseCase(policies, commitScope, publisher);
     }
 
     @Provides

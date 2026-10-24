@@ -113,7 +113,8 @@ public final class FileCommitScope implements CommitScope {
             return;
         }
         if (aggregate instanceof RuntimePolicy) {
-            AtomicFiles.write(dir.settingsFile(), codec.write(aggregate));
+            AtomicFiles.write(dir.settingsFile(),
+                    codec.write(FilePolicyRepository.PolicyDto.from((RuntimePolicy) aggregate)));
             return;
         }
         if (aggregate instanceof Plan) {

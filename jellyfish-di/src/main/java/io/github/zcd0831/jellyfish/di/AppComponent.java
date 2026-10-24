@@ -4,6 +4,9 @@ import dagger.Component;
 import io.github.zcd0831.jellyfish.application.action.BudgetService;
 import io.github.zcd0831.jellyfish.application.action.ToolExecutor;
 import io.github.zcd0831.jellyfish.application.action.port.CatalogRepository;
+import io.github.zcd0831.jellyfish.application.action.ManageCatalogUseCase;
+import io.github.zcd0831.jellyfish.application.perception.AdjustPolicyUseCase;
+import io.github.zcd0831.jellyfish.application.perception.ManageSessionUseCase;
 import io.github.zcd0831.jellyfish.application.perception.StartSessionUseCase;
 import io.github.zcd0831.jellyfish.application.perception.port.PolicyRepository;
 import io.github.zcd0831.jellyfish.application.perception.port.RecordStore;
@@ -76,4 +79,10 @@ public interface AppComponent {
     StartSessionUseCase startSessionUseCase();
 
     RunSessionUseCase runSessionUseCase();
+
+    ManageSessionUseCase manageSessionUseCase();
+
+    AdjustPolicyUseCase adjustPolicyUseCase();
+
+    ManageCatalogUseCase manageCatalogUseCase();
 }

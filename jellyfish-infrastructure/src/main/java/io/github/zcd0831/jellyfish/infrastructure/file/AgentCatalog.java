@@ -32,7 +32,7 @@ final class AgentCatalog {
         List<AgentDefinition> out = new ArrayList<AgentDefinition>();
         for (String path : BuiltinAssets.list("agents/")) {
             FrontMatter frontMatter = FrontMatter.parse(BuiltinAssets.readText("/builtin/" + path));
-            out.add(toDomain(idOf(path), frontMatter, AgentSource.BUILT_IN));
+            out.add(toDomain(idOf(fileName(path)), frontMatter, AgentSource.BUILT_IN));
         }
         for (Path file : marks(dataDirectory.agents())) {
             String id = idOf(file.getFileName().toString());
@@ -91,6 +91,11 @@ final class AgentCatalog {
 
     private static AgentStatus status(String raw) {
         return raw == null ? AgentStatus.ACTIVE : AgentStatus.valueOf(raw.toUpperCase());
+    }
+
+    private static String fileName(String path) {
+        int slash = path.lastIndexOf('/');
+        return slash < 0 ? path : path.substring(slash + 1);
     }
 
     private static String idOf(String fileName) {

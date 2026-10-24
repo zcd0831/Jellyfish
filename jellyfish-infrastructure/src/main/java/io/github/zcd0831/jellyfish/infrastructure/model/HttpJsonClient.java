@@ -15,7 +15,7 @@ import java.util.Map;
  * JDK 自带 HTTP，不引第三方客户端（D16-5）；超时按 D10.1。
  * 流式用读超时表达"空闲超时"：每次读都重新计时，长回答不会被总时长误杀。
  */
-final class HttpJsonClient implements ChatTransport {
+public final class HttpJsonClient implements ChatTransport {
 
     static final int CONNECT_TIMEOUT_MS = 10_000;
     static final int READ_TIMEOUT_MS = 120_000;

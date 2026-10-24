@@ -1,0 +1,56 @@
+package io.github.zcd0831.jellyfish.di;
+
+import dagger.Module;
+import dagger.Provides;
+import io.github.zcd0831.jellyfish.application.action.BudgetService;
+import io.github.zcd0831.jellyfish.application.action.port.CatalogRepository;
+import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationPort;
+import io.github.zcd0831.jellyfish.application.perception.ContextWindowService;
+import io.github.zcd0831.jellyfish.application.perception.SessionTitleGenerator;
+import io.github.zcd0831.jellyfish.application.perception.StartSessionUseCase;
+import io.github.zcd0831.jellyfish.application.perception.port.PolicyRepository;
+import io.github.zcd0831.jellyfish.application.perception.port.SessionRepository;
+import io.github.zcd0831.jellyfish.application.action.port.BudgetRepository;
+import io.github.zcd0831.jellyfish.application.shared.port.Clock;
+import io.github.zcd0831.jellyfish.application.shared.port.CommitScope;
+import io.github.zcd0831.jellyfish.application.shared.port.DomainEventPublisher;
+import io.github.zcd0831.jellyfish.application.shared.port.ProgressPort;
+import io.github.zcd0831.jellyfish.domain.perception.session.SystemPromptAssembler;
+import io.github.zcd0831.jellyfish.domain.shared.TokenEstimator;
+
+import javax.inject.Singleton;
+
+/** 感知：窗口推导、标题、会话开启。规则出处：模块-感知 §4。 */
+@Module
+public final class PerceptionModule {
+
+    @Provides
+    @Singleton
+    SystemPromptAssembler systemPromptAssembler() {
+        return new SystemPromptAssembler();
+    }
+
+    @Provides
+    @Singleton
+    ContextWindowService contextWindowService(ModelInvocationPort model, PolicyRepository policies,
+                                              CommitScope commitScope, DomainEventPublisher publisher,
+                                              ProgressPort progress, BudgetService budgetService,
+                                              TokenEstimator estimator) {
+        return new ContextWindowService(model, policies, commitScope, publisher, progress, budgetService,
+                estimator);
+    }
+
+    @Provides
+    SessionTitleGenerator sessionTitleGenerator(ModelInvocationPort model, BudgetService budgetService) {
+        return new SessionTitleGenerator(model, budgetService);
+    }
+
+    @Provides
+    StartSessionUseCase startSessionUseCase(CatalogRepository catalog, SessionRepository sessions,
+                                            BudgetRepository budgets, SessionTitleGenerator titleGenerator,
+                                            SystemPromptAssembler assembler, CommitScope commitScope,
+                                            Clock clock) {
+        return new StartSessionUseCase(catalog, sessions, budgets, titleGenerator, assembler, commitScope,
+                clock);
+    }
+}

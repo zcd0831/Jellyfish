@@ -57,6 +57,15 @@ public class Session {
                 new ArrayList<Record>(records), snapshot);
     }
 
+    /**
+     * 续跑时把流水装回聚合：meta.json 只存会话头，记录在 RecordStore（§7.1 规则 11）。
+     * 规则出处：模块-感知 §7.1 规则 5/11、M13。
+     */
+    public void hydrateRecords(List<Record> hydrated) {
+        records.clear();
+        records.addAll(hydrated);
+    }
+
     /** 规则出处：模块-感知 §7.1 规则 5（只追加）。 */
     public Record appendRecord(RecordRole role, String content, ToolResultPayload payload, long now) {
         Record record = new Record(RecordId.of(java.util.UUID.randomUUID().toString()), role, content,

@@ -36,12 +36,12 @@ public final class FileSessionRepository implements SessionRepository {
             return null;
         }
         SessionMetaDto dto = codec.read(read(meta), SessionMetaDto.class);
-        return toDomain(dto);
+        return SessionMetaMapper.toDomain(dto, java.util.Collections.<io.github.zcd0831.jellyfish.domain.perception.session.Record>emptyList());
     }
 
     @Override
     public void save(Session session) {
-        SessionMetaDto dto = toDto(session);
+        SessionMetaDto dto = SessionMetaMapper.toDto(session);
         AtomicFiles.write(metaFile(session.id()), codec.write(dto));
     }
 
@@ -135,20 +135,4 @@ public final class FileSessionRepository implements SessionRepository {
         }
     }
 
-    private static SessionMetaDto toDto(Session s) {
-        SessionMetaDto d = new SessionMetaDto();
-        d.id = s.id();
-        d.parentId = s.parentSessionId();
-        d.agentId = s.agentId();
-        d.modelId = s.activeModelId();
-        d.status = s.status();
-        d.title = s.title();
-        d.createdDate = s.createdDate();
-        return d;
-    }
-
-    private static Session toDomain(SessionMetaDto d) {
-        return Session.rehydrate(d.id, d.parentId, d.agentId, d.modelId, d.status, d.title, d.createdDate,
-                java.util.Collections.<io.github.zcd0831.jellyfish.domain.perception.session.Record>emptyList(), null);
-    }
 }

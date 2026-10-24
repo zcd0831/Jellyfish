@@ -6,7 +6,7 @@ import java.util.Map;
  * 只做 HTTP：状态码 + 响应体 / SSE 数据行。协议映射是 {@link ChatCompletionsProtocol} 的事，
  * 这样测试可以不碰网络。规则出处：模块-基础设施层 §10、技术决策 D16。
  */
-interface ChatTransport {
+public interface ChatTransport {
 
     Response post(String url, Map<String, String> headers, String body);
 

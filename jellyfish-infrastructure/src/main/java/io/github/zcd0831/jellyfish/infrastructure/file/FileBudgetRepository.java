@@ -29,7 +29,13 @@ public final class FileBudgetRepository implements BudgetRepository {
 
     @Override
     public Budget load(SessionId sessionFamilyRootId) {
-        Path file = file(sessionFamilyRootId);
+        Path file;
+        try {
+            file = file(sessionFamilyRootId);
+        } catch (RuntimeException notCreatedYet) {
+            // 会话开启时台账先于 meta.json 写，目录可能还不存在
+            return null;
+        }
         if (!Files.exists(file)) {
             return null;
         }
@@ -49,7 +55,8 @@ public final class FileBudgetRepository implements BudgetRepository {
         dto.sessionFamilyRootId = budget.sessionFamilyRootId().getValue();
         dto.consumedTokens = budget.consumedTokens();
         dto.warned = budget.warned();
-        AtomicFiles.write(file(budget.sessionFamilyRootId()), codec.write(dto));
+        AtomicFiles.write(dataDirectory.sessionDir(budget.sessionFamilyRootId().getValue()).resolve("budget.json"),
+                codec.write(dto));
     }
 
     private Path file(SessionId rootSessionId) {

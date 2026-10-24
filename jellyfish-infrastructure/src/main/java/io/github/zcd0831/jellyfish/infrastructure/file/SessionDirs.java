@@ -23,6 +23,9 @@ final class SessionDirs {
         if (Files.isDirectory(direct)) {
             return direct;
         }
+        if (!Files.isDirectory(dataDirectory.sessions())) {
+            throw new IllegalArgumentException("会话目录尚未建立：" + sessionId);
+        }
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(dataDirectory.sessions())) {
             for (Path root : stream) {
                 Path child = root.resolve("sub").resolve(sessionId);

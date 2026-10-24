@@ -3,22 +3,27 @@ package io.github.zcd0831.jellyfish.shell.tui;
 import io.github.zcd0831.jellyfish.application.shared.ProgressEvent;
 import io.github.zcd0831.jellyfish.application.shared.port.ProgressPort;
 
-import java.io.PrintStream;
-
 /**
- * 单向推送，丢弃不影响业务。属于外壳：终端只由外壳持有（D19）。规则出处：模块-基础设施层 §3、D14（进度与日志分开）。
+ * 进度用状态行原地覆盖（\r），不整屏重绘；丢弃不影响业务（D12.1、D20-2）。
  */
 public final class TuiProgressReporter implements ProgressPort {
 
-    private final PrintStream out;
+    private final AnsiRenderer renderer;
 
-    public TuiProgressReporter(PrintStream out) {
-        this.out = out;
+    public TuiProgressReporter(AnsiRenderer renderer) {
+        this.renderer = renderer;
     }
 
     @Override
     public void emit(ProgressEvent event) {
-        out.println("· " + event.message());
-        out.flush();
+        switch (event.kind()) {
+            case SUMMARY_DONE:
+            case STEP_FINISHED:
+                renderer.status("");
+                renderer.info("· " + event.message());
+                break;
+            default:
+                renderer.status("· " + event.message());
+        }
     }
 }

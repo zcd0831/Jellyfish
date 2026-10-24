@@ -4,7 +4,6 @@ import io.github.zcd0831.jellyfish.di.AppComponent;
 import io.github.zcd0831.jellyfish.di.DaggerAppComponent;
 import io.github.zcd0831.jellyfish.di.InfrastructureModule;
 import io.github.zcd0831.jellyfish.infrastructure.file.DataDirectory;
-import io.github.zcd0831.jellyfish.shell.tui.TuiShell;
 
 /**
  * 只做三件事：解析配置 → 创建组件 → 启动外壳（技术决策 D04-4）。
@@ -13,6 +12,16 @@ import io.github.zcd0831.jellyfish.shell.tui.TuiShell;
 public final class Main {
 
     private static final long SHUTDOWN_GRACE_MILLIS = 2000L;
+
+    /** 控制台宽度：优先 COLUMNS，其次退化为 100（渲染器依赖它做折行）。 */
+    private static int terminalWidth() {
+        String columns = System.getenv("COLUMNS");
+        try {
+            return columns == null ? 100 : Integer.parseInt(columns);
+        } catch (NumberFormatException ignored) {
+            return 100;
+        }
+    }
 
     /** 凭据只从环境变量读；缺失的供应商提示一条，不阻塞启动（D09-4）。 */
     private static void warnMissingCredentials(AppComponent component) {
@@ -37,7 +46,7 @@ public final class Main {
 
         final AppComponent component = DaggerAppComponent.builder()
                 .infrastructureModule(new InfrastructureModule(dir))
-                .shellModule(new io.github.zcd0831.jellyfish.di.ShellModule(System.in, System.out))
+                .shellModule(new io.github.zcd0831.jellyfish.di.ShellModule(System.out, terminalWidth()))
                 .build();
         final Thread mainThread = Thread.currentThread();
         Runtime.getRuntime().addShutdownHook(new Thread(new Runnable() {
@@ -62,10 +71,7 @@ public final class Main {
                     + "  maxReActRounds=" + component.policyRepository().load().maxReActRounds()
                     + "  schemaVersion=1");
             warnMissingCredentials(component);
-            new TuiShell(component.startSessionUseCase(), component.runSessionUseCase(),
-                    component.manageSessionUseCase(), component.adjustPolicyUseCase(),
-                    component.catalogRepository(), System.in, System.out)
-                    .run();
+            component.tuiApp().run();
         } finally {
             component.instanceLock().release();
         }

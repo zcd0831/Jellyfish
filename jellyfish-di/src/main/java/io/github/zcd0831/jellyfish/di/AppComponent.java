@@ -24,6 +24,7 @@ import io.github.zcd0831.jellyfish.domain.perception.session.SystemPromptAssembl
 import io.github.zcd0831.jellyfish.infrastructure.file.DataDirectory;
 import io.github.zcd0831.jellyfish.infrastructure.file.JsonCodec;
 import io.github.zcd0831.jellyfish.infrastructure.model.HttpJsonClient;
+import io.github.zcd0831.jellyfish.shell.tui.TuiApp;
 
 import java.util.concurrent.ExecutorService;
 import javax.inject.Singleton;
@@ -85,4 +86,7 @@ public interface AppComponent {
     AdjustPolicyUseCase adjustPolicyUseCase();
 
     ManageCatalogUseCase manageCatalogUseCase();
+
+    /** 外壳入口：单栏流式 TUI（D12.1 / D20）。 */
+    TuiApp tuiApp();
 }

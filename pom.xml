@@ -59,6 +59,7 @@
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
 
         <!-- 版本统一在此声明；Java 8 可用的较新版，实际编译验证以构建结果为准。 -->
+        <jline.version>3.21.0</jline.version>
         <mockito.version>4.11.0</mockito.version>
         <jacoco.version>0.8.12</jacoco.version>
         <log4j.version>2.24.3</log4j.version>
@@ -129,6 +130,13 @@
                 <groupId>com.fasterxml.jackson.core</groupId>
                 <artifactId>jackson-databind</artifactId>
                 <version>${jackson.version}</version>
+            </dependency>
+
+            <!-- 终端输入（技术决策 D20：JLine 3 只做输入，Java 8 兼容线） -->
+            <dependency>
+                <groupId>org.jline</groupId>
+                <artifactId>jline</artifactId>
+                <version>${jline.version}</version>
             </dependency>
 
             <!-- 日志（技术决策 D18：Log4j2 2.24.x，Java 8 兼容线） -->

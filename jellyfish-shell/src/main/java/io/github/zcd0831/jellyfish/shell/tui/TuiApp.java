@@ -8,6 +8,7 @@ import io.github.zcd0831.jellyfish.application.planning.RunSessionResult;
 import io.github.zcd0831.jellyfish.application.planning.RunSessionUseCase;
 import io.github.zcd0831.jellyfish.application.shared.Answer;
 import io.github.zcd0831.jellyfish.application.shared.ChunkSink;
+import io.github.zcd0831.jellyfish.application.shared.Question;
 import io.github.zcd0831.jellyfish.application.shared.Result;
 import io.github.zcd0831.jellyfish.application.shared.UseCaseError;
 import io.github.zcd0831.jellyfish.domain.shared.SessionId;
@@ -16,23 +17,34 @@ import org.jline.reader.LineReader;
 import org.jline.reader.LineReaderBuilder;
 import org.jline.reader.UserInterruptException;
 import org.jline.terminal.Terminal;
-import org.jline.terminal.TerminalBuilder;
 
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * TUI 主循环：输入线程只负责"读一行并分发"，主线程按顺序驱动用例。
- * 单栏流式（D12.1）、JLine 只做输入（D20）、Ctrl-C 两级语义（D20-5）。
+ * TUI 主循环：输入线程独占 stdin（D05 约束 1），主循环按顺序驱动用例。
+ * <p>
+ * 输入线程有三种状态，切换由主循环控制：**等待提示符** / **轮次进行中（不读）** / **等一个答案**。
+ * 轮次进行中不读输入，是为了让流式输出独占终端——否则每个增量都要经 `printAbove`
+ * 把提示符重画一遍（D20-2、D20-8）。
  */
-public final class TuiApp {
+public final class TuiApp implements QuestionBroker.Answerer {
 
-    private static final long INTERRUPT_WINDOW_MILLIS = 2000L;
+    private static final long DOUBLE_INTERRUPT_MILLIS = 2000L;
+
+    private enum InputMode {
+        PROMPT, PAUSED, QUESTION
+    }
 
     private final StartSessionUseCase startSession;
     private final RunSessionUseCase runSession;
@@ -40,97 +52,84 @@ public final class TuiApp {
     private final AdjustPolicyUseCase adjustPolicy;
     private final CatalogRepository catalog;
     private final AnsiRenderer renderer;
-    private final QuestionBroker broker;
+    private final OutputGateway gateway;
+    private final Terminal terminal;
     private final Runnable cancelInFlight;
 
     private final BlockingQueue<String> commands = new LinkedBlockingQueue<String>();
     private final AtomicInteger interruptions = new AtomicInteger();
-    private SessionId currentSession;
+    private final AtomicLong lastPromptInterrupt = new AtomicLong();
+    private final Object inputLock = new Object();
+
+    private InputMode mode = InputMode.PAUSED;
+    private CompletableFuture<Answer> pending;
+    private volatile SessionId currentSession;
+    private LineReader reader;
 
     public TuiApp(StartSessionUseCase startSession, RunSessionUseCase runSession,
                   ManageSessionUseCase manageSession, AdjustPolicyUseCase adjustPolicy,
                   CatalogRepository catalog, AnsiRenderer renderer, QuestionBroker broker,
-                  Runnable cancelInFlight) {
+                  OutputGateway gateway, Terminal terminal, Runnable cancelInFlight) {
         this.startSession = startSession;
         this.runSession = runSession;
         this.manageSession = manageSession;
         this.adjustPolicy = adjustPolicy;
         this.catalog = catalog;
         this.renderer = renderer;
-        this.broker = broker;
+        this.gateway = gateway;
+        this.terminal = terminal;
         this.cancelInFlight = cancelInFlight;
+        broker.bind(this);
     }
 
     public void run() {
         renderer.info("Jellyfish 1.0.0-alpha　/help 查看命令，exit 退出");
-        if (System.console() == null) {
-            // 非 TTY（管道 / CI / 重定向）：不启用 JLine 行编辑（D20-7）
-            startDumbInputThread(System.in);
-            loop();
-            return;
-        }
-        try {
-            Terminal terminal = TerminalBuilder.builder().system(true).build();
-            LineReader reader = LineReaderBuilder.builder()
+        if (Terminal.TYPE_DUMB.equals(terminal.getType())) {
+            startDumbInput(System.in);
+        } else {
+            reader = LineReaderBuilder.builder()
                     .terminal(terminal)
                     .completer(new CommandCompleter())
                     .option(LineReader.Option.DISABLE_EVENT_EXPANSION, true)
                     .build();
             terminal.handle(Terminal.Signal.INT, signal -> onInterrupt());
-            startInputThread(reader);
-            loop();
-        } catch (IOException e) {
-            renderer.error("无法初始化终端：" + e.getMessage());
+            startInputThread();
         }
+        resumePrompt();
+        loop();
     }
 
-    /** 无行编辑的降级输入：只读一行一行的原始文本。 */
-    private void startDumbInputThread(final java.io.InputStream input) {
-        Thread thread = new Thread(new Runnable() {
-            @Override
-            public void run() {
-                java.io.BufferedReader reader = new java.io.BufferedReader(
-                        new java.io.InputStreamReader(input, java.nio.charset.StandardCharsets.UTF_8));
-                try {
-                    String line;
-                    while ((line = reader.readLine()) != null) {
-                        if (!broker.deliver(line)) {
-                            commands.offer(line);
-                        }
-                    }
-                } catch (IOException eof) {
-                    // 输入结束等同 exit
-                }
-                commands.offer("exit");
-            }
-        }, "jellyfish-input-dumb");
-        thread.setDaemon(true);
-        thread.start();
-    }
-
-    /** 输入线程：有待答问题就交给提问队列，否则进命令队列。 */
-    private void startInputThread(final LineReader reader) {
+    private void startInputThread() {
         Thread thread = new Thread(new Runnable() {
             @Override
             public void run() {
                 while (true) {
+                    String prompt;
+                    synchronized (inputLock) {
+                        while (mode == InputMode.PAUSED) {
+                            waitOnLock();
+                        }
+                        prompt = mode == InputMode.QUESTION ? "回答> " : prompt();
+                    }
                     String line;
+                    gateway.reading(reader);
                     try {
-                        line = reader.readLine(prompt());
+                        line = reader.readLine(prompt);
                     } catch (UserInterruptException interrupt) {
-                        onInterrupt();
+                        gateway.idle();
+                        onPromptInterrupt();
                         continue;
                     } catch (EndOfFileException eof) {
+                        gateway.idle();
                         commands.offer("exit");
                         return;
                     }
+                    gateway.idle();
                     if (line == null) {
                         commands.offer("exit");
                         return;
                     }
-                    if (!broker.deliver(line)) {
-                        commands.offer(line);
-                    }
+                    deliver(line);
                 }
             }
         }, "jellyfish-input");
@@ -138,8 +137,38 @@ public final class TuiApp {
         thread.start();
     }
 
-    private String prompt() {
-        return currentSession == null ? "新会话> " : "继续> ";
+    /** 非 TTY：没有行编辑，输出侧是否着色由外壳判定（D20-7）。 */
+    private void startDumbInput(final InputStream input) {
+        Thread thread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                BufferedReader source = new BufferedReader(new InputStreamReader(input, StandardCharsets.UTF_8));
+                try {
+                    String line;
+                    while ((line = source.readLine()) != null) {
+                        deliver(line);
+                    }
+                } catch (IOException eof) {
+                    // 输入结束等同 exit
+                }
+                commands.offer("exit");
+            }
+        }, "jellyfish-input");
+        thread.setDaemon(true);
+        thread.start();
+    }
+
+    /** 答案进提问、其余进命令队列：任何时刻只有一个消费者。 */
+    private void deliver(String line) {
+        synchronized (inputLock) {
+            if (mode == InputMode.QUESTION && pending != null) {
+                pending.complete(Answer.answered(line));
+                mode = InputMode.PAUSED;
+                return;
+            }
+            mode = InputMode.PAUSED;
+        }
+        commands.offer(line);
     }
 
     private void loop() {
@@ -152,19 +181,43 @@ public final class TuiApp {
                 return;
             }
             String text = line.trim();
-            if ("exit".equals(text) || "quit".equals(text) || "/exit".equals(text)) {
+            if (isExit(text)) {
                 renderer.endTurn();
+                gateway.close();
                 return;
             }
             if (text.isEmpty()) {
+                resumePrompt();
                 continue;
             }
             if (text.startsWith("/")) {
                 command(text);
-                continue;
+            } else {
+                handle(text);
             }
-            handle(text);
+            resumePrompt();
         }
+    }
+
+    private void resumePrompt() {
+        synchronized (inputLock) {
+            mode = InputMode.PROMPT;
+            inputLock.notifyAll();
+        }
+    }
+
+    private void pauseInput() {
+        synchronized (inputLock) {
+            mode = InputMode.PAUSED;
+        }
+    }
+
+    private static boolean isExit(String text) {
+        return "exit".equals(text) || "quit".equals(text) || "/exit".equals(text);
+    }
+
+    private String prompt() {
+        return currentSession == null ? "新会话> " : "继续> ";
     }
 
     private void handle(String text) {
@@ -182,39 +235,134 @@ public final class TuiApp {
     }
 
     private void runOnce(String text) {
-        ChunkSink sink = new ChunkSink() {
-            private boolean started;
-
-            @Override
-            public void accept(String delta) {
-                if (!started) {
-                    renderer.assistantPrefix();
-                    started = true;
-                }
-                renderer.append(delta);
-            }
-        };
-        Result<RunSessionResult> result = runSession.run(currentSession, text, sink);
-        renderer.status("");
+        pauseInput();
+        renderer.status("思考中…");
+        org.jline.terminal.Attributes original = withoutEcho();
+        Result<RunSessionResult> result;
+        try {
+            result = runSession.run(currentSession, text, sink());
+        } finally {
+            restore(original);
+        }
         renderer.endTurn();
         if (!result.isOk()) {
             printError(result.error());
             return;
         }
         if (result.value().outcome() == RunSessionResult.Outcome.CANCELLED) {
-            renderer.info("（已取消，可用 /cancel 确认或继续输入）");
+            renderer.info("（本轮已取消）");
         }
+    }
+
+    private ChunkSink sink() {
+        return new ChunkSink() {
+            private boolean started;
+
+            @Override
+            public void accept(String delta) {
+                if (!started) {
+                    renderer.status("");
+                    renderer.assistantPrefix();
+                    started = true;
+                }
+                renderer.append(delta);
+            }
+        };
+    }
+
+    /**
+     * 提问：在锁内先把问题打出去，再切到"等答案"，输入线程才开始画 `回答>`。
+     * 顺序反了就会出现"提示符在前、问题被顶到下一行"。
+     */
+    @Override
+    public Answer ask(Question question) {
+        CompletableFuture<Answer> future = new CompletableFuture<Answer>();
+        synchronized (inputLock) {
+            pending = future;
+            renderer.question(sourceLabel(question.source()), question.prompt());
+            mode = InputMode.QUESTION;
+            inputLock.notifyAll();
+        }
+        try {
+            return future.get();
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            return Answer.cancelled();
+        } catch (java.util.concurrent.ExecutionException broken) {
+            return Answer.cancelled();
+        } finally {
+            synchronized (inputLock) {
+                pending = null;
+                mode = InputMode.PAUSED;
+            }
+        }
+    }
+
+    /**
+     * 轮次进行中关掉回显：终端不在 readLine 里，敲键会被 TTY 直接回显到正文中间（D20-9）。
+     * ISIG 不动，Ctrl-C 仍然能到达信号处理器。
+     */
+    private org.jline.terminal.Attributes withoutEcho() {
+        try {
+            org.jline.terminal.Attributes original = terminal.getAttributes();
+            org.jline.terminal.Attributes copy = new org.jline.terminal.Attributes(original);
+            copy.setLocalFlag(org.jline.terminal.Attributes.LocalFlag.ECHO, false);
+            terminal.setAttributes(copy);
+            return original;
+        } catch (RuntimeException unsupported) {
+            return null;
+        }
+    }
+
+    private void restore(org.jline.terminal.Attributes original) {
+        if (original == null) {
+            return;
+        }
+        try {
+            terminal.setAttributes(original);
+        } catch (RuntimeException ignored) {
+            // 恢复失败交给终端自己兜底
+        }
+    }
+
+    /** 取消时唤醒阻塞中的提问（`/cancel` 与 Ctrl-C 共用）。 */
+    private void cancelPendingQuestion() {
+        synchronized (inputLock) {
+            if (pending != null) {
+                pending.complete(Answer.cancelled());
+            }
+        }
+    }
+
+    /** Ctrl-C 在轮次中：取消本轮；连按两次退出（D20-5）。 */
+    private void onInterrupt() {
+        cancelPendingQuestion();
+        if (interruptions.incrementAndGet() >= 2) {
+            commands.offer("exit");
+            return;
+        }
+        cancelInFlight.run();
+    }
+
+    /** Ctrl-C 在提示符处：清行继续，两秒内第二次退出（D20-5）。 */
+    private void onPromptInterrupt() {
+        long now = System.currentTimeMillis();
+        if (now - lastPromptInterrupt.getAndSet(now) <= DOUBLE_INTERRUPT_MILLIS) {
+            commands.offer("exit");
+            return;
+        }
+        renderer.info("（已清空当前输入，再按一次 Ctrl-C 退出）");
     }
 
     private void command(String line) {
         String[] parts = line.split("\\s+");
         String name = parts[0];
+        boolean sessionFree = "/policy".equals(name) || "/tools".equals(name) || "/agents".equals(name)
+                || "/models".equals(name) || "/providers".equals(name) || "/skills".equals(name);
         if ("/help".equals(name)) {
             renderer.info("/cancel /archive /delete /policy k=v /tools /agents /models /providers /skills /exit");
             return;
         }
-        boolean sessionFree = "/policy".equals(name) || "/tools".equals(name) || "/agents".equals(name)
-                || "/models".equals(name) || "/providers".equals(name) || "/skills".equals(name);
         if (currentSession == null && !sessionFree) {
             renderer.info("（还没有会话）");
             return;
@@ -226,7 +374,7 @@ public final class TuiApp {
             print(manageSession.delete(currentSession));
             currentSession = null;
         } else if ("/cancel".equals(name)) {
-            broker.cancelPending();
+            cancelPendingQuestion();
             print(manageSession.cancel(currentSession));
             renderer.info("（已取消，可继续输入或 exit）");
         } else if ("/policy".equals(name)) {
@@ -273,37 +421,6 @@ public final class TuiApp {
         }
     }
 
-    /** 第一次 Ctrl-C 取消当前轮；两秒内第二次退出（D20-5）。 */
-    private void onInterrupt() {
-        boolean pendingQuestion = broker.hasPending();
-        broker.cancelPending();
-        interruptions.incrementAndGet();
-        if (interruptions.get() >= 2) {
-            renderer.info("（再按一次已退出）".replace("再按一次已退出", "已退出"));
-            commands.offer("exit");
-            return;
-        }
-        cancelInFlight.run();
-        renderer.info(pendingQuestion ? "（已取消提问；Ctrl-C 再按一次退出）" : "（已请求取消；Ctrl-C 再按一次退出）");
-        scheduleInterruptReset();
-    }
-
-    private void scheduleInterruptReset() {
-        Thread reset = new Thread(new Runnable() {
-            @Override
-            public void run() {
-                try {
-                    TimeUnit.MILLISECONDS.sleep(INTERRUPT_WINDOW_MILLIS);
-                } catch (InterruptedException ignored) {
-                    Thread.currentThread().interrupt();
-                }
-                interruptions.set(0);
-            }
-        }, "jellyfish-interrupt-reset");
-        reset.setDaemon(true);
-        reset.start();
-    }
-
     private void print(Result<?> result) {
         if (!result.isOk()) {
             printError(result.error());
@@ -315,17 +432,26 @@ public final class TuiApp {
         renderer.error(Messages.text(error.error().code()));
     }
 
-    /** 供测试与补全复用：当前是否有会话（不暴露内部 id）。 */
-    public boolean hasSession() {
-        return currentSession != null;
+    private void waitOnLock() {
+        try {
+            inputLock.wait();
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+        }
     }
 
-    /** 让外壳在退出前主动结束输入线程（JLine 读取是不可中断的阻塞读）。 */
-    public void requestExit() {
-        commands.offer("exit");
-    }
-
-    static Answer cancelledAnswer() {
-        return Answer.cancelled();
+    private static String sourceLabel(Question.Source source) {
+        switch (source) {
+            case SUBAGENT:
+                return "子代理";
+            case VERIFICATION:
+                return "验收";
+            case APPROVAL:
+                return "放行审批";
+            case BUDGET:
+                return "预算预警";
+            default:
+                return "会话";
+        }
     }
 }

@@ -20,9 +20,4 @@ public final class TuiHumanInteraction implements HumanInteractionPort {
     public Answer ask(Question question) {
         return broker.ask(question);
     }
-
-    /** Ctrl-C：唤醒阻塞中的提问，让主循环尽快收尾。 */
-    public void cancel() {
-        broker.cancelPending();
-    }
 }

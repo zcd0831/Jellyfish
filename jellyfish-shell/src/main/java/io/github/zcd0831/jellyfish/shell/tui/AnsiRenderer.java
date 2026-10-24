@@ -18,6 +18,8 @@ public final class AnsiRenderer {
     private final PrintStream out;
     private final int width;
     private int column;
+    /** 状态行是否占着当前行：占着就不能在它上面打正文（D20-10）。 */
+    private boolean statusActive;
 
     public AnsiRenderer(PrintStream out, int width) {
         this.out = out;
@@ -25,10 +27,11 @@ public final class AnsiRenderer {
     }
 
     /** 流式增量：不回显的换行交给渲染器，保证 CJK 宽度与折行正确。 */
-    public void append(String delta) {
+    public synchronized void append(String delta) {
         if (delta == null || delta.isEmpty()) {
             return;
         }
+        clearStatusLine();
         for (int i = 0; i < delta.length(); i++) {
             char c = delta.charAt(i);
             if (c == '\n') {
@@ -48,48 +51,68 @@ public final class AnsiRenderer {
     }
 
     /** 一轮结束：确保光标在行首，问答与提示不会粘在一起。 */
-    public void endTurn() {
+    public synchronized void endTurn() {
+        clearStatusLine();
         if (column > 0) {
             out.println();
             column = 0;
         }
     }
 
-    public void assistantPrefix() {
+    public synchronized void assistantPrefix() {
+        clearStatusLine();
         out.print(CYAN + "助手 " + RESET);
         column = 3;
     }
 
-    public void tool(String name, String outcome) {
+    public synchronized void tool(String name, String outcome) {
         out.println(DIM + "  · " + name + "：" + firstLine(outcome) + RESET);
         column = 0;
     }
 
     /** 提问就地暂停：先断开当前行，再打印来源与问题。 */
-    public void question(String sourceLabel, String prompt) {
+    public synchronized void question(String sourceLabel, String prompt) {
         endTurn();
         out.println(YELLOW + "[" + sourceLabel + "] " + prompt + RESET);
         column = 0;
         out.flush();
     }
 
-    /** 状态行：用 \r 原地覆盖，不产生新行；传空串即清除。 */
-    public void status(String text) {
-        out.print(ERASE_LINE);
-        if (text != null && !text.isEmpty()) {
-            out.print(DIM + text + RESET);
+    /**
+     * 状态行：`\r` 原地覆盖；光标在正文行中间时先另起一行，避免擦掉正文（D20-10）。
+     * 传空串即清除。
+     */
+    public synchronized void status(String text) {
+        if (text == null || text.isEmpty()) {
+            clearStatusLine();
+            return;
         }
+        if (!statusActive && column > 0) {
+            out.println();
+        }
+        out.print(ERASE_LINE + DIM + text + RESET);
         out.flush();
         column = 0;
+        statusActive = true;
     }
 
-    public void error(String text) {
+    /** 只在状态行确实占着当前行时才擦，绝不误伤正文。 */
+    private void clearStatusLine() {
+        if (statusActive) {
+            out.print(ERASE_LINE);
+            out.flush();
+            statusActive = false;
+            column = 0;
+        }
+    }
+
+    public synchronized void error(String text) {
         endTurn();
         out.println(RED + "错误：" + text + RESET);
         column = 0;
     }
 
-    public void info(String text) {
+    public synchronized void info(String text) {
         endTurn();
         out.println(DIM + text + RESET);
         column = 0;

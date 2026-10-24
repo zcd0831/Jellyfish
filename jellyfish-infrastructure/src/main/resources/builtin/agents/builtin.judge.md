@@ -19,3 +19,4 @@ status: active
 3. 信息不足以判断时，选择"无法判定"，不要猜。
 4. 输出严格为一行 JSON：{"verdict":"PASSED|FAILED|UNDETERMINED","reason":"一句话原因"}
    不要输出 JSON 之外的任何文字。
+5. 如果没有确凿的证据证明它通过了，就必须判定为未通过。

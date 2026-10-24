@@ -13,16 +13,6 @@ public final class Main {
 
     private static final long SHUTDOWN_GRACE_MILLIS = 2000L;
 
-    /** 控制台宽度：优先 COLUMNS，其次退化为 100（渲染器依赖它做折行）。 */
-    private static int terminalWidth() {
-        String columns = System.getenv("COLUMNS");
-        try {
-            return columns == null ? 100 : Integer.parseInt(columns);
-        } catch (NumberFormatException ignored) {
-            return 100;
-        }
-    }
-
     /** 凭据只从环境变量读；缺失的供应商提示一条，不阻塞启动（D09-4）。 */
     private static void warnMissingCredentials(AppComponent component) {
         for (io.github.zcd0831.jellyfish.domain.action.model.Provider provider
@@ -46,7 +36,7 @@ public final class Main {
 
         final AppComponent component = DaggerAppComponent.builder()
                 .infrastructureModule(new InfrastructureModule(dir))
-                .shellModule(new io.github.zcd0831.jellyfish.di.ShellModule(System.out, terminalWidth()))
+                .shellModule(new io.github.zcd0831.jellyfish.di.ShellModule(System.out))
                 .build();
         final Thread mainThread = Thread.currentThread();
         Runtime.getRuntime().addShutdownHook(new Thread(new Runnable() {

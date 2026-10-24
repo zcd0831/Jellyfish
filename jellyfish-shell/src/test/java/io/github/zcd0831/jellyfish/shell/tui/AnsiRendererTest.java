@@ -44,6 +44,30 @@ class AnsiRendererTest {
     }
 
     @Test
+    void 状态行前先另起一行不擦正文() throws UnsupportedEncodingException {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        AnsiRenderer renderer = new AnsiRenderer(new PrintStream(bytes, true, "UTF-8"), 80);
+        renderer.append("答案最后一行");
+
+        renderer.status("思考中…");
+
+        String text = bytes.toString("UTF-8");
+        assertTrue(text.contains("答案最后一行\n"), "状态行前应另起一行：" + text);
+    }
+
+    @Test
+    void 正文续写前先擦状态行() throws UnsupportedEncodingException {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        AnsiRenderer renderer = new AnsiRenderer(new PrintStream(bytes, true, "UTF-8"), 80);
+        renderer.status("思考中…");
+
+        renderer.append("答案");
+
+        String text = bytes.toString("UTF-8");
+        assertTrue(text.contains("\r\u001B[2K"), "正文续写前应擦掉状态行：" + text);
+    }
+
+    @Test
     void 提问前先断开当前行() throws UnsupportedEncodingException {
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();
         AnsiRenderer renderer = new AnsiRenderer(new PrintStream(bytes, true, "UTF-8"), 80);

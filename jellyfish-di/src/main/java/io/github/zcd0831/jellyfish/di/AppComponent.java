@@ -26,12 +26,11 @@ import java.util.concurrent.ExecutorService;
 import javax.inject.Singleton;
 
 /**
- * 装配根。S1 暴露已实现的端口与用例；记忆模块（经验/反思/SOP）随 S4/S5 加入，
- * 所以本版本没有 MemoryModule——不是遗漏，而是那一层还没有实现。
+ * 装配根：端口 + 用例 + 各认知模块的应用服务。
  */
 @Singleton
 @Component(modules = {InfrastructureModule.class, PerceptionModule.class, ActionModule.class,
-        PlanningModule.class})
+        PlanningModule.class, MemoryModule.class})
 public interface AppComponent {
 
     DataDirectory dataDirectory();

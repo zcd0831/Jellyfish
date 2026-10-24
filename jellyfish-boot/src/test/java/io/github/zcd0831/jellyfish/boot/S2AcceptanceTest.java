@@ -83,6 +83,7 @@ class S2AcceptanceTest {
     private DataDirectory dir;
     private StartSessionUseCase startSession;
     private RunSessionUseCase runSession;
+    private final RunSessionUseCase[] runSessionHolder = new RunSessionUseCase[1];
     private PlanRepository plans;
 
     @BeforeEach
@@ -117,11 +118,34 @@ class S2AcceptanceTest {
                 new FileCommitScope(dir, codec), human);
         VerificationRunner verificationRunner = new VerificationRunner(model, catalog, human, budgetService,
                 EnvironmentFeedbackVerifier.NOT_CONFIGURED);
+        io.github.zcd0831.jellyfish.application.memory.port.ExperienceRepository experiences =
+                new io.github.zcd0831.jellyfish.infrastructure.file.FileExperienceRepository(dir, codec);
+        io.github.zcd0831.jellyfish.application.memory.port.ReflectionRepository reflections =
+                new io.github.zcd0831.jellyfish.infrastructure.file.FileReflectionRepository(dir, codec);
+        io.github.zcd0831.jellyfish.application.memory.ExperienceRetriever retriever =
+                new io.github.zcd0831.jellyfish.application.memory.ExperienceRetriever(experiences, model,
+                        catalog, policies, budgetService);
+        io.github.zcd0831.jellyfish.application.memory.ExperienceFeedbackService feedback =
+                new io.github.zcd0831.jellyfish.application.memory.ExperienceFeedbackService(experiences,
+                        policies, new FileCommitScope(dir, codec), publisher);
+        io.github.zcd0831.jellyfish.application.memory.ExperienceDistillationService distillation =
+                new io.github.zcd0831.jellyfish.application.memory.ExperienceDistillationService(experiences,
+                        records, model, catalog, policies, budgetService, new FileCommitScope(dir, codec),
+                        publisher, event -> { });
         ExecutionLoop executionLoop = new ExecutionLoop(contextWindow, reActLoop, verificationRunner, plans,
                 planFactory, catalog, policies, new FileCommitScope(dir, codec), publisher, event -> { }, model,
-                budgetService);
+                budgetService, retriever, feedback, distillation, reflections,
+                new io.github.zcd0831.jellyfish.application.planning.SubagentLauncher(startSession,
+                        new io.github.zcd0831.jellyfish.application.planning.RunSessionProvider() {
+                            @Override
+                            public RunSessionUseCase get() {
+                                return runSessionHolder[0];
+                            }
+                        }, sessions, records, budgetService, policies, event -> { },
+                        java.util.concurrent.Executors.newFixedThreadPool(2)));
         runSession = new RunSessionUseCase(sessions, records, new FileCommitScope(dir, codec), publisher,
                 executionLoop);
+        runSessionHolder[0] = runSession;
         startSession = new StartSessionUseCase(catalog, sessions, budgets,
                 new SessionTitleGenerator(model, budgetService), new SystemPromptAssembler(),
                 new FileCommitScope(dir, codec), new SystemClock());

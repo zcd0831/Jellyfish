@@ -1,6 +1,15 @@
 package io.github.zcd0831.jellyfish.application.planning;
 
 import io.github.zcd0831.jellyfish.application.action.BudgetService;
+import io.github.zcd0831.jellyfish.application.memory.DistillationInput;
+import io.github.zcd0831.jellyfish.application.memory.ExperienceDistillationService;
+import io.github.zcd0831.jellyfish.application.memory.ExperienceFeedbackService;
+import io.github.zcd0831.jellyfish.application.memory.ExperienceRetriever;
+import io.github.zcd0831.jellyfish.application.memory.FeedbackInput;
+import io.github.zcd0831.jellyfish.application.memory.RetrievalInput;
+import io.github.zcd0831.jellyfish.application.memory.StepBrief;
+import io.github.zcd0831.jellyfish.application.memory.StepTrace;
+import io.github.zcd0831.jellyfish.application.memory.port.ReflectionRepository;
 import io.github.zcd0831.jellyfish.application.action.port.CatalogRepository;
 import io.github.zcd0831.jellyfish.application.action.port.ChatMessage;
 import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationException;
@@ -28,11 +37,18 @@ import io.github.zcd0831.jellyfish.domain.planning.plan.PlanCreationException;
 import io.github.zcd0831.jellyfish.domain.planning.plan.PlanFactory;
 import io.github.zcd0831.jellyfish.domain.planning.plan.PlanStatus;
 import io.github.zcd0831.jellyfish.domain.planning.plan.PlanStep;
+import io.github.zcd0831.jellyfish.domain.memory.reflection.Reflection;
+import io.github.zcd0831.jellyfish.domain.planning.plan.PlanStep;
+import io.github.zcd0831.jellyfish.domain.planning.plan.RecordRange;
 import io.github.zcd0831.jellyfish.domain.planning.plan.StepStatus;
 import io.github.zcd0831.jellyfish.domain.planning.verification.VerificationOutcome;
 import io.github.zcd0831.jellyfish.domain.planning.verification.VerificationReport;
 import io.github.zcd0831.jellyfish.domain.shared.DomainEvent;
 import io.github.zcd0831.jellyfish.domain.shared.PlanId;
+import io.github.zcd0831.jellyfish.domain.shared.AgentId;
+import io.github.zcd0831.jellyfish.domain.shared.ExperienceId;
+import io.github.zcd0831.jellyfish.domain.shared.SessionId;
+import io.github.zcd0831.jellyfish.domain.shared.StepId;
 import io.github.zcd0831.jellyfish.domain.shared.ToolId;
 
 import java.util.ArrayList;
@@ -65,12 +81,20 @@ public final class ExecutionLoop {
     private final ProgressPort progress;
     private final ModelInvocationPort model;
     private final BudgetService budgetService;
+    private final ExperienceRetriever experienceRetriever;
+    private final ExperienceFeedbackService experienceFeedback;
+    private final ExperienceDistillationService experienceDistillation;
+    private final ReflectionRepository reflections;
+    private final SubagentLauncher subagentLauncher;
 
     public ExecutionLoop(ContextWindowService contextWindow, ReActLoop reActLoop,
                          VerificationRunner verificationRunner, PlanRepository plans, PlanFactory planFactory,
                          CatalogRepository catalog, PolicyRepository policies, CommitScope commitScope,
                          DomainEventPublisher eventPublisher, ProgressPort progress, ModelInvocationPort model,
-                         BudgetService budgetService) {
+                         BudgetService budgetService, ExperienceRetriever experienceRetriever,
+                         ExperienceFeedbackService experienceFeedback,
+                         ExperienceDistillationService experienceDistillation,
+                         ReflectionRepository reflections, SubagentLauncher subagentLauncher) {
         this.contextWindow = contextWindow;
         this.reActLoop = reActLoop;
         this.verificationRunner = verificationRunner;
@@ -83,6 +107,11 @@ public final class ExecutionLoop {
         this.progress = progress;
         this.model = model;
         this.budgetService = budgetService;
+        this.experienceRetriever = experienceRetriever;
+        this.experienceFeedback = experienceFeedback;
+        this.experienceDistillation = experienceDistillation;
+        this.reflections = reflections;
+        this.subagentLauncher = subagentLauncher;
     }
 
     public Outcome run(Session session, ChunkSink sink) {
@@ -133,6 +162,7 @@ public final class ExecutionLoop {
                 Plan created = runningPlan(session);
                 if (created != null) {
                     plan = created;
+                    assignExperiences(session, created);
                     continue;
                 }
                 return Outcome.CONVERGED;
@@ -144,6 +174,7 @@ public final class ExecutionLoop {
             if (!stepNeedsVerification(step)) {
                 plan.markStepSucceeded(step.id(), iteration.submittedSummary(), null);
                 commitPlan(plan);
+                feedbackSucceeded(step);
                 progress.emit(ProgressEvent.of(ProgressEvent.Kind.STEP_FINISHED,
                         "第 " + step.sequence() + " 步完成（免验证）"));
             } else {
@@ -153,12 +184,15 @@ public final class ExecutionLoop {
                 if (report.outcome() == VerificationOutcome.PASSED) {
                     plan.markStepSucceeded(step.id(), iteration.submittedSummary(), report.id());
                     commitPlan(plan);
+                    feedbackSucceeded(step);
                     progress.emit(ProgressEvent.of(ProgressEvent.Kind.STEP_FINISHED,
                             "第 " + step.sequence() + " 步验收通过"));
                 } else {
                     plan.markStepFailed(step.id(), report.id());
                     commitPlan(plan);
                     publish(report.pullEvents());
+                    feedbackFailed(step);
+                    reflectIfNeeded(session, plan, step, report.failureReason());
                     progress.emit(ProgressEvent.of(ProgressEvent.Kind.STEP_FINISHED,
                             "第 " + step.sequence() + " 步验收未通过：" + report.outcome()));
                     if (advanceAfterFailure(session, plan, step,
@@ -173,6 +207,7 @@ public final class ExecutionLoop {
             if (plan.status() == PlanStatus.COMPLETED) {
                 // 计划完结后再跑一轮自由内循环，由模型产出结论（模型图 §5.1）
                 publish(plan.pullEvents());
+                distill(session, plan);
                 plan = null;
             }
         }
@@ -197,6 +232,7 @@ public final class ExecutionLoop {
         plan.terminate("重划用尽：" + reason);
         commitPlan(plan);
         publish(plan.pullEvents());
+        distill(session, plan);
         return true;
     }
 
@@ -224,6 +260,89 @@ public final class ExecutionLoop {
             progress.emit(ProgressEvent.of(ProgressEvent.Kind.RETRY_SCHEDULED, "重划失败：" + cannotReplan.getMessage()));
             return false;
         }
+    }
+
+    /** 计划诞生 / 重划：检索经验并交给 Plan 自己改状态（记忆只返回分配结果）。 */
+    private void assignExperiences(Session session, Plan plan) {
+        List<StepBrief> briefs = new ArrayList<StepBrief>();
+        for (PlanStep step : plan.steps()) {
+            if (step.status() == StepStatus.PENDING) {
+                briefs.add(new StepBrief(step.id(), step.description()));
+            }
+        }
+        if (briefs.isEmpty()) {
+            return;
+        }
+        Map<StepId, List<ExperienceId>> assignment = experienceRetriever.retrieveAndAssign(session,
+                new RetrievalInput(plan.id(), briefs));
+        for (Map.Entry<StepId, List<ExperienceId>> entry : assignment.entrySet()) {
+            plan.assignExperiences(entry.getKey(), entry.getValue());
+        }
+        commitPlan(plan);
+    }
+
+    private void feedbackSucceeded(PlanStep step) {
+        experienceFeedback.onStepSucceeded(feedbackOf(step));
+    }
+
+    private void feedbackFailed(PlanStep step) {
+        experienceFeedback.onStepFailed(feedbackOf(step));
+    }
+
+    /** 本期"注入"与"建议"同源：分配即注入（奖惩不对称仍按两段分支执行）。 */
+    private static FeedbackInput feedbackOf(PlanStep step) {
+        return new FeedbackInput(step.id(), step.assignedExperienceIds(), step.assignedExperienceIds());
+    }
+
+    /**
+     * 达反思阈值时跑内置反思子代理（按文档是子代理，不是进程内调用），结论落 Reflection 并回注。
+     * 规则出处：模块-记忆 §7.2、§8.1 回注。
+     */
+    private void reflectIfNeeded(Session session, Plan plan, PlanStep step, String failureReason) {
+        int failed = failedAttempts(step);
+        if (!policies.load().needsReflection(failed)) {
+            return;
+        }
+        List<SubagentRequest> requests = Collections.singletonList(new SubagentRequest(
+                AgentId.of("builtin.reflect"), session.activeModelId(),
+                "原定目标：" + step.description() + "\n失败原因：" + failureReason
+                        + "\n请给出下一次该改什么。"));
+        List<SubagentResult> results = subagentLauncher.launch(session, requests);
+        if (results.isEmpty()) {
+            return;
+        }
+        Reflection reflection = Reflection.record(plan.id(), step.id(), failedIn(step), results.get(0).conclusion(),
+                System.currentTimeMillis());
+        commitScope.stageFact(reflection);
+        commitScope.commit();
+        publish(reflection.pullEvents());
+    }
+
+    private static int failedIn(PlanStep step) {
+        Attempt latest = step.attempts().get(step.attempts().size() - 1);
+        return latest.attemptNo();
+    }
+
+    /** 计划完结（含终局失败）：组装事实摘要交给沉淀服务，记忆不遍历 Plan。 */
+    private void distill(Session session, Plan plan) {
+        List<StepTrace> traces = new ArrayList<StepTrace>();
+        for (PlanStep step : plan.steps()) {
+            Attempt latest = step.attempts().isEmpty() ? null
+                    : step.attempts().get(step.attempts().size() - 1);
+            traces.add(new StepTrace(step.id(), step.description(), step.status(),
+                    latest == null ? null : latest.recordRange(), latest == null
+                    ? Collections.<SessionId>emptyList() : latest.childSessionIds(),
+                    latest == null || latest.outcome() == AttemptOutcome.SUCCEEDED ? null
+                            : plan.terminationReason(),
+                    latest == null || latest.reflectionId() == null ? null : reflectionOf(latest)));
+        }
+        experienceDistillation.distill(session, new DistillationInput(plan.id(), session.id(), plan.goal(),
+                plan.status(), traces));
+    }
+
+    private String reflectionOf(Attempt attempt) {
+        return reflections.get(attempt.reflectionId()).isPresent()
+                ? reflections.get(attempt.reflectionId()).get().conclusion() : null;
     }
 
     private static boolean stepNeedsVerification(PlanStep step) {

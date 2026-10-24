@@ -73,6 +73,7 @@ class S1AcceptanceTest {
     private DataDirectory dir;
     private StartSessionUseCase startSession;
     private RunSessionUseCase runSession;
+    private final RunSessionUseCase[] runSessionProviderHolder = new RunSessionUseCase[1];
 
     @BeforeEach
     void setUp() throws IOException {
@@ -102,16 +103,25 @@ class S1AcceptanceTest {
                 io.github.zcd0831.jellyfish.application.action.InternalToolHandlers.empty());
         ReActLoop reActLoop = new ReActLoop(model, toolExecutor, budgetService, contextWindow, policies,
                 new FileCommitScope(dir, codec), human);
-        io.github.zcd0831.jellyfish.application.planning.port.PlanRepository plans =
+        final io.github.zcd0831.jellyfish.application.planning.port.PlanRepository plans =
                 new io.github.zcd0831.jellyfish.infrastructure.file.FilePlanRepository(dir, codec);
-        ExecutionLoop executionLoop = new ExecutionLoop(contextWindow, reActLoop,
+        final io.github.zcd0831.jellyfish.application.planning.VerificationRunner verificationRunner =
                 new io.github.zcd0831.jellyfish.application.planning.VerificationRunner(model, catalog, human,
                         budgetService,
-                        io.github.zcd0831.jellyfish.application.planning.EnvironmentFeedbackVerifier.NOT_CONFIGURED),
-                plans, new io.github.zcd0831.jellyfish.domain.planning.plan.PlanFactory(), catalog, policies,
-                new FileCommitScope(dir, codec), publisher, event -> { }, model, budgetService);
+                        io.github.zcd0831.jellyfish.application.planning.EnvironmentFeedbackVerifier.NOT_CONFIGURED);
+        final io.github.zcd0831.jellyfish.application.perception.StartSessionUseCase startSessionRef =
+                startSession;
+        ExecutionLoop executionLoop = LoopSupport.build(dir, codec, model, policies, catalog, budgetService,
+                contextWindow, reActLoop, verificationRunner, plans, publisher, event -> { }, startSessionRef,
+                sessions, records, new io.github.zcd0831.jellyfish.application.planning.RunSessionProvider() {
+                    @Override
+                    public io.github.zcd0831.jellyfish.application.planning.RunSessionUseCase get() {
+                        return runSessionProviderHolder[0];
+                    }
+                });
         runSession = new RunSessionUseCase(sessions, records, new FileCommitScope(dir, codec), publisher,
                 executionLoop);
+        runSessionProviderHolder[0] = runSession;
         startSession = new StartSessionUseCase(catalog, sessions, budgets,
                 new SessionTitleGenerator(model, budgetService), new SystemPromptAssembler(),
                 new FileCommitScope(dir, codec), clock);

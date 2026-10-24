@@ -3,6 +3,10 @@ package io.github.zcd0831.jellyfish.di;
 import dagger.Module;
 import dagger.Provides;
 import io.github.zcd0831.jellyfish.application.action.BudgetService;
+import io.github.zcd0831.jellyfish.application.memory.ExperienceDistillationService;
+import io.github.zcd0831.jellyfish.application.memory.ExperienceFeedbackService;
+import io.github.zcd0831.jellyfish.application.memory.ExperienceRetriever;
+import io.github.zcd0831.jellyfish.application.memory.port.ReflectionRepository;
 import io.github.zcd0831.jellyfish.application.action.InternalToolHandlers;
 import io.github.zcd0831.jellyfish.application.action.ToolExecutor;
 import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationPort;
@@ -112,9 +116,14 @@ public final class PlanningModule {
                                 VerificationRunner verificationRunner, PlanRepository plans,
                                 PlanFactory planFactory, CatalogRepository catalog, PolicyRepository policies,
                                 CommitScope commitScope, DomainEventPublisher publisher, ProgressPort progress,
-                                ModelInvocationPort model, BudgetService budgetService) {
+                                ModelInvocationPort model, BudgetService budgetService,
+                                ExperienceRetriever experienceRetriever,
+                                ExperienceFeedbackService experienceFeedback,
+                                ExperienceDistillationService experienceDistillation,
+                                ReflectionRepository reflections, SubagentLauncher subagentLauncher) {
         return new ExecutionLoop(contextWindow, reActLoop, verificationRunner, plans, planFactory, catalog,
-                policies, commitScope, publisher, progress, model, budgetService);
+                policies, commitScope, publisher, progress, model, budgetService, experienceRetriever,
+                experienceFeedback, experienceDistillation, reflections, subagentLauncher);
     }
 
     @Provides

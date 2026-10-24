@@ -8,6 +8,8 @@ import io.github.zcd0831.jellyfish.application.action.port.ExternalToolPort;
 import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationPort;
 import io.github.zcd0831.jellyfish.application.perception.port.PolicyRepository;
 import io.github.zcd0831.jellyfish.application.perception.port.RecordStore;
+import io.github.zcd0831.jellyfish.application.memory.port.ExperienceRepository;
+import io.github.zcd0831.jellyfish.application.memory.port.ReflectionRepository;
 import io.github.zcd0831.jellyfish.application.perception.port.SessionRepository;
 import io.github.zcd0831.jellyfish.application.planning.port.PlanRepository;
 import io.github.zcd0831.jellyfish.application.planning.port.VerificationReportRepository;
@@ -29,7 +31,9 @@ import io.github.zcd0831.jellyfish.infrastructure.file.FileCatalogRepository;
 import io.github.zcd0831.jellyfish.infrastructure.file.FileCommitScope;
 import io.github.zcd0831.jellyfish.infrastructure.file.FileInstanceLock;
 import io.github.zcd0831.jellyfish.infrastructure.file.FilePlanRepository;
+import io.github.zcd0831.jellyfish.infrastructure.file.FileExperienceRepository;
 import io.github.zcd0831.jellyfish.infrastructure.file.FilePolicyRepository;
+import io.github.zcd0831.jellyfish.infrastructure.file.FileReflectionRepository;
 import io.github.zcd0831.jellyfish.infrastructure.file.FileReportRepository;
 import io.github.zcd0831.jellyfish.infrastructure.file.FileRecordStore;
 import io.github.zcd0831.jellyfish.infrastructure.file.FileSchemaMigrator;
@@ -114,6 +118,18 @@ public final class InfrastructureModule {
     @Singleton
     VerificationReportRepository verificationReportRepository(DataDirectory dir, JsonCodec codec) {
         return new FileReportRepository(dir, codec);
+    }
+
+    @Provides
+    @Singleton
+    ExperienceRepository experienceRepository(DataDirectory dir, JsonCodec codec) {
+        return new FileExperienceRepository(dir, codec);
+    }
+
+    @Provides
+    @Singleton
+    ReflectionRepository reflectionRepository(DataDirectory dir, JsonCodec codec) {
+        return new FileReflectionRepository(dir, codec);
     }
 
     @Provides

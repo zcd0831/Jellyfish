@@ -94,6 +94,7 @@ class S3AcceptanceTest {
     private FileBudgetRepository budgets;
     private BudgetService budgetService;
     private ExecutorService pool;
+    private final RunSessionUseCase[] runSessionHolder = new RunSessionUseCase[1];
     private Session main;
 
     /** 每个用例可换的超时：默认 5 秒。 */
@@ -142,11 +143,17 @@ class S3AcceptanceTest {
                 new FileCommitScope(dir, codec), human);
         VerificationRunner verificationRunner = new VerificationRunner(model, catalog, human, budgetService,
                 EnvironmentFeedbackVerifier.NOT_CONFIGURED);
-        ExecutionLoop executionLoop = new ExecutionLoop(contextWindow, reActLoop, verificationRunner, plans,
-                planFactory, catalog, policies, new FileCommitScope(dir, codec), publisher, event -> { }, model,
-                budgetService);
+        ExecutionLoop executionLoop = LoopSupport.build(dir, codec, model, policies, catalog, budgetService,
+                contextWindow, reActLoop, verificationRunner, plans, publisher, event -> { }, startSession,
+                sessions, records, new RunSessionProvider() {
+                    @Override
+                    public RunSessionUseCase get() {
+                        return runSessionHolder[0];
+                    }
+                });
         runSession = new RunSessionUseCase(sessions, records, new FileCommitScope(dir, codec), publisher,
                 executionLoop);
+        runSessionHolder[0] = runSession;
         startSession = new StartSessionUseCase(catalog, sessions, budgets, titleGenerator,
                 new SystemPromptAssembler(), new FileCommitScope(dir, codec), new SystemClock());
 

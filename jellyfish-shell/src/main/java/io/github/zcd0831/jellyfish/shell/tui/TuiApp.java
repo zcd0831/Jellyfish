@@ -63,6 +63,12 @@ public final class TuiApp {
 
     public void run() {
         renderer.info("Jellyfish 1.0.0-alpha　/help 查看命令，exit 退出");
+        if (System.console() == null) {
+            // 非 TTY（管道 / CI / 重定向）：不启用 JLine 行编辑（D20-7）
+            startDumbInputThread(System.in);
+            loop();
+            return;
+        }
         try {
             Terminal terminal = TerminalBuilder.builder().system(true).build();
             LineReader reader = LineReaderBuilder.builder()
@@ -76,6 +82,30 @@ public final class TuiApp {
         } catch (IOException e) {
             renderer.error("无法初始化终端：" + e.getMessage());
         }
+    }
+
+    /** 无行编辑的降级输入：只读一行一行的原始文本。 */
+    private void startDumbInputThread(final java.io.InputStream input) {
+        Thread thread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                java.io.BufferedReader reader = new java.io.BufferedReader(
+                        new java.io.InputStreamReader(input, java.nio.charset.StandardCharsets.UTF_8));
+                try {
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        if (!broker.deliver(line)) {
+                            commands.offer(line);
+                        }
+                    }
+                } catch (IOException eof) {
+                    // 输入结束等同 exit
+                }
+                commands.offer("exit");
+            }
+        }, "jellyfish-input-dumb");
+        thread.setDaemon(true);
+        thread.start();
     }
 
     /** 输入线程：有待答问题就交给提问队列，否则进命令队列。 */
@@ -183,7 +213,9 @@ public final class TuiApp {
             renderer.info("/cancel /archive /delete /policy k=v /tools /agents /models /providers /skills /exit");
             return;
         }
-        if (currentSession == null && !"/policy".equals(name)) {
+        boolean sessionFree = "/policy".equals(name) || "/tools".equals(name) || "/agents".equals(name)
+                || "/models".equals(name) || "/providers".equals(name) || "/skills".equals(name);
+        if (currentSession == null && !sessionFree) {
             renderer.info("（还没有会话）");
             return;
         }

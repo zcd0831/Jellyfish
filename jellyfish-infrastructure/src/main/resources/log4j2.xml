@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- 规则出处：技术决策 D14（格式/保留期/脱敏）、D18（Log4j2） -->
-<Configuration status="WARN" packages="io.github.zcd0831.jellyfish.infrastructure.log">
+<Configuration status="OFF" packages="io.github.zcd0831.jellyfish.infrastructure.log">
   <Properties>
     <Property name="LOG_DIR">${sys:jellyfish.log.dir:-${env:TMPDIR:-/tmp}/jellyfish-logs}</Property>
     <Property name="PATTERN">ts=%d{ISO8601} level=%-5p thread=%t s=%X{s} plan=%X{plan} step=%X{step} ev=%X{ev} code=%X{code} durMs=%X{durMs} tokIn=%X{tokIn} tokOut=%X{tokOut} model=%X{model} tool=%X{tool} retry=%X{retry} msg=%m%n</Property>

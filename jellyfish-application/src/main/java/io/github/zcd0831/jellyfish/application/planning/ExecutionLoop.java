@@ -314,6 +314,8 @@ public final class ExecutionLoop {
         Reflection reflection = Reflection.record(plan.id(), step.id(), failedIn(step), results.get(0).conclusion(),
                 System.currentTimeMillis());
         commitScope.stageFact(reflection);
+        plan.recordReflection(step.id(), reflection.attemptNo(), reflection.id());
+        commitScope.stageReplace(plan);
         commitScope.commit();
         publish(reflection.pullEvents());
     }

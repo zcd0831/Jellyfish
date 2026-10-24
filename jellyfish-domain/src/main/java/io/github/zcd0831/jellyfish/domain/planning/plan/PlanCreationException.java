@@ -6,14 +6,14 @@ package io.github.zcd0831.jellyfish.domain.planning.plan;
  */
 public final class PlanCreationException extends RuntimeException {
 
-    private final PlanError error;
+    private final PlanningError error;
 
-    public PlanCreationException(PlanError error, String detail) {
+    public PlanCreationException(PlanningError error, String detail) {
         super(detail);
         this.error = error;
     }
 
-    public PlanError error() {
+    public PlanningError error() {
         return error;
     }
 }

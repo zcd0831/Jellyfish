@@ -119,6 +119,19 @@ class PlanTest {
     }
 
     @Test
+    void 反思挂到指定attempt上() {
+        Plan plan = plan(1);
+        Attempt attempt = plan.beginCurrentStep();
+
+        plan.recordReflection(StepId.of("step1"), attempt.attemptNo(),
+                io.github.zcd0831.jellyfish.domain.shared.ReflectionId.of("rfl1"));
+
+        assertEquals(io.github.zcd0831.jellyfish.domain.shared.ReflectionId.of("rfl1"),
+                attempt.reflectionId());
+        assertEquals(StepStatus.RUNNING, plan.steps().get(0).status(), "反思不改变步骤状态");
+    }
+
+    @Test
     void 终结后不可再推进() {
         Plan plan = plan(1);
         plan.pullEvents();

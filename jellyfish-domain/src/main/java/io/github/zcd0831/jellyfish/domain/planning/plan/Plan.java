@@ -43,7 +43,7 @@ public class Plan {
     /** 规则出处：§7.1 规则 1（steps 非空）。 */
     public static Plan create(PlanId id, SessionId sessionId, String goal, List<PlanStep> steps) {
         if (steps == null || steps.isEmpty()) {
-            throw new PlanCreationException(PlanError.INVALID_PLAN, "计划至少要有一个步骤");
+            throw new PlanCreationException(PlanningError.INVALID_PLAN, "计划至少要有一个步骤");
         }
         Plan plan = new Plan(id, sessionId, goal, new ArrayList<PlanStep>(steps), PlanStatus.EXECUTING, 0);
         plan.pendingEvents.add(new PlanCreated());
@@ -125,6 +125,18 @@ public class Plan {
         return step.beginAttempt();
     }
 
+    /** 反思挂到指定 attempt：只写引用，不改结局、不消耗重试（M18、§7.2 规则 ⑥）。 */
+    public void recordReflection(StepId stepId, int attemptNo, io.github.zcd0831.jellyfish.domain.shared.ReflectionId reflectionId) {
+        PlanStep step = requireStep(stepId);
+        for (Attempt attempt : step.attempts()) {
+            if (attempt.attemptNo() == attemptNo) {
+                attempt.attachReflection(reflectionId);
+                return;
+            }
+        }
+        throw new DomainInvariantViolation("计划里没有该尝试：" + stepId.getValue() + "#" + attemptNo);
+    }
+
     /** 中断不消耗重试：只落 attempt 结局。规则出处：§5.2。 */
     public void markAttemptInterrupted(StepId stepId, int attemptNo) {
         PlanStep step = requireStep(stepId);
@@ -152,7 +164,7 @@ public class Plan {
     public void applyReplan(List<PlanStep> newTail) {
         requireExecuting();
         if (newTail == null || newTail.isEmpty()) {
-            throw new PlanCreationException(PlanError.INVALID_PLAN, "重划必须给出至少一个步骤");
+            throw new PlanCreationException(PlanningError.INVALID_PLAN, "重划必须给出至少一个步骤");
         }
         for (PlanStep step : steps) {
             if (step.status() == StepStatus.PENDING) {

@@ -191,6 +191,6 @@ public final class PlanFactory {
     }
 
     private static PlanCreationException invalid(String detail) {
-        return new PlanCreationException(PlanError.INVALID_PLAN, detail);
+        return new PlanCreationException(PlanningError.INVALID_PLAN, detail);
     }
 }

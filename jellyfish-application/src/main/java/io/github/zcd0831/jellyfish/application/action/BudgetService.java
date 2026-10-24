@@ -59,6 +59,28 @@ public final class BudgetService {
         return false;
     }
 
+    /**
+     * 子会话结束后一次性归集：子会话不写自己的台账，避免并发写同一聚合。
+     * 规则出处：模块-行动 §7.5 规则 ⑤、§8.1。
+     */
+    public void settleFromSubSession(SessionId subSessionId, long tokens) {
+        Session sub = sessions.load(subSessionId);
+        SessionId rootId = sub == null ? subSessionId : rootOf(sub);
+        RuntimePolicy policy = policies.load();
+        Budget budget = budgets.load(rootId);
+        if (budget == null) {
+            budget = Budget.openFor(BudgetId.of(UUID.randomUUID().toString()), rootId);
+        }
+        budget.recordUsage(tokens, policy);
+        commitScope.stageReplace(budget);
+        commitScope.commit();
+        eventPublisher.publishAfterCommit(new ArrayList<DomainEvent>(budget.pullEvents()));
+    }
+
+    public Budget budgetOf(SessionId rootId) {
+        return budgets.load(rootId);
+    }
+
     /** 子会话不自建台账：沿 parentSessionId 上溯到族根（模块-行动 §7.5 规则 ⑤）。 */
     private SessionId rootOf(Session session) {
         SessionId current = session.id();

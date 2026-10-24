@@ -1,0 +1,33 @@
+{
+  "id": "spawn_subagents",
+  "name": "spawn_subagents",
+  "description": "并行派出多个子代理各自完成一件独立的子任务，等待全部结束后拿到各自结论。只用于可并行、互不依赖的工作。",
+  "inputSchema": {
+    "type": "object",
+    "required": ["subagents"],
+    "properties": {
+      "subagents": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 8,
+        "items": {
+          "type": "object",
+          "required": ["task"],
+          "properties": {
+            "agentId": {"type": "string", "description": "可选：子代理使用的代理 id，缺省沿用当前会话"},
+            "modelId": {"type": "string", "description": "可选：子代理使用的模型 id，缺省沿用当前会话"},
+            "task": {"type": "string", "description": "交给这个子代理的完整任务描述（它看不到主会话的上下文）"}
+          }
+        }
+      }
+    }
+  },
+  "outputSchema": {
+    "type": "array",
+    "items": {"type": "object", "properties": {"sessionId": {"type": "string"}, "conclusion": {"type": "string"}}}
+  },
+  "source": {"type": "INTERNAL", "endpointOrIdentifier": "spawn_subagents"},
+  "sideEffect": "READ_ONLY",
+  "timeoutMillis": 0,
+  "status": "ACTIVE"
+}

@@ -1,6 +1,7 @@
 package io.github.zcd0831.jellyfish.infrastructure.file;
 
 import java.io.IOException;
+import java.nio.file.NoSuchFileException;
 import java.io.UncheckedIOException;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
@@ -33,6 +34,9 @@ final class SessionDirs {
                     return child;
                 }
             }
+        } catch (NoSuchFileException gone) {
+            // 并发创建/删除 sub/ 时目录可能瞬间不可见，按"尚未建立"处理
+            throw new IllegalArgumentException("会话目录尚未建立：" + sessionId, gone);
         } catch (IOException e) {
             throw new UncheckedIOException("定位会话目录失败：" + sessionId, e);
         }

@@ -44,6 +44,8 @@ import io.github.zcd0831.jellyfish.infrastructure.tokenizer.EstimatorStrategy;
 import io.github.zcd0831.jellyfish.infrastructure.tool.HttpToolAdapter;
 
 import java.io.PrintStream;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import javax.inject.Singleton;
 
 /**
@@ -172,6 +174,14 @@ public final class InfrastructureModule {
     @Singleton
     ExternalToolPort externalToolPort() {
         return new HttpToolAdapter();
+    }
+
+    /** 子代理用有界池，不用 ForkJoinPool.commonPool（D05-3）。 */
+    @Provides
+    @Singleton
+    ExecutorService subagentPool() {
+        int size = Math.min(4, Runtime.getRuntime().availableProcessors());
+        return Executors.newFixedThreadPool(Math.max(1, size));
     }
 
     @Provides

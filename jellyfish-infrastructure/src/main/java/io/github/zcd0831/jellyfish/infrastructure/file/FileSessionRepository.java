@@ -22,16 +22,23 @@ import java.util.List;
 public final class FileSessionRepository implements SessionRepository {
 
     private final DataDirectory dir;
+    private final SessionDirs sessionDirs;
     private final JsonCodec codec;
 
     public FileSessionRepository(DataDirectory dir, JsonCodec codec) {
         this.dir = dir;
+        this.sessionDirs = new SessionDirs(dir);
         this.codec = codec;
     }
 
     @Override
     public Session load(SessionId id) {
-        Path meta = metaFile(id);
+        Path meta;
+        try {
+            meta = sessionDirs.of(id.getValue()).resolve("meta.json");
+        } catch (RuntimeException notFound) {
+            return null;
+        }
         if (!Files.exists(meta)) {
             return null;
         }
@@ -42,7 +49,16 @@ public final class FileSessionRepository implements SessionRepository {
     @Override
     public void save(Session session) {
         SessionMetaDto dto = SessionMetaMapper.toDto(session);
-        AtomicFiles.write(metaFile(session.id()), codec.write(dto));
+        AtomicFiles.write(metaFile(session), codec.write(dto));
+    }
+
+    /** 子会话落在主会话的 sub/ 下，深度恒为 1（D05.1）。 */
+    private Path metaFile(Session session) {
+        if (session.parentSessionId() == null) {
+            return dir.sessionDir(session.id().getValue()).resolve("meta.json");
+        }
+        Path parentDir = sessionDirs.of(session.parentSessionId().getValue());
+        return parentDir.resolve("sub").resolve(session.id().getValue()).resolve("meta.json");
     }
 
     @Override
@@ -72,10 +88,6 @@ public final class FileSessionRepository implements SessionRepository {
     @Override
     public void delete(SessionId id) {
         deleteRecursively(dir.sessionDir(id.getValue()));
-    }
-
-    private Path metaFile(SessionId id) {
-        return dir.sessionDir(id.getValue()).resolve("meta.json");
     }
 
     private List<Path> metaFiles() {

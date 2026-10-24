@@ -7,6 +7,7 @@ import io.github.zcd0831.jellyfish.application.action.InternalToolHandlers;
 import io.github.zcd0831.jellyfish.application.action.ToolExecutor;
 import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationPort;
 import io.github.zcd0831.jellyfish.application.perception.ContextWindowService;
+import io.github.zcd0831.jellyfish.application.perception.StartSessionUseCase;
 import io.github.zcd0831.jellyfish.application.perception.port.PolicyRepository;
 import io.github.zcd0831.jellyfish.application.perception.port.RecordStore;
 import io.github.zcd0831.jellyfish.application.perception.port.SessionRepository;
@@ -16,6 +17,9 @@ import io.github.zcd0831.jellyfish.application.planning.EnvironmentFeedbackVerif
 import io.github.zcd0831.jellyfish.application.planning.GeneratePlanHandler;
 import io.github.zcd0831.jellyfish.application.planning.VerificationRunner;
 import io.github.zcd0831.jellyfish.application.planning.RunSessionUseCase;
+import io.github.zcd0831.jellyfish.application.planning.SpawnSubagentsHandler;
+import io.github.zcd0831.jellyfish.application.planning.RunSessionProvider;
+import io.github.zcd0831.jellyfish.application.planning.SubagentLauncher;
 import io.github.zcd0831.jellyfish.application.planning.port.PlanRepository;
 import io.github.zcd0831.jellyfish.application.shared.port.CommitScope;
 import io.github.zcd0831.jellyfish.application.shared.port.DomainEventPublisher;
@@ -24,7 +28,9 @@ import io.github.zcd0831.jellyfish.application.shared.port.HumanInteractionPort;
 import io.github.zcd0831.jellyfish.application.shared.port.ProgressPort;
 import io.github.zcd0831.jellyfish.domain.planning.plan.PlanFactory;
 
-import java.util.Collections;
+import java.util.Arrays;
+import javax.inject.Provider;
+import java.util.concurrent.ExecutorService;
 
 import javax.inject.Singleton;
 
@@ -48,9 +54,34 @@ public final class PlanningModule {
 
     @Provides
     @Singleton
-    InternalToolHandlers internalToolHandlers(GeneratePlanHandler generatePlanHandler) {
-        return new InternalToolHandlers(Collections.singletonList(
-                new InternalToolHandlers.NamedHandler("generate_plan", generatePlanHandler)));
+    InternalToolHandlers internalToolHandlers(GeneratePlanHandler generatePlanHandler,
+                                              SpawnSubagentsHandler spawnSubagentsHandler) {
+        return new InternalToolHandlers(Arrays.asList(
+                new InternalToolHandlers.NamedHandler("generate_plan", generatePlanHandler),
+                new InternalToolHandlers.NamedHandler("spawn_subagents", spawnSubagentsHandler)));
+    }
+
+    @Provides
+    @Singleton
+    SubagentLauncher subagentLauncher(StartSessionUseCase startSession,
+                                      final Provider<RunSessionUseCase> runSession,
+                                      SessionRepository sessions, RecordStore records,
+                                      BudgetService budgetService, PolicyRepository policies,
+                                      ProgressPort progress, ExecutorService pool) {
+        RunSessionProvider lazyRunSession = new RunSessionProvider() {
+            @Override
+            public RunSessionUseCase get() {
+                return runSession.get();
+            }
+        };
+        return new SubagentLauncher(startSession, lazyRunSession, sessions, records, budgetService, policies,
+                progress, pool);
+    }
+
+    @Provides
+    @Singleton
+    SpawnSubagentsHandler spawnSubagentsHandler(SubagentLauncher launcher) {
+        return new SpawnSubagentsHandler(launcher);
     }
 
     @Provides

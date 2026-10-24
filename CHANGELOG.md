@@ -1,5 +1,14 @@
 ## [1.0.0-alpha] - 进行中
 
+### S3 子代理
+- `SubagentLauncher`：并行发起、**各自独立超时**、join-all；子代理拒绝递归（深度恒为 1）
+- `StartSessionUseCase.startSubSession`：子会话不自建 `Budget`，快照同样冻结
+- 子会话落 `sessions/<root>/sub/<child>/`（D05.1）；目录解析统一走 `SessionDirs`（扫两层，无需索引）
+- `spawn_subagents` 内置处理器 + draft-07 schema；主代理默认绑定
+- 并发正确性：`CommitScope` 事务状态按线程隔离；同一路径写入串行化；目录并发创建容错
+- 有界子代理池 `min(4, CPU)`（D05-3），关闭时 `shutdownNow`
+- 验收（`S3AcceptanceTest`）：3 个并行子代理、1 个超时不影响其它、子代理再开子代理被拒
+
 ### S0 骨架
 - 6 模块（domain / application / infrastructure / shell / di / boot）与单向依赖；Dagger 装配
 - `domain.shared`：13 个 Id、`DomainError`、`DomainInvariantViolation`

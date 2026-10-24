@@ -82,6 +82,38 @@ public final class StartSessionUseCase {
         return Result.ok(sessionId);
     }
 
+    /**
+     * 子代理派遣：同一套快照冻结，但**不自建 Budget**（沿 parentSessionId 上溯到根）。
+     * 规则出处：模块-感知 §8.1、模块-行动 §7.5 规则 ⑤、技术决策 D05.1。
+     */
+    public Result<SessionId> startSubSession(SessionId parentSessionId, AgentId requestedAgent,
+                                             ModelId requestedModel, String task) {
+        Session parent = sessions.load(parentSessionId);
+        if (parent == null) {
+            return Result.fail(UseCaseError.of(SessionError.NOT_FOUND, "父会话不存在", parentSessionId));
+        }
+        AgentDefinition agent = resolveAgent(requestedAgent == null ? parent.agentId() : requestedAgent);
+        if (agent == null) {
+            return Result.fail(UseCaseError.of(SessionError.NO_USABLE_AGENT, "没有可用的代理", requestedAgent));
+        }
+        Model model = resolveModel(requestedModel == null ? parent.activeModelId() : requestedModel);
+        if (model == null) {
+            return Result.fail(UseCaseError.of(SessionError.NO_USABLE_MODEL, "没有可用的模型", requestedModel));
+        }
+        SessionId childId = SessionId.of(UUID.randomUUID().toString());
+        Session child = Session.create(childId, parentSessionId, agent.id(), model.id(), clock.nowMillis(),
+                freeze(agent));
+        Record userRecord = child.appendRecord(RecordRole.USER, task, null, clock.nowMillis());
+        child.retitle(titleGenerator.generate(child, task));
+
+        // 先建出 sub/<child>/ 目录：追加流水的路径只能由会话头推导（D05.1 的嵌套布局）
+        sessions.save(child);
+        commitScope.stageAppend(childId, userRecord);
+        commitScope.stageReplace(child);
+        commitScope.commit();
+        return Result.ok(childId);
+    }
+
     /** 快照冻结：只收 ACTIVE 且被该代理绑定的工具与技能（§7.1 规则 4、§8.3）。 */
     private SystemPromptSnapshot freeze(AgentDefinition agent) {
         List<ToolSchemaSnapshot> tools = new ArrayList<ToolSchemaSnapshot>();

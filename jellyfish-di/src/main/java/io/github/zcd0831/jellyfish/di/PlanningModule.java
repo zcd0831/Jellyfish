@@ -12,13 +12,16 @@ import io.github.zcd0831.jellyfish.application.perception.port.RecordStore;
 import io.github.zcd0831.jellyfish.application.perception.port.SessionRepository;
 import io.github.zcd0831.jellyfish.application.planning.ExecutionLoop;
 import io.github.zcd0831.jellyfish.application.planning.ReActLoop;
+import io.github.zcd0831.jellyfish.application.planning.EnvironmentFeedbackVerifier;
 import io.github.zcd0831.jellyfish.application.planning.GeneratePlanHandler;
+import io.github.zcd0831.jellyfish.application.planning.VerificationRunner;
 import io.github.zcd0831.jellyfish.application.planning.RunSessionUseCase;
 import io.github.zcd0831.jellyfish.application.planning.port.PlanRepository;
 import io.github.zcd0831.jellyfish.application.shared.port.CommitScope;
 import io.github.zcd0831.jellyfish.application.shared.port.DomainEventPublisher;
 import io.github.zcd0831.jellyfish.application.action.port.CatalogRepository;
 import io.github.zcd0831.jellyfish.application.shared.port.HumanInteractionPort;
+import io.github.zcd0831.jellyfish.application.shared.port.ProgressPort;
 import io.github.zcd0831.jellyfish.domain.planning.plan.PlanFactory;
 
 import java.util.Collections;
@@ -60,8 +63,27 @@ public final class PlanningModule {
 
     @Provides
     @Singleton
-    ExecutionLoop executionLoop(ContextWindowService contextWindow, ReActLoop reActLoop) {
-        return new ExecutionLoop(contextWindow, reActLoop);
+    EnvironmentFeedbackVerifier environmentFeedbackVerifier() {
+        return EnvironmentFeedbackVerifier.NOT_CONFIGURED;
+    }
+
+    @Provides
+    @Singleton
+    VerificationRunner verificationRunner(ModelInvocationPort model, CatalogRepository catalog,
+                                          HumanInteractionPort human, BudgetService budgetService,
+                                          EnvironmentFeedbackVerifier envFeedback) {
+        return new VerificationRunner(model, catalog, human, budgetService, envFeedback);
+    }
+
+    @Provides
+    @Singleton
+    ExecutionLoop executionLoop(ContextWindowService contextWindow, ReActLoop reActLoop,
+                                VerificationRunner verificationRunner, PlanRepository plans,
+                                PlanFactory planFactory, CatalogRepository catalog, PolicyRepository policies,
+                                CommitScope commitScope, DomainEventPublisher publisher, ProgressPort progress,
+                                ModelInvocationPort model, BudgetService budgetService) {
+        return new ExecutionLoop(contextWindow, reActLoop, verificationRunner, plans, planFactory, catalog,
+                policies, commitScope, publisher, progress, model, budgetService);
     }
 
     @Provides

@@ -8,6 +8,7 @@ public final class RunSessionResult {
 
     public enum Outcome {
         CONVERGED,
+        SUSPENDED,
         ROUNDS_EXHAUSTED,
         CANCELLED
     }

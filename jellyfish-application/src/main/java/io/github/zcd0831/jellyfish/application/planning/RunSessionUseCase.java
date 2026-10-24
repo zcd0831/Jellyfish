@@ -60,10 +60,7 @@ public final class RunSessionUseCase {
         try {
             ExecutionLoop.Outcome outcome = executionLoop.run(session, sink);
             finish(session);
-            return Result.ok(RunSessionResult.of(
-                    outcome == ExecutionLoop.Outcome.CONVERGED
-                            ? RunSessionResult.Outcome.CONVERGED
-                            : RunSessionResult.Outcome.ROUNDS_EXHAUSTED));
+            return Result.ok(RunSessionResult.of(map(outcome)));
         } catch (java.util.concurrent.CancellationException cancelled) {
             // 中断不是错误：会话回到可续跑，半截输出不落盘（D06-4、D11）
             finish(session);
@@ -71,6 +68,17 @@ public final class RunSessionUseCase {
         } catch (ModelInvocationException unavailable) {
             // 模型不可用：不改任何状态（模块-应用层 §9）
             return Result.fail(UseCaseError.of(unavailable.error(), unavailable.getMessage(), sessionId));
+        }
+    }
+
+    private static RunSessionResult.Outcome map(ExecutionLoop.Outcome outcome) {
+        switch (outcome) {
+            case CONVERGED:
+                return RunSessionResult.Outcome.CONVERGED;
+            case SUSPENDED:
+                return RunSessionResult.Outcome.SUSPENDED;
+            default:
+                return RunSessionResult.Outcome.ROUNDS_EXHAUSTED;
         }
     }
 

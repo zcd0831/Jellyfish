@@ -102,7 +102,14 @@ class S1AcceptanceTest {
                 io.github.zcd0831.jellyfish.application.action.InternalToolHandlers.empty());
         ReActLoop reActLoop = new ReActLoop(model, toolExecutor, budgetService, contextWindow, policies,
                 new FileCommitScope(dir, codec), human);
-        ExecutionLoop executionLoop = new ExecutionLoop(contextWindow, reActLoop);
+        io.github.zcd0831.jellyfish.application.planning.port.PlanRepository plans =
+                new io.github.zcd0831.jellyfish.infrastructure.file.FilePlanRepository(dir, codec);
+        ExecutionLoop executionLoop = new ExecutionLoop(contextWindow, reActLoop,
+                new io.github.zcd0831.jellyfish.application.planning.VerificationRunner(model, catalog, human,
+                        budgetService,
+                        io.github.zcd0831.jellyfish.application.planning.EnvironmentFeedbackVerifier.NOT_CONFIGURED),
+                plans, new io.github.zcd0831.jellyfish.domain.planning.plan.PlanFactory(), catalog, policies,
+                new FileCommitScope(dir, codec), publisher, event -> { }, model, budgetService);
         runSession = new RunSessionUseCase(sessions, records, new FileCommitScope(dir, codec), publisher,
                 executionLoop);
         startSession = new StartSessionUseCase(catalog, sessions, budgets,

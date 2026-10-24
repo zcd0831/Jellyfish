@@ -6,7 +6,6 @@ import io.github.zcd0831.jellyfish.domain.shared.DomainError;
 public enum SessionError implements DomainError {
 
     NOT_FOUND("S_NOT_FOUND"),
-    ARCHIVED("S_ARCHIVED"),
     NO_USABLE_MODEL("S_NO_USABLE_MODEL"),
     NO_USABLE_AGENT("S_NO_USABLE_AGENT");
 

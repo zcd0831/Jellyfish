@@ -1,8 +1,8 @@
 package io.github.zcd0831.jellyfish.infrastructure.contract;
 
 import io.github.zcd0831.jellyfish.application.perception.port.SessionRepository;
+import io.github.zcd0831.jellyfish.application.perception.port.SessionSummary;
 import io.github.zcd0831.jellyfish.domain.perception.session.Session;
-import io.github.zcd0831.jellyfish.domain.perception.session.SessionStatus;
 import io.github.zcd0831.jellyfish.domain.shared.AgentId;
 import io.github.zcd0831.jellyfish.domain.shared.ModelId;
 import io.github.zcd0831.jellyfish.domain.shared.SessionId;
@@ -22,19 +22,18 @@ public abstract class SessionRepositoryContract {
 
     protected abstract SessionRepository repository();
 
-    private static Session session(String id, SessionStatus status, SessionId parent) {
+    private static Session session(String id, SessionId parent) {
         return Session.rehydrate(SessionId.of(id), parent, AgentId.of("builtin.main"), ModelId.of("m1"),
-                status, "标题-" + id, 1000L, java.util.Collections.emptyList(), null);
+                "标题-" + id, 1000L, java.util.Collections.emptyList(), null);
     }
 
     @Test
     void 保存后能按id读回同样的会话头() {
-        repository().save(session("s1", SessionStatus.RUNNING, null));
+        repository().save(session("s1", null));
 
         Session loaded = repository().load(SessionId.of("s1"));
 
         assertEquals("s1", loaded.id().getValue());
-        assertEquals(SessionStatus.RUNNING, loaded.status());
         assertEquals("标题-s1", loaded.title());
         assertEquals(1000L, loaded.createdDate());
     }
@@ -45,40 +44,40 @@ public abstract class SessionRepositoryContract {
     }
 
     @Test
-    void listResumable只返回可续跑的会话() {
-        repository().save(session("r1", SessionStatus.RESUMABLE, null));
-        repository().save(session("r2", SessionStatus.RUNNING, null));
+    void list按创建时间倒序列出所有存在的会话() {
+        repository().save(session("r1", null));
+        repository().save(session("r2", null));
 
-        List<SessionId> ids = repository().listResumable();
+        List<SessionSummary> summaries = repository().list();
 
-        assertEquals(1, ids.size());
-        assertEquals("r1", ids.get(0).getValue());
+        assertEquals(2, summaries.size());
     }
 
     @Test
     void 子会话的父id被保留() {
-        repository().save(session("root", SessionStatus.RUNNING, null));
-        repository().save(session("child", SessionStatus.RUNNING, SessionId.of("root")));
+        repository().save(session("root", null));
+        repository().save(session("child", SessionId.of("root")));
 
         assertEquals("root", repository().load(SessionId.of("child")).parentSessionId().getValue());
     }
 
     @Test
-    void archive把会话移出可读范围() {
-        repository().save(session("s9", SessionStatus.RUNNING, null));
+    void archive压缩后会话不可读且不再被列出() {
+        repository().save(session("s9", null));
 
         repository().archive(SessionId.of("s9"));
 
         assertNull(repository().load(SessionId.of("s9")));
+        assertTrue(repository().list().isEmpty());
     }
 
     @Test
     void delete后会话不可读() {
-        repository().save(session("s8", SessionStatus.RUNNING, null));
+        repository().save(session("s8", null));
 
         repository().delete(SessionId.of("s8"));
 
         assertNull(repository().load(SessionId.of("s8")));
-        assertTrue(repository().listResumable().isEmpty());
+        assertTrue(repository().list().isEmpty());
     }
 }

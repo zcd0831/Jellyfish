@@ -12,7 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** 会话状态迁移与窗口推导的边界分支。规则出处：模块-感知 §7.1。 */
+/** 会话取消与窗口推导的边界分支。规则出处：模块-感知 §7.1（会话没有状态，D22）。 */
 class SessionBranchesTest {
 
     private static Session session() {
@@ -20,24 +20,13 @@ class SessionBranchesTest {
     }
 
     @Test
-    void 已归档会话不能取消也不能续跑() {
+    void 取消只发事件不改任何持久事实() {
         Session session = session();
-        session.archive();
 
-        assertThrows(DomainInvariantViolation.class, session::cancel);
-        assertThrows(DomainInvariantViolation.class, session::resume);
-    }
+        session.cancel();
 
-    @Test
-    void 标记可续跑只对运行中生效() {
-        Session session = session();
-        session.archive();
-        session.markResumable();
-        assertEquals(SessionStatus.ARCHIVED, session.status(), "归档不会被降级为可续跑");
-
-        Session running = session();
-        running.markResumable();
-        assertEquals(SessionStatus.RESUMABLE, running.status());
+        assertEquals(1, session.pullEvents().size());
+        assertEquals(0, session.pullEvents().size(), "事件取走后不再重复");
     }
 
     @Test

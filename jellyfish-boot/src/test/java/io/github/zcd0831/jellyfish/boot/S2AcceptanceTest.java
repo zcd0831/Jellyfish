@@ -32,7 +32,6 @@ import io.github.zcd0831.jellyfish.domain.planning.plan.Plan;
 import io.github.zcd0831.jellyfish.domain.planning.plan.PlanFactory;
 import io.github.zcd0831.jellyfish.domain.planning.plan.PlanStatus;
 import io.github.zcd0831.jellyfish.domain.perception.session.Session;
-import io.github.zcd0831.jellyfish.domain.perception.session.SessionStatus;
 import io.github.zcd0831.jellyfish.domain.perception.session.SystemPromptAssembler;
 import io.github.zcd0831.jellyfish.domain.shared.ModelId;
 import io.github.zcd0831.jellyfish.domain.shared.SessionId;
@@ -170,7 +169,7 @@ class S2AcceptanceTest {
         List<Plan> finished = plans.findRunning(sessionId);
         assertTrue(finished.isEmpty(), "计划应已完结");
         Session session = new FileSessionRepository(dir, codec).load(sessionId);
-        assertEquals(SessionStatus.RESUMABLE, session.status());
+        assertTrue(session.title() != null, "会话头仍可读回");
     }
 
     @Test

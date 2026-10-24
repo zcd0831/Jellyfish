@@ -3,7 +3,6 @@ package io.github.zcd0831.jellyfish.infrastructure.file;
 import io.github.zcd0831.jellyfish.domain.perception.session.Record;
 import io.github.zcd0831.jellyfish.domain.perception.session.RecordRole;
 import io.github.zcd0831.jellyfish.domain.perception.session.Session;
-import io.github.zcd0831.jellyfish.domain.perception.session.SessionStatus;
 import io.github.zcd0831.jellyfish.domain.shared.AgentId;
 import io.github.zcd0831.jellyfish.domain.shared.ModelId;
 import io.github.zcd0831.jellyfish.domain.shared.RecordId;

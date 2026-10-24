@@ -13,7 +13,6 @@ import io.github.zcd0831.jellyfish.domain.perception.session.Record;
 import io.github.zcd0831.jellyfish.domain.perception.session.RecordRole;
 import io.github.zcd0831.jellyfish.domain.perception.session.Session;
 import io.github.zcd0831.jellyfish.domain.perception.session.SessionError;
-import io.github.zcd0831.jellyfish.domain.perception.session.SessionStatus;
 import io.github.zcd0831.jellyfish.domain.shared.DomainEvent;
 import io.github.zcd0831.jellyfish.domain.shared.SessionId;
 
@@ -50,11 +49,7 @@ public final class RunSessionUseCase {
         if (session == null) {
             return Result.fail(UseCaseError.of(SessionError.NOT_FOUND, "会话不存在", sessionId));
         }
-        if (session.status() == SessionStatus.ARCHIVED) {
-            return Result.fail(UseCaseError.of(SessionError.ARCHIVED, "会话已归档", sessionId));
-        }
         session.hydrateRecords(records.last(sessionId, Integer.MAX_VALUE));
-        session.resume();
         if (text != null) {
             // 续跑（text == null）不追加用户消息：会话开启时首条输入已落盘（§8.3）
             Record userRecord = session.appendRecord(RecordRole.USER, text, null, System.currentTimeMillis());
@@ -89,7 +84,6 @@ public final class RunSessionUseCase {
     }
 
     private void finish(Session session) {
-        session.markResumable();
         commitScope.stageReplace(session);
         commitScope.commit();
         eventPublisher.publishAfterCommit(new ArrayList<DomainEvent>(session.pullEvents()));

@@ -1,6 +1,7 @@
 package io.github.zcd0831.jellyfish.application.perception;
 
 import io.github.zcd0831.jellyfish.application.perception.port.SessionRepository;
+import io.github.zcd0831.jellyfish.application.perception.port.SessionSummary;
 import io.github.zcd0831.jellyfish.application.shared.Result;
 import io.github.zcd0831.jellyfish.application.shared.UseCaseError;
 import io.github.zcd0831.jellyfish.application.shared.port.ArtifactStore;
@@ -43,12 +44,11 @@ public final class ManageSessionUseCase {
             return Result.fail(UseCaseError.of(SessionError.NOT_FOUND, "会话不存在", sessionId));
         }
         session.cancel();
-        session.markResumable();
         commitScope.stageReplace(session);
         for (SessionId child : childSessionsOf(sessionId)) {
             Session childSession = sessions.load(child);
             if (childSession != null) {
-                childSession.markResumable();
+                childSession.cancel();
                 commitScope.stageReplace(childSession);
             }
         }
@@ -57,7 +57,7 @@ public final class ManageSessionUseCase {
         return Result.ok(null);
     }
 
-    /** 规则出处：模块-应用层 §8.4（目录移到 archive/，只读，不可 resume）。 */
+    /** 规则出处：模块-应用层 §8.4（压成 archive/<id>.zip 后删除原目录；此后应用不再认识它，D22）。 */
     public Result<Void> archive(SessionId sessionId) {
         if (sessions.load(sessionId) == null) {
             return Result.fail(UseCaseError.of(SessionError.NOT_FOUND, "会话不存在", sessionId));
@@ -76,12 +76,16 @@ public final class ManageSessionUseCase {
         return Result.ok(null);
     }
 
+    /** 列出可用会话（含子会话），界面据此让人挑一个加载（D22）。 */
+    public Result<List<SessionSummary>> list() {
+        return Result.ok(sessions.list());
+    }
+
     private List<SessionId> childSessionsOf(SessionId parentId) {
         List<SessionId> children = new ArrayList<SessionId>();
-        for (SessionId candidate : sessions.listResumable()) {
-            Session session = sessions.load(candidate);
-            if (session != null && parentId.equals(session.parentSessionId())) {
-                children.add(candidate);
+        for (SessionSummary candidate : sessions.list()) {
+            if (parentId.equals(candidate.parentId())) {
+                children.add(candidate.id());
             }
         }
         return children;

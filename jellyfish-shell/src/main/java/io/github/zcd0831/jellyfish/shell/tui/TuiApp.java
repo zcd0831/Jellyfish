@@ -359,18 +359,26 @@ public final class TuiApp implements QuestionBroker.Answerer {
         String[] parts = line.split("\\s+");
         String name = parts[0];
         boolean sessionFree = "/policy".equals(name) || "/tools".equals(name) || "/agents".equals(name)
-                || "/models".equals(name) || "/providers".equals(name) || "/skills".equals(name);
+                || "/models".equals(name) || "/providers".equals(name) || "/skills".equals(name)
+                || "/sessions".equals(name) || "/open".equals(name);
         if ("/help".equals(name)) {
-            renderer.info("/cancel /archive /delete /policy k=v /tools /agents /models /providers /skills /exit");
+            renderer.info("/sessions /open <id> /cancel /archive /delete /policy k=v "
+                    + "/tools /agents /models /providers /skills /exit");
             return;
         }
         if (currentSession == null && !sessionFree) {
             renderer.info("（还没有会话）");
             return;
         }
-        if ("/archive".equals(name)) {
+        if ("/sessions".equals(name)) {
+            listSessions();
+        } else if ("/open".equals(name) && parts.length > 1) {
+            currentSession = SessionId.of(parts[1]);
+            renderer.info("（已切换到 " + parts[1] + "）");
+        } else if ("/archive".equals(name)) {
             print(manageSession.archive(currentSession));
             currentSession = null;
+            renderer.info("（已归档：应用不再列出该会话）");
         } else if ("/delete".equals(name)) {
             print(manageSession.delete(currentSession));
             currentSession = null;
@@ -391,6 +399,21 @@ public final class TuiApp implements QuestionBroker.Answerer {
             renderer.info("策略已更新（立即生效）");
         } else {
             list(name);
+        }
+    }
+
+    /** 会话列表只来自存在的目录（D22：没有状态字段，存在即可用）。 */
+    private void listSessions() {
+        Result<java.util.List<io.github.zcd0831.jellyfish.application.perception.port.SessionSummary>> listed =
+                manageSession.list();
+        if (!listed.isOk()) {
+            printError(listed.error());
+            return;
+        }
+        for (io.github.zcd0831.jellyfish.application.perception.port.SessionSummary summary : listed.value()) {
+            String marker = summary.isSubSession() ? "  └ " : "";
+            renderer.info(marker + summary.id().getValue() + "  " + summary.title()
+                    + "  " + summary.modelId().getValue());
         }
     }
 

@@ -113,13 +113,11 @@ class SessionTest {
     }
 
     @Test
-    void 取消与归档() {
+    void 取消只发事件() {
         Session session = newSession();
 
         session.cancel();
-        assertEquals(1, session.pullEvents().size());
 
-        session.archive();
-        assertEquals(SessionStatus.ARCHIVED, session.status());
+        assertEquals(1, session.pullEvents().size());
     }
 }

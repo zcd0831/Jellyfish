@@ -8,7 +8,6 @@ import io.github.zcd0831.jellyfish.application.shared.Result;
 import io.github.zcd0831.jellyfish.application.shared.port.CommitScope;
 import io.github.zcd0831.jellyfish.domain.action.model.ModelError;
 import io.github.zcd0831.jellyfish.domain.perception.session.Session;
-import io.github.zcd0831.jellyfish.domain.perception.session.SessionStatus;
 import io.github.zcd0831.jellyfish.domain.shared.AgentId;
 import io.github.zcd0831.jellyfish.domain.shared.ModelId;
 import io.github.zcd0831.jellyfish.domain.shared.SessionId;
@@ -23,6 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /** 一轮运行的四条出口：收敛 / 挂起 / 轮次用尽 / 取消 / 模型不可用。 */
@@ -51,24 +51,14 @@ class RunSessionUseCaseTest {
     }
 
     @Test
-    void 已归档会话不能继续() {
-        session.archive();
-
-        Result<RunSessionResult> result = useCase().run(SessionId.of("s1"), "hi", ChunkSink.NOOP);
-
-        assertFalse(result.isOk());
-        assertEquals("S_ARCHIVED", result.error().error().code());
-    }
-
-    @Test
-    void 收敛后会话落回可续跑() {
+    void 收敛后把本轮事实落盘() {
         when(executionLoop.run(any(Session.class), any(ChunkSink.class), any())).thenReturn(ExecutionLoop.Outcome.CONVERGED);
 
         Result<RunSessionResult> result = useCase().run(SessionId.of("s1"), "hi", ChunkSink.NOOP);
 
         assertTrue(result.isOk());
         assertEquals(RunSessionResult.Outcome.CONVERGED, result.value().outcome());
-        assertEquals(SessionStatus.RESUMABLE, session.status());
+        verify(executionLoop).run(any(Session.class), any(ChunkSink.class), any());
     }
 
     @Test
@@ -85,7 +75,7 @@ class RunSessionUseCaseTest {
     }
 
     @Test
-    void 取消是正常结果且会话可续跑() {
+    void 取消是正常结果不是错误() {
         when(executionLoop.run(any(Session.class), any(ChunkSink.class), any()))
                 .thenThrow(new CancellationException("用户中断"));
 
@@ -93,7 +83,6 @@ class RunSessionUseCaseTest {
 
         assertTrue(result.isOk());
         assertEquals(RunSessionResult.Outcome.CANCELLED, result.value().outcome());
-        assertEquals(SessionStatus.RESUMABLE, session.status());
     }
 
     @Test
@@ -101,7 +90,6 @@ class RunSessionUseCaseTest {
         when(executionLoop.run(any(Session.class), any(ChunkSink.class), any()))
                 .thenThrow(new ModelInvocationException(ModelError.UNAVAILABLE, "全挂"));
         Session fresh = Session.create(SessionId.of("s1"), null, AgentId.of("a"), ModelId.of("m1"), 1L, null);
-        fresh.resume();
         when(sessions.load(SessionId.of("s1"))).thenReturn(fresh);
 
         Result<RunSessionResult> result = new RunSessionUseCase(sessions, records, commitScope, events -> { },
@@ -109,6 +97,6 @@ class RunSessionUseCaseTest {
 
         assertFalse(result.isOk());
         assertEquals("M_UNAVAILABLE", result.error().error().code());
-        assertEquals(SessionStatus.RUNNING, fresh.status(), "模型不可用不改状态");
+        verify(executionLoop).run(any(Session.class), any(ChunkSink.class), any());
     }
 }

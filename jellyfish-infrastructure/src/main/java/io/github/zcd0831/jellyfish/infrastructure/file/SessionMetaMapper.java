@@ -20,7 +20,6 @@ final class SessionMetaMapper {
         dto.parentId = session.parentSessionId();
         dto.agentId = session.agentId();
         dto.modelId = session.activeModelId();
-        dto.status = session.status();
         dto.title = session.title();
         dto.createdDate = session.createdDate();
         SystemPromptSnapshot snapshot = session.systemPromptSnapshot();
@@ -46,7 +45,7 @@ final class SessionMetaMapper {
     }
 
     static Session toDomain(SessionMetaDto dto, List<io.github.zcd0831.jellyfish.domain.perception.session.Record> records) {
-        return Session.rehydrate(dto.id, dto.parentId, dto.agentId, dto.modelId, dto.status, dto.title,
+        return Session.rehydrate(dto.id, dto.parentId, dto.agentId, dto.modelId, dto.title,
                 dto.createdDate, records, snapshot(dto.systemPrompt));
     }
 

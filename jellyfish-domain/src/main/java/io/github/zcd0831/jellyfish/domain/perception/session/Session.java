@@ -25,17 +25,15 @@ public class Session {
     private final List<DomainEvent> pendingEvents = new ArrayList<>();
 
     private ModelId activeModelId;
-    private SessionStatus status;
     private String title;
 
     private Session(SessionId id, SessionId parentSessionId, AgentId agentId, ModelId activeModelId,
-                    SessionStatus status, String title, long createdDate, List<Record> records,
+                    String title, long createdDate, List<Record> records,
                     SystemPromptSnapshot snapshot) {
         this.id = id;
         this.parentSessionId = parentSessionId;
         this.agentId = agentId;
         this.activeModelId = activeModelId;
-        this.status = status;
         this.title = title;
         this.createdDate = createdDate;
         this.records = records;
@@ -45,15 +43,15 @@ public class Session {
     /** 会话开启 / 子代理派遣的唯一创建路径（应用层调用）。规则出处：模块-感知 §4、§7.1 规则 1。 */
     public static Session create(SessionId id, SessionId parentSessionId, AgentId agentId, ModelId modelId,
                                  long now, SystemPromptSnapshot snapshot) {
-        return new Session(id, parentSessionId, agentId, modelId, SessionStatus.RUNNING, null, now,
+        return new Session(id, parentSessionId, agentId, modelId, null, now,
                 new ArrayList<Record>(), snapshot);
     }
 
     /** 会话续跑：从持久化形态重建，不重新派发事件。规则出处：模块-感知 §7.1 规则 11。 */
     public static Session rehydrate(SessionId id, SessionId parentSessionId, AgentId agentId, ModelId modelId,
-                                    SessionStatus status, String title, long createdDate,
+                                    String title, long createdDate,
                                     List<Record> records, SystemPromptSnapshot snapshot) {
-        return new Session(id, parentSessionId, agentId, modelId, status, title, createdDate,
+        return new Session(id, parentSessionId, agentId, modelId, title, createdDate,
                 new ArrayList<Record>(records), snapshot);
     }
 
@@ -124,29 +122,7 @@ public class Session {
 
     /** 规则出处：模块-感知 §7.1 规则 6（父取消级联子由应用层执行）。 */
     public void cancel() {
-        if (status == SessionStatus.ARCHIVED) {
-            throw new DomainInvariantViolation("已归档的会话不能取消：" + id);
-        }
         pendingEvents.add(new SessionCancelled());
-    }
-
-    /** 规则出处：模块-感知 §7.1 规则 7。 */
-    public void archive() {
-        this.status = SessionStatus.ARCHIVED;
-    }
-
-    /** 运行态消失不是状态迁移：进程退出时由应用层把 RUNNING 落为 RESUMABLE。 */
-    public void markResumable() {
-        if (status == SessionStatus.RUNNING) {
-            this.status = SessionStatus.RESUMABLE;
-        }
-    }
-
-    public void resume() {
-        if (status == SessionStatus.ARCHIVED) {
-            throw new DomainInvariantViolation("已归档的会话不能续跑：" + id);
-        }
-        this.status = SessionStatus.RUNNING;
     }
 
     public void retitle(String title) {
@@ -229,10 +205,6 @@ public class Session {
 
     public ModelId activeModelId() {
         return activeModelId;
-    }
-
-    public SessionStatus status() {
-        return status;
     }
 
     public String title() {

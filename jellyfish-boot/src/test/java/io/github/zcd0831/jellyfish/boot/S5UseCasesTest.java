@@ -6,7 +6,6 @@ import io.github.zcd0831.jellyfish.application.perception.ManageSessionUseCase;
 import io.github.zcd0831.jellyfish.application.shared.Result;
 import io.github.zcd0831.jellyfish.domain.perception.policy.RuntimePolicy;
 import io.github.zcd0831.jellyfish.domain.perception.session.Session;
-import io.github.zcd0831.jellyfish.domain.perception.session.SessionStatus;
 import io.github.zcd0831.jellyfish.domain.shared.AgentId;
 import io.github.zcd0831.jellyfish.domain.shared.ModelId;
 import io.github.zcd0831.jellyfish.domain.shared.SessionId;
@@ -29,6 +28,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -94,13 +94,14 @@ class S5UseCasesTest {
     }
 
     @Test
-    void 归档后不可续跑且目录移走() {
+    void 归档压成包后应用不再列出它() {
         SessionId id = newSession();
 
         assertTrue(manageSession.archive(id).isOk());
 
-        assertTrue(Files.isDirectory(tmp.resolve("archive").resolve("s1")));
+        assertTrue(Files.exists(tmp.resolve("archive").resolve("s1.zip")), "归档 = 压缩成包（D22）");
         assertFalse(Files.exists(tmp.resolve("sessions").resolve("s1")));
+        assertTrue(manageSession.list().value().isEmpty(), "归档后应用不再认识它");
     }
 
     @Test
@@ -113,15 +114,13 @@ class S5UseCasesTest {
     }
 
     @Test
-    void 取消把会话落回可续跑() {
+    void 取消只发事件不改会话数据() {
         SessionId id = newSession();
-        Session session = sessions.load(id);
-        session.resume();
-        sessions.save(session);
 
         assertTrue(manageSession.cancel(id).isOk());
 
-        assertEquals(SessionStatus.RESUMABLE, sessions.load(id).status());
+        assertNotNull(sessions.load(id), "会话仍在，只是本轮被取消");
+        assertFalse(manageSession.list().value().isEmpty(), "取消不影响会话存在性");
     }
 
     @Test

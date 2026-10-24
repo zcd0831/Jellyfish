@@ -1,6 +1,5 @@
 package io.github.zcd0831.jellyfish.infrastructure.file;
 
-import io.github.zcd0831.jellyfish.domain.perception.session.SessionStatus;
 import io.github.zcd0831.jellyfish.domain.shared.AgentId;
 import io.github.zcd0831.jellyfish.domain.shared.ModelId;
 import io.github.zcd0831.jellyfish.domain.shared.SessionId;
@@ -18,7 +17,6 @@ public class SessionMetaDto {
     public SessionId parentId;
     public AgentId agentId;
     public ModelId modelId;
-    public SessionStatus status;
     public String title;
     public long createdDate;
     public SnapshotDto systemPrompt;

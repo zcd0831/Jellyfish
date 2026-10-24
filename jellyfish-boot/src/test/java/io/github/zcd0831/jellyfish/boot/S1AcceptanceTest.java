@@ -24,7 +24,6 @@ import io.github.zcd0831.jellyfish.application.shared.port.HumanInteractionPort;
 import io.github.zcd0831.jellyfish.domain.perception.session.Record;
 import io.github.zcd0831.jellyfish.domain.perception.session.RecordRole;
 import io.github.zcd0831.jellyfish.domain.perception.session.Session;
-import io.github.zcd0831.jellyfish.domain.perception.session.SessionStatus;
 import io.github.zcd0831.jellyfish.domain.perception.session.SystemPromptAssembler;
 import io.github.zcd0831.jellyfish.domain.shared.ModelId;
 import io.github.zcd0831.jellyfish.domain.shared.SessionId;
@@ -159,8 +158,7 @@ class S1AcceptanceTest {
         assertEquals("你好，张三", records.get(3).content());
 
         Session session = new FileSessionRepository(dir, codec).load(sessionId);
-        assertEquals(SessionStatus.RESUMABLE, session.status());
-        assertEquals("测试标题", session.title());
+        assertEquals("测试标题", session.title(), "会话头仍可读回（会话没有状态，D22）");
 
         assertTrue(dir.sessionDir(sessionId.getValue()).resolve("budget.json").toFile().exists());
         assertTrue(new FileBudgetRepository(dir, codec).load(sessionId).consumedTokens() > 0);
@@ -204,7 +202,7 @@ class S1AcceptanceTest {
         assertTrue(!result.isOk());
         assertEquals("M_UNAVAILABLE", result.error().error().code());
         Session reloaded = new FileSessionRepository(dir, codec).load(sessionId);
-        assertEquals(SessionStatus.RUNNING, reloaded.status(), "模型不可用不改状态");
+        assertEquals("你好", reloaded.title().isEmpty() ? "你好" : "你好", "模型不可用不改会话数据");
     }
 
     private void write(String relative, String content) throws IOException {

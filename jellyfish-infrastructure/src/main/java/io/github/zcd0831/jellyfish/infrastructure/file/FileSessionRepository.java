@@ -2,10 +2,12 @@ package io.github.zcd0831.jellyfish.infrastructure.file;
 
 import io.github.zcd0831.jellyfish.application.perception.port.SessionRepository;
 import io.github.zcd0831.jellyfish.domain.perception.session.Session;
-import io.github.zcd0831.jellyfish.domain.perception.session.SessionStatus;
+import io.github.zcd0831.jellyfish.application.perception.port.SessionSummary;
 import io.github.zcd0831.jellyfish.domain.shared.SessionId;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
@@ -13,7 +15,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 /**
  * 会话头与状态；子会话落在 {@code sessions/<root>/sub/<child>/}。
@@ -62,26 +67,93 @@ public final class FileSessionRepository implements SessionRepository {
     }
 
     @Override
-    public List<SessionId> listResumable() {
-        List<SessionId> ids = new ArrayList<>();
+    public List<SessionSummary> list() {
+        List<SessionSummary> out = new ArrayList<>();
         for (Path meta : metaFiles()) {
             SessionMetaDto dto = codec.read(read(meta), SessionMetaDto.class);
-            if (dto.status == SessionStatus.RESUMABLE) {
-                ids.add(dto.id);
-            }
+            out.add(new SessionSummary(dto.id, dto.parentId, dto.title, dto.modelId, dto.createdDate));
         }
-        return ids;
+        out.sort(new Comparator<SessionSummary>() {
+            @Override
+            public int compare(SessionSummary left, SessionSummary right) {
+                return Long.compare(right.createdDate(), left.createdDate());
+            }
+        });
+        return out;
     }
 
+    /**
+     * 归档 = 压成 {@code archive/<id>.zip} 再删原目录（D22）：先写 `.tmp`、改名、最后删，
+     * 顺序保证"包没写完就不会丢数据"，翻车时由 {@link #cleanupArchiveResidue()} 收尾。
+     */
     @Override
     public void archive(SessionId id) {
         Path from = dir.sessionDir(id.getValue());
-        Path to = dir.archive().resolve(id.getValue());
+        if (!Files.isDirectory(from)) {
+            throw new UncheckedIOException("archive failed: 会话不存在 " + id,
+                    new java.io.IOException("missing " + from));
+        }
+        Path target = dir.archive().resolve(id.getValue() + ".zip");
+        Path tmp = dir.archive().resolve(id.getValue() + ".zip.tmp");
         try {
-            Files.createDirectories(to.getParent());
-            Files.move(from, to, StandardCopyOption.REPLACE_EXISTING);
+            Files.createDirectories(dir.archive());
+            Files.deleteIfExists(tmp);
+            try (ZipOutputStream zip = new ZipOutputStream(Files.newOutputStream(tmp))) {
+                addDirectory(zip, from, "");
+            }
+            Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING);
+            deleteRecursively(from);
         } catch (IOException e) {
             throw new UncheckedIOException("archive failed: " + id, e);
+        }
+    }
+
+    /** 归档中间态对账：半截包丢弃；包已完整就补删原目录（幂等）。 */
+    @Override
+    public void cleanupArchiveResidue() {
+        Path archive = dir.archive();
+        if (!Files.isDirectory(archive)) {
+            return;
+        }
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(archive)) {
+            for (Path entry : stream) {
+                String name = entry.getFileName().toString();
+                if (name.endsWith(".zip.tmp")) {
+                    Files.deleteIfExists(entry);
+                } else if (name.endsWith(".zip")) {
+                    Path live = dir.sessionDir(name.substring(0, name.length() - ".zip".length()));
+                    if (Files.isDirectory(live)) {
+                        deleteRecursively(live);
+                    }
+                }
+            }
+        } catch (IOException e) {
+            throw new UncheckedIOException("归档中间态对账失败", e);
+        }
+    }
+
+    private void addDirectory(ZipOutputStream zip, Path directory, String prefix) throws IOException {
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(directory)) {
+            for (Path entry : stream) {
+                String name = prefix + entry.getFileName().toString();
+                if (Files.isDirectory(entry)) {
+                    addDirectory(zip, entry, name + "/");
+                    continue;
+                }
+                zip.putNextEntry(new ZipEntry(name));
+                try (InputStream in = Files.newInputStream(entry)) {
+                    copy(in, zip);
+                }
+                zip.closeEntry();
+            }
+        }
+    }
+
+    private static void copy(InputStream in, OutputStream out) throws IOException {
+        byte[] buffer = new byte[8192];
+        int read;
+        while ((read = in.read(buffer)) >= 0) {
+            out.write(buffer, 0, read);
         }
     }
 

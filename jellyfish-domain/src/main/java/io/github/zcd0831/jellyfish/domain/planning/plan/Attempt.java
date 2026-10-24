@@ -1,17 +1,78 @@
 package io.github.zcd0831.jellyfish.domain.planning.plan;
 
-import java.util.List;
 import io.github.zcd0831.jellyfish.domain.shared.ReflectionId;
 import io.github.zcd0831.jellyfish.domain.shared.SessionId;
 import io.github.zcd0831.jellyfish.domain.shared.VerificationReportId;
 
-/** 一个 step 的一次完整执行周期。规则出处：模块-规划 §6.6。 */
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
+/**
+ * 一个 step 的一次完整执行周期：可跨多段 ReAct、被多次用户输入切分，但不切分 attempt。
+ * 规则出处：模块-规划 §5、§5.2。
+ */
 public class Attempt {
 
-    private int attemptNo;
+    private final int attemptNo;
+    private final List<SessionId> childSessionIds = new ArrayList<SessionId>();
+
     private RecordRange recordRange;
-    private List<SessionId> childSessionIds;
     private VerificationReportId verificationReportId;
     private ReflectionId reflectionId;
     private AttemptOutcome outcome;
+
+    public Attempt(int attemptNo, RecordRange recordRange) {
+        this.attemptNo = attemptNo;
+        this.recordRange = recordRange;
+    }
+
+    /** 规则出处：§5.2（收敛但未提交不结束，记录区间继续延伸）。 */
+    public void extendRange(RecordRange range) {
+        if (recordRange == null) {
+            this.recordRange = range;
+        } else {
+            this.recordRange = new RecordRange(recordRange.getStartRecordId(), range.getEndRecordId());
+        }
+    }
+
+    public void addChildSession(SessionId childSessionId) {
+        childSessionIds.add(childSessionId);
+    }
+
+    public void attachReport(VerificationReportId reportId) {
+        this.verificationReportId = reportId;
+    }
+
+    public void attachReflection(ReflectionId reflectionId) {
+        this.reflectionId = reflectionId;
+    }
+
+    public void finish(AttemptOutcome outcome) {
+        this.outcome = outcome;
+    }
+
+    public int attemptNo() {
+        return attemptNo;
+    }
+
+    public RecordRange recordRange() {
+        return recordRange;
+    }
+
+    public List<SessionId> childSessionIds() {
+        return Collections.unmodifiableList(childSessionIds);
+    }
+
+    public VerificationReportId verificationReportId() {
+        return verificationReportId;
+    }
+
+    public ReflectionId reflectionId() {
+        return reflectionId;
+    }
+
+    public AttemptOutcome outcome() {
+        return outcome;
+    }
 }

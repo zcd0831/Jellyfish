@@ -104,6 +104,27 @@ public class Plan {
         pendingEvents.add(new StepFailed());
     }
 
+    /** 撞轮次上限：只落 attempt 结局，重试/重划由外循环判定（M15）。 */
+    public void markAttemptFailed(StepId stepId, int attemptNo) {
+        PlanStep step = requireStep(stepId);
+        for (Attempt attempt : step.attempts()) {
+            if (attempt.attemptNo() == attemptNo) {
+                attempt.finish(AttemptOutcome.FAILED);
+                step.markFailed();
+                return;
+            }
+        }
+        throw new DomainInvariantViolation("计划里没有该尝试：" + stepId.getValue() + "#" + attemptNo);
+    }
+
+    /** 步骤重试：新建 Attempt，同一步回到 RUNNING（M15、§7.1 节点「步骤重试」）。 */
+    public Attempt retryStep(StepId stepId) {
+        requireExecuting();
+        PlanStep step = requireStep(stepId);
+        step.markRunning();
+        return step.beginAttempt();
+    }
+
     /** 中断不消耗重试：只落 attempt 结局。规则出处：§5.2。 */
     public void markAttemptInterrupted(StepId stepId, int attemptNo) {
         PlanStep step = requireStep(stepId);
@@ -140,8 +161,8 @@ public class Plan {
         }
         int sequence = steps.size();
         for (PlanStep step : newTail) {
-            steps.add(new PlanStep(step.id(), ++sequence, step.description(), step.requiredVerifications(),
-                    StepStatus.PENDING));
+            steps.add(PlanSteps.draft(step.id(), ++sequence, step.description(), step.goal(),
+                    step.expectedOutcome(), step.verificationCriteria(), step.requiredVerifications()));
         }
         this.replanGeneration++;
         this.status = PlanStatus.EXECUTING;

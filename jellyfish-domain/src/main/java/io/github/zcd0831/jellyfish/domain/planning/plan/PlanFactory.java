@@ -33,8 +33,13 @@ public final class PlanFactory {
         List<PlanStep> steps = new ArrayList<PlanStep>();
         for (int i = 0; i < rawSteps.size(); i++) {
             Map<String, Object> raw = rawSteps.get(i);
+            Set<VerificationType> verifications = verificationsOf(raw, i);
             steps.add(PlanSteps.draft(StepId.of(UUID.randomUUID().toString()), i + 1,
-                    descriptionOf(raw, i), verificationsOf(raw, i)));
+                    descriptionOf(raw, i), textOf(raw, "goal", i), textOf(raw, "expectedOutcome", i),
+                    textOf(raw, "verificationCriteria", i), verifications));
+            if (verifications.contains(VerificationType.LLM_JUDGE)) {
+                requireJudgeInputs(raw, i);
+            }
             requireBoundTools(raw, i, boundToolIds);
         }
         requireAcyclic(rawSteps);
@@ -68,6 +73,25 @@ public final class PlanFactory {
             throw invalid("第 " + (index + 1) + " 步缺少 description");
         }
         return String.valueOf(description);
+    }
+
+    private static String textOf(Map<String, Object> raw, String key, int index) {
+        Object value = raw.get(key);
+        return value == null ? null : String.valueOf(value);
+    }
+
+    /** 裁判要吃三要素：声明 LLM_JUDGE 就必须给全（M16）。 */
+    private static void requireJudgeInputs(Map<String, Object> raw, int index) {
+        requireText(raw, "goal", index, "LLM_JUDGE");
+        requireText(raw, "expectedOutcome", index, "LLM_JUDGE");
+        requireText(raw, "verificationCriteria", index, "LLM_JUDGE");
+    }
+
+    private static void requireText(Map<String, Object> raw, String key, int index, String why) {
+        Object value = raw.get(key);
+        if (value == null || String.valueOf(value).trim().isEmpty()) {
+            throw invalid("第 " + (index + 1) + " 步声明了 " + why + "，必须给出 " + key);
+        }
     }
 
     @SuppressWarnings("unchecked")

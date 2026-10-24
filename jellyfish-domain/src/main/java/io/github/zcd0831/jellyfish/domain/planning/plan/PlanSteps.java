@@ -14,13 +14,17 @@ public final class PlanSteps {
     private PlanSteps() {
     }
 
-    public static PlanStep draft(StepId id, int sequence, String description,
+    public static PlanStep draft(StepId id, int sequence, String description, String goal,
+                                 String expectedOutcome, String verificationCriteria,
                                  Set<VerificationType> requiredVerifications) {
-        return new PlanStep(id, sequence, description, requiredVerifications, StepStatus.PENDING);
+        return new PlanStep(id, sequence, description, goal, expectedOutcome, verificationCriteria,
+                requiredVerifications, StepStatus.PENDING);
     }
 
-    public static PlanStep rehydrate(StepId id, int sequence, String description,
+    public static PlanStep rehydrate(StepId id, int sequence, String description, String goal,
+                                     String expectedOutcome, String verificationCriteria,
                                      Set<VerificationType> requiredVerifications, StepStatus status) {
-        return new PlanStep(id, sequence, description, requiredVerifications, status);
+        return new PlanStep(id, sequence, description, goal, expectedOutcome, verificationCriteria,
+                requiredVerifications, status);
     }
 }

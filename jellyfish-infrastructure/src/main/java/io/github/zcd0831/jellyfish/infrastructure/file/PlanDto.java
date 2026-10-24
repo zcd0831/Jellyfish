@@ -62,6 +62,9 @@ public class PlanDto {
         public String id;
         public int sequence;
         public String description;
+        public String goal;
+        public String expectedOutcome;
+        public String verificationCriteria;
         public List<String> requiredVerifications = new ArrayList<String>();
         public String status;
         public String finalOutput;
@@ -74,6 +77,9 @@ public class PlanDto {
             dto.id = step.id().getValue();
             dto.sequence = step.sequence();
             dto.description = step.description();
+            dto.goal = step.goal();
+            dto.expectedOutcome = step.expectedOutcome();
+            dto.verificationCriteria = step.verificationCriteria();
             for (VerificationType type : step.requiredVerifications()) {
                 dto.requiredVerifications.add(type.name());
             }
@@ -95,8 +101,8 @@ public class PlanDto {
             for (String type : requiredVerifications) {
                 types.add(VerificationType.valueOf(type));
             }
-            PlanStep step = PlanSteps.rehydrate(StepId.of(id), sequence, description, types,
-                    StepStatus.valueOf(status));
+            PlanStep step = PlanSteps.rehydrate(StepId.of(id), sequence, description, goal, expectedOutcome,
+                    verificationCriteria, types, StepStatus.valueOf(status));
             for (AttemptDto attempt : attempts) {
                 step.restoreAttempt(attempt.toDomain());
             }

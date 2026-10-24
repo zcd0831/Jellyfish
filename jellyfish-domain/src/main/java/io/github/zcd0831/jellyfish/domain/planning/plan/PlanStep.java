@@ -17,6 +17,9 @@ public class PlanStep {
     private final StepId id;
     private final int sequence;
     private final String description;
+    private final String goal;
+    private final String expectedOutcome;
+    private final String verificationCriteria;
     private final Set<VerificationType> requiredVerifications;
     private final List<Attempt> attempts = new ArrayList<Attempt>();
     private final List<ExperienceId> assignedExperienceIds = new ArrayList<ExperienceId>();
@@ -25,11 +28,14 @@ public class PlanStep {
     private String finalOutput;
     private VerificationReportId finalVerificationReportId;
 
-    PlanStep(StepId id, int sequence, String description, Set<VerificationType> requiredVerifications,
-             StepStatus status) {
+    PlanStep(StepId id, int sequence, String description, String goal, String expectedOutcome,
+             String verificationCriteria, Set<VerificationType> requiredVerifications, StepStatus status) {
         this.id = id;
         this.sequence = sequence;
         this.description = description;
+        this.goal = goal;
+        this.expectedOutcome = expectedOutcome;
+        this.verificationCriteria = verificationCriteria;
         this.requiredVerifications = Collections.unmodifiableSet(new HashSet<VerificationType>(
                 requiredVerifications == null ? Collections.<VerificationType>emptySet() : requiredVerifications));
         this.status = status;
@@ -103,6 +109,21 @@ public class PlanStep {
 
     public String description() {
         return description;
+    }
+
+    /** LLM 裁判要吃"原定目标"（M16）。 */
+    public String goal() {
+        return goal;
+    }
+
+    /** LLM 裁判要吃"结果期望"（M16）。 */
+    public String expectedOutcome() {
+        return expectedOutcome;
+    }
+
+    /** LLM 裁判要吃"验证标准"（M16）。 */
+    public String verificationCriteria() {
+        return verificationCriteria;
     }
 
     public Set<VerificationType> requiredVerifications() {

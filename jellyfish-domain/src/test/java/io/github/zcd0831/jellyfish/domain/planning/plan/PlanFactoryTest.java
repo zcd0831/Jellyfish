@@ -38,6 +38,9 @@ class PlanFactoryTest {
     @Test
     void 合法草案生成计划并保留验证声明() {
         Map<String, Object> draft = step("读文件");
+        draft.put("goal", "读完目标文件");
+        draft.put("expectedOutcome", "拿到文件内容");
+        draft.put("verificationCriteria", "内容非空");
         draft.put("verifications", Arrays.asList("DETERMINISTIC", "LLM_JUDGE"));
 
         Plan plan = factory.create(PlanId.of("p1"), SessionId.of("s1"), plan(draft),
@@ -55,6 +58,25 @@ class PlanFactoryTest {
                 SessionId.of("s1"), plan(), Collections.<ToolId>emptySet()));
         assertThrows(PlanCreationException.class, () -> factory.create(PlanId.of("p1"),
                 SessionId.of("s1"), plan(step(" ")), Collections.<ToolId>emptySet()));
+    }
+
+    @Test
+    void 声明LLM_JUDGE必须给出三要素() {
+        Map<String, Object> draft = step("写报告");
+        draft.put("verifications", Arrays.asList("LLM_JUDGE"));
+
+        PlanCreationException e = assertThrows(PlanCreationException.class, () -> factory.create(
+                PlanId.of("p1"), SessionId.of("s1"), plan(draft), Collections.<ToolId>emptySet()));
+        assertTrue(e.getMessage().contains("goal"), e.getMessage());
+
+        draft.put("goal", "写一份评审意见");
+        draft.put("expectedOutcome", "包含三个问题");
+        draft.put("verificationCriteria", "问题条数 >= 3");
+        Plan created = factory.create(PlanId.of("p1"), SessionId.of("s1"), plan(draft),
+                Collections.<ToolId>emptySet());
+
+        assertEquals("写一份评审意见", created.steps().get(0).goal());
+        assertEquals("问题条数 >= 3", created.steps().get(0).verificationCriteria());
     }
 
     @Test

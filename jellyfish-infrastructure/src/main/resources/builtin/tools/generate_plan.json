@@ -16,6 +16,9 @@
           "required": ["description"],
           "properties": {
             "description": {"type": "string", "description": "这一步要做什么，可验证的具体动作"},
+            "goal": {"type": "string", "description": "这一步的原定目标（裁判要用）"},
+            "expectedOutcome": {"type": "string", "description": "这一步做完后应该看到的结果（裁判要用）"},
+            "verificationCriteria": {"type": "string", "description": "判定这一步是否达成的标准；声明 LLM_JUDGE 时必填"},
             "verifications": {
               "type": "array",
               "items": {"enum": ["DETERMINISTIC", "ENV_FEEDBACK", "LLM_JUDGE", "HUMAN_APPROVAL"]},

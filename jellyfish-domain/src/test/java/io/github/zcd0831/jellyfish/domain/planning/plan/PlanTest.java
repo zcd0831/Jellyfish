@@ -25,7 +25,7 @@ class PlanTest {
 
     private static PlanStep step(int sequence) {
         return PlanSteps.draft(StepId.of("step" + sequence), sequence, "第 " + sequence + " 步",
-                EnumSet.of(VerificationType.DETERMINISTIC));
+                "目标", "期望", "标准", EnumSet.of(VerificationType.DETERMINISTIC));
     }
 
     private static Plan plan(int steps) {
@@ -92,13 +92,30 @@ class PlanTest {
         plan.markStepSucceeded(StepId.of("step1"), "完成", null);
 
         plan.applyReplan(Collections.singletonList(PlanSteps.draft(StepId.of("new"), 0, "新的一步",
-                EnumSet.noneOf(VerificationType.class))));
+                "目标", "期望", "标准", EnumSet.noneOf(VerificationType.class))));
 
         assertEquals(1, plan.replanGeneration());
         assertEquals(StepStatus.SUCCEEDED, plan.steps().get(0).status());
         assertEquals(StepStatus.SUPERSEDED, plan.steps().get(1).status());
         assertEquals(3, plan.steps().size());
         assertEquals(StepStatus.PENDING, plan.getCurrentStep().status());
+    }
+
+    @Test
+    void 撞轮次上限只落attempt失败且可重试同一步() {
+        Plan plan = plan(2);
+        Attempt first = plan.beginCurrentStep();
+
+        plan.markAttemptFailed(StepId.of("step1"), first.attemptNo());
+        assertEquals(AttemptOutcome.FAILED, first.outcome());
+        assertEquals(StepStatus.FAILED, plan.steps().get(0).status());
+
+        Attempt retried = plan.retryStep(StepId.of("step1"));
+
+        assertEquals(StepStatus.RUNNING, plan.steps().get(0).status());
+        assertEquals(2, retried.attemptNo());
+        assertEquals(StepId.of("step1"), plan.getCurrentStep().id(), "重试回到同一步");
+        assertEquals(PlanStatus.EXECUTING, plan.status());
     }
 
     @Test

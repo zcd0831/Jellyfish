@@ -9,6 +9,7 @@ import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationResult
 import io.github.zcd0831.jellyfish.application.shared.Answer;
 import io.github.zcd0831.jellyfish.application.shared.Json;
 import io.github.zcd0831.jellyfish.application.shared.Question;
+import io.github.zcd0831.jellyfish.application.shared.TechnicalLog;
 import io.github.zcd0831.jellyfish.application.shared.port.HumanInteractionPort;
 import io.github.zcd0831.jellyfish.domain.action.agent.AgentDefinition;
 import io.github.zcd0831.jellyfish.domain.planning.plan.Plan;
@@ -53,14 +54,19 @@ public final class VerificationRunner {
 
     public VerificationReport verify(Session session, Plan plan, PlanStep step, int attemptNo, String summary) {
         String reportId = UUID.randomUUID().toString();
+        long startedAt = System.currentTimeMillis();
         List<VerificationType> layers = chain.orderedLayers(step.requiredVerifications());
         for (VerificationType layer : layers) {
             LayerResult result = runLayer(session, step, summary, layer);
             if (result.outcome != VerificationOutcome.PASSED) {
+                TechnicalLog.verified(plan.id().getValue(), step.id().getValue(), result.outcome.name(),
+                        System.currentTimeMillis() - startedAt);
                 return chain.rejected(VerificationReportId.of(reportId), plan.id(), step.id(), attemptNo,
                         result.outcome, layer, result.reason, System.currentTimeMillis());
             }
         }
+        TechnicalLog.verified(plan.id().getValue(), step.id().getValue(), VerificationOutcome.PASSED.name(),
+                System.currentTimeMillis() - startedAt);
         return chain.passed(VerificationReportId.of(reportId), plan.id(), step.id(), attemptNo,
                 System.currentTimeMillis());
     }

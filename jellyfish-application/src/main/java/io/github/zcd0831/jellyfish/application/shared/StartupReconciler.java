@@ -13,6 +13,7 @@ import io.github.zcd0831.jellyfish.domain.action.budget.Budget;
 import io.github.zcd0831.jellyfish.domain.perception.session.Record;
 import io.github.zcd0831.jellyfish.domain.perception.session.RecordRole;
 import io.github.zcd0831.jellyfish.domain.perception.session.Session;
+import io.github.zcd0831.jellyfish.domain.perception.session.SessionStatus;
 import io.github.zcd0831.jellyfish.domain.planning.plan.Attempt;
 import io.github.zcd0831.jellyfish.domain.planning.plan.Plan;
 import io.github.zcd0831.jellyfish.domain.planning.plan.PlanStep;
@@ -58,10 +59,24 @@ public final class StartupReconciler {
     }
 
     public void reconcile(Session session) {
+        reconcileArchive(session);
         for (Plan plan : plans.findRunning(session.id())) {
             reconcilePlan(session, plan);
         }
         reconcileHalfToolCall(session);
+    }
+
+    /** 规则 ④：状态已是 ARCHIVED 但目录还在 ⇒ 完成归档（幂等）。 */
+    private void reconcileArchive(Session session) {
+        if (session.status() != SessionStatus.ARCHIVED) {
+            return;
+        }
+        try {
+            sessions.archive(session.id());
+            announce("对账：完成归档（" + session.id().getValue() + "）");
+        } catch (RuntimeException alreadyArchived) {
+            // 目录已移走 = 归档已完成，幂等返回
+        }
     }
 
     /** 规则 ①②：报告已存在但步骤状态没跟上。 */

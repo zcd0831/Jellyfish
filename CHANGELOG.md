@@ -1,5 +1,17 @@
 ## [1.0.0-alpha] - 进行中
 
+### S5 收尾
+- `ManageSessionUseCase`：取消（级联子会话，回 `RESUMABLE`）/ 归档 / 删除（经验保留）
+- `AdjustPolicyUseCase`：逐项校验（正数 / 比例 0~1），失败 `C_INVALID_VALUE` 且不改文件
+- `ManageCatalogUseCase`：`builtin.` 前缀保留、内置代理不可写
+- 技能：`FileSkillSopProvider` + `load_skill`；SOP 注入为 `SYSTEM` 记录，不参与滑窗
+- TUI：`/cancel` `/archive` `/delete` `/policy k=v` `/tools` `/agents` `/models` `/providers` `/skills`
+- 日志：Log4j2 2.24.3（按天 + 32 MiB 滚动、保留 7 天）；`MaskingLayout` 统一脱敏；
+  技术事件（模型重试/降级/不可用、上下文折叠、验证耗时）落结构化 key=value
+- 启动自检：供应商凭据环境变量缺失逐条提示，不阻塞启动
+- 启动对账：`StartupReconciler` 5 条规则全部实现（含归档幂等收尾）
+- 测试：JUnit 5 为主、假端口优先；需要时用 Mockito（4.11.x）；JaCoCo 0.8.12 出覆盖率数据（不设门槛）
+
 ### S3 子代理
 - `SubagentLauncher`：并行发起、**各自独立超时**、join-all；子代理拒绝递归（深度恒为 1）
 - `StartSessionUseCase.startSubSession`：子会话不自建 `Budget`，快照同样冻结

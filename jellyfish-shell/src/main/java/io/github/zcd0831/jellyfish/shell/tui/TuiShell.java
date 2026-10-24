@@ -1,5 +1,6 @@
 package io.github.zcd0831.jellyfish.shell.tui;
 
+import io.github.zcd0831.jellyfish.application.action.port.CatalogRepository;
 import io.github.zcd0831.jellyfish.application.perception.AdjustPolicyUseCase;
 import io.github.zcd0831.jellyfish.application.perception.ManageSessionUseCase;
 import io.github.zcd0831.jellyfish.application.perception.StartSessionUseCase;
@@ -27,6 +28,7 @@ public final class TuiShell {
     private final RunSessionUseCase runSession;
     private final ManageSessionUseCase manageSession;
     private final AdjustPolicyUseCase adjustPolicy;
+    private final CatalogRepository catalog;
     private final BufferedReader in;
     private final PrintStream out;
 
@@ -34,11 +36,12 @@ public final class TuiShell {
 
     public TuiShell(StartSessionUseCase startSession, RunSessionUseCase runSession,
                     ManageSessionUseCase manageSession, AdjustPolicyUseCase adjustPolicy,
-                    InputStream in, PrintStream out) {
+                    CatalogRepository catalog, InputStream in, PrintStream out) {
         this.startSession = startSession;
         this.runSession = runSession;
         this.manageSession = manageSession;
         this.adjustPolicy = adjustPolicy;
+        this.catalog = catalog;
         this.in = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8));
         this.out = out;
     }
@@ -89,6 +92,11 @@ public final class TuiShell {
     private void command(String line) {
         String[] parts = line.split("\\s+");
         String name = parts[0];
+        if ("/tools".equals(name) || "/agents".equals(name) || "/models".equals(name)
+                || "/providers".equals(name) || "/skills".equals(name)) {
+            list(name);
+            return;
+        }
         if (currentSession == null) {
             out.println("（还没有会话）");
             return;
@@ -113,7 +121,36 @@ public final class TuiShell {
             print(adjustPolicy.adjust(changes));
             out.println("策略已更新（立即生效）");
         } else {
-            out.println("未知命令：" + name + "（可用 /archive /delete /cancel /policy）");
+            out.println("未知命令：" + name
+                    + "（可用 /archive /delete /cancel /policy /tools /agents /models /providers /skills）");
+        }
+    }
+
+    /** 目录只读浏览；增删改按 D12 走"编辑文件 + 重启"。 */
+    private void list(String what) {
+        if ("/tools".equals(what)) {
+            for (io.github.zcd0831.jellyfish.domain.action.tool.ToolDefinition tool : catalog.tools()) {
+                out.println("tool " + tool.id().getValue() + " [" + tool.status() + "] "
+                        + tool.source().getType());
+            }
+        } else if ("/agents".equals(what)) {
+            for (io.github.zcd0831.jellyfish.domain.action.agent.AgentDefinition agent : catalog.agents()) {
+                out.println("agent " + agent.id().getValue() + " [" + agent.status() + "] " + agent.source());
+            }
+        } else if ("/models".equals(what)) {
+            for (io.github.zcd0831.jellyfish.domain.action.model.Model model : catalog.models()) {
+                out.println("model " + model.id().getValue() + " [" + model.status() + "] "
+                        + model.modelName());
+            }
+        } else if ("/providers".equals(what)) {
+            for (io.github.zcd0831.jellyfish.domain.action.model.Provider provider : catalog.providers()) {
+                out.println("provider " + provider.id().getValue() + " [" + provider.status() + "] "
+                        + provider.protocol());
+            }
+        } else {
+            for (io.github.zcd0831.jellyfish.domain.memory.skill.SkillDefinition skill : catalog.skills()) {
+                out.println("skill " + skill.id().getValue() + " [" + skill.status() + "] " + skill.name());
+            }
         }
     }
 

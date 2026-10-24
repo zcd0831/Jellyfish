@@ -32,6 +32,8 @@ public final class Main {
         // 日志目录与级别必须先于任何 logger 初始化（D18-4）
         System.setProperty("jellyfish.log.dir", dir.logs().toString());
         System.setProperty("jellyfish.log.level", options.logLevel());
+        io.github.zcd0831.jellyfish.application.shared.TechnicalLog.use(
+                new io.github.zcd0831.jellyfish.infrastructure.log.Log4jTechnicalLog());
 
         final AppComponent component = DaggerAppComponent.builder()
                 .infrastructureModule(new InfrastructureModule(dir, System.out))
@@ -60,7 +62,8 @@ public final class Main {
                     + "  schemaVersion=1");
             warnMissingCredentials(component);
             new TuiShell(component.startSessionUseCase(), component.runSessionUseCase(),
-                    component.manageSessionUseCase(), component.adjustPolicyUseCase(), System.in, System.out)
+                    component.manageSessionUseCase(), component.adjustPolicyUseCase(),
+                    component.catalogRepository(), System.in, System.out)
                     .run();
         } finally {
             component.instanceLock().release();

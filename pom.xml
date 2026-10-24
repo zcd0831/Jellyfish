@@ -59,6 +59,8 @@
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
 
         <!-- 版本统一在此声明；Java 8 可用的较新版，实际编译验证以构建结果为准。 -->
+        <mockito.version>4.11.0</mockito.version>
+        <jacoco.version>0.8.12</jacoco.version>
         <log4j.version>2.24.3</log4j.version>
         <okhttp.version>4.12.0</okhttp.version>
         <json-schema-validator.version>1.5.8</json-schema-validator.version>
@@ -168,7 +170,15 @@
                 <version>${jtokkit.version}</version>
             </dependency>
 
-            <!-- 测试（技术决策 D13：JUnit 5，不使用 Mockito） -->
+            <!-- 测试替身（技术决策 D13/M22：需要 mock 时才用 Mockito 4.x —— Java 8 兼容线） -->
+            <dependency>
+                <groupId>org.mockito</groupId>
+                <artifactId>mockito-core</artifactId>
+                <version>${mockito.version}</version>
+                <scope>test</scope>
+            </dependency>
+
+            <!-- 测试（技术决策 D13：JUnit 5 为主，假端口优先） -->
             <dependency>
                 <groupId>org.junit</groupId>
                 <artifactId>junit-bom</artifactId>
@@ -218,5 +228,25 @@
                 </plugin>
             </plugins>
         </pluginManagement>
+        <plugins>
+            <!-- 覆盖率数据（技术决策 D13/M22：只出报告，不设门槛） -->
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>${jacoco.version}</version>
+                <executions>
+                    <execution>
+                        <id>prepare-agent</id>
+                        <goals><goal>prepare-agent</goal></goals>
+                    </execution>
+                    <execution>
+                        <id>report</id>
+                        <phase>test</phase>
+                        <goals><goal>report</goal></goals>
+                    </execution>
+
+                </executions>
+            </plugin>
+        </plugins>
     </build>
 </project>

@@ -7,6 +7,7 @@ import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationResult
 import io.github.zcd0831.jellyfish.application.action.port.ChatMessage;
 import io.github.zcd0831.jellyfish.application.perception.port.PolicyRepository;
 import io.github.zcd0831.jellyfish.application.shared.ProgressEvent;
+import io.github.zcd0831.jellyfish.application.shared.TechnicalLog;
 import io.github.zcd0831.jellyfish.application.shared.port.CommitScope;
 import io.github.zcd0831.jellyfish.application.shared.port.DomainEventPublisher;
 import io.github.zcd0831.jellyfish.application.shared.port.ProgressPort;
@@ -88,6 +89,7 @@ public final class ContextWindowService {
             return;
         }
         progress.emit(ProgressEvent.of(ProgressEvent.Kind.SUMMARIZING, "上下文压缩中"));
+        TechnicalLog.fold(session.id().getValue(), window.getUsage().getUsedTokens());
 
         ModelInvocationResult result = model.invoke(new ModelInvocationRequest(session.activeModelId(),
                 SUMMARY_INSTRUCTION,

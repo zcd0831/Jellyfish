@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- 规则出处：技术决策 D14（格式/保留期/脱敏）、D18（Log4j2） -->
+<Configuration status="WARN" packages="io.github.zcd0831.jellyfish.infrastructure.log">
+  <Properties>
+    <Property name="LOG_DIR">${sys:jellyfish.log.dir:-${env:TMPDIR:-/tmp}/jellyfish-logs}</Property>
+    <Property name="PATTERN">ts=%d{ISO8601} level=%-5p thread=%t s=%X{s} plan=%X{plan} step=%X{step} ev=%X{ev} code=%X{code} durMs=%X{durMs} tokIn=%X{tokIn} tokOut=%X{tokOut} model=%X{model} tool=%X{tool} retry=%X{retry} msg=%m%n</Property>
+  </Properties>
+  <Appenders>
+    <RollingFile name="FILE" fileName="${LOG_DIR}/jellyfish.log"
+                 filePattern="${LOG_DIR}/jellyfish-%d{yyyy-MM-dd}-%i.log.gz">
+      <MaskingLayout pattern="${PATTERN}"/>
+      <Policies>
+        <TimeBasedTriggeringPolicy interval="1"/>
+        <SizeBasedTriggeringPolicy size="32 MB"/>
+      </Policies>
+      <DefaultRolloverStrategy max="7"/>
+    </RollingFile>
+  </Appenders>
+  <Loggers>
+    <Root level="${sys:jellyfish.log.level:-info}">
+      <AppenderRef ref="FILE"/>
+    </Root>
+  </Loggers>
+</Configuration>

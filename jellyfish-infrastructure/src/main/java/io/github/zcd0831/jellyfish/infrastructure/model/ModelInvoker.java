@@ -17,6 +17,7 @@ import io.github.zcd0831.jellyfish.domain.action.model.Model;
 import io.github.zcd0831.jellyfish.domain.action.model.ModelError;
 import io.github.zcd0831.jellyfish.domain.action.model.Provider;
 import io.github.zcd0831.jellyfish.domain.shared.ModelId;
+import io.github.zcd0831.jellyfish.infrastructure.log.ModelCallLog;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -105,7 +106,12 @@ public final class ModelInvoker implements ModelInvocationPort {
             }
         }
         ModelInvocationException lastFailure = null;
+        boolean first = true;
         for (ModelId modelId : chain) {
+            if (!first) {
+                ModelCallLog.switched(chain.get(0).getValue(), modelId.getValue());
+            }
+            first = false;
             Model model = findModel(modelId);
             if (model == null || !model.isCallable()) {
                 continue;
@@ -121,6 +127,7 @@ public final class ModelInvoker implements ModelInvocationPort {
                 if (e.error() == ModelError.CONTEXT_EXCEEDED) {
                     throw e;
                 }
+                ModelCallLog.unavailable(modelId.getValue(), e.error().code());
                 lastFailure = e;
             }
         }
@@ -153,6 +160,7 @@ public final class ModelInvoker implements ModelInvocationPort {
                     throw new ModelInvocationException(ModelError.UNAVAILABLE,
                             "Retry-After 超过 60s，直接降级（" + model.id().getValue() + "）", e);
                 }
+                ModelCallLog.retry(model.id().getValue(), attempt + 1, delay);
                 progress.emit(ProgressEvent.of(ProgressEvent.Kind.RETRY_SCHEDULED,
                         "第 " + (attempt + 1) + " 次重试，" + delay + "ms 后（" + e.getMessage() + "）"));
                 sleep(delay);

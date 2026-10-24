@@ -29,6 +29,10 @@ public final class Main {
         BootOptions options = BootOptions.parse(args);
         DataDirectory dir = DataDirectory.of(options.dataDir());
 
+        // 日志目录与级别必须先于任何 logger 初始化（D18-4）
+        System.setProperty("jellyfish.log.dir", dir.logs().toString());
+        System.setProperty("jellyfish.log.level", options.logLevel());
+
         final AppComponent component = DaggerAppComponent.builder()
                 .infrastructureModule(new InfrastructureModule(dir, System.out))
                 .build();

@@ -59,6 +59,7 @@
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
 
         <!-- 版本统一在此声明；Java 8 可用的较新版，实际编译验证以构建结果为准。 -->
+        <log4j.version>2.24.3</log4j.version>
         <okhttp.version>4.12.0</okhttp.version>
         <json-schema-validator.version>1.5.8</json-schema-validator.version>
         <lombok.version>1.18.30</lombok.version>
@@ -126,6 +127,18 @@
                 <groupId>com.fasterxml.jackson.core</groupId>
                 <artifactId>jackson-databind</artifactId>
                 <version>${jackson.version}</version>
+            </dependency>
+
+            <!-- 日志（技术决策 D18：Log4j2 2.24.x，Java 8 兼容线） -->
+            <dependency>
+                <groupId>org.apache.logging.log4j</groupId>
+                <artifactId>log4j-api</artifactId>
+                <version>${log4j.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.logging.log4j</groupId>
+                <artifactId>log4j-core</artifactId>
+                <version>${log4j.version}</version>
             </dependency>
 
             <!-- HTTP 客户端（技术决策 D16-5 / M14：OkHttp 4.12.0，Java 8 兼容且仍在维护） -->

@@ -1,0 +1,44 @@
+{
+  "id": "generate_plan",
+  "name": "generate_plan",
+  "description": "把一个复杂任务拆成可串行执行的步骤计划。每步声明需要的验证类型；简单任务不要用本工具，直接回答。",
+  "inputSchema": {
+    "type": "object",
+    "required": ["goal", "steps"],
+    "properties": {
+      "goal": {"type": "string", "description": "这次计划要达成的目标，一句话"},
+      "steps": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 30,
+        "items": {
+          "type": "object",
+          "required": ["description"],
+          "properties": {
+            "description": {"type": "string", "description": "这一步要做什么，可验证的具体动作"},
+            "verifications": {
+              "type": "array",
+              "items": {"enum": ["DETERMINISTIC", "ENV_FEEDBACK", "LLM_JUDGE", "HUMAN_APPROVAL"]},
+              "description": "这一步需要哪些验证层；为空表示模型自证"
+            },
+            "tools": {
+              "type": "array",
+              "items": {"type": "string"},
+              "description": "这一步预计会用到的工具名，必须在当前代理的绑定内"
+            },
+            "dependsOn": {
+              "type": "array",
+              "items": {"type": "integer", "minimum": 1},
+              "description": "依赖的前置步骤序号（1 基），只能引用更早的步骤"
+            }
+          }
+        }
+      }
+    }
+  },
+  "outputSchema": {"type": "object", "properties": {"result": {"type": "string"}}},
+  "source": {"type": "INTERNAL", "endpointOrIdentifier": "generate_plan"},
+  "sideEffect": "READ_ONLY",
+  "timeoutMillis": 0,
+  "status": "ACTIVE"
+}

@@ -3,6 +3,7 @@ package io.github.zcd0831.jellyfish.di;
 import dagger.Module;
 import dagger.Provides;
 import io.github.zcd0831.jellyfish.application.action.BudgetService;
+import io.github.zcd0831.jellyfish.application.action.InternalToolHandlers;
 import io.github.zcd0831.jellyfish.application.action.ToolExecutor;
 import io.github.zcd0831.jellyfish.application.action.port.BudgetRepository;
 import io.github.zcd0831.jellyfish.application.action.port.CatalogRepository;
@@ -31,7 +32,8 @@ public final class ActionModule {
     @Provides
     @Singleton
     ToolExecutor toolExecutor(CatalogRepository catalog, ExternalToolPort externalTools,
-                              ArtifactStore artifacts, HumanInteractionPort human, PolicyRepository policies) {
-        return new ToolExecutor(catalog, externalTools, artifacts, human, policies);
+                              ArtifactStore artifacts, HumanInteractionPort human, PolicyRepository policies,
+                              InternalToolHandlers handlers) {
+        return new ToolExecutor(catalog, externalTools, artifacts, human, policies, handlers);
     }
 }

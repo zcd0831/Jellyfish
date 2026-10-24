@@ -2,6 +2,8 @@ package io.github.zcd0831.jellyfish.infrastructure.file;
 
 import io.github.zcd0831.jellyfish.application.shared.port.CommitScope;
 import io.github.zcd0831.jellyfish.domain.action.budget.Budget;
+import io.github.zcd0831.jellyfish.domain.planning.plan.Plan;
+import io.github.zcd0831.jellyfish.domain.planning.verification.VerificationReport;
 import io.github.zcd0831.jellyfish.domain.perception.policy.RuntimePolicy;
 import io.github.zcd0831.jellyfish.domain.perception.session.Record;
 import io.github.zcd0831.jellyfish.domain.perception.session.Session;
@@ -66,9 +68,13 @@ public final class FileCommitScope implements CommitScope {
         replacements.clear();
     }
 
+    /** 事实只新建、不覆盖：报告一经写出就是不可变的（§7.2）。 */
     private void writeFact(Object fact) {
-        throw new UnsupportedOperationException("S0 只支持 Session / RuntimePolicy，事实类型待各自切片加入："
-                + fact.getClass().getName());
+        if (fact instanceof VerificationReport) {
+            new FileReportRepository(dir, codec).save((VerificationReport) fact);
+            return;
+        }
+        throw new UnsupportedOperationException("暂不支持的事实类型：" + fact.getClass().getName());
     }
 
     private void writeAggregate(Object aggregate) {
@@ -80,6 +86,13 @@ public final class FileCommitScope implements CommitScope {
         }
         if (aggregate instanceof RuntimePolicy) {
             AtomicFiles.write(dir.settingsFile(), codec.write(aggregate));
+            return;
+        }
+        if (aggregate instanceof Plan) {
+            Plan plan = (Plan) aggregate;
+            AtomicFiles.write(dir.sessionDir(plan.sessionId().getValue())
+                            .resolve("plans").resolve(plan.id().getValue() + ".json"),
+                    codec.write(PlanDto.from(plan)));
             return;
         }
         if (aggregate instanceof Budget) {

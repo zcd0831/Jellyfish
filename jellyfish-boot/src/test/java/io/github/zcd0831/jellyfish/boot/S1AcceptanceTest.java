@@ -98,7 +98,8 @@ class S1AcceptanceTest {
                 new FileCommitScope(dir, codec), publisher, event -> { }, budgetService,
                 new EstimatorStrategy());
         ToolExecutor toolExecutor = new ToolExecutor(catalog, new HttpToolAdapter(),
-                new io.github.zcd0831.jellyfish.infrastructure.file.FileArtifactStore(dir), human, policies);
+                new io.github.zcd0831.jellyfish.infrastructure.file.FileArtifactStore(dir), human, policies,
+                io.github.zcd0831.jellyfish.application.action.InternalToolHandlers.empty());
         ReActLoop reActLoop = new ReActLoop(model, toolExecutor, budgetService, contextWindow, policies,
                 new FileCommitScope(dir, codec), human);
         ExecutionLoop executionLoop = new ExecutionLoop(contextWindow, reActLoop);
@@ -159,8 +160,12 @@ class S1AcceptanceTest {
 
         ModelInvocationRequest request = model.requests.get(model.requests.size() - 1);
         assertTrue(request.systemPrompt().contains("AI 助手"), request.systemPrompt());
-        assertEquals(1, request.tools().size());
-        assertEquals("ask_user", request.tools().get(0).getName());
+        java.util.List<String> toolNames = new java.util.ArrayList<String>();
+        for (io.github.zcd0831.jellyfish.domain.perception.session.ToolSchemaSnapshot tool : request.tools()) {
+            toolNames.add(tool.getName());
+        }
+        assertTrue(toolNames.contains("ask_user"), "工具快照应含内置工具：" + toolNames);
+        assertTrue(toolNames.contains("generate_plan"), "S2 起主代理也绑定计划工具：" + toolNames);
         assertEquals(1, request.messages().size());
         assertEquals(RecordRole.USER, request.messages().get(0).role());
     }

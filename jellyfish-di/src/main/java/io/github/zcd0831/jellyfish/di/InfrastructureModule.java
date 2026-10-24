@@ -9,6 +9,8 @@ import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationPort;
 import io.github.zcd0831.jellyfish.application.perception.port.PolicyRepository;
 import io.github.zcd0831.jellyfish.application.perception.port.RecordStore;
 import io.github.zcd0831.jellyfish.application.perception.port.SessionRepository;
+import io.github.zcd0831.jellyfish.application.planning.port.PlanRepository;
+import io.github.zcd0831.jellyfish.application.planning.port.VerificationReportRepository;
 import io.github.zcd0831.jellyfish.application.shared.port.ArtifactStore;
 import io.github.zcd0831.jellyfish.application.shared.port.Clock;
 import io.github.zcd0831.jellyfish.application.shared.port.CommitScope;
@@ -26,7 +28,9 @@ import io.github.zcd0831.jellyfish.infrastructure.file.FileBudgetRepository;
 import io.github.zcd0831.jellyfish.infrastructure.file.FileCatalogRepository;
 import io.github.zcd0831.jellyfish.infrastructure.file.FileCommitScope;
 import io.github.zcd0831.jellyfish.infrastructure.file.FileInstanceLock;
+import io.github.zcd0831.jellyfish.infrastructure.file.FilePlanRepository;
 import io.github.zcd0831.jellyfish.infrastructure.file.FilePolicyRepository;
+import io.github.zcd0831.jellyfish.infrastructure.file.FileReportRepository;
 import io.github.zcd0831.jellyfish.infrastructure.file.FileRecordStore;
 import io.github.zcd0831.jellyfish.infrastructure.file.FileSchemaMigrator;
 import io.github.zcd0831.jellyfish.infrastructure.file.FileSessionRepository;
@@ -96,6 +100,18 @@ public final class InfrastructureModule {
     @Singleton
     CatalogRepository catalogRepository(DataDirectory dir, JsonCodec codec) {
         return new FileCatalogRepository(dir, codec);
+    }
+
+    @Provides
+    @Singleton
+    PlanRepository planRepository(DataDirectory dir, JsonCodec codec) {
+        return new FilePlanRepository(dir, codec);
+    }
+
+    @Provides
+    @Singleton
+    VerificationReportRepository verificationReportRepository(DataDirectory dir, JsonCodec codec) {
+        return new FileReportRepository(dir, codec);
     }
 
     @Provides

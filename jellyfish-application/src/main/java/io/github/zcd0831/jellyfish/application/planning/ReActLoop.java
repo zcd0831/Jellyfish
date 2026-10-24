@@ -18,6 +18,7 @@ import io.github.zcd0831.jellyfish.application.shared.Question;
 import io.github.zcd0831.jellyfish.application.shared.port.CommitScope;
 import io.github.zcd0831.jellyfish.application.shared.port.HumanInteractionPort;
 import io.github.zcd0831.jellyfish.domain.perception.policy.RuntimePolicy;
+import io.github.zcd0831.jellyfish.domain.planning.plan.PlanStep;
 import io.github.zcd0831.jellyfish.domain.perception.session.ContextWindow;
 import io.github.zcd0831.jellyfish.domain.perception.session.Record;
 import io.github.zcd0831.jellyfish.domain.perception.session.RecordRole;
@@ -36,6 +37,8 @@ import java.util.Map;
  * 规则出处：模块-规划 §8.2、模块-感知 §8.5。
  */
 public final class ReActLoop {
+
+    private static final String SUBMIT_STEP = "submit_step";
 
     private final ModelInvocationPort model;
     private final ToolExecutor toolExecutor;
@@ -57,13 +60,14 @@ public final class ReActLoop {
         this.human = human;
     }
 
-    public IterationResult runIteration(Session session, ChunkSink sink) {
+    /** 内循环的唯一出口：模型不再调工具。`submit_step` 由内循环识别，不当作普通工具执行。 */
+    public IterationResult runIteration(Session session, PlanStep step, ChunkSink sink) {
         RuntimePolicy policy = policies.load();
         ContextWindow window = contextWindow.currentWindow(session);
         List<ChatMessage> messages = toMessages(window);
 
         for (int round = 1; round <= policy.maxReActRounds(); round++) {
-            ModelInvocationResult result = invoke(session, window, messages, sink);
+            ModelInvocationResult result = invoke(session, step, window, messages, sink);
             syncModel(session, result.servedModelId());
             if (result.usage() != null && budgetService.recordUsage(session, result.usage().total())) {
                 askContinue();
@@ -77,18 +81,27 @@ public final class ReActLoop {
             if (result.toolCalls().isEmpty()) {
                 return IterationResult.converged(round);
             }
+            String submittedSummary = null;
             for (ToolCall call : result.toolCalls()) {
                 messages.add(ChatMessage.assistant(null, Collections.singletonList(call)));
+                if (SUBMIT_STEP.equals(call.name())) {
+                    submittedSummary = summaryOf(call);
+                    messages.add(submit(session, call, submittedSummary));
+                    continue;
+                }
                 messages.add(executeTool(session, call));
+            }
+            if (submittedSummary != null) {
+                return IterationResult.submitted(submittedSummary, round);
             }
         }
         return IterationResult.notConverged(policy.maxReActRounds());
     }
 
-    private ModelInvocationResult invoke(Session session, ContextWindow window, List<ChatMessage> messages,
-                                         ChunkSink sink) {
+    private ModelInvocationResult invoke(Session session, PlanStep step, ContextWindow window,
+                                         List<ChatMessage> messages, ChunkSink sink) {
         ModelInvocationRequest request = new ModelInvocationRequest(session.activeModelId(),
-                systemPrompt(session), messages, tools(session),
+                systemPrompt(session, step), messages, tools(session),
                 window.getUsage().getUsedTokens(), null);
         return sink == null ? model.invoke(request) : model.invokeStreaming(request, sink);
     }
@@ -97,7 +110,7 @@ public final class ReActLoop {
      * 系统提示词 = 冻结快照 + 运行期注入（SYSTEM 记录）；工具清单同理取快照。
      * 规则出处：模块-感知 §7.1 规则 13、§8.5；技术决策 M02/M12。
      */
-    private static String systemPrompt(Session session) {
+    private static String systemPrompt(Session session, PlanStep step) {
         StringBuilder prompt = new StringBuilder();
         if (session.systemPromptSnapshot() != null && session.systemPromptSnapshot().getRenderedPrompt() != null) {
             prompt.append(session.systemPromptSnapshot().getRenderedPrompt());
@@ -107,6 +120,11 @@ public final class ReActLoop {
                 prompt.append('\n').append(record.content());
             }
         }
+        if (step != null) {
+            // 当前步骤是运行期信息，不属于冻结快照：每次请求临时附在 system 里
+            prompt.append("\n\n当前步骤（第 ").append(step.sequence()).append(" 步）：")
+                    .append(step.description());
+        }
         return prompt.toString();
     }
 
@@ -114,6 +132,22 @@ public final class ReActLoop {
         return session.systemPromptSnapshot() == null
                 ? Collections.<ToolSchemaSnapshot>emptyList()
                 : session.systemPromptSnapshot().getToolList();
+    }
+
+    /** submit_step 只登记，不执行：真正的判定在外循环的验证链（§8.2）。 */
+    private ChatMessage submit(Session session, ToolCall call, String summary) {
+        Record request = session.appendRecord(RecordRole.TOOL_REQUEST, describe(call), null,
+                System.currentTimeMillis());
+        commitAppend(session, request);
+        Record result = session.appendRecord(RecordRole.TOOL_RESULT, "已登记，等待验收", null,
+                System.currentTimeMillis());
+        commitAppend(session, result);
+        return ChatMessage.toolResult(call.callId(), "已登记，等待验收");
+    }
+
+    private static String summaryOf(ToolCall call) {
+        Object summary = Json.parseObject(call.argumentsJson()).get("summary");
+        return summary == null ? "" : String.valueOf(summary);
     }
 
     private ChatMessage executeTool(Session session, ToolCall call) {

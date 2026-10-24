@@ -1,2 +1,4 @@
 agents/builtin.main.md
 tools/ask_user.json
+tools/generate_plan.json
+tools/submit_step.json

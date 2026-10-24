@@ -3,6 +3,7 @@ package io.github.zcd0831.jellyfish.di;
 import dagger.Module;
 import dagger.Provides;
 import io.github.zcd0831.jellyfish.application.action.BudgetService;
+import io.github.zcd0831.jellyfish.application.action.InternalToolHandlers;
 import io.github.zcd0831.jellyfish.application.action.ToolExecutor;
 import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationPort;
 import io.github.zcd0831.jellyfish.application.perception.ContextWindowService;
@@ -11,16 +12,43 @@ import io.github.zcd0831.jellyfish.application.perception.port.RecordStore;
 import io.github.zcd0831.jellyfish.application.perception.port.SessionRepository;
 import io.github.zcd0831.jellyfish.application.planning.ExecutionLoop;
 import io.github.zcd0831.jellyfish.application.planning.ReActLoop;
+import io.github.zcd0831.jellyfish.application.planning.GeneratePlanHandler;
 import io.github.zcd0831.jellyfish.application.planning.RunSessionUseCase;
+import io.github.zcd0831.jellyfish.application.planning.port.PlanRepository;
 import io.github.zcd0831.jellyfish.application.shared.port.CommitScope;
 import io.github.zcd0831.jellyfish.application.shared.port.DomainEventPublisher;
+import io.github.zcd0831.jellyfish.application.action.port.CatalogRepository;
 import io.github.zcd0831.jellyfish.application.shared.port.HumanInteractionPort;
+import io.github.zcd0831.jellyfish.domain.planning.plan.PlanFactory;
+
+import java.util.Collections;
 
 import javax.inject.Singleton;
 
 /** 规划：内循环与外循环。规则出处：模块-规划 §4。 */
 @Module
 public final class PlanningModule {
+
+    @Provides
+    @Singleton
+    PlanFactory planFactory() {
+        return new PlanFactory();
+    }
+
+    @Provides
+    @Singleton
+    GeneratePlanHandler generatePlanHandler(PlanFactory planFactory, PlanRepository plans,
+                                            CatalogRepository catalog, CommitScope commitScope,
+                                            DomainEventPublisher publisher) {
+        return new GeneratePlanHandler(planFactory, plans, catalog, commitScope, publisher);
+    }
+
+    @Provides
+    @Singleton
+    InternalToolHandlers internalToolHandlers(GeneratePlanHandler generatePlanHandler) {
+        return new InternalToolHandlers(Collections.singletonList(
+                new InternalToolHandlers.NamedHandler("generate_plan", generatePlanHandler)));
+    }
 
     @Provides
     @Singleton

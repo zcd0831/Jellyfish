@@ -1,0 +1,22 @@
+{
+  "id": "submit_step",
+  "name": "submit_step",
+  "description": "声明当前步骤已完成并提交验收。只有在确实做完这一步时才调用；提交后由外循环决定是否通过。",
+  "inputSchema": {
+    "type": "object",
+    "required": ["summary"],
+    "properties": {
+      "summary": {"type": "string", "description": "这一步做了什么、结果是什么，供验证与后续步骤使用"},
+      "artifacts": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "可选：产出的文件路径或引用"
+      }
+    }
+  },
+  "outputSchema": {"type": "object", "properties": {"result": {"type": "string"}}},
+  "source": {"type": "INTERNAL", "endpointOrIdentifier": "submit_step"},
+  "sideEffect": "READ_ONLY",
+  "timeoutMillis": 0,
+  "status": "ACTIVE"
+}

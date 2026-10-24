@@ -69,6 +69,20 @@ public class PlanStep {
         this.status = StepStatus.RUNNING;
     }
 
+    /** 续跑重建：把落盘 attempts / 经验 / 终态装回实体（不重放任何迁移）。 */
+    public void restoreAttempt(Attempt attempt) {
+        attempts.add(attempt);
+    }
+
+    public void restoreExperience(ExperienceId experienceId) {
+        assignedExperienceIds.add(experienceId);
+    }
+
+    public void restoreOutcome(String finalOutput, VerificationReportId reportId) {
+        this.finalOutput = finalOutput;
+        this.finalVerificationReportId = reportId;
+    }
+
     void assignExperiences(List<ExperienceId> experienceIds) {
         assignedExperienceIds.clear();
         assignedExperienceIds.addAll(experienceIds);

@@ -34,14 +34,16 @@ public final class ToolExecutor {
     private final ArtifactStore artifacts;
     private final HumanInteractionPort human;
     private final PolicyRepository policies;
+    private final InternalToolHandlers handlers;
 
     public ToolExecutor(CatalogRepository catalog, ExternalToolPort externalTools, ArtifactStore artifacts,
-                        HumanInteractionPort human, PolicyRepository policies) {
+                        HumanInteractionPort human, PolicyRepository policies, InternalToolHandlers handlers) {
         this.catalog = catalog;
         this.externalTools = externalTools;
         this.artifacts = artifacts;
         this.human = human;
         this.policies = policies;
+        this.handlers = handlers;
     }
 
     public ToolExecOutcome execute(Session session, String toolName, Map<String, Object> args, RecordId recordId) {
@@ -67,11 +69,11 @@ public final class ToolExecutor {
                 return ToolExecOutcome.plain("用户拒绝执行：" + toolName);
             }
         }
-        String raw = dispatch(tool, args);
+        String raw = dispatch(session, tool, args);
         return truncate(raw, session, recordId, policy);
     }
 
-    private String dispatch(ToolDefinition tool, Map<String, Object> args) {
+    private String dispatch(Session session, ToolDefinition tool, Map<String, Object> args) {
         if (tool.source().getType() == SourceType.INTERNAL) {
             if (ASK_USER.equals(tool.source().getEndpointOrIdentifier())) {
                 Object question = args.get("question");
@@ -79,8 +81,12 @@ public final class ToolExecutor {
                         question == null ? "（模型没有提供问题文本）" : String.valueOf(question), null));
                 return answer.kind() == Answer.Kind.CANCELLED ? "用户取消了回答" : answer.text();
             }
-            // 其余内置工具的处理器随各自切片加入（S2/S3/S5），本期如实回报
-            return "工具尚未实现：" + tool.name();
+            InternalToolHandler handler = handlers.find(tool.source().getEndpointOrIdentifier());
+            if (handler == null) {
+                // 其余内置工具的处理器随各自切片加入（S3/S5），本期如实回报
+                return "工具尚未实现：" + tool.name();
+            }
+            return handler.handle(session, args).content();
         }
         try {
             return externalTools.invoke(tool, args);

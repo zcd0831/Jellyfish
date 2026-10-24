@@ -87,7 +87,7 @@ class HttpJsonClientTest {
 
     @Test
     void 取消在途请求立即失败() {
-        server.enqueue(new MockResponse().setBody("{}").setBodyDelay(5, TimeUnit.SECONDS));
+        server.enqueue(new MockResponse().setBody("{}").setBodyDelay(2, TimeUnit.SECONDS));
         Thread canceller = new Thread(new Runnable() {
             @Override
             public void run() {

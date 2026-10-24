@@ -26,7 +26,7 @@ public final class ExecutionLoop {
 
     public Outcome run(Session session, ChunkSink sink) {
         contextWindow.ensureWithinLimit(session);
-        IterationResult result = reActLoop.runIteration(session, sink);
+        IterationResult result = reActLoop.runIteration(session, null, sink);
         return result.isConverged() ? Outcome.CONVERGED : Outcome.ROUNDS_EXHAUSTED;
     }
 }

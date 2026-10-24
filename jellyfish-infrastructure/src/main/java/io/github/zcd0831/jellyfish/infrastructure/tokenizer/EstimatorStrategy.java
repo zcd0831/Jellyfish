@@ -1,6 +1,7 @@
 package io.github.zcd0831.jellyfish.infrastructure.tokenizer;
 
 import io.github.zcd0831.jellyfish.application.action.port.ChatMessage;
+import io.github.zcd0831.jellyfish.domain.shared.TokenEstimator;
 
 import java.util.List;
 
@@ -9,7 +10,7 @@ import java.util.List;
  * **宁可高估**——高估只是多折叠一次，低估会撞 API 400。
  * 规则出处：技术决策 D08 第 2 节。
  */
-public final class EstimatorStrategy {
+public final class EstimatorStrategy implements TokenEstimator {
 
     private static final int PER_MESSAGE_OVERHEAD = 4;
 
@@ -19,6 +20,11 @@ public final class EstimatorStrategy {
             total += PER_MESSAGE_OVERHEAD + textTokens(message.content());
         }
         return (int) Math.ceil(total);
+    }
+
+    @Override
+    public int estimate(String text) {
+        return (int) Math.ceil(textTokens(text));
     }
 
     private static double textTokens(String text) {

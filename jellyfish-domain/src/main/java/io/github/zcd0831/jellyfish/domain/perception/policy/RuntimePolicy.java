@@ -78,7 +78,8 @@ public class RuntimePolicy {
     public RuntimePolicy adjust(java.util.Map<String, Object> changes) {
         int retries = positiveInt(changes, "maxRetries", maxRetries);
         int reflection = positiveInt(changes, "reflectionThreshold", reflectionThreshold);
-        int replan = positiveInt(changes, "maxReplanGeneration", maxReplanGeneration);
+        // 0 表示"永不重划"，是合法配置（§7.1 规则 5：还能不能重划由外循环判定）
+        int replan = nonNegativeInt(changes, "maxReplanGeneration", maxReplanGeneration);
         int rounds = positiveInt(changes, "maxReActRounds", maxReActRounds);
         int summarization = positiveInt(changes, "summarizationTokenThreshold", summarizationTokenThreshold);
         int margin = nonNegativeInt(changes, "inputSafetyMargin", inputSafetyMargin);

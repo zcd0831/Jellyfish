@@ -165,10 +165,15 @@ public final class ExecutionLoop {
             if (step == null) {
                 // generate_plan 成功不打断内循环：本轮收敛后下一轮转入计划执行（模型图 §5.1）
                 Plan created = runningPlan(session);
-                if (created != null) {
+                if (created != null && created.getCurrentStep() != null) {
                     plan = created;
                     assignExperiences(session, created);
                     continue;
+                }
+                if (created != null) {
+                    // 计划还在执行态却没有任何可执行步骤：没有可推进的东西，按收敛退出，
+                    // 避免"step 为空 → 又捡回同一个计划"的死循环
+                    return Outcome.CONVERGED;
                 }
                 return Outcome.CONVERGED;
             }

@@ -14,6 +14,17 @@ public final class Main {
 
     private static final long SHUTDOWN_GRACE_MILLIS = 2000L;
 
+    /** 凭据只从环境变量读；缺失的供应商提示一条，不阻塞启动（D09-4）。 */
+    private static void warnMissingCredentials(AppComponent component) {
+        for (io.github.zcd0831.jellyfish.domain.action.model.Provider provider
+                : component.catalogRepository().providers()) {
+            String env = provider.credential() == null ? null : provider.credential().getApiKeyRef();
+            if (env != null && !env.isEmpty() && System.getenv(env) == null) {
+                System.out.println("provider " + provider.id().getValue() + ": 环境变量 " + env + " 未设置");
+            }
+        }
+    }
+
     public static void main(String[] args) {
         BootOptions options = BootOptions.parse(args);
         DataDirectory dir = DataDirectory.of(options.dataDir());
@@ -43,7 +54,9 @@ public final class Main {
                     + "  log-level=" + options.logLevel()
                     + "  maxReActRounds=" + component.policyRepository().load().maxReActRounds()
                     + "  schemaVersion=1");
-            new TuiShell(component.startSessionUseCase(), component.runSessionUseCase(), System.in, System.out)
+            warnMissingCredentials(component);
+            new TuiShell(component.startSessionUseCase(), component.runSessionUseCase(),
+                    component.manageSessionUseCase(), component.adjustPolicyUseCase(), System.in, System.out)
                     .run();
         } finally {
             component.instanceLock().release();

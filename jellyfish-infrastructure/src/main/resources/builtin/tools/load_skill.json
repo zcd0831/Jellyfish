@@ -1,0 +1,17 @@
+{
+  "id": "load_skill",
+  "name": "load_skill",
+  "description": "按名字加载一个技能的标准作业流程（SOP）全文，注入上下文后照着做。只在确实需要该技能的细则时调用。",
+  "inputSchema": {
+    "type": "object",
+    "required": ["skillName"],
+    "properties": {
+      "skillName": {"type": "string", "description": "技能名字或 id（见系统提示里的技能摘要）"}
+    }
+  },
+  "outputSchema": {"type": "object", "properties": {"sop": {"type": "string"}}},
+  "source": {"type": "INTERNAL", "endpointOrIdentifier": "load_skill"},
+  "sideEffect": "READ_ONLY",
+  "timeoutMillis": 0,
+  "status": "ACTIVE"
+}

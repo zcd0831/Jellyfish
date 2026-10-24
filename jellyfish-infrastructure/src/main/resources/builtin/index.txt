@@ -7,3 +7,4 @@ tools/spawn_subagents.json
 agents/builtin.reflect.md
 agents/builtin.retrieve.md
 agents/builtin.distill.md
+tools/load_skill.json

@@ -7,6 +7,7 @@ import io.github.zcd0831.jellyfish.application.memory.ExperienceDistillationServ
 import io.github.zcd0831.jellyfish.application.memory.ExperienceFeedbackService;
 import io.github.zcd0831.jellyfish.application.memory.ExperienceRetriever;
 import io.github.zcd0831.jellyfish.application.memory.port.ReflectionRepository;
+import io.github.zcd0831.jellyfish.application.memory.port.SkillSopProvider;
 import io.github.zcd0831.jellyfish.application.action.InternalToolHandlers;
 import io.github.zcd0831.jellyfish.application.action.ToolExecutor;
 import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationPort;
@@ -22,6 +23,7 @@ import io.github.zcd0831.jellyfish.application.planning.GeneratePlanHandler;
 import io.github.zcd0831.jellyfish.application.planning.VerificationRunner;
 import io.github.zcd0831.jellyfish.application.planning.RunSessionUseCase;
 import io.github.zcd0831.jellyfish.application.planning.SpawnSubagentsHandler;
+import io.github.zcd0831.jellyfish.application.planning.LoadSkillHandler;
 import io.github.zcd0831.jellyfish.application.planning.RunSessionProvider;
 import io.github.zcd0831.jellyfish.application.planning.SubagentLauncher;
 import io.github.zcd0831.jellyfish.application.planning.port.PlanRepository;
@@ -59,10 +61,12 @@ public final class PlanningModule {
     @Provides
     @Singleton
     InternalToolHandlers internalToolHandlers(GeneratePlanHandler generatePlanHandler,
-                                              SpawnSubagentsHandler spawnSubagentsHandler) {
+                                              SpawnSubagentsHandler spawnSubagentsHandler,
+                                              SkillSopProvider sopProvider) {
         return new InternalToolHandlers(Arrays.asList(
                 new InternalToolHandlers.NamedHandler("generate_plan", generatePlanHandler),
-                new InternalToolHandlers.NamedHandler("spawn_subagents", spawnSubagentsHandler)));
+                new InternalToolHandlers.NamedHandler("spawn_subagents", spawnSubagentsHandler),
+                new InternalToolHandlers.NamedHandler("load_skill", new LoadSkillHandler(sopProvider))));
     }
 
     @Provides

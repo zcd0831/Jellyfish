@@ -10,6 +10,7 @@ import io.github.zcd0831.jellyfish.application.perception.port.PolicyRepository;
 import io.github.zcd0831.jellyfish.application.perception.port.RecordStore;
 import io.github.zcd0831.jellyfish.application.memory.port.ExperienceRepository;
 import io.github.zcd0831.jellyfish.application.memory.port.ReflectionRepository;
+import io.github.zcd0831.jellyfish.application.memory.port.SkillSopProvider;
 import io.github.zcd0831.jellyfish.application.perception.port.SessionRepository;
 import io.github.zcd0831.jellyfish.application.planning.port.PlanRepository;
 import io.github.zcd0831.jellyfish.application.planning.port.VerificationReportRepository;
@@ -38,6 +39,7 @@ import io.github.zcd0831.jellyfish.infrastructure.file.FileReportRepository;
 import io.github.zcd0831.jellyfish.infrastructure.file.FileRecordStore;
 import io.github.zcd0831.jellyfish.infrastructure.file.FileSchemaMigrator;
 import io.github.zcd0831.jellyfish.infrastructure.file.FileSessionRepository;
+import io.github.zcd0831.jellyfish.infrastructure.file.FileSkillSopProvider;
 import io.github.zcd0831.jellyfish.infrastructure.file.JsonCodec;
 import io.github.zcd0831.jellyfish.infrastructure.model.HttpJsonClient;
 import io.github.zcd0831.jellyfish.infrastructure.model.ModelInvoker;
@@ -104,8 +106,14 @@ public final class InfrastructureModule {
 
     @Provides
     @Singleton
-    CatalogRepository catalogRepository(DataDirectory dir, JsonCodec codec) {
+    FileCatalogRepository catalogRepository(DataDirectory dir, JsonCodec codec) {
         return new FileCatalogRepository(dir, codec);
+    }
+
+    @Provides
+    @Singleton
+    CatalogRepository catalogAlias(FileCatalogRepository catalog) {
+        return catalog;
     }
 
     @Provides
@@ -130,6 +138,12 @@ public final class InfrastructureModule {
     @Singleton
     ReflectionRepository reflectionRepository(DataDirectory dir, JsonCodec codec) {
         return new FileReflectionRepository(dir, codec);
+    }
+
+    @Provides
+    @Singleton
+    SkillSopProvider skillSopProvider(FileCatalogRepository catalog) {
+        return new FileSkillSopProvider(catalog);
     }
 
     @Provides

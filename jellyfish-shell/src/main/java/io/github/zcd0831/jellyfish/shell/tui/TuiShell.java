@@ -1,5 +1,7 @@
 package io.github.zcd0831.jellyfish.shell.tui;
 
+import io.github.zcd0831.jellyfish.application.perception.AdjustPolicyUseCase;
+import io.github.zcd0831.jellyfish.application.perception.ManageSessionUseCase;
 import io.github.zcd0831.jellyfish.application.perception.StartSessionUseCase;
 import io.github.zcd0831.jellyfish.application.planning.RunSessionResult;
 import io.github.zcd0831.jellyfish.application.planning.RunSessionUseCase;
@@ -23,15 +25,20 @@ public final class TuiShell {
 
     private final StartSessionUseCase startSession;
     private final RunSessionUseCase runSession;
+    private final ManageSessionUseCase manageSession;
+    private final AdjustPolicyUseCase adjustPolicy;
     private final BufferedReader in;
     private final PrintStream out;
 
     private SessionId currentSession;
 
-    public TuiShell(StartSessionUseCase startSession, RunSessionUseCase runSession, InputStream in,
-                    PrintStream out) {
+    public TuiShell(StartSessionUseCase startSession, RunSessionUseCase runSession,
+                    ManageSessionUseCase manageSession, AdjustPolicyUseCase adjustPolicy,
+                    InputStream in, PrintStream out) {
         this.startSession = startSession;
         this.runSession = runSession;
+        this.manageSession = manageSession;
+        this.adjustPolicy = adjustPolicy;
         this.in = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8));
         this.out = out;
     }
@@ -55,6 +62,10 @@ public final class TuiShell {
             if (line.trim().isEmpty()) {
                 continue;
             }
+            if (line.trim().startsWith("/")) {
+                command(line.trim());
+                continue;
+            }
             handle(line);
         }
     }
@@ -72,6 +83,44 @@ public final class TuiShell {
             return;
         }
         runOnce(text);
+    }
+
+    /** 管理命令：/archive /delete /cancel /policy k=v [k=v ...]。 */
+    private void command(String line) {
+        String[] parts = line.split("\\s+");
+        String name = parts[0];
+        if (currentSession == null) {
+            out.println("（还没有会话）");
+            return;
+        }
+        if ("/archive".equals(name)) {
+            print(manageSession.archive(currentSession));
+            currentSession = null;
+        } else if ("/delete".equals(name)) {
+            print(manageSession.delete(currentSession));
+            currentSession = null;
+        } else if ("/cancel".equals(name)) {
+            print(manageSession.cancel(currentSession));
+            out.println("（已取消，可继续输入或 exit）");
+        } else if ("/policy".equals(name)) {
+            java.util.Map<String, Object> changes = new java.util.LinkedHashMap<String, Object>();
+            for (int i = 1; i < parts.length; i++) {
+                int eq = parts[i].indexOf('=');
+                if (eq > 0) {
+                    changes.put(parts[i].substring(0, eq), parts[i].substring(eq + 1));
+                }
+            }
+            print(adjustPolicy.adjust(changes));
+            out.println("策略已更新（立即生效）");
+        } else {
+            out.println("未知命令：" + name + "（可用 /archive /delete /cancel /policy）");
+        }
+    }
+
+    private void print(Result<?> result) {
+        if (!result.isOk()) {
+            printError(result.error());
+        }
     }
 
     private void runOnce(String text) {

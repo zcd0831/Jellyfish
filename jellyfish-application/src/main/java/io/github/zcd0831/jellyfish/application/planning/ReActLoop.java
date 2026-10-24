@@ -39,6 +39,7 @@ import java.util.Map;
 public final class ReActLoop {
 
     private static final String SUBMIT_STEP = "submit_step";
+    private static final String LOAD_SKILL = "load_skill";
 
     private final ModelInvocationPort model;
     private final ToolExecutor toolExecutor;
@@ -161,6 +162,12 @@ public final class ReActLoop {
         Record result = session.appendRecord(RecordRole.TOOL_RESULT, outcome.content(),
                 new ToolResultPayload(outcome.isTruncated(), outcome.resourceUri()), System.currentTimeMillis());
         commitAppend(session, result);
+        if (LOAD_SKILL.equals(call.name())) {
+            // SOP 注入为 SYSTEM 记录：此后不参与滑窗（§7.3 规则 ③）
+            Record injected = session.appendRecord(RecordRole.SYSTEM, outcome.content(), null,
+                    System.currentTimeMillis());
+            commitAppend(session, injected);
+        }
         return ChatMessage.toolResult(call.callId(), outcome.content());
     }
 

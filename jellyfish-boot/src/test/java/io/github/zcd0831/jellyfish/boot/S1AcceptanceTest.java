@@ -56,6 +56,7 @@ import java.util.Deque;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -176,7 +177,10 @@ class S1AcceptanceTest {
         runSession.run(sessionId, null, ChunkSink.NOOP);
 
         ModelInvocationRequest request = model.requests.get(model.requests.size() - 1);
-        assertTrue(request.systemPrompt().contains("AI 助手"), request.systemPrompt());
+        // 断言的是"请求用的是冻结快照"，不是提示词措辞——措辞属于内置资产，可以改（模块-感知 §8.3）
+        Session frozen = new FileSessionRepository(dir, codec).load(sessionId);
+        assertEquals(frozen.systemPromptSnapshot().getRenderedPrompt(), request.systemPrompt());
+        assertFalse(request.systemPrompt().isEmpty(), "系统提示词不能为空");
         java.util.List<String> toolNames = new java.util.ArrayList<String>();
         for (io.github.zcd0831.jellyfish.domain.perception.session.ToolSchemaSnapshot tool : request.tools()) {
             toolNames.add(tool.getName());

@@ -10,7 +10,11 @@
   技术事件（模型重试/降级/不可用、上下文折叠、验证耗时）落结构化 key=value
 - 启动自检：供应商凭据环境变量缺失逐条提示，不阻塞启动
 - 启动对账：`StartupReconciler` 5 条规则全部实现（含归档幂等收尾）
-- 测试：JUnit 5 为主、假端口优先；需要时用 Mockito（4.11.x）；JaCoCo 0.8.12 出覆盖率数据（不设门槛）
+- 测试：JUnit 5 为主、假端口优先；需要时用 Mockito（4.11.x + mockito-inline）；JaCoCo 0.8.12 出覆盖率数据
+- 经验注入上下文：步骤启动前写一条带 `step=` 标记的 SYSTEM 记录，正文来自 `ExperienceRepository.find(id)`
+- 修复：审批判定先看否定再看肯定（"不同意"里含"同意"，原来会被当放行）
+- 修复：模型响应无法解析时映射为 `M_UNAVAILABLE`（原来会漏出基础设施异常）
+- 修复：JSON 解析拒绝末尾多余内容
 
 ### S3 子代理
 - `SubagentLauncher`：并行发起、**各自独立超时**、join-all；子代理拒绝递归（深度恒为 1）

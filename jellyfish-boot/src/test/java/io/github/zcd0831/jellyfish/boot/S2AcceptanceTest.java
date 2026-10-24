@@ -142,7 +142,7 @@ class S2AcceptanceTest {
                                 return runSessionHolder[0];
                             }
                         }, sessions, records, budgetService, policies, event -> { },
-                        java.util.concurrent.Executors.newFixedThreadPool(2)));
+                        java.util.concurrent.Executors.newFixedThreadPool(2)), experiences);
         runSession = new RunSessionUseCase(sessions, records, new FileCommitScope(dir, codec), publisher,
                 executionLoop);
         runSessionHolder[0] = runSession;

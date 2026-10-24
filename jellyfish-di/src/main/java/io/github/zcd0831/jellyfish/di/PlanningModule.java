@@ -6,6 +6,7 @@ import io.github.zcd0831.jellyfish.application.action.BudgetService;
 import io.github.zcd0831.jellyfish.application.memory.ExperienceDistillationService;
 import io.github.zcd0831.jellyfish.application.memory.ExperienceFeedbackService;
 import io.github.zcd0831.jellyfish.application.memory.ExperienceRetriever;
+import io.github.zcd0831.jellyfish.application.memory.port.ExperienceRepository;
 import io.github.zcd0831.jellyfish.application.memory.port.ReflectionRepository;
 import io.github.zcd0831.jellyfish.application.memory.port.SkillSopProvider;
 import io.github.zcd0831.jellyfish.application.action.InternalToolHandlers;
@@ -124,10 +125,11 @@ public final class PlanningModule {
                                 ExperienceRetriever experienceRetriever,
                                 ExperienceFeedbackService experienceFeedback,
                                 ExperienceDistillationService experienceDistillation,
-                                ReflectionRepository reflections, SubagentLauncher subagentLauncher) {
+                                ReflectionRepository reflections, SubagentLauncher subagentLauncher,
+                                ExperienceRepository experiences) {
         return new ExecutionLoop(contextWindow, reActLoop, verificationRunner, plans, planFactory, catalog,
                 policies, commitScope, publisher, progress, model, budgetService, experienceRetriever,
-                experienceFeedback, experienceDistillation, reflections, subagentLauncher);
+                experienceFeedback, experienceDistillation, reflections, subagentLauncher, experiences);
     }
 
     @Provides

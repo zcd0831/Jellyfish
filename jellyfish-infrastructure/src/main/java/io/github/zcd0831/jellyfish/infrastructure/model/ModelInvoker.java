@@ -184,8 +184,14 @@ public final class ModelInvoker implements ModelInvocationPort {
         if (sink == null) {
             ChatTransport.Response response = execute(url, headers, body);
             if (response.status() >= 200 && response.status() < 300) {
-                ModelInvocationResult result = protocol.parseResponse(response.body(), model.id());
-                return withUsageFallback(request, model, result);
+                try {
+                    ModelInvocationResult result = protocol.parseResponse(response.body(), model.id());
+                    return withUsageFallback(request, model, result);
+                } catch (ModelResponseFormatException broken) {
+                    // 响应体不是协议约定的 JSON：属于端点行为异常，映射成上下文错误码（D11）
+                    throw new ModelInvocationException(ModelError.UNAVAILABLE,
+                            "模型响应无法解析（" + model.id().getValue() + "）", broken);
+                }
             }
             throw mapFailure(response, model);
         }

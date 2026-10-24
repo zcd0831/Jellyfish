@@ -58,6 +58,6 @@ final class LoopSupport {
                 budgetService, policies, progress, pool);
         return new ExecutionLoop(contextWindow, reActLoop, verificationRunner, plans, new PlanFactory(), catalog,
                 policies, new FileCommitScope(dir, codec), publisher, progress, model, budgetService, retriever,
-                feedback, distillation, reflections, launcher);
+                feedback, distillation, reflections, launcher, experiences);
     }
 }

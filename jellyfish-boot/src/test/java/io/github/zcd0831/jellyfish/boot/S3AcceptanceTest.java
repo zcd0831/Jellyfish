@@ -205,16 +205,6 @@ class S3AcceptanceTest {
         ToolExecOutcome outcome = toolExecutorHolder.execute(main, "spawn_subagents", args,
                 io.github.zcd0831.jellyfish.domain.shared.RecordId.of("r1"));
         Path sd = tmp.resolve("sessions").resolve("main").resolve("sub");
-        java.io.File[] kids = sd.toFile().listFiles();
-        StringBuilder dbg = new StringBuilder("DEBUG content=" + outcome.content() + " | ");
-        if (kids != null) {
-            for (java.io.File kid : kids) {
-                dbg.append(kid.getName()).append(":meta=").append(new java.io.File(kid, "meta.json").exists())
-                        .append(",load=").append(sessions.load(SessionId.of(kid.getName())) != null).append("; ");
-            }
-        }
-        System.out.println(dbg);
-
         assertTrue(outcome.content().contains("结论A"), outcome.content());
         assertTrue(outcome.content().contains("超时未完成"), outcome.content());
     }

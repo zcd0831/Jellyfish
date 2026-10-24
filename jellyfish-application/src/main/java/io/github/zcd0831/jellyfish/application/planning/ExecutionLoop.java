@@ -28,6 +28,7 @@ import io.github.zcd0831.jellyfish.application.shared.port.ProgressPort;
 import io.github.zcd0831.jellyfish.domain.action.agent.AgentDefinition;
 import io.github.zcd0831.jellyfish.domain.action.model.ModelError;
 import io.github.zcd0831.jellyfish.domain.perception.policy.RuntimePolicy;
+import io.github.zcd0831.jellyfish.domain.perception.session.Record;
 import io.github.zcd0831.jellyfish.domain.perception.session.RecordRole;
 import io.github.zcd0831.jellyfish.domain.perception.session.Session;
 import io.github.zcd0831.jellyfish.domain.planning.plan.Attempt;
@@ -85,6 +86,7 @@ public final class ExecutionLoop {
     private final ExperienceFeedbackService experienceFeedback;
     private final ExperienceDistillationService experienceDistillation;
     private final ReflectionRepository reflections;
+    private final io.github.zcd0831.jellyfish.application.memory.port.ExperienceRepository experiences;
     private final SubagentLauncher subagentLauncher;
 
     public ExecutionLoop(ContextWindowService contextWindow, ReActLoop reActLoop,
@@ -94,7 +96,8 @@ public final class ExecutionLoop {
                          BudgetService budgetService, ExperienceRetriever experienceRetriever,
                          ExperienceFeedbackService experienceFeedback,
                          ExperienceDistillationService experienceDistillation,
-                         ReflectionRepository reflections, SubagentLauncher subagentLauncher) {
+                         ReflectionRepository reflections, SubagentLauncher subagentLauncher,
+                         io.github.zcd0831.jellyfish.application.memory.port.ExperienceRepository experiences) {
         this.contextWindow = contextWindow;
         this.reActLoop = reActLoop;
         this.verificationRunner = verificationRunner;
@@ -112,6 +115,7 @@ public final class ExecutionLoop {
         this.experienceDistillation = experienceDistillation;
         this.reflections = reflections;
         this.subagentLauncher = subagentLauncher;
+        this.experiences = experiences;
     }
 
     public Outcome run(Session session, ChunkSink sink) {
@@ -124,6 +128,7 @@ public final class ExecutionLoop {
             PlanStep step = plan != null && plan.hasExecutablePlan() ? plan.getCurrentStep() : null;
             Attempt attempt = null;
             if (step != null && step.status() == StepStatus.PENDING) {
+                injectExperiences(session, step);
                 attempt = plan.beginCurrentStep();
                 commitPlan(plan);
                 progress.emit(ProgressEvent.of(ProgressEvent.Kind.STEP_STARTED,
@@ -279,6 +284,53 @@ public final class ExecutionLoop {
             plan.assignExperiences(entry.getKey(), entry.getValue());
         }
         commitPlan(plan);
+    }
+
+    /**
+     * 步骤启动前把该步分配到的经验注入上下文（一条 SYSTEM 记录，首行带 step 标记用于去重）。
+     * 规则出处：模块-感知 §7.1 规则 9 ①（经验注入）、规则 10（不参与淘汰）、§7.3 规则 ③、M24。
+     */
+    private void injectExperiences(Session session, PlanStep step) {
+        List<ExperienceId> ids = step.assignedExperienceIds();
+        if (ids.isEmpty() || alreadyInjected(session, step)) {
+            return;
+        }
+        StringBuilder text = new StringBuilder("[经验注入 step=").append(step.id().getValue()).append(']');
+        int limit = policies.load().toolResultTruncateLength();
+        for (ExperienceId id : ids) {
+            java.util.Optional<io.github.zcd0831.jellyfish.domain.memory.experience.Experience> found =
+                    experiences.find(id);
+            if (!found.isPresent() || !found.get().isActive()) {
+                continue;
+            }
+            io.github.zcd0831.jellyfish.domain.memory.experience.Experience experience = found.get();
+            text.append("\n- 适用场景：").append(experience.applicableScenario())
+                    .append("｜教训：").append(experience.lesson().getInstruction())
+                    .append("｜期望：").append(experience.lesson().getExpectedOutcome());
+            if (text.length() > limit) {
+                text.append("\n（已截断）");
+                break;
+            }
+        }
+        if (text.indexOf("\n") < 0) {
+            return;   // 一条可用经验都没有，不写空记录
+        }
+        Record injected = session.appendRecord(RecordRole.SYSTEM, text.toString(), null,
+                System.currentTimeMillis());
+        commitScope.stageAppend(session.id(), injected);
+        commitScope.commit();
+    }
+
+    /** 去重靠流水本身：标记是"可推导状态"，不落库（§7.1 规则 11、M24）。 */
+    private static boolean alreadyInjected(Session session, PlanStep step) {
+        String marker = "[经验注入 step=" + step.id().getValue() + "]";
+        for (Record record : session.records()) {
+            if (record.role() == RecordRole.SYSTEM && record.content() != null
+                    && record.content().startsWith(marker)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void feedbackSucceeded(PlanStep step) {

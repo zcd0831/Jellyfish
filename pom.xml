@@ -142,6 +142,13 @@
                 <artifactId>log4j-core</artifactId>
                 <version>${log4j.version}</version>
             </dependency>
+            <!-- 把第三方库（OkHttp / networknt）的 SLF4J 日志并到 Log4j2（D18） -->
+            <dependency>
+                <groupId>org.apache.logging.log4j</groupId>
+                <artifactId>log4j-slf4j2-impl</artifactId>
+                <version>${log4j.version}</version>
+                <scope>runtime</scope>
+            </dependency>
 
             <!-- HTTP 客户端（技术决策 D16-5 / M14：OkHttp 4.12.0，Java 8 兼容且仍在维护） -->
             <dependency>
@@ -174,6 +181,13 @@
             <dependency>
                 <groupId>org.mockito</groupId>
                 <artifactId>mockito-core</artifactId>
+                <version>${mockito.version}</version>
+                <scope>test</scope>
+            </dependency>
+            <!-- final 类（我们的应用服务都是 final）也要能 mock（M22） -->
+            <dependency>
+                <groupId>org.mockito</groupId>
+                <artifactId>mockito-inline</artifactId>
                 <version>${mockito.version}</version>
                 <scope>test</scope>
             </dependency>

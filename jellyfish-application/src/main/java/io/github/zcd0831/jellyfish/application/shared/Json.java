@@ -23,7 +23,12 @@ public final class Json {
         if (json == null || json.trim().isEmpty()) {
             return new LinkedHashMap<String, Object>();
         }
-        Object value = new Json(json).readValue();
+        Json parser = new Json(json);
+        Object value = parser.readValue();
+        parser.skipWhitespace();
+        if (parser.index < parser.text.length()) {
+            throw new IllegalArgumentException("JSON 末尾有多余内容，位置 " + parser.index);
+        }
         return value instanceof Map ? (Map<String, Object>) value : new LinkedHashMap<String, Object>();
     }
 

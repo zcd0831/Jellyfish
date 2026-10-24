@@ -65,7 +65,8 @@ public final class ToolExecutor {
         if (needsApproval(tool, policy)) {
             Answer answer = human.ask(new Question(Question.Source.APPROVAL,
                     "工具 " + toolName + " 可能产生副作用，允许执行吗？", null));
-            if (answer.kind() == Answer.Kind.CANCELLED || !isApproved(answer.text())) {
+            if (answer.kind() == Answer.Kind.CANCELLED
+                    || !io.github.zcd0831.jellyfish.application.shared.Approvals.isApproved(answer.text())) {
                 return ToolExecOutcome.plain("用户拒绝执行：" + toolName);
             }
         }
@@ -110,11 +111,6 @@ public final class ToolExecutor {
 
     private boolean needsApproval(ToolDefinition tool, RuntimePolicy policy) {
         return tool.sideEffect() != SideEffectLevel.READ_ONLY && !policy.isToolTrusted(tool.id());
-    }
-
-    private boolean isApproved(String text) {
-        return text != null && (text.contains("同意") || text.equalsIgnoreCase("y")
-                || text.equalsIgnoreCase("yes") || text.trim().isEmpty());
     }
 
     private boolean isBoundToAgent(Session session, ToolId toolId) {

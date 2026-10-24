@@ -9,10 +9,12 @@ mvn -q test
 JAR=$(ls ~/.m2/repository/org/jacoco/org.jacoco.cli/*/org.jacoco.cli-*-nodeps.jar | tail -1)
 rm -rf target/coverage && mkdir -p target/coverage
 
-java -jar "$JAR" report \
-  jellyfish-domain/target/jacoco.exec \
-  jellyfish-infrastructure/target/jacoco.exec \
-  jellyfish-boot/target/jacoco.exec \
+EXECS=()
+for module in jellyfish-domain jellyfish-application jellyfish-infrastructure jellyfish-shell jellyfish-boot; do
+  [ -f "$module/target/jacoco.exec" ] && EXECS+=("$module/target/jacoco.exec")
+done
+
+java -jar "$JAR" report "${EXECS[@]}" \
   --classfiles jellyfish-domain/target/classes \
   --classfiles jellyfish-application/target/classes \
   --classfiles jellyfish-infrastructure/target/classes \

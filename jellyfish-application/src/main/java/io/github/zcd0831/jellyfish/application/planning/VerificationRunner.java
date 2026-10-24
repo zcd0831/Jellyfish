@@ -167,7 +167,7 @@ public final class VerificationRunner {
             return LayerResult.undetermined("用户取消了验收");
         }
         String text = answer.text() == null ? "" : answer.text();
-        if (text.contains("同意") || text.equalsIgnoreCase("y") || text.equalsIgnoreCase("yes")) {
+        if (io.github.zcd0831.jellyfish.application.shared.Approvals.isApproved(text)) {
             return LayerResult.passed();
         }
         return LayerResult.failed(text.trim().isEmpty() ? "用户不同意，但未给出原因" : text);

@@ -160,6 +160,42 @@ class S4LoopTest {
 
         double confidence = experiences.findActive().get(0).confidence().getValue();
         assertEquals(0.6, confidence, 1e-9, "成功后应奖励被建议的经验");
+
+        assertTrue(injectedContext(sessionId).contains("先拆步骤再执行"), "经验正文应注入为 SYSTEM 记录");
+    }
+
+    /** 找到那条 SYSTEM 注入记录（首行带 step 标记）。 */
+    private String injectedContext(SessionId sessionId) {
+        StringBuilder text = new StringBuilder();
+        for (io.github.zcd0831.jellyfish.domain.perception.session.Record record
+                : new FileRecordStore(dir, codec).last(sessionId, 50)) {
+            if (record.role() == io.github.zcd0831.jellyfish.domain.perception.session.RecordRole.SYSTEM
+                    && record.content() != null && record.content().startsWith("[经验注入 step=")) {
+                text.append(record.content());
+            }
+        }
+        return text.toString();
+    }
+
+    @Test
+    void 同一步的第二次attempt不重复注入() {
+        experiences.save(Experience.create(ExperienceId.of("e1"), "需要多步任务时",
+                new LessonLearned("先拆步骤再执行", "不遗漏子任务"), 0.5, 100L));
+        model.seed(text("标题"));
+        SessionId sessionId = startSession.start(null, null, "做两件事").value();
+        model.seed(toolCall("c1", "generate_plan",
+                "{\"goal\":\"做两件事\",\"steps\":[{\"description\":\"第一步\","
+                        + "\"goal\":\"g\",\"expectedOutcome\":\"o\",\"verificationCriteria\":\"c\","
+                        + "\"verifications\":[\"DETERMINISTIC\"]}]}"));
+        model.seed(text("计划已创建"));
+        model.seed(toolCall("c2", "submit_step", "{\"summary\":\"\"}"));
+        model.seed(toolCall("c3", "submit_step", "{\"summary\":\"做完了\"}"));
+        model.seed(text("完成"));
+
+        runSession.run(sessionId, null, ChunkSink.NOOP);
+
+        String injected = injectedContext(sessionId);
+        assertEquals(1, injected.split("\\[经验注入", -1).length - 1, "同一步只注入一次");
     }
 
     private String firstPlanId(SessionId sessionId) {

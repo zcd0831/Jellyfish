@@ -44,6 +44,15 @@ public final class FileExperienceRepository implements ExperienceRepository {
         return active;
     }
 
+    @Override
+    public java.util.Optional<Experience> find(ExperienceId id) {
+        Path file = fileOf(id);
+        if (!Files.isRegularFile(file)) {
+            return java.util.Optional.empty();
+        }
+        return java.util.Optional.of(codec.read(read(file), ExperienceDto.class).toDomain());
+    }
+
     /** 供淘汰排序用：全部经验（含已归档，避免重复归档时找不到）。 */
     public List<Experience> all() {
         List<Experience> all = new ArrayList<Experience>();

@@ -54,7 +54,7 @@ public final class TuiApp implements QuestionBroker.Answerer {
     private final AnsiRenderer renderer;
     private final OutputGateway gateway;
     private final Terminal terminal;
-    private final Runnable cancelInFlight;
+    private final ShellCancellationToken token;
 
     private final BlockingQueue<String> commands = new LinkedBlockingQueue<String>();
     private final AtomicInteger interruptions = new AtomicInteger();
@@ -69,7 +69,7 @@ public final class TuiApp implements QuestionBroker.Answerer {
     public TuiApp(StartSessionUseCase startSession, RunSessionUseCase runSession,
                   ManageSessionUseCase manageSession, AdjustPolicyUseCase adjustPolicy,
                   CatalogRepository catalog, AnsiRenderer renderer, QuestionBroker broker,
-                  OutputGateway gateway, Terminal terminal, Runnable cancelInFlight) {
+                  OutputGateway gateway, Terminal terminal, ShellCancellationToken token) {
         this.startSession = startSession;
         this.runSession = runSession;
         this.manageSession = manageSession;
@@ -78,7 +78,7 @@ public final class TuiApp implements QuestionBroker.Answerer {
         this.renderer = renderer;
         this.gateway = gateway;
         this.terminal = terminal;
-        this.cancelInFlight = cancelInFlight;
+        this.token = token;
         broker.bind(this);
     }
 
@@ -236,11 +236,12 @@ public final class TuiApp implements QuestionBroker.Answerer {
 
     private void runOnce(String text) {
         pauseInput();
+        token.reset();
         renderer.status("思考中…");
         org.jline.terminal.Attributes original = withoutEcho();
         Result<RunSessionResult> result;
         try {
-            result = runSession.run(currentSession, text, sink());
+            result = runSession.run(currentSession, text, sink(), token);
         } finally {
             restore(original);
         }
@@ -341,7 +342,7 @@ public final class TuiApp implements QuestionBroker.Answerer {
             commands.offer("exit");
             return;
         }
-        cancelInFlight.run();
+        token.cancel();
     }
 
     /** Ctrl-C 在提示符处：清行继续，两秒内第二次退出（D20-5）。 */
@@ -374,6 +375,7 @@ public final class TuiApp implements QuestionBroker.Answerer {
             print(manageSession.delete(currentSession));
             currentSession = null;
         } else if ("/cancel".equals(name)) {
+            token.cancel();
             cancelPendingQuestion();
             print(manageSession.cancel(currentSession));
             renderer.info("（已取消，可继续输入或 exit）");

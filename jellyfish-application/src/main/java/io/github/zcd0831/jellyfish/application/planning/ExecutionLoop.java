@@ -19,6 +19,7 @@ import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationResult
 import io.github.zcd0831.jellyfish.application.perception.ContextWindowService;
 import io.github.zcd0831.jellyfish.application.perception.port.PolicyRepository;
 import io.github.zcd0831.jellyfish.application.planning.port.PlanRepository;
+import io.github.zcd0831.jellyfish.application.shared.CancellationToken;
 import io.github.zcd0831.jellyfish.application.shared.ChunkSink;
 import io.github.zcd0831.jellyfish.application.shared.Json;
 import io.github.zcd0831.jellyfish.application.shared.ProgressEvent;
@@ -118,12 +119,19 @@ public final class ExecutionLoop {
         this.experiences = experiences;
     }
 
+    /** 无令牌的调用按"永不取消"处理（§8.4.1）。 */
     public Outcome run(Session session, ChunkSink sink) {
+        return run(session, sink, CancellationToken.never());
+    }
+
+    public Outcome run(Session session, ChunkSink sink, CancellationToken token) {
         RuntimePolicy policy = policies.load();
         Plan plan = runningPlan(session);
         boolean collapsedOnce = false;
 
         while (true) {
+            // 每一轮开始先看取消：流式/工具刚被打断时，不再进入下一轮（§8.4.1）
+            token.throwIfCancelled();
             contextWindow.ensureWithinLimit(session);
             PlanStep step = plan != null && plan.hasExecutablePlan() ? plan.getCurrentStep() : null;
             Attempt attempt = null;

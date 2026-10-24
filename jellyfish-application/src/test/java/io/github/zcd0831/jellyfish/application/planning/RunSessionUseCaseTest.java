@@ -62,7 +62,7 @@ class RunSessionUseCaseTest {
 
     @Test
     void 收敛后会话落回可续跑() {
-        when(executionLoop.run(any(Session.class), any(ChunkSink.class))).thenReturn(ExecutionLoop.Outcome.CONVERGED);
+        when(executionLoop.run(any(Session.class), any(ChunkSink.class), any())).thenReturn(ExecutionLoop.Outcome.CONVERGED);
 
         Result<RunSessionResult> result = useCase().run(SessionId.of("s1"), "hi", ChunkSink.NOOP);
 
@@ -73,12 +73,12 @@ class RunSessionUseCaseTest {
 
     @Test
     void 挂起与轮次用尽如实映射() {
-        when(executionLoop.run(any(Session.class), any(ChunkSink.class)))
+        when(executionLoop.run(any(Session.class), any(ChunkSink.class), any()))
                 .thenReturn(ExecutionLoop.Outcome.SUSPENDED);
         assertEquals(RunSessionResult.Outcome.SUSPENDED,
                 useCase().run(SessionId.of("s1"), "hi", ChunkSink.NOOP).value().outcome());
 
-        when(executionLoop.run(any(Session.class), any(ChunkSink.class)))
+        when(executionLoop.run(any(Session.class), any(ChunkSink.class), any()))
                 .thenReturn(ExecutionLoop.Outcome.ROUNDS_EXHAUSTED);
         assertEquals(RunSessionResult.Outcome.ROUNDS_EXHAUSTED,
                 useCase().run(SessionId.of("s1"), "hi", ChunkSink.NOOP).value().outcome());
@@ -86,7 +86,7 @@ class RunSessionUseCaseTest {
 
     @Test
     void 取消是正常结果且会话可续跑() {
-        when(executionLoop.run(any(Session.class), any(ChunkSink.class)))
+        when(executionLoop.run(any(Session.class), any(ChunkSink.class), any()))
                 .thenThrow(new CancellationException("用户中断"));
 
         Result<RunSessionResult> result = useCase().run(SessionId.of("s1"), "hi", ChunkSink.NOOP);
@@ -98,7 +98,7 @@ class RunSessionUseCaseTest {
 
     @Test
     void 模型不可用不改状态() {
-        when(executionLoop.run(any(Session.class), any(ChunkSink.class)))
+        when(executionLoop.run(any(Session.class), any(ChunkSink.class), any()))
                 .thenThrow(new ModelInvocationException(ModelError.UNAVAILABLE, "全挂"));
         Session fresh = Session.create(SessionId.of("s1"), null, AgentId.of("a"), ModelId.of("m1"), 1L, null);
         fresh.resume();

@@ -68,6 +68,10 @@ class ModelInvokerTest {
             script.add(response);
         }
 
+        void failWith(RuntimeException failure) {
+            script.add(failure);
+        }
+
         void streamWith(List<String> lines) {
             this.streamLines = lines;
         }
@@ -83,6 +87,13 @@ class ModelInvokerTest {
                 throw (RuntimeException) next;
             }
             return (Response) next;
+        }
+
+        private boolean cancelled;
+
+        @Override
+        public boolean cancelledByUser() {
+            return cancelled;
         }
 
         @Override
@@ -301,6 +312,21 @@ class ModelInvokerTest {
         assertEquals(4, transport.calls);
         assertEquals(3, sleeps.size());
         assertEquals(ProgressEvent.Kind.RETRY_SCHEDULED, progress.events.get(0).kind());
+    }
+
+    @Test
+    void 用户取消不进重试() {
+        FakeCatalog catalog = new FakeCatalog();
+        catalog.models.add(model("m1", 1000));
+        catalog.providers.add(provider());
+        transport.cancelled = true;
+        transport.failWith(new java.io.UncheckedIOException("canceled", new java.io.IOException("canceled")));
+
+        assertThrows(java.util.concurrent.CancellationException.class,
+                () -> invoker(catalog, policyWithFallback(), "sk-test").invoke(request("m1", 10)));
+
+        assertEquals(1, transport.calls, "取消是终态：不得重试");
+        assertTrue(sleeps.isEmpty(), "取消不应进入退避等待");
     }
 
     @Test

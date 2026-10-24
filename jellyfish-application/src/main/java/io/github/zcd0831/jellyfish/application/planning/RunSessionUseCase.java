@@ -3,6 +3,7 @@ package io.github.zcd0831.jellyfish.application.planning;
 import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationException;
 import io.github.zcd0831.jellyfish.application.perception.port.RecordStore;
 import io.github.zcd0831.jellyfish.application.perception.port.SessionRepository;
+import io.github.zcd0831.jellyfish.application.shared.CancellationToken;
 import io.github.zcd0831.jellyfish.application.shared.ChunkSink;
 import io.github.zcd0831.jellyfish.application.shared.Result;
 import io.github.zcd0831.jellyfish.application.shared.UseCaseError;
@@ -39,7 +40,12 @@ public final class RunSessionUseCase {
         this.executionLoop = executionLoop;
     }
 
+    /** 没有令牌的调用（测试复跑、内部复用）按"永不取消"处理（§8.4.1）。 */
     public Result<RunSessionResult> run(SessionId sessionId, String text, ChunkSink sink) {
+        return run(sessionId, text, sink, CancellationToken.never());
+    }
+
+    public Result<RunSessionResult> run(SessionId sessionId, String text, ChunkSink sink, CancellationToken token) {
         Session session = sessions.load(sessionId);
         if (session == null) {
             return Result.fail(UseCaseError.of(SessionError.NOT_FOUND, "会话不存在", sessionId));
@@ -58,7 +64,7 @@ public final class RunSessionUseCase {
         commitScope.commit();
 
         try {
-            ExecutionLoop.Outcome outcome = executionLoop.run(session, sink);
+            ExecutionLoop.Outcome outcome = executionLoop.run(session, sink, token);
             finish(session);
             return Result.ok(RunSessionResult.of(map(outcome)));
         } catch (java.util.concurrent.CancellationException cancelled) {

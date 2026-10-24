@@ -151,6 +151,9 @@ public final class ModelInvoker implements ModelInvocationPort {
             try {
                 return callOnce(request, model, provider, sink);
             } catch (RetryableFailure e) {
+                if (transport.cancelledByUser()) {
+                    throw new java.util.concurrent.CancellationException("用户取消了本次模型调用");
+                }
                 if (attempt >= BACKOFF_MILLIS.length) {
                     throw new ModelInvocationException(ModelError.UNAVAILABLE,
                             "重试用尽（" + model.id().getValue() + "）：" + e.getMessage(), e);
@@ -212,6 +215,9 @@ public final class ModelInvoker implements ModelInvocationPort {
                 }
             });
         } catch (RuntimeException e) {
+            if (transport.cancelledByUser()) {
+                throw new java.util.concurrent.CancellationException("用户取消了本次模型调用");
+            }
             throw new RetryableFailure("流式读取失败：" + e.getMessage(), null, e);
         }
         return withUsageFallback(request, model, accumulator.result(model.id()));
@@ -232,6 +238,9 @@ public final class ModelInvoker implements ModelInvocationPort {
         try {
             return transport.post(url, headers, body);
         } catch (RuntimeException e) {
+            if (transport.cancelledByUser()) {
+                throw new java.util.concurrent.CancellationException("用户取消了本次模型调用");
+            }
             throw new RetryableFailure("网络错误：" + e.getMessage(), null, e);
         }
     }

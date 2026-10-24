@@ -96,6 +96,12 @@ class ModelInvokerBranchesTest {
             return response;
         }
         public void postStreaming(String url, Map<String, String> headers, String body, LineSink sink) { }
+        @Override
+        public boolean cancelledByUser() {
+            return false;
+        }
+
+        @Override
         public void cancelActive() { }
     }
 

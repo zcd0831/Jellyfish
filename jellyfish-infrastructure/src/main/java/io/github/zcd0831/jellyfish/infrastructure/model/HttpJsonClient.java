@@ -27,6 +27,8 @@ public final class HttpJsonClient implements ChatTransport {
 
     private final OkHttpClient client;
     private volatile Call active;
+    /** 只对当次调用有效：每次发请求开头清掉。 */
+    private volatile boolean cancelled;
 
     public HttpJsonClient() {
         this.client = new OkHttpClient.Builder()
@@ -37,6 +39,7 @@ public final class HttpJsonClient implements ChatTransport {
 
     @Override
     public Response post(String url, Map<String, String> headers, String body) {
+        cancelled = false;
         Request request = build(url, headers, body);
         Call call = client.newCall(request);
         active = call;
@@ -53,6 +56,7 @@ public final class HttpJsonClient implements ChatTransport {
 
     @Override
     public void postStreaming(String url, Map<String, String> headers, String body, LineSink sink) {
+        cancelled = false;
         // 流式把读超时当"空闲超时"：每收到一行都会重置，长回答不会被总时长误杀（D10.1）
         OkHttpClient streaming = client.newBuilder()
                 .readTimeout(STREAM_IDLE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
@@ -88,10 +92,16 @@ public final class HttpJsonClient implements ChatTransport {
 
     @Override
     public void cancelActive() {
+        cancelled = true;
         Call call = active;
         if (call != null) {
             call.cancel();
         }
+    }
+
+    @Override
+    public boolean cancelledByUser() {
+        return cancelled;
     }
 
     private static Request build(String url, Map<String, String> headers, String body) {

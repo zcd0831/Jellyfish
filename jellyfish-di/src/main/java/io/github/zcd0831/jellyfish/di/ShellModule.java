@@ -13,6 +13,7 @@ import io.github.zcd0831.jellyfish.infrastructure.model.HttpJsonClient;
 import io.github.zcd0831.jellyfish.shell.tui.AnsiRenderer;
 import io.github.zcd0831.jellyfish.shell.tui.OutputGateway;
 import io.github.zcd0831.jellyfish.shell.tui.QuestionBroker;
+import io.github.zcd0831.jellyfish.shell.tui.ShellCancellationToken;
 import io.github.zcd0831.jellyfish.shell.tui.TuiApp;
 import io.github.zcd0831.jellyfish.shell.tui.TuiHumanInteraction;
 import io.github.zcd0831.jellyfish.shell.tui.TuiProgressReporter;
@@ -77,18 +78,27 @@ public final class ShellModule {
         return new TuiProgressReporter(renderer);
     }
 
+    /** 唯一取消令牌：Ctrl-C 与 `/cancel` 都走它；令牌回调负责让在途 HTTP 读立刻失败（§8.4.1）。 */
+    @Provides
+    @Singleton
+    ShellCancellationToken cancellationToken(final HttpJsonClient http) {
+        ShellCancellationToken token = new ShellCancellationToken();
+        token.onCancel(new Runnable() {
+            @Override
+            public void run() {
+                http.cancelActive();
+            }
+        });
+        return token;
+    }
+
     @Provides
     @Singleton
     TuiApp tuiApp(StartSessionUseCase startSession, RunSessionUseCase runSession,
                   ManageSessionUseCase manageSession, AdjustPolicyUseCase adjustPolicy,
                   CatalogRepository catalog, AnsiRenderer renderer, QuestionBroker broker,
-                  OutputGateway gateway, Terminal terminal, final HttpJsonClient http) {
+                  OutputGateway gateway, Terminal terminal, ShellCancellationToken token) {
         return new TuiApp(startSession, runSession, manageSession, adjustPolicy, catalog, renderer, broker,
-                gateway, terminal, new Runnable() {
-                    @Override
-                    public void run() {
-                        http.cancelActive();
-                    }
-                });
+                gateway, terminal, token);
     }
 }

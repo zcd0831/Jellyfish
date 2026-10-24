@@ -18,7 +18,6 @@ import io.github.zcd0831.jellyfish.application.shared.port.ArtifactStore;
 import io.github.zcd0831.jellyfish.application.shared.port.Clock;
 import io.github.zcd0831.jellyfish.application.shared.port.CommitScope;
 import io.github.zcd0831.jellyfish.application.shared.port.DomainEventPublisher;
-import io.github.zcd0831.jellyfish.application.shared.port.HumanInteractionPort;
 import io.github.zcd0831.jellyfish.application.shared.port.InstanceLock;
 import io.github.zcd0831.jellyfish.application.shared.port.ProgressPort;
 import io.github.zcd0831.jellyfish.application.shared.port.SchemaMigrator;
@@ -43,7 +42,6 @@ import io.github.zcd0831.jellyfish.infrastructure.file.FileSkillSopProvider;
 import io.github.zcd0831.jellyfish.infrastructure.file.JsonCodec;
 import io.github.zcd0831.jellyfish.infrastructure.model.HttpJsonClient;
 import io.github.zcd0831.jellyfish.infrastructure.model.ModelInvoker;
-import io.github.zcd0831.jellyfish.infrastructure.terminal.TerminalProgressReporter;
 import io.github.zcd0831.jellyfish.infrastructure.time.SystemClock;
 import io.github.zcd0831.jellyfish.infrastructure.tokenizer.CompositeTokenCounter;
 import io.github.zcd0831.jellyfish.infrastructure.tokenizer.EstimatorStrategy;
@@ -61,11 +59,9 @@ import javax.inject.Singleton;
 public final class InfrastructureModule {
 
     private final DataDirectory dataDirectory;
-    private final PrintStream console;
 
-    public InfrastructureModule(DataDirectory dataDirectory, PrintStream console) {
+    public InfrastructureModule(DataDirectory dataDirectory) {
         this.dataDirectory = dataDirectory;
-        this.console = console;
     }
 
     @Provides
@@ -174,18 +170,6 @@ public final class InfrastructureModule {
     @Singleton
     DomainEventPublisher domainEventPublisher() {
         return new InProcessEventPublisher();
-    }
-
-    @Provides
-    @Singleton
-    ProgressPort progressPort() {
-        return new TerminalProgressReporter(console);
-    }
-
-    @Provides
-    @Singleton
-    HumanInteractionPort humanInteractionPort() {
-        return new io.github.zcd0831.jellyfish.infrastructure.terminal.TerminalHumanInteraction(System.in, console);
     }
 
     @Provides

@@ -1,4 +1,4 @@
-package io.github.zcd0831.jellyfish.infrastructure.terminal;
+package io.github.zcd0831.jellyfish.shell.tui;
 
 import io.github.zcd0831.jellyfish.application.shared.Answer;
 import io.github.zcd0831.jellyfish.application.shared.Question;
@@ -13,16 +13,17 @@ import java.nio.charset.StandardCharsets;
 
 /**
  * 阻塞式提问：单队列（同一把锁串行呈现）、标注来源、可被 cancel 唤醒。
+ * 属于外壳：终端只由外壳持有（D19）。
  * 规则出处：模块-基础设施层 §7、技术决策 D05-2。
  */
-public final class TerminalHumanInteraction implements HumanInteractionPort {
+public final class TuiHumanInteraction implements HumanInteractionPort {
 
     private final BufferedReader in;
     private final PrintStream out;
     private final Object turn = new Object();
     private volatile boolean cancelled;
 
-    public TerminalHumanInteraction(InputStream in, PrintStream out) {
+    public TuiHumanInteraction(InputStream in, PrintStream out) {
         this.in = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8));
         this.out = out;
     }

@@ -23,7 +23,9 @@ class WiringTest {
 
     private AppComponent component() {
         return DaggerAppComponent.builder()
-                .infrastructureModule(new InfrastructureModule(DataDirectory.of(tmp.toString()),
+                .infrastructureModule(new InfrastructureModule(DataDirectory.of(tmp.toString())))
+                .shellModule(new io.github.zcd0831.jellyfish.di.ShellModule(
+                        new java.io.ByteArrayInputStream(new byte[0]),
                         new PrintStream(new ByteArrayOutputStream())))
                 .build();
     }

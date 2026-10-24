@@ -36,7 +36,8 @@ public final class Main {
                 new io.github.zcd0831.jellyfish.infrastructure.log.Log4jTechnicalLog());
 
         final AppComponent component = DaggerAppComponent.builder()
-                .infrastructureModule(new InfrastructureModule(dir, System.out))
+                .infrastructureModule(new InfrastructureModule(dir))
+                .shellModule(new io.github.zcd0831.jellyfish.di.ShellModule(System.in, System.out))
                 .build();
         final Thread mainThread = Thread.currentThread();
         Runtime.getRuntime().addShutdownHook(new Thread(new Runnable() {

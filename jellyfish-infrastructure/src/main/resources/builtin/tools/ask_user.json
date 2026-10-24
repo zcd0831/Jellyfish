@@ -1,0 +1,25 @@
+{
+  "id": "ask_user",
+  "name": "ask_user",
+  "description": "向用户提问并等待回答。用于只有用户知道的信息（偏好、路径、确认是否继续）；会阻塞当前循环直到用户回答。",
+  "inputSchema": {
+    "type": "object",
+    "required": ["question"],
+    "properties": {
+      "question": {
+        "type": "string",
+        "description": "要问用户的问题，一句话说清；不要一次问多个不相关的问题"
+      }
+    }
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "answer": {"type": "string"}
+    }
+  },
+  "source": {"type": "INTERNAL", "endpointOrIdentifier": "ask_user"},
+  "sideEffect": "READ_ONLY",
+  "timeoutMillis": 0,
+  "status": "ACTIVE"
+}

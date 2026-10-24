@@ -39,6 +39,26 @@ public final class DataDirectory {
         return root.resolve("archive");
     }
 
+    public Path agents() {
+        return root.resolve("agents");
+    }
+
+    public Path skills() {
+        return root.resolve("skills");
+    }
+
+    public Path tools() {
+        return root.resolve("tools");
+    }
+
+    public Path providers() {
+        return root.resolve("providers");
+    }
+
+    public Path models() {
+        return root.resolve("models");
+    }
+
     public Path experience() {
         return root.resolve("experience");
     }

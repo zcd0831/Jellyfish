@@ -59,6 +59,7 @@
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
 
         <!-- 版本统一在此声明；Java 8 可用的较新版，实际编译验证以构建结果为准。 -->
+        <okhttp.version>4.12.0</okhttp.version>
         <json-schema-validator.version>1.5.8</json-schema-validator.version>
         <lombok.version>1.18.30</lombok.version>
         <dagger.version>2.48</dagger.version>
@@ -125,6 +126,19 @@
                 <groupId>com.fasterxml.jackson.core</groupId>
                 <artifactId>jackson-databind</artifactId>
                 <version>${jackson.version}</version>
+            </dependency>
+
+            <!-- HTTP 客户端（技术决策 D16-5 / M14：OkHttp 4.12.0，Java 8 兼容且仍在维护） -->
+            <dependency>
+                <groupId>com.squareup.okhttp3</groupId>
+                <artifactId>okhttp</artifactId>
+                <version>${okhttp.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.squareup.okhttp3</groupId>
+                <artifactId>mockwebserver</artifactId>
+                <version>${okhttp.version}</version>
+                <scope>test</scope>
             </dependency>
 
             <!-- 工具入参校验（技术决策 D17：完整 JSON Schema，draft-07） -->

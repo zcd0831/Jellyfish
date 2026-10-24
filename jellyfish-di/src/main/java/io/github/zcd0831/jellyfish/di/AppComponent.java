@@ -20,6 +20,7 @@ import io.github.zcd0831.jellyfish.application.shared.port.TokenCounter;
 import io.github.zcd0831.jellyfish.domain.perception.session.SystemPromptAssembler;
 import io.github.zcd0831.jellyfish.infrastructure.file.DataDirectory;
 import io.github.zcd0831.jellyfish.infrastructure.file.JsonCodec;
+import io.github.zcd0831.jellyfish.infrastructure.model.HttpJsonClient;
 
 import javax.inject.Singleton;
 
@@ -59,6 +60,9 @@ public interface AppComponent {
     HumanInteractionPort humanInteractionPort();
 
     TokenCounter tokenCounter();
+
+    /** 供 boot 的关闭钩子取消在途请求（M14）。 */
+    HttpJsonClient httpJsonClient();
 
     SystemPromptAssembler systemPromptAssembler();
 

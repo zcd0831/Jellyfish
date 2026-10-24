@@ -86,6 +86,10 @@ class ModelInvokerTest {
         }
 
         @Override
+        public void cancelActive() {
+        }
+
+        @Override
         public void postStreaming(String url, Map<String, String> headers, String body, LineSink sink) {
             calls++;
             this.urls.add(url);

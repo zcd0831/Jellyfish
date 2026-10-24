@@ -160,9 +160,15 @@ public final class InfrastructureModule {
 
     @Provides
     @Singleton
+    HttpJsonClient httpJsonClient() {
+        return new HttpJsonClient();
+    }
+
+    @Provides
+    @Singleton
     ModelInvocationPort modelInvocationPort(CatalogRepository catalog, PolicyRepository policies,
-                                            ProgressPort progress, TokenCounter counter) {
-        return new ModelInvoker(catalog, policies, new HttpJsonClient(), progress, counter);
+                                            HttpJsonClient http, ProgressPort progress, TokenCounter counter) {
+        return new ModelInvoker(catalog, policies, http, progress, counter);
     }
 
     /** 每次注入一个新的写入作用域：一个事务一个实例。 */

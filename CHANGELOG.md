@@ -11,6 +11,7 @@
 ### S1 无计划对话
 - 会话窗口推导（`buildContextForLlm`：SYSTEM 注入不淘汰、只取最新 SUMMARY、超占比整段降级）
   + 上下文折叠（超限才摘要，摘要提示词不进 Record）
+- HTTP：OkHttp 4.12.0（D16-5/M14）；Ctrl-C 由关闭钩子 `Call.cancel()` 唤醒在途请求
 - `ModelInvoker`：OpenAI 兼容 `/chat/completions`（D16）、同模型 3 次退避重试（500/1500/4000 ±20%）、
   `Retry-After > 60s` 直接降级、备用链逐个重新硬校验、凭据只从环境变量读
 - 协议映射：`systemPrompt` → 首条 system、`ChatMessage` ↔ `messages`、`ToolCall` ↔ `tool_calls`、

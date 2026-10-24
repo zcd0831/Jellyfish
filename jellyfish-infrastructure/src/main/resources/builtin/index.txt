@@ -4,3 +4,6 @@ tools/generate_plan.json
 tools/submit_step.json
 agents/builtin.judge.md
 tools/spawn_subagents.json
+agents/builtin.reflect.md
+agents/builtin.retrieve.md
+agents/builtin.distill.md

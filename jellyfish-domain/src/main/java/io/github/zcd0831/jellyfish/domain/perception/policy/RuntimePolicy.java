@@ -67,7 +67,7 @@ public class RuntimePolicy {
     /** 平台初始化写入的默认值；规则出处：模块-感知 §7.2、D08/D10 的常量口径。 */
     public static RuntimePolicy defaults() {
         return new RuntimePolicy(3, 2, 2, 20, 100000, 10000, 20, 0.6, 4000, 60000,
-                200, 5, 3, 0.5, 0.1, 0.2, 0.8, 1000000L,
+                200, 5, 1, 0.5, 0.1, 0.2, 0.8, 1000000L,
                 Collections.<ModelId>emptyList(), Collections.<ToolId>emptyList());
     }
 

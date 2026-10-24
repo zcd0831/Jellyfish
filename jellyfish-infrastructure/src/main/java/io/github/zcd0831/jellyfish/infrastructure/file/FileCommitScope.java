@@ -2,6 +2,8 @@ package io.github.zcd0831.jellyfish.infrastructure.file;
 
 import io.github.zcd0831.jellyfish.application.shared.port.CommitScope;
 import io.github.zcd0831.jellyfish.domain.action.budget.Budget;
+import io.github.zcd0831.jellyfish.domain.memory.experience.Experience;
+import io.github.zcd0831.jellyfish.domain.memory.reflection.Reflection;
 import io.github.zcd0831.jellyfish.domain.planning.plan.Plan;
 import io.github.zcd0831.jellyfish.domain.planning.verification.VerificationReport;
 import io.github.zcd0831.jellyfish.domain.perception.policy.RuntimePolicy;
@@ -97,6 +99,10 @@ public final class FileCommitScope implements CommitScope {
             new FileReportRepository(dir, codec).save((VerificationReport) fact);
             return;
         }
+        if (fact instanceof Reflection) {
+            new FileReflectionRepository(dir, codec).save((Reflection) fact);
+            return;
+        }
         throw new UnsupportedOperationException("暂不支持的事实类型：" + fact.getClass().getName());
     }
 
@@ -115,6 +121,12 @@ public final class FileCommitScope implements CommitScope {
             AtomicFiles.write(sessionDirOf(plan.sessionId())
                             .resolve("plans").resolve(plan.id().getValue() + ".json"),
                     codec.write(PlanDto.from(plan)));
+            return;
+        }
+        if (aggregate instanceof Experience) {
+            Experience experience = (Experience) aggregate;
+            AtomicFiles.write(dir.experience().resolve(experience.id().getValue() + ".json"),
+                    codec.write(FileExperienceRepository.ExperienceDto.from(experience)));
             return;
         }
         if (aggregate instanceof Budget) {

@@ -62,6 +62,7 @@ class ModelInvokerTest {
         private final List<String> urls = new ArrayList<>();
         private final List<String> bodies = new ArrayList<>();
         private List<String> streamLines = Collections.emptyList();
+        private RuntimeException streamFailure;
         private int calls;
 
         void respond(Response response) {
@@ -74,6 +75,10 @@ class ModelInvokerTest {
 
         void streamWith(List<String> lines) {
             this.streamLines = lines;
+        }
+
+        void streamFailsWith(RuntimeException failure) {
+            this.streamFailure = failure;
         }
 
         @Override
@@ -105,6 +110,9 @@ class ModelInvokerTest {
             calls++;
             this.urls.add(url);
             this.headers.add(headers);
+            if (streamFailure != null) {
+                throw streamFailure;
+            }
             for (String line : streamLines) {
                 if (!sink.onData(line)) {
                     return;
@@ -312,6 +320,22 @@ class ModelInvokerTest {
         assertEquals(4, transport.calls);
         assertEquals(3, sleeps.size());
         assertEquals(ProgressEvent.Kind.RETRY_SCHEDULED, progress.events.get(0).kind());
+    }
+
+    @Test
+    void 流式期间取消也不进重试() {
+        FakeCatalog catalog = new FakeCatalog();
+        catalog.models.add(model("m1", 1000));
+        catalog.providers.add(provider());
+        transport.cancelled = true;
+        transport.streamFailsWith(new java.io.UncheckedIOException("canceled",
+                new java.io.IOException("canceled")));
+
+        assertThrows(java.util.concurrent.CancellationException.class,
+                () -> invoker(catalog, policyWithFallback(), "sk-test")
+                        .invokeStreaming(request("m1", 10), ChunkSink.NOOP));
+
+        assertEquals(1, transport.calls, "取消是终态：流式中断也不得重试");
     }
 
     @Test

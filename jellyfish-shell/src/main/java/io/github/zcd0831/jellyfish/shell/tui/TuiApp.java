@@ -3,6 +3,7 @@ package io.github.zcd0831.jellyfish.shell.tui;
 import io.github.zcd0831.jellyfish.application.action.ManagePluginsUseCase;
 import io.github.zcd0831.jellyfish.application.action.port.CatalogRepository;
 import io.github.zcd0831.jellyfish.application.perception.AdjustPolicyUseCase;
+import io.github.zcd0831.jellyfish.application.perception.SwitchModelUseCase;
 import io.github.zcd0831.jellyfish.application.perception.ManageSessionUseCase;
 import io.github.zcd0831.jellyfish.application.perception.StartSessionUseCase;
 import io.github.zcd0831.jellyfish.application.planning.RunSessionResult;
@@ -51,6 +52,7 @@ public final class TuiApp implements QuestionBroker.Answerer {
     private final RunSessionUseCase runSession;
     private final ManageSessionUseCase manageSession;
     private final AdjustPolicyUseCase adjustPolicy;
+    private final SwitchModelUseCase switchModel;
     private final CatalogRepository catalog;
     private final ManagePluginsUseCase plugins;
     private final AnsiRenderer renderer;
@@ -71,13 +73,14 @@ public final class TuiApp implements QuestionBroker.Answerer {
 
     public TuiApp(StartSessionUseCase startSession, RunSessionUseCase runSession,
                   ManageSessionUseCase manageSession, AdjustPolicyUseCase adjustPolicy,
-                  CatalogRepository catalog, AnsiRenderer renderer, QuestionBroker broker,
-                  OutputGateway gateway, Terminal terminal, ShellCancellationToken token,
+                  SwitchModelUseCase switchModel, CatalogRepository catalog, AnsiRenderer renderer,
+                  QuestionBroker broker, OutputGateway gateway, Terminal terminal, ShellCancellationToken token,
                   ManagePluginsUseCase plugins, TurnStats stats) {
         this.startSession = startSession;
         this.runSession = runSession;
         this.manageSession = manageSession;
         this.adjustPolicy = adjustPolicy;
+        this.switchModel = switchModel;
         this.catalog = catalog;
         this.plugins = plugins;
         this.renderer = renderer;
@@ -386,7 +389,7 @@ public final class TuiApp implements QuestionBroker.Answerer {
                 || "/models".equals(name) || "/providers".equals(name) || "/skills".equals(name)
                 || "/sessions".equals(name) || "/open".equals(name) || "/plugins".equals(name);
         if ("/help".equals(name)) {
-            renderer.info("/sessions /open <id> /cancel /archive /delete /policy k=v "
+            renderer.info("/sessions /open <id> /cancel /archive /delete /policy k=v /model <id> "
                     + "/tools /agents /models /providers /skills /plugins /exit");
             return;
         }
@@ -411,6 +414,10 @@ public final class TuiApp implements QuestionBroker.Answerer {
             cancelPendingQuestion();
             print(manageSession.cancel(currentSession));
             renderer.info("（已取消，可继续输入或 exit）");
+        } else if ("/model".equals(name) && parts.length > 1) {
+            print(switchModel.switchTo(currentSession,
+                    io.github.zcd0831.jellyfish.domain.shared.ModelId.of(parts[1])));
+            renderer.info("（当前模型：" + parts[1] + "）");
         } else if ("/policy".equals(name)) {
             Map<String, Object> changes = new LinkedHashMap<String, Object>();
             for (int i = 1; i < parts.length; i++) {

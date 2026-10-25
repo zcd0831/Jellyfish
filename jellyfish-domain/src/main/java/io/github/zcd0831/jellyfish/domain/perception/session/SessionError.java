@@ -7,7 +7,8 @@ public enum SessionError implements DomainError {
 
     NOT_FOUND("S_NOT_FOUND"),
     NO_USABLE_MODEL("S_NO_USABLE_MODEL"),
-    NO_USABLE_AGENT("S_NO_USABLE_AGENT");
+    NO_USABLE_AGENT("S_NO_USABLE_AGENT"),
+    TOOL_ROUND_OPEN("S_TOOL_ROUND_OPEN");
 
     private final String code;
 

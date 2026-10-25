@@ -8,6 +8,7 @@ import io.github.zcd0831.jellyfish.application.action.port.CatalogRepository;
 import io.github.zcd0831.jellyfish.application.perception.AdjustPolicyUseCase;
 import io.github.zcd0831.jellyfish.application.perception.ManageSessionUseCase;
 import io.github.zcd0831.jellyfish.application.perception.StartSessionUseCase;
+import io.github.zcd0831.jellyfish.application.perception.SwitchModelUseCase;
 import io.github.zcd0831.jellyfish.application.planning.RunSessionUseCase;
 import io.github.zcd0831.jellyfish.application.shared.port.HumanInteractionPort;
 import io.github.zcd0831.jellyfish.application.shared.port.ProgressPort;
@@ -105,10 +106,10 @@ public final class ShellModule {
     @Singleton
     TuiApp tuiApp(StartSessionUseCase startSession, RunSessionUseCase runSession,
                   ManageSessionUseCase manageSession, AdjustPolicyUseCase adjustPolicy,
-                  CatalogRepository catalog, AnsiRenderer renderer, QuestionBroker broker,
-                  OutputGateway gateway, Terminal terminal, ShellCancellationToken token,
-                  ManagePluginsUseCase plugins, TurnStats stats) {
-        return new TuiApp(startSession, runSession, manageSession, adjustPolicy, catalog, renderer, broker,
-                gateway, terminal, token, plugins, stats);
+                  SwitchModelUseCase switchModel, CatalogRepository catalog, AnsiRenderer renderer,
+                  QuestionBroker broker, OutputGateway gateway, Terminal terminal,
+                  ShellCancellationToken token, ManagePluginsUseCase plugins, TurnStats stats) {
+        return new TuiApp(startSession, runSession, manageSession, adjustPolicy, switchModel, catalog, renderer,
+                broker, gateway, terminal, token, plugins, stats);
     }
 }

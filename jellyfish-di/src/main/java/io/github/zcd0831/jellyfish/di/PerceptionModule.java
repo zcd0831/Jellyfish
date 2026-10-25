@@ -10,7 +10,9 @@ import io.github.zcd0831.jellyfish.application.perception.AdjustPolicyUseCase;
 import io.github.zcd0831.jellyfish.application.perception.ManageSessionUseCase;
 import io.github.zcd0831.jellyfish.application.perception.SessionTitleGenerator;
 import io.github.zcd0831.jellyfish.application.perception.StartSessionUseCase;
+import io.github.zcd0831.jellyfish.application.perception.SwitchModelUseCase;
 import io.github.zcd0831.jellyfish.application.perception.port.PolicyRepository;
+import io.github.zcd0831.jellyfish.application.perception.port.RecordStore;
 import io.github.zcd0831.jellyfish.application.perception.port.SessionRepository;
 import io.github.zcd0831.jellyfish.application.action.port.BudgetRepository;
 import io.github.zcd0831.jellyfish.application.shared.port.ArtifactStore;
@@ -59,6 +61,13 @@ public final class PerceptionModule {
     AdjustPolicyUseCase adjustPolicyUseCase(PolicyRepository policies, CommitScope commitScope,
                                             DomainEventPublisher publisher) {
         return new AdjustPolicyUseCase(policies, commitScope, publisher);
+    }
+
+    @Provides
+    SwitchModelUseCase switchModelUseCase(SessionRepository sessions, RecordStore records,
+                                         CatalogRepository catalog, CommitScope commitScope,
+                                         DomainEventPublisher publisher) {
+        return new SwitchModelUseCase(sessions, records, catalog, commitScope, publisher);
     }
 
     @Provides

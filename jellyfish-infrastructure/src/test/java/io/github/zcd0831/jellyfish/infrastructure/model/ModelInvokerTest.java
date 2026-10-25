@@ -180,6 +180,11 @@ class ModelInvokerTest {
         @Override
         public void saveSkill(SkillDefinition skill) {
         }
+
+        @Override
+        public int countActiveSkills() {
+            return 0;
+        }
     }
 
     // ---------- 夹具 ----------
@@ -201,7 +206,7 @@ class ModelInvokerTest {
                 d.contextWindowRecordCount(), d.systemRecordRatioLimit(), d.toolResultTruncateLength(),
                 d.subagentExecutionTimeoutMillis(), d.experienceCapacity(), d.experienceTopN(),
                 d.experiencePerPlan(), d.experienceInitialConfidence(), d.experienceConfidenceStep(),
-                d.experienceRetireThreshold(), d.budgetWarnRatio(), d.budgetLimitTokens(),
+                d.experienceRetireThreshold(), d.skillCapacity(), d.budgetWarnRatio(), d.budgetLimitTokens(),
                 Arrays.asList(fallback), d.trustedToolIds());
     }
 

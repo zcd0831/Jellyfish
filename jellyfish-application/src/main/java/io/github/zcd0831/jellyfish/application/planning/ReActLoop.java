@@ -26,6 +26,7 @@ import io.github.zcd0831.jellyfish.domain.perception.session.Session;
 import io.github.zcd0831.jellyfish.domain.perception.session.ToolResultPayload;
 import io.github.zcd0831.jellyfish.domain.perception.session.ToolSchemaSnapshot;
 import io.github.zcd0831.jellyfish.domain.shared.ModelId;
+import io.github.zcd0831.jellyfish.domain.shared.SkillId;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -66,6 +67,7 @@ public final class ReActLoop {
         RuntimePolicy policy = policies.load();
         ContextWindow window = contextWindow.currentWindow(session);
         List<ChatMessage> messages = toMessages(window);
+        List<SkillId> usedSkills = new ArrayList<SkillId>();
 
         for (int round = 1; round <= policy.maxReActRounds(); round++) {
             ModelInvocationResult result = invoke(session, step, window, messages, sink);
@@ -80,7 +82,7 @@ public final class ReActLoop {
                 messages.add(ChatMessage.of(RecordRole.ASSISTANT, result.text()));
             }
             if (result.toolCalls().isEmpty()) {
-                return IterationResult.converged(round);
+                return IterationResult.converged(round, usedSkills);
             }
             String submittedSummary = null;
             for (ToolCall call : result.toolCalls()) {
@@ -90,13 +92,16 @@ public final class ReActLoop {
                     messages.add(submit(session, call, submittedSummary));
                     continue;
                 }
+                if (LOAD_SKILL.equals(call.name())) {
+                    recordSkillUse(call, usedSkills);
+                }
                 messages.add(executeTool(session, call));
             }
             if (submittedSummary != null) {
-                return IterationResult.submitted(submittedSummary, round);
+                return IterationResult.submitted(submittedSummary, round, usedSkills);
             }
         }
-        return IterationResult.notConverged(policy.maxReActRounds());
+        return IterationResult.notConverged(policy.maxReActRounds(), usedSkills);
     }
 
     private ModelInvocationResult invoke(Session session, PlanStep step, ContextWindow window,
@@ -149,6 +154,14 @@ public final class ReActLoop {
     private static String summaryOf(ToolCall call) {
         Object summary = Json.parseObject(call.argumentsJson()).get("summary");
         return summary == null ? "" : String.valueOf(summary);
+    }
+
+    /** 记下"本次真的加载了哪个技能"：改进判定的唯一证据（§8.6）。 */
+    private static void recordSkillUse(ToolCall call, List<SkillId> usedSkills) {
+        Object skillName = Json.parseObject(call.argumentsJson()).get("skillName");
+        if (skillName != null) {
+            usedSkills.add(SkillId.of(String.valueOf(skillName)));
+        }
     }
 
     private ChatMessage executeTool(Session session, ToolCall call) {

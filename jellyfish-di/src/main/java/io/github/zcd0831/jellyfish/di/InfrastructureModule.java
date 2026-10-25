@@ -1,9 +1,14 @@
 package io.github.zcd0831.jellyfish.di;
 
+import io.github.zcd0831.jellyfish.infrastructure.local.Workspace;
+import io.github.zcd0831.jellyfish.infrastructure.local.UrlFetcher;
 import dagger.Module;
 import dagger.Provides;
+import io.github.zcd0831.jellyfish.application.action.PortRoutes;
 import io.github.zcd0831.jellyfish.application.action.port.BudgetRepository;
 import io.github.zcd0831.jellyfish.application.action.port.CatalogRepository;
+import io.github.zcd0831.jellyfish.application.action.port.PluginRepository;
+import io.github.zcd0831.jellyfish.application.shared.port.PluginRuntimePort;
 import io.github.zcd0831.jellyfish.application.action.port.ExternalToolPort;
 import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationPort;
 import io.github.zcd0831.jellyfish.application.perception.port.PolicyRepository;
@@ -28,6 +33,7 @@ import io.github.zcd0831.jellyfish.infrastructure.file.DataDirectory;
 import io.github.zcd0831.jellyfish.infrastructure.file.FileArtifactStore;
 import io.github.zcd0831.jellyfish.infrastructure.file.FileBudgetRepository;
 import io.github.zcd0831.jellyfish.infrastructure.file.FileCatalogRepository;
+import io.github.zcd0831.jellyfish.infrastructure.file.FilePluginRepository;
 import io.github.zcd0831.jellyfish.infrastructure.file.FileCommitScope;
 import io.github.zcd0831.jellyfish.infrastructure.file.FileInstanceLock;
 import io.github.zcd0831.jellyfish.infrastructure.file.FilePlanRepository;
@@ -102,8 +108,15 @@ public final class InfrastructureModule {
 
     @Provides
     @Singleton
-    FileCatalogRepository catalogRepository(DataDirectory dir, JsonCodec codec) {
-        return new FileCatalogRepository(dir, codec);
+    FileCatalogRepository catalogRepository(DataDirectory dir, JsonCodec codec, PluginRepository plugins,
+                                            PluginRuntimePort pluginRuntime) {
+        return new FileCatalogRepository(dir, codec, plugins, pluginRuntime);
+    }
+
+    @Provides
+    @Singleton
+    PluginRepository pluginRepository(DataDirectory dir, JsonCodec codec) {
+        return new FilePluginRepository(dir, codec);
     }
 
     @Provides
@@ -160,10 +173,23 @@ public final class InfrastructureModule {
         return new FileSchemaMigrator(dir);
     }
 
+    /** 工作区根 = 启动目录，启动求一次（模块-行动 §7.1 规则 9）。 */
     @Provides
     @Singleton
-    Clock clock() {
-        return new SystemClock();
+    Workspace workspace() {
+        return Workspace.atLaunchDirectory();
+    }
+
+    @Provides
+    @Singleton
+    UrlFetcher urlFetcher() {
+        return new UrlFetcher();
+    }
+
+    @Provides
+    @Singleton
+    Clock clock(PortRoutes routes) {
+        return routes.resolve("Clock", (Clock) new SystemClock());
     }
 
     @Provides
@@ -174,8 +200,8 @@ public final class InfrastructureModule {
 
     @Provides
     @Singleton
-    TokenCounter tokenCounter() {
-        return new CompositeTokenCounter();
+    TokenCounter tokenCounter(PortRoutes routes) {
+        return routes.resolve("TokenCounter", (TokenCounter) new CompositeTokenCounter());
     }
 
     @Provides
@@ -186,8 +212,8 @@ public final class InfrastructureModule {
 
     @Provides
     @Singleton
-    ExternalToolPort externalToolPort() {
-        return new HttpToolAdapter();
+    ExternalToolPort externalToolPort(PortRoutes routes) {
+        return routes.resolve("ExternalToolPort", (ExternalToolPort) new HttpToolAdapter());
     }
 
     /** 子代理用有界池，不用 ForkJoinPool.commonPool（D05-3）。 */
@@ -207,8 +233,10 @@ public final class InfrastructureModule {
     @Provides
     @Singleton
     ModelInvocationPort modelInvocationPort(CatalogRepository catalog, PolicyRepository policies,
-                                            HttpJsonClient http, ProgressPort progress, TokenCounter counter) {
-        return new ModelInvoker(catalog, policies, http, progress, counter);
+                                            HttpJsonClient http, ProgressPort progress, TokenCounter counter,
+                                            PortRoutes routes) {
+        return routes.resolve("ModelInvocationPort",
+                (ModelInvocationPort) new ModelInvoker(catalog, policies, http, progress, counter));
     }
 
     /** 每次注入一个新的写入作用域：一个事务一个实例。 */

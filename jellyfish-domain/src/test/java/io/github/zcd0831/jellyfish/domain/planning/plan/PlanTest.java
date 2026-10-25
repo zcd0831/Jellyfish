@@ -102,6 +102,16 @@ class PlanTest {
     }
 
     @Test
+    void 判失败的attempt不存在时报错而不是静默忽略() {
+        Plan plan = plan(2);
+        plan.beginCurrentStep();
+
+        org.junit.jupiter.api.Assertions.assertThrows(
+                io.github.zcd0831.jellyfish.domain.shared.DomainInvariantViolation.class,
+                () -> plan.markAttemptFailed(StepId.of("step1"), 99));
+    }
+
+    @Test
     void 撞轮次上限只落attempt失败且可重试同一步() {
         Plan plan = plan(2);
         Attempt first = plan.beginCurrentStep();

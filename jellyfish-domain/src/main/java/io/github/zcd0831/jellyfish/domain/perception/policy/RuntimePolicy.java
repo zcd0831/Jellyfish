@@ -27,6 +27,7 @@ public class RuntimePolicy {
     private final double experienceInitialConfidence;
     private final double experienceConfidenceStep;
     private final double experienceRetireThreshold;
+    private final int skillCapacity;
     private final double budgetWarnRatio;
     private final long budgetLimitTokens;
     private final List<ModelId> modelFallbackChain;
@@ -38,6 +39,7 @@ public class RuntimePolicy {
                          int subagentExecutionTimeoutMillis, int experienceCapacity, int experienceTopN,
                          int experiencePerPlan, double experienceInitialConfidence,
                          double experienceConfidenceStep, double experienceRetireThreshold,
+                         int skillCapacity,
                          double budgetWarnRatio, long budgetLimitTokens,
                          List<ModelId> modelFallbackChain, List<ToolId> trustedToolIds) {
         this.maxRetries = maxRetries;
@@ -56,6 +58,7 @@ public class RuntimePolicy {
         this.experienceInitialConfidence = experienceInitialConfidence;
         this.experienceConfidenceStep = experienceConfidenceStep;
         this.experienceRetireThreshold = experienceRetireThreshold;
+        this.skillCapacity = skillCapacity;
         this.budgetWarnRatio = budgetWarnRatio;
         this.budgetLimitTokens = budgetLimitTokens;
         this.modelFallbackChain = Collections.unmodifiableList(new ArrayList<ModelId>(
@@ -67,7 +70,7 @@ public class RuntimePolicy {
     /** 平台初始化写入的默认值；规则出处：模块-感知 §7.2、D08/D10 的常量口径。 */
     public static RuntimePolicy defaults() {
         return new RuntimePolicy(3, 2, 2, 20, 100000, 10000, 20, 0.6, 4000, 60000,
-                200, 5, 1, 0.5, 0.1, 0.2, 0.8, 1000000L,
+                200, 5, 1, 0.5, 0.1, 0.2, 30, 0.8, 1000000L,
                 Collections.<ModelId>emptyList(), Collections.<ToolId>emptyList());
     }
 
@@ -94,13 +97,14 @@ public class RuntimePolicy {
         double initialConfidence = ratio(changes, "experienceInitialConfidence", experienceInitialConfidence);
         double confidenceStep = ratio(changes, "experienceConfidenceStep", experienceConfidenceStep);
         double retireThreshold = ratio(changes, "experienceRetireThreshold", experienceRetireThreshold);
+        int skills = positiveInt(changes, "skillCapacity", skillCapacity);
         double warnRatio = ratio(changes, "budgetWarnRatio", budgetWarnRatio);
         long limitTokens = nonNegativeLong(changes, "budgetLimitTokens", budgetLimitTokens);
         List<ModelId> fallback = modelIds(changes, "modelFallbackChain", modelFallbackChain);
         List<ToolId> trusted = toolIds(changes, "trustedToolIds", trustedToolIds);
         return new RuntimePolicy(retries, reflection, replan, rounds, summarization, margin, windowRecords,
                 systemRatio, truncate, subagentTimeout, capacity, topN, perPlan, initialConfidence,
-                confidenceStep, retireThreshold, warnRatio, limitTokens, fallback, trusted);
+                confidenceStep, retireThreshold, skills, warnRatio, limitTokens, fallback, trusted);
     }
 
     private static int positiveInt(java.util.Map<String, Object> changes, String key, int current) {
@@ -280,6 +284,11 @@ public class RuntimePolicy {
 
     public double experienceRetireThreshold() {
         return experienceRetireThreshold;
+    }
+
+    /** ACTIVE 技能总数上限（含人写、不含 jar 内置）。规则出处：模块-记忆 §8.5、D23-3。 */
+    public int skillCapacity() {
+        return skillCapacity;
     }
 
     public double budgetWarnRatio() {

@@ -9,7 +9,7 @@ import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationReques
 import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationResult;
 import io.github.zcd0831.jellyfish.application.action.port.ModelUsage;
 import io.github.zcd0831.jellyfish.application.memory.DistillationInput;
-import io.github.zcd0831.jellyfish.application.memory.ExperienceDistillationService;
+import io.github.zcd0831.jellyfish.application.memory.PlanCompletionCurator;
 import io.github.zcd0831.jellyfish.application.memory.ExperienceFeedbackService;
 import io.github.zcd0831.jellyfish.application.memory.ExperienceRetriever;
 import io.github.zcd0831.jellyfish.application.memory.port.ExperienceRepository;
@@ -17,9 +17,11 @@ import io.github.zcd0831.jellyfish.application.memory.port.ReflectionRepository;
 import io.github.zcd0831.jellyfish.application.perception.ContextWindowService;
 import io.github.zcd0831.jellyfish.application.perception.port.PolicyRepository;
 import io.github.zcd0831.jellyfish.application.planning.port.PlanRepository;
+import io.github.zcd0831.jellyfish.application.shared.CancellationToken;
 import io.github.zcd0831.jellyfish.application.shared.ChunkSink;
 import io.github.zcd0831.jellyfish.application.shared.port.CommitScope;
 import io.github.zcd0831.jellyfish.domain.action.model.ModelError;
+import io.github.zcd0831.jellyfish.domain.planning.plan.AttemptOutcome;
 import io.github.zcd0831.jellyfish.domain.planning.plan.Plan;
 import io.github.zcd0831.jellyfish.domain.planning.plan.PlanStatus;
 import io.github.zcd0831.jellyfish.domain.planning.plan.PlanSteps;
@@ -70,7 +72,7 @@ class ExecutionLoopTest {
     private final BudgetService budget = mock(BudgetService.class);
     private final ExperienceRetriever retriever = mock(ExperienceRetriever.class);
     private final ExperienceFeedbackService feedback = mock(ExperienceFeedbackService.class);
-    private final ExperienceDistillationService distillation = mock(ExperienceDistillationService.class);
+    private final PlanCompletionCurator curator = mock(PlanCompletionCurator.class);
     private final ReflectionRepository reflections = mock(ReflectionRepository.class);
     private final SubagentLauncher launcher = mock(SubagentLauncher.class);
     private final ExperienceRepository experiences = mock(ExperienceRepository.class);
@@ -98,8 +100,13 @@ class ExecutionLoopTest {
                         : Collections.singletonList(planScript.peek()));
         return new ExecutionLoop(contextWindow, reActLoop, verificationRunner, plans, new io.github.zcd0831.jellyfish.domain.planning.plan.PlanFactory(),
                 catalog, policies, commitScope, events -> { }, event -> { }, model, budget, retriever,
-                feedback, distillation, reflections, launcher, experiences);
+                feedback, curator, reflections, launcher, experiences);
     }
+
+    /** 默认实现不读上下文（依赖由构造器注入），所以这里给空值即可。 */
+    private static final CancellationToken NO_TOKEN = CancellationToken.never();
+    private static final RunContext NO_CONTEXT = new RunContext(null, null, NO_TOKEN, null, null, null, null,
+            null, null);
 
     private static Plan plan(VerificationType... layers) {
         Plan plan = Plan.create(PlanId.of("p1"), SessionId.of("s1"), "目标", Collections.singletonList(
@@ -109,11 +116,11 @@ class ExecutionLoopTest {
     }
 
     private static IterationResult converged() {
-        return IterationResult.converged(1);
+        return IterationResult.converged(1, java.util.Collections.emptyList());
     }
 
     private static IterationResult submitted(String summary) {
-        return IterationResult.submitted(summary, 1);
+        return IterationResult.submitted(summary, 1, java.util.Collections.emptyList());
     }
 
     private static VerificationReport passed() {
@@ -130,15 +137,32 @@ class ExecutionLoopTest {
     void 无计划且收敛即结束() {
         when(reActLoop.runIteration(any(Session.class), any(), any(ChunkSink.class))).thenReturn(converged());
 
-        assertEquals(ExecutionLoop.Outcome.CONVERGED, loop().run(session, ChunkSink.NOOP));
+        assertEquals(RunOutcome.CONVERGED, loop().run(session, ChunkSink.NOOP, NO_TOKEN, NO_CONTEXT));
     }
 
     @Test
     void 无计划且撞轮次上限返回轮次用尽() {
         when(reActLoop.runIteration(any(Session.class), any(), any(ChunkSink.class)))
-                .thenReturn(IterationResult.notConverged(20));
+                .thenReturn(IterationResult.notConverged(20, java.util.Collections.emptyList()));
 
-        assertEquals(ExecutionLoop.Outcome.ROUNDS_EXHAUSTED, loop().run(session, ChunkSink.NOOP));
+        assertEquals(RunOutcome.ROUNDS_EXHAUSTED, loop().run(session, ChunkSink.NOOP, NO_TOKEN, NO_CONTEXT));
+    }
+
+    @Test
+    void 撞轮次上限时判当前attempt失败而不是按轮次号猜() {
+        policy = policy.adjust(Collections.<String, Object>singletonMap("maxRetries", 3));
+        Plan plan = plan();
+        planScript.add(plan);
+        // 先撞上限（第 20 轮），重试后模型不调工具 → 挂起
+        when(reActLoop.runIteration(any(Session.class), any(), any(ChunkSink.class)))
+                .thenReturn(IterationResult.notConverged(20, java.util.Collections.emptyList()))
+                .thenReturn(converged());
+
+        loop().run(session, ChunkSink.NOOP, NO_TOKEN, NO_CONTEXT);
+
+        assertEquals(AttemptOutcome.FAILED, plan.steps().get(0).attempts().get(0).outcome(),
+                "撞轮次上限要落到当前 attempt 上（轮次号 20 与 attempt 号无关）");
+        assertEquals(2, plan.steps().get(0).attempts().size(), "失败后应重试同一步");
     }
 
     @Test
@@ -146,7 +170,7 @@ class ExecutionLoopTest {
         planScript.add(plan());
         when(reActLoop.runIteration(any(Session.class), any(), any(ChunkSink.class))).thenReturn(converged());
 
-        assertEquals(ExecutionLoop.Outcome.SUSPENDED, loop().run(session, ChunkSink.NOOP));
+        assertEquals(RunOutcome.SUSPENDED, loop().run(session, ChunkSink.NOOP, NO_TOKEN, NO_CONTEXT));
     }
 
     @Test
@@ -157,11 +181,11 @@ class ExecutionLoopTest {
                 .thenReturn(submitted("做完了"))
                 .thenReturn(converged());
 
-        ExecutionLoop.Outcome outcome = loop().run(session, ChunkSink.NOOP);
+        RunOutcome outcome = loop().run(session, ChunkSink.NOOP, NO_TOKEN, NO_CONTEXT);
 
-        assertEquals(ExecutionLoop.Outcome.CONVERGED, outcome);
+        assertEquals(RunOutcome.CONVERGED, outcome);
         assertEquals(PlanStatus.COMPLETED, plan.status());
-        verify(distillation).distill(any(Session.class), any(DistillationInput.class));
+        verify(curator).curate(any(Session.class), any(DistillationInput.class));
         verify(feedback).onStepSucceeded(any());
     }
 
@@ -175,7 +199,7 @@ class ExecutionLoopTest {
         when(verificationRunner.verify(any(Session.class), any(Plan.class), any(), anyInt(), any()))
                 .thenReturn(passed());
 
-        loop().run(session, ChunkSink.NOOP);
+        loop().run(session, ChunkSink.NOOP, NO_TOKEN, NO_CONTEXT);
 
         assertEquals(PlanStatus.COMPLETED, plan.status());
         verify(commitScope).stageFact(any(VerificationReport.class));
@@ -194,7 +218,7 @@ class ExecutionLoopTest {
                 .thenReturn(failed())
                 .thenReturn(passed());
 
-        loop().run(session, ChunkSink.NOOP);
+        loop().run(session, ChunkSink.NOOP, NO_TOKEN, NO_CONTEXT);
 
         assertEquals(PlanStatus.COMPLETED, plan.status());
         assertEquals(2, plan.steps().get(0).attempts().size(), "失败后应重试同一步");
@@ -221,7 +245,7 @@ class ExecutionLoopTest {
                         + "\"verificationCriteria\":\"c\"}]}", Collections.emptyList(),
                 new ModelUsage(1, 1), ModelId.of("m1")));
 
-        loop().run(session, ChunkSink.NOOP);
+        loop().run(session, ChunkSink.NOOP, NO_TOKEN, NO_CONTEXT);
 
         assertTrue(plan.replanGeneration() >= 1, "应发生重划");
     }
@@ -242,11 +266,11 @@ class ExecutionLoopTest {
                 .thenReturn(failed())
                 .thenReturn(failed());
 
-        ExecutionLoop.Outcome outcome = loop().run(session, ChunkSink.NOOP);
+        RunOutcome outcome = loop().run(session, ChunkSink.NOOP, NO_TOKEN, NO_CONTEXT);
 
-        assertEquals(ExecutionLoop.Outcome.CONVERGED, outcome);
+        assertEquals(RunOutcome.CONVERGED, outcome);
         assertEquals(PlanStatus.FAILED, plan.status());
-        verify(distillation).distill(any(Session.class), any(DistillationInput.class));
+        verify(curator).curate(any(Session.class), any(DistillationInput.class));
     }
 
     @Test
@@ -255,7 +279,7 @@ class ExecutionLoopTest {
                 .thenThrow(new ModelInvocationException(ModelError.CONTEXT_EXCEEDED, "超限"))
                 .thenReturn(converged());
 
-        assertEquals(ExecutionLoop.Outcome.CONVERGED, loop().run(session, ChunkSink.NOOP));
+        assertEquals(RunOutcome.CONVERGED, loop().run(session, ChunkSink.NOOP, NO_TOKEN, NO_CONTEXT));
         verify(contextWindow).forceCollapse(session);
     }
 
@@ -264,7 +288,7 @@ class ExecutionLoopTest {
         when(reActLoop.runIteration(any(Session.class), any(), any(ChunkSink.class)))
                 .thenThrow(new ModelInvocationException(ModelError.UNAVAILABLE, "全挂"));
 
-        assertThrows(ModelInvocationException.class, () -> loop().run(session, ChunkSink.NOOP));
+        assertThrows(ModelInvocationException.class, () -> loop().run(session, ChunkSink.NOOP, NO_TOKEN, NO_CONTEXT));
         verify(commitScope, never()).stageReplace(any());
     }
 
@@ -286,7 +310,7 @@ class ExecutionLoopTest {
         when(launcher.launch(any(Session.class), any())).thenReturn(Collections.singletonList(
                 SubagentResult.of(SessionId.of("child"), "下次先读文件")));
 
-        loop().run(session, ChunkSink.NOOP);
+        loop().run(session, ChunkSink.NOOP, NO_TOKEN, NO_CONTEXT);
 
         verify(launcher).launch(any(Session.class), any());
         verify(commitScope, times(1)).stageFact(any(io.github.zcd0831.jellyfish.domain.memory.reflection.Reflection.class));

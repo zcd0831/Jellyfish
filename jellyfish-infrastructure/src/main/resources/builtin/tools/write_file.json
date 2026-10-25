@@ -1,0 +1,41 @@
+{
+  "id": "write_file",
+  "name": "write_file",
+  "description": "新建文件或整篇重写。已存在的文件默认拒写，改内容请用 edit_file。",
+  "inputSchema": {
+    "type": "object",
+    "required": [
+      "path",
+      "content"
+    ],
+    "properties": {
+      "path": {
+        "type": "string",
+        "description": "相对工作区根的路径"
+      },
+      "content": {
+        "type": "string",
+        "description": "完整文件内容"
+      },
+      "overwrite": {
+        "type": "boolean",
+        "description": "允许覆盖已存在的文件，默认 false"
+      }
+    }
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "result": {
+        "type": "string"
+      }
+    }
+  },
+  "source": {
+    "type": "NATIVE",
+    "endpointOrIdentifier": "write_file"
+  },
+  "sideEffect": "REPEATABLE",
+  "timeoutMillis": 10000,
+  "status": "ACTIVE"
+}

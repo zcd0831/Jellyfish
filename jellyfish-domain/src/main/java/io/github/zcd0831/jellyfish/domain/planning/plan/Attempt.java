@@ -2,6 +2,7 @@ package io.github.zcd0831.jellyfish.domain.planning.plan;
 
 import io.github.zcd0831.jellyfish.domain.shared.ReflectionId;
 import io.github.zcd0831.jellyfish.domain.shared.SessionId;
+import io.github.zcd0831.jellyfish.domain.shared.SkillId;
 import io.github.zcd0831.jellyfish.domain.shared.VerificationReportId;
 
 import java.util.ArrayList;
@@ -16,6 +17,7 @@ public class Attempt {
 
     private final int attemptNo;
     private final List<SessionId> childSessionIds = new ArrayList<SessionId>();
+    private final List<SkillId> usedSkillIds = new ArrayList<SkillId>();
 
     private RecordRange recordRange;
     private VerificationReportId verificationReportId;
@@ -40,6 +42,13 @@ public class Attempt {
         childSessionIds.add(childSessionId);
     }
 
+    /** 技能使用的唯一来源：改进判定的证据（模块-规划 §5、§8.1）。 */
+    public void recordSkillUsage(SkillId skillId) {
+        if (!usedSkillIds.contains(skillId)) {
+            usedSkillIds.add(skillId);
+        }
+    }
+
     public void attachReport(VerificationReportId reportId) {
         this.verificationReportId = reportId;
     }
@@ -62,6 +71,10 @@ public class Attempt {
 
     public List<SessionId> childSessionIds() {
         return Collections.unmodifiableList(childSessionIds);
+    }
+
+    public List<SkillId> usedSkillIds() {
+        return Collections.unmodifiableList(usedSkillIds);
     }
 
     public VerificationReportId verificationReportId() {

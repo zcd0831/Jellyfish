@@ -90,7 +90,7 @@ class S1AcceptanceTest {
         FileRecordStore records = new FileRecordStore(dir, codec);
         FilePolicyRepository policies = new FilePolicyRepository(dir, codec);
         FileBudgetRepository budgets = new FileBudgetRepository(dir, codec);
-        FileCatalogRepository catalog = new FileCatalogRepository(dir, codec);
+        FileCatalogRepository catalog = FileCatalogRepository.standalone(dir, codec);
         InProcessEventPublisher publisher = new InProcessEventPublisher();
         SystemClock clock = new SystemClock();
         BudgetService budgetService = new BudgetService(budgets, sessions, policies,
@@ -120,7 +120,7 @@ class S1AcceptanceTest {
                     }
                 });
         runSession = new RunSessionUseCase(sessions, records, new FileCommitScope(dir, codec), publisher,
-                executionLoop);
+                executionLoop, model, toolExecutor, human, event -> { }, plans, contextWindow);
         runSessionProviderHolder[0] = runSession;
         startSession = new StartSessionUseCase(catalog, sessions, budgets,
                 new SessionTitleGenerator(model, budgetService), new SystemPromptAssembler(),

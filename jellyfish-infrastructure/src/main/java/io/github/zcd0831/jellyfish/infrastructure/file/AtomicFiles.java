@@ -12,7 +12,7 @@ import java.nio.file.StandardOpenOption;
  * 原子写：临时文件同目录生成 → fsync → rename → fsync 目录。
  * 规则出处：模块-基础设施层 §5。
  */
-final class AtomicFiles {
+public final class AtomicFiles {
 
     private AtomicFiles() {
     }
@@ -43,7 +43,7 @@ final class AtomicFiles {
         return lock;
     }
 
-    static void write(Path target, String content) {
+    public static void write(Path target, String content) {
         synchronized (lockOf(target)) {
             writeLocked(target, content);
         }

@@ -56,7 +56,7 @@ class S5UseCasesTest {
         manageSession = new ManageSessionUseCase(sessions, new FileArtifactStore(dir),
                 new FileCommitScope(dir, codec), publisher);
         adjustPolicy = new AdjustPolicyUseCase(policies, new FileCommitScope(dir, codec), publisher);
-        manageCatalog = new ManageCatalogUseCase(new FileCatalogRepository(dir, codec));
+        manageCatalog = new ManageCatalogUseCase(FileCatalogRepository.standalone(dir, codec));
     }
 
     private SessionId newSession() {
@@ -127,7 +127,7 @@ class S5UseCasesTest {
     void 内置前缀不允许用户写入() {
         io.github.zcd0831.jellyfish.domain.action.agent.AgentDefinition builtinAgent = null;
         for (io.github.zcd0831.jellyfish.domain.action.agent.AgentDefinition agent
-                : new FileCatalogRepository(DataDirectory.of(tmp.toString()), codec).agents()) {
+                : FileCatalogRepository.standalone(DataDirectory.of(tmp.toString()), codec).agents()) {
             if (agent.id().getValue().equals("builtin.main")) {
                 builtinAgent = agent;
             }

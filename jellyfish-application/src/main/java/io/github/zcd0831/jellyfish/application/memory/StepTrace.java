@@ -3,6 +3,7 @@ package io.github.zcd0831.jellyfish.application.memory;
 import io.github.zcd0831.jellyfish.domain.planning.plan.RecordRange;
 import io.github.zcd0831.jellyfish.domain.planning.plan.StepStatus;
 import io.github.zcd0831.jellyfish.domain.shared.SessionId;
+import io.github.zcd0831.jellyfish.domain.shared.SkillId;
 import io.github.zcd0831.jellyfish.domain.shared.StepId;
 
 import java.util.ArrayList;
@@ -17,17 +18,21 @@ public final class StepTrace {
     private final StepStatus outcome;
     private final RecordRange recordRange;
     private final List<SessionId> childSessionIds;
+    private final List<SkillId> usedSkillIds;
     private final String failureReason;
     private final String reflectionConclusion;
 
     public StepTrace(StepId stepId, String description, StepStatus outcome, RecordRange recordRange,
-                     List<SessionId> childSessionIds, String failureReason, String reflectionConclusion) {
+                     List<SessionId> childSessionIds, List<SkillId> usedSkillIds,
+                     String failureReason, String reflectionConclusion) {
         this.stepId = stepId;
         this.description = description;
         this.outcome = outcome;
         this.recordRange = recordRange;
         this.childSessionIds = Collections.unmodifiableList(new ArrayList<SessionId>(
                 childSessionIds == null ? Collections.<SessionId>emptyList() : childSessionIds));
+        this.usedSkillIds = Collections.unmodifiableList(new ArrayList<SkillId>(
+                usedSkillIds == null ? Collections.<SkillId>emptyList() : usedSkillIds));
         this.failureReason = failureReason;
         this.reflectionConclusion = reflectionConclusion;
     }
@@ -50,6 +55,10 @@ public final class StepTrace {
 
     public List<SessionId> childSessionIds() {
         return childSessionIds;
+    }
+
+    public List<SkillId> usedSkillIds() {
+        return usedSkillIds;
     }
 
     public String failureReason() {

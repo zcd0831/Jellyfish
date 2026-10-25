@@ -12,6 +12,6 @@ class FileCatalogRepositoryContractTest extends CatalogRepositoryContract {
 
     @Override
     protected CatalogRepository repository() {
-        return new FileCatalogRepository(DataDirectory.of(tmp.toString()), new JsonCodec());
+        return FileCatalogRepository.standalone(DataDirectory.of(tmp.toString()), new JsonCodec());
     }
 }

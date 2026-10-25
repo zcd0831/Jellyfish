@@ -8,6 +8,8 @@ import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationPort;
 import io.github.zcd0831.jellyfish.application.memory.ExperienceDistillationService;
 import io.github.zcd0831.jellyfish.application.memory.ExperienceFeedbackService;
 import io.github.zcd0831.jellyfish.application.memory.ExperienceRetriever;
+import io.github.zcd0831.jellyfish.application.memory.PlanCompletionCurator;
+import io.github.zcd0831.jellyfish.application.memory.SkillDistillationService;
 import io.github.zcd0831.jellyfish.application.memory.port.ExperienceRepository;
 import io.github.zcd0831.jellyfish.application.memory.port.ReflectionRepository;
 import io.github.zcd0831.jellyfish.application.perception.port.PolicyRepository;
@@ -41,14 +43,29 @@ public final class MemoryModule {
     @Provides
     @Singleton
     ExperienceDistillationService experienceDistillationService(ExperienceRepository experiences,
-                                                                RecordStore records, ModelInvocationPort model,
-                                                                CatalogRepository catalog,
                                                                 PolicyRepository policies,
-                                                                BudgetService budgetService,
                                                                 CommitScope commitScope,
                                                                 DomainEventPublisher publisher,
                                                                 ProgressPort progress) {
-        return new ExperienceDistillationService(experiences, records, model, catalog, policies, budgetService,
-                commitScope, publisher, progress);
+        return new ExperienceDistillationService(experiences, policies, commitScope, publisher, progress);
+    }
+
+    @Provides
+    @Singleton
+    SkillDistillationService skillDistillationService(CatalogRepository catalog, PolicyRepository policies,
+                                                      CommitScope commitScope, DomainEventPublisher publisher,
+                                                      ProgressPort progress) {
+        return new SkillDistillationService(catalog, policies, commitScope, publisher, progress);
+    }
+
+    @Provides
+    @Singleton
+    PlanCompletionCurator planCompletionCurator(RecordStore records, ModelInvocationPort model,
+                                                CatalogRepository catalog, PolicyRepository policies,
+                                                BudgetService budgetService,
+                                                ExperienceDistillationService experienceDistillation,
+                                                SkillDistillationService skillDistillation) {
+        return new PlanCompletionCurator(records, model, catalog, policies, budgetService,
+                experienceDistillation, skillDistillation);
     }
 }

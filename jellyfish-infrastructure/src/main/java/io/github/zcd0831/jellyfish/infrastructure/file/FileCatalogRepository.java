@@ -1,6 +1,8 @@
 package io.github.zcd0831.jellyfish.infrastructure.file;
 
 import io.github.zcd0831.jellyfish.application.action.port.CatalogRepository;
+import io.github.zcd0831.jellyfish.application.action.port.PluginRepository;
+import io.github.zcd0831.jellyfish.application.shared.port.PluginRuntimePort;
 import io.github.zcd0831.jellyfish.domain.action.agent.AgentDefinition;
 import io.github.zcd0831.jellyfish.domain.action.model.Model;
 import io.github.zcd0831.jellyfish.domain.action.model.Provider;
@@ -20,18 +22,40 @@ public final class FileCatalogRepository implements CatalogRepository {
     private final ProviderCatalog providers;
     private final ModelCatalog models;
     private final SkillCatalog skills;
+    private final PluginRepository pluginManifests;
+    private final PluginRuntimePort pluginRuntime;
 
-    public FileCatalogRepository(DataDirectory dataDirectory, JsonCodec codec) {
+    public FileCatalogRepository(DataDirectory dataDirectory, JsonCodec codec, PluginRepository pluginManifests,
+                                 PluginRuntimePort pluginRuntime) {
         this.tools = new ToolCatalog(dataDirectory, codec);
         this.agents = new AgentCatalog(dataDirectory);
         this.providers = new ProviderCatalog(dataDirectory, codec);
         this.models = new ModelCatalog(dataDirectory, codec);
         this.skills = new SkillCatalog(dataDirectory);
+        this.pluginManifests = pluginManifests;
+        this.pluginRuntime = pluginRuntime;
+    }
+
+    /** 三个来源：jar 内置 + 磁盘用户资产 + **已授权 tools 能力的插件**（M42、D24）。 */
+    /**
+     * 自带一套空的插件来源：测试与工具场景用；装配层用 4 参构造，
+     * 以便与 {@code PluginAssembler} 共享**同一个**运行时实例。
+     */
+    public static FileCatalogRepository standalone(DataDirectory dataDirectory, JsonCodec codec) {
+        return new FileCatalogRepository(dataDirectory, codec, new FilePluginRepository(dataDirectory, codec),
+                new io.github.zcd0831.jellyfish.infrastructure.plugin.Pf4jPluginRuntime(
+                        dataDirectory.plugins(), codec, java.util.Collections.<String, Class<?>>emptyMap()));
     }
 
     @Override
     public List<ToolDefinition> tools() {
-        return tools.all();
+        List<ToolDefinition> all = new java.util.ArrayList<ToolDefinition>(tools.all());
+        for (io.github.zcd0831.jellyfish.domain.action.plugin.PluginManifest manifest : pluginManifests.list()) {
+            if (manifest.isGranted("tools")) {
+                all.addAll(pluginRuntime.toolsOf(manifest.id()));
+            }
+        }
+        return all;
     }
 
     @Override
@@ -77,5 +101,16 @@ public final class FileCatalogRepository implements CatalogRepository {
     @Override
     public void saveSkill(SkillDefinition skill) {
         skills.save(skill);
+    }
+
+    @Override
+    public int countActiveSkills() {
+        int active = 0;
+        for (SkillDefinition skill : skills.all()) {
+            if (skill.isActive()) {
+                active++;
+            }
+        }
+        return active;
     }
 }

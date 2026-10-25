@@ -6,6 +6,7 @@ import io.github.zcd0831.jellyfish.application.action.BudgetService;
 import io.github.zcd0831.jellyfish.application.action.InternalToolHandlers;
 import io.github.zcd0831.jellyfish.application.action.ManageCatalogUseCase;
 import io.github.zcd0831.jellyfish.application.action.ToolExecutor;
+import io.github.zcd0831.jellyfish.application.action.ToolInvoker;
 import io.github.zcd0831.jellyfish.application.action.port.BudgetRepository;
 import io.github.zcd0831.jellyfish.application.action.port.CatalogRepository;
 import io.github.zcd0831.jellyfish.application.action.port.ExternalToolPort;
@@ -41,5 +42,11 @@ public final class ActionModule {
                               ArtifactStore artifacts, HumanInteractionPort human, PolicyRepository policies,
                               InternalToolHandlers handlers) {
         return new ToolExecutor(catalog, externalTools, artifacts, human, policies, handlers);
+    }
+
+    /** 工具闸门的扩展点视图：插件换掉循环后仍走同一条路（D24-5）。 */
+    @Provides
+    ToolInvoker toolInvoker(ToolExecutor executor) {
+        return executor;
     }
 }

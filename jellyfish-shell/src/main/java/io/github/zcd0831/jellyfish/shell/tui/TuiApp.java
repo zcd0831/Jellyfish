@@ -1,5 +1,6 @@
 package io.github.zcd0831.jellyfish.shell.tui;
 
+import io.github.zcd0831.jellyfish.application.action.ManagePluginsUseCase;
 import io.github.zcd0831.jellyfish.application.action.port.CatalogRepository;
 import io.github.zcd0831.jellyfish.application.perception.AdjustPolicyUseCase;
 import io.github.zcd0831.jellyfish.application.perception.ManageSessionUseCase;
@@ -51,6 +52,7 @@ public final class TuiApp implements QuestionBroker.Answerer {
     private final ManageSessionUseCase manageSession;
     private final AdjustPolicyUseCase adjustPolicy;
     private final CatalogRepository catalog;
+    private final ManagePluginsUseCase plugins;
     private final AnsiRenderer renderer;
     private final OutputGateway gateway;
     private final Terminal terminal;
@@ -69,12 +71,14 @@ public final class TuiApp implements QuestionBroker.Answerer {
     public TuiApp(StartSessionUseCase startSession, RunSessionUseCase runSession,
                   ManageSessionUseCase manageSession, AdjustPolicyUseCase adjustPolicy,
                   CatalogRepository catalog, AnsiRenderer renderer, QuestionBroker broker,
-                  OutputGateway gateway, Terminal terminal, ShellCancellationToken token) {
+                  OutputGateway gateway, Terminal terminal, ShellCancellationToken token,
+                  ManagePluginsUseCase plugins) {
         this.startSession = startSession;
         this.runSession = runSession;
         this.manageSession = manageSession;
         this.adjustPolicy = adjustPolicy;
         this.catalog = catalog;
+        this.plugins = plugins;
         this.renderer = renderer;
         this.gateway = gateway;
         this.terminal = terminal;
@@ -360,10 +364,10 @@ public final class TuiApp implements QuestionBroker.Answerer {
         String name = parts[0];
         boolean sessionFree = "/policy".equals(name) || "/tools".equals(name) || "/agents".equals(name)
                 || "/models".equals(name) || "/providers".equals(name) || "/skills".equals(name)
-                || "/sessions".equals(name) || "/open".equals(name);
+                || "/sessions".equals(name) || "/open".equals(name) || "/plugins".equals(name);
         if ("/help".equals(name)) {
             renderer.info("/sessions /open <id> /cancel /archive /delete /policy k=v "
-                    + "/tools /agents /models /providers /skills /exit");
+                    + "/tools /agents /models /providers /skills /plugins /exit");
             return;
         }
         if (currentSession == null && !sessionFree) {
@@ -440,6 +444,14 @@ public final class TuiApp implements QuestionBroker.Answerer {
         } else if ("/skills".equals(what)) {
             for (io.github.zcd0831.jellyfish.domain.memory.skill.SkillDefinition skill : catalog.skills()) {
                 renderer.info("skill " + skill.id().getValue() + " [" + skill.status() + "] " + skill.name());
+            }
+        } else if ("/plugins".equals(what)) {
+            for (io.github.zcd0831.jellyfish.domain.action.plugin.PluginManifest manifest
+                    : plugins.list()) {
+                renderer.info("plugin " + manifest.id().getValue() + " v" + manifest.version()
+                        + (manifest.isTrusted() ? " [trusted]" : " [untrusted]")
+                        + " granted=" + manifest.grantedCapabilities()
+                        + " tools=" + manifest.toolIds().size());
             }
         } else {
             renderer.info("未知命令：" + what + "（/help 查看）");

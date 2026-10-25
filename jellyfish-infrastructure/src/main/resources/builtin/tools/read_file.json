@@ -1,0 +1,40 @@
+{
+  "id": "read_file",
+  "name": "read_file",
+  "description": "读取工作区内的文本文件，返回带行号的内容。先用 list_dir 或 grep 定位，不要盲猜路径。",
+  "inputSchema": {
+    "type": "object",
+    "required": [
+      "path"
+    ],
+    "properties": {
+      "path": {
+        "type": "string",
+        "description": "相对工作区根的路径"
+      },
+      "offset": {
+        "type": "integer",
+        "description": "从第几行开始，默认 1"
+      },
+      "limit": {
+        "type": "integer",
+        "description": "最多读多少行，默认 2000"
+      }
+    }
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "result": {
+        "type": "string"
+      }
+    }
+  },
+  "source": {
+    "type": "NATIVE",
+    "endpointOrIdentifier": "read_file"
+  },
+  "sideEffect": "READ_ONLY",
+  "timeoutMillis": 10000,
+  "status": "ACTIVE"
+}

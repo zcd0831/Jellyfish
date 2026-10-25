@@ -1,0 +1,42 @@
+{
+  "id": "edit_file",
+  "name": "edit_file",
+  "description": "用精确替换修改文件：oldText 必须在文件里恰好出现一次。未匹配就失败，请先 read_file 确认原文。",
+  "inputSchema": {
+    "type": "object",
+    "required": [
+      "path",
+      "oldText",
+      "newText"
+    ],
+    "properties": {
+      "path": {
+        "type": "string",
+        "description": "相对工作区根的路径"
+      },
+      "oldText": {
+        "type": "string",
+        "description": "要被替换的原文，必须唯一"
+      },
+      "newText": {
+        "type": "string",
+        "description": "替换成什么，可以是空字符串"
+      }
+    }
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "result": {
+        "type": "string"
+      }
+    }
+  },
+  "source": {
+    "type": "NATIVE",
+    "endpointOrIdentifier": "edit_file"
+  },
+  "sideEffect": "REPEATABLE",
+  "timeoutMillis": 10000,
+  "status": "ACTIVE"
+}

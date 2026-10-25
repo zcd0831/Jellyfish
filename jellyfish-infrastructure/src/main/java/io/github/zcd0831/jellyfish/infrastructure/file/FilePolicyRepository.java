@@ -69,6 +69,7 @@ public final class FilePolicyRepository implements PolicyRepository {
         public double experienceInitialConfidence;
         public double experienceConfidenceStep;
         public double experienceRetireThreshold;
+        public int skillCapacity;
         public double budgetWarnRatio;
         public long budgetLimitTokens;
         public List<String> modelFallbackChain = new ArrayList<String>();
@@ -92,6 +93,7 @@ public final class FilePolicyRepository implements PolicyRepository {
             dto.experienceInitialConfidence = policy.experienceInitialConfidence();
             dto.experienceConfidenceStep = policy.experienceConfidenceStep();
             dto.experienceRetireThreshold = policy.experienceRetireThreshold();
+            dto.skillCapacity = policy.skillCapacity();
             dto.budgetWarnRatio = policy.budgetWarnRatio();
             dto.budgetLimitTokens = policy.budgetLimitTokens();
             for (ModelId modelId : policy.modelFallbackChain()) {
@@ -116,8 +118,8 @@ public final class FilePolicyRepository implements PolicyRepository {
                     summarizationTokenThreshold, inputSafetyMargin, contextWindowRecordCount,
                     systemRecordRatioLimit, toolResultTruncateLength, subagentExecutionTimeoutMillis,
                     experienceCapacity, experienceTopN, experiencePerPlan, experienceInitialConfidence,
-                    experienceConfidenceStep, experienceRetireThreshold, budgetWarnRatio, budgetLimitTokens,
-                    fallback, trusted);
+                    experienceConfidenceStep, experienceRetireThreshold, skillCapacity, budgetWarnRatio,
+                    budgetLimitTokens, fallback, trusted);
         }
     }
 }

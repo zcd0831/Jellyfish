@@ -5,6 +5,7 @@ import io.github.zcd0831.jellyfish.domain.shared.DomainInvariantViolation;
 import io.github.zcd0831.jellyfish.domain.shared.ExperienceId;
 import io.github.zcd0831.jellyfish.domain.shared.PlanId;
 import io.github.zcd0831.jellyfish.domain.shared.SessionId;
+import io.github.zcd0831.jellyfish.domain.shared.SkillId;
 import io.github.zcd0831.jellyfish.domain.shared.StepId;
 import io.github.zcd0831.jellyfish.domain.shared.VerificationReportId;
 
@@ -131,6 +132,18 @@ public class Plan {
         for (Attempt attempt : step.attempts()) {
             if (attempt.attemptNo() == attemptNo) {
                 attempt.attachReflection(reflectionId);
+                return;
+            }
+        }
+        throw new DomainInvariantViolation("计划里没有该尝试：" + stepId.getValue() + "#" + attemptNo);
+    }
+
+    /** 技能使用痕迹：只写引用，供计划完结时判定"要不要改进"（模块-记忆 §8.6）。 */
+    public void recordSkillUsage(StepId stepId, int attemptNo, SkillId skillId) {
+        PlanStep step = requireStep(stepId);
+        for (Attempt attempt : step.attempts()) {
+            if (attempt.attemptNo() == attemptNo) {
+                attempt.recordSkillUsage(skillId);
                 return;
             }
         }

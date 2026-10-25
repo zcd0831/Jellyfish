@@ -10,6 +10,8 @@ import io.github.zcd0831.jellyfish.application.action.port.ModelUsage;
 import io.github.zcd0831.jellyfish.application.action.port.ToolCall;
 import io.github.zcd0831.jellyfish.application.memory.DistillationInput;
 import io.github.zcd0831.jellyfish.application.memory.ExperienceDistillationService;
+import io.github.zcd0831.jellyfish.application.memory.PlanCompletionCurator;
+import io.github.zcd0831.jellyfish.application.memory.SkillDistillationService;
 import io.github.zcd0831.jellyfish.application.memory.ExperienceFeedbackService;
 import io.github.zcd0831.jellyfish.application.memory.ExperienceRetriever;
 import io.github.zcd0831.jellyfish.application.memory.FeedbackInput;
@@ -71,7 +73,7 @@ class S4MemoryTest {
     private BudgetService budgetService;
     private ExperienceFeedbackService feedback;
     private ExperienceRetriever retriever;
-    private ExperienceDistillationService distillation;
+    private PlanCompletionCurator curator;
 
     @BeforeEach
     void setUp() {
@@ -80,15 +82,19 @@ class S4MemoryTest {
         FileSessionRepository sessions = new FileSessionRepository(dir, codec);
         experiences = new FileExperienceRepository(dir, codec);
         FileRecordStore records = new FileRecordStore(dir, codec);
-        FileCatalogRepository catalog = new FileCatalogRepository(dir, codec);
+        FileCatalogRepository catalog = FileCatalogRepository.standalone(dir, codec);
         InProcessEventPublisher publisher = new InProcessEventPublisher();
         budgetService = new BudgetService(new FileBudgetRepository(dir, codec), sessions, policies,
                 new FileCommitScope(dir, codec), publisher);
         feedback = new ExperienceFeedbackService(experiences, policies, new FileCommitScope(dir, codec),
                 publisher);
         retriever = new ExperienceRetriever(experiences, model, catalog, policies, budgetService);
-        distillation = new ExperienceDistillationService(experiences, records, model, catalog, policies,
-                budgetService, new FileCommitScope(dir, codec), publisher, event -> { });
+        ExperienceDistillationService distillation = new ExperienceDistillationService(experiences, policies,
+                new FileCommitScope(dir, codec), publisher, event -> { });
+        SkillDistillationService skills = new SkillDistillationService(catalog, policies,
+                new FileCommitScope(dir, codec), publisher, event -> { });
+        curator = new PlanCompletionCurator(records, model, catalog, policies, budgetService, distillation,
+                skills);
 
         session = Session.create(SessionId.of("s1"), null, AgentId.of("builtin.main"), ModelId.of("m1"),
                 1L, null);
@@ -135,30 +141,31 @@ class S4MemoryTest {
     }
 
     @Test
-    void 沉淀按每Plan上限产出且场景与教训落库() {
-        model.reply = "{\"experiences\":[{\"applicableScenario\":\"需要改代码时\","
-                + "\"instruction\":\"先读再改\",\"expectedOutcome\":\"不破坏上下文\"},"
-                + "{\"applicableScenario\":\"第二条\",\"instruction\":\"不该被写入\"}]}";
-        StepTrace trace = new StepTrace(StepId.of("step1"), "改代码", StepStatus.FAILED, null, null,
+    void 一次判定只产出一条经验且场景与教训落库() {
+        model.reply = "{\"experience\":{\"applicableScenario\":\"需要改代码时\","
+                + "\"instruction\":\"先读再改\",\"expectedOutcome\":\"不破坏上下文\"}}";
+        StepTrace trace = new StepTrace(StepId.of("step1"), "改代码", StepStatus.FAILED, null, null, null,
                 "没读就改", "应先读文件");
 
-        distillation.distill(session, new DistillationInput(PlanId.of("p1"), session.id(), "改个 bug",
+        curator.curate(session, new DistillationInput(PlanId.of("p1"), session.id(), "改个 bug",
                 PlanStatus.FAILED, Collections.singletonList(trace)));
 
         List<Experience> active = experiences.findActive();
-        assertEquals(1, active.size(), "experiencePerPlan 默认 1");
+        assertEquals(1, active.size());
         assertEquals("需要改代码时", active.get(0).applicableScenario());
     }
 
     @Test
-    void 没有可用素材时不产出经验() {
+    void 判定为技能时不写经验() {
+        model.reply = "{\"skill\":{\"name\":\"依赖升级\",\"description\":\"升版本\","
+                + "\"triggerCondition\":\"升级依赖时\",\"sopBody\":\"## 步骤\"}}";
         StepTrace trace = new StepTrace(StepId.of("step1"), "顺利的步骤", StepStatus.SUCCEEDED, null, null,
-                null, null);
+                null, null, null);
 
-        distillation.distill(session, new DistillationInput(PlanId.of("p1"), session.id(), "目标",
+        curator.curate(session, new DistillationInput(PlanId.of("p1"), session.id(), "目标",
                 PlanStatus.COMPLETED, Collections.singletonList(trace)));
 
-        assertTrue(experiences.findActive().isEmpty());
+        assertTrue(experiences.findActive().isEmpty(), "同一件事只进一边");
     }
 
     private double confidence(String id) {

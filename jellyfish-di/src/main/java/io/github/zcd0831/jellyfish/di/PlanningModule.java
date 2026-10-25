@@ -1,9 +1,15 @@
 package io.github.zcd0831.jellyfish.di;
 
+import java.util.List;
+import java.util.ArrayList;
+import io.github.zcd0831.jellyfish.infrastructure.local.Workspace;
+import io.github.zcd0831.jellyfish.infrastructure.local.UrlFetcher;
+import io.github.zcd0831.jellyfish.infrastructure.local.LocalToolHandlers;
 import dagger.Module;
 import dagger.Provides;
+import io.github.zcd0831.jellyfish.application.action.PortRoutes;
 import io.github.zcd0831.jellyfish.application.action.BudgetService;
-import io.github.zcd0831.jellyfish.application.memory.ExperienceDistillationService;
+import io.github.zcd0831.jellyfish.application.memory.PlanCompletionCurator;
 import io.github.zcd0831.jellyfish.application.memory.ExperienceFeedbackService;
 import io.github.zcd0831.jellyfish.application.memory.ExperienceRetriever;
 import io.github.zcd0831.jellyfish.application.memory.port.ExperienceRepository;
@@ -18,6 +24,8 @@ import io.github.zcd0831.jellyfish.application.perception.port.PolicyRepository;
 import io.github.zcd0831.jellyfish.application.perception.port.RecordStore;
 import io.github.zcd0831.jellyfish.application.perception.port.SessionRepository;
 import io.github.zcd0831.jellyfish.application.planning.ExecutionLoop;
+import io.github.zcd0831.jellyfish.application.action.ToolInvoker;
+import io.github.zcd0831.jellyfish.application.planning.SessionRunner;
 import io.github.zcd0831.jellyfish.application.planning.ReActLoop;
 import io.github.zcd0831.jellyfish.application.planning.EnvironmentFeedbackVerifier;
 import io.github.zcd0831.jellyfish.application.planning.GeneratePlanHandler;
@@ -63,11 +71,14 @@ public final class PlanningModule {
     @Singleton
     InternalToolHandlers internalToolHandlers(GeneratePlanHandler generatePlanHandler,
                                               SpawnSubagentsHandler spawnSubagentsHandler,
-                                              SkillSopProvider sopProvider) {
-        return new InternalToolHandlers(Arrays.asList(
+                                              SkillSopProvider sopProvider, Workspace workspace,
+                                              UrlFetcher urlFetcher) {
+        List<InternalToolHandlers.NamedHandler> handlers = new ArrayList<InternalToolHandlers.NamedHandler>(Arrays.asList(
                 new InternalToolHandlers.NamedHandler("generate_plan", generatePlanHandler),
                 new InternalToolHandlers.NamedHandler("spawn_subagents", spawnSubagentsHandler),
                 new InternalToolHandlers.NamedHandler("load_skill", new LoadSkillHandler(sopProvider))));
+        handlers.addAll(LocalToolHandlers.all(workspace, urlFetcher));
+        return new InternalToolHandlers(handlers);
     }
 
     @Provides
@@ -124,18 +135,28 @@ public final class PlanningModule {
                                 ModelInvocationPort model, BudgetService budgetService,
                                 ExperienceRetriever experienceRetriever,
                                 ExperienceFeedbackService experienceFeedback,
-                                ExperienceDistillationService experienceDistillation,
+                                PlanCompletionCurator planCompletionCurator,
                                 ReflectionRepository reflections, SubagentLauncher subagentLauncher,
                                 ExperienceRepository experiences) {
         return new ExecutionLoop(contextWindow, reActLoop, verificationRunner, plans, planFactory, catalog,
                 policies, commitScope, publisher, progress, model, budgetService, experienceRetriever,
-                experienceFeedback, experienceDistillation, reflections, subagentLauncher, experiences);
+                experienceFeedback, planCompletionCurator, reflections, subagentLauncher, experiences);
+    }
+
+    /** 零插件时就是默认编排；插件装上后由路由接管（D24-6，见 PluginModule）。 */
+    @Provides
+    @Singleton
+    SessionRunner sessionRunner(ExecutionLoop executionLoop, PortRoutes routes) {
+        return routes.resolve("SessionRunner", (SessionRunner) executionLoop);
     }
 
     @Provides
     RunSessionUseCase runSessionUseCase(SessionRepository sessions, RecordStore records,
                                         CommitScope commitScope, DomainEventPublisher publisher,
-                                        ExecutionLoop executionLoop) {
-        return new RunSessionUseCase(sessions, records, commitScope, publisher, executionLoop);
+                                        SessionRunner runner, ModelInvocationPort model, ToolInvoker tools,
+                                        HumanInteractionPort human, ProgressPort progress,
+                                        PlanRepository plans, ContextWindowService contextWindow) {
+        return new RunSessionUseCase(sessions, records, commitScope, publisher, runner, model, tools, human,
+                progress, plans, contextWindow);
     }
 }

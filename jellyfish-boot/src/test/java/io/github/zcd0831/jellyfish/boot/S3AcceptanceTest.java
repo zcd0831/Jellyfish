@@ -128,7 +128,7 @@ class S3AcceptanceTest {
             }
         };
         budgets = new FileBudgetRepository(dir, codec);
-        catalog = new FileCatalogRepository(dir, codec);
+        catalog = FileCatalogRepository.standalone(dir, codec);
         InProcessEventPublisher publisher = new InProcessEventPublisher();
         budgetService = new BudgetService(budgets, sessions, policies, new FileCommitScope(dir, codec), publisher);
         titleGenerator = new SessionTitleGenerator(model, budgetService);
@@ -152,7 +152,7 @@ class S3AcceptanceTest {
                     }
                 });
         runSession = new RunSessionUseCase(sessions, records, new FileCommitScope(dir, codec), publisher,
-                executionLoop);
+                executionLoop, model, toolExecutor, human, event -> { }, plans, contextWindow);
         runSessionHolder[0] = runSession;
         startSession = new StartSessionUseCase(catalog, sessions, budgets, titleGenerator,
                 new SystemPromptAssembler(), new FileCommitScope(dir, codec), new SystemClock());
@@ -240,7 +240,8 @@ class S3AcceptanceTest {
                 d.contextWindowRecordCount(), d.systemRecordRatioLimit(), d.toolResultTruncateLength(),
                 timeoutMillis, d.experienceCapacity(), d.experienceTopN(), d.experiencePerPlan(),
                 d.experienceInitialConfidence(), d.experienceConfidenceStep(), d.experienceRetireThreshold(),
-                d.budgetWarnRatio(), d.budgetLimitTokens(), d.modelFallbackChain(), d.trustedToolIds());
+                d.skillCapacity(), d.budgetWarnRatio(), d.budgetLimitTokens(), d.modelFallbackChain(),
+                d.trustedToolIds());
     }
 
     private void write(String relative, String content) throws IOException {

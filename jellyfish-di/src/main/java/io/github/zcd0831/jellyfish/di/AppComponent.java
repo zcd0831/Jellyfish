@@ -34,7 +34,7 @@ import javax.inject.Singleton;
  */
 @Singleton
 @Component(modules = {InfrastructureModule.class, PerceptionModule.class, ActionModule.class,
-        PlanningModule.class, MemoryModule.class, ShellModule.class})
+        PlanningModule.class, MemoryModule.class, PluginModule.class, ShellModule.class})
 public interface AppComponent {
 
     DataDirectory dataDirectory();

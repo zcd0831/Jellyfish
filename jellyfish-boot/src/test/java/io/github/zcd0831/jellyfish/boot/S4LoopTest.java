@@ -101,7 +101,7 @@ class S4LoopTest {
         RecordStore records = new FileRecordStore(dir, codec);
         FilePolicyRepository policies = new FilePolicyRepository(dir, codec);
         FileBudgetRepository budgets = new FileBudgetRepository(dir, codec);
-        FileCatalogRepository catalog = new FileCatalogRepository(dir, codec);
+        FileCatalogRepository catalog = FileCatalogRepository.standalone(dir, codec);
         InProcessEventPublisher publisher = new InProcessEventPublisher();
         experiences = new FileExperienceRepository(dir, codec);
         BudgetService budgetService = new BudgetService(budgets, sessions, policies,
@@ -132,7 +132,7 @@ class S4LoopTest {
                     }
                 });
         runSession = new RunSessionUseCase(sessions, records, new FileCommitScope(dir, codec), publisher,
-                executionLoop);
+                executionLoop, model, toolExecutor, human, event -> { }, plans, contextWindow);
         holder[0] = runSession;
     }
 

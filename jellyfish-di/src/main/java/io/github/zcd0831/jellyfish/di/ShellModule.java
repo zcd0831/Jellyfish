@@ -2,6 +2,8 @@ package io.github.zcd0831.jellyfish.di;
 
 import dagger.Module;
 import dagger.Provides;
+import io.github.zcd0831.jellyfish.application.action.ManagePluginsUseCase;
+import io.github.zcd0831.jellyfish.application.action.PortRoutes;
 import io.github.zcd0831.jellyfish.application.action.port.CatalogRepository;
 import io.github.zcd0831.jellyfish.application.perception.AdjustPolicyUseCase;
 import io.github.zcd0831.jellyfish.application.perception.ManageSessionUseCase;
@@ -68,14 +70,14 @@ public final class ShellModule {
 
     @Provides
     @Singleton
-    HumanInteractionPort humanInteractionPort(QuestionBroker broker) {
-        return new TuiHumanInteraction(broker);
+    HumanInteractionPort humanInteractionPort(QuestionBroker broker, PortRoutes routes) {
+        return routes.resolve("HumanInteractionPort", (HumanInteractionPort) new TuiHumanInteraction(broker));
     }
 
     @Provides
     @Singleton
-    ProgressPort progressPort(AnsiRenderer renderer) {
-        return new TuiProgressReporter(renderer);
+    ProgressPort progressPort(AnsiRenderer renderer, PortRoutes routes) {
+        return routes.resolve("ProgressPort", (ProgressPort) new TuiProgressReporter(renderer));
     }
 
     /** 唯一取消令牌：Ctrl-C 与 `/cancel` 都走它；令牌回调负责让在途 HTTP 读立刻失败（§8.4.1）。 */
@@ -97,8 +99,9 @@ public final class ShellModule {
     TuiApp tuiApp(StartSessionUseCase startSession, RunSessionUseCase runSession,
                   ManageSessionUseCase manageSession, AdjustPolicyUseCase adjustPolicy,
                   CatalogRepository catalog, AnsiRenderer renderer, QuestionBroker broker,
-                  OutputGateway gateway, Terminal terminal, ShellCancellationToken token) {
+                  OutputGateway gateway, Terminal terminal, ShellCancellationToken token,
+                  ManagePluginsUseCase plugins) {
         return new TuiApp(startSession, runSession, manageSession, adjustPolicy, catalog, renderer, broker,
-                gateway, terminal, token);
+                gateway, terminal, token, plugins);
     }
 }

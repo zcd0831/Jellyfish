@@ -100,7 +100,7 @@ class S2AcceptanceTest {
         RecordStore records = new FileRecordStore(dir, codec);
         FilePolicyRepository policies = new FilePolicyRepository(dir, codec);
         FileBudgetRepository budgets = new FileBudgetRepository(dir, codec);
-        FileCatalogRepository catalog = new FileCatalogRepository(dir, codec);
+        FileCatalogRepository catalog = FileCatalogRepository.standalone(dir, codec);
         InProcessEventPublisher publisher = new InProcessEventPublisher();
         BudgetService budgetService = new BudgetService(budgets, sessions, policies,
                 new FileCommitScope(dir, codec), publisher);
@@ -129,11 +129,15 @@ class S2AcceptanceTest {
                         policies, new FileCommitScope(dir, codec), publisher);
         io.github.zcd0831.jellyfish.application.memory.ExperienceDistillationService distillation =
                 new io.github.zcd0831.jellyfish.application.memory.ExperienceDistillationService(experiences,
-                        records, model, catalog, policies, budgetService, new FileCommitScope(dir, codec),
-                        publisher, event -> { });
+                        policies, new FileCommitScope(dir, codec), publisher, event -> { });
+        io.github.zcd0831.jellyfish.application.memory.PlanCompletionCurator curator =
+                new io.github.zcd0831.jellyfish.application.memory.PlanCompletionCurator(records, model,
+                        catalog, policies, budgetService, distillation,
+                        new io.github.zcd0831.jellyfish.application.memory.SkillDistillationService(catalog,
+                                policies, new FileCommitScope(dir, codec), publisher, event -> { }));
         ExecutionLoop executionLoop = new ExecutionLoop(contextWindow, reActLoop, verificationRunner, plans,
                 planFactory, catalog, policies, new FileCommitScope(dir, codec), publisher, event -> { }, model,
-                budgetService, retriever, feedback, distillation, reflections,
+                budgetService, retriever, feedback, curator, reflections,
                 new io.github.zcd0831.jellyfish.application.planning.SubagentLauncher(startSession,
                         new io.github.zcd0831.jellyfish.application.planning.RunSessionProvider() {
                             @Override
@@ -143,7 +147,7 @@ class S2AcceptanceTest {
                         }, sessions, records, budgetService, policies, event -> { },
                         java.util.concurrent.Executors.newFixedThreadPool(2)), experiences);
         runSession = new RunSessionUseCase(sessions, records, new FileCommitScope(dir, codec), publisher,
-                executionLoop);
+                executionLoop, model, toolExecutor, human, event -> { }, plans, contextWindow);
         runSessionHolder[0] = runSession;
         startSession = new StartSessionUseCase(catalog, sessions, budgets,
                 new SessionTitleGenerator(model, budgetService), new SystemPromptAssembler(),

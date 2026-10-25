@@ -1,0 +1,40 @@
+{
+  "id": "run_command",
+  "name": "run_command",
+  "description": "在工作区内执行一条 shell 命令（如跑测试、编译、git）。返回退出码与尾部输出。",
+  "inputSchema": {
+    "type": "object",
+    "required": [
+      "command"
+    ],
+    "properties": {
+      "command": {
+        "type": "string",
+        "description": "要执行的命令"
+      },
+      "cwd": {
+        "type": "string",
+        "description": "工作目录，必须是工作区内的子目录，默认工作区根"
+      },
+      "timeoutMs": {
+        "type": "integer",
+        "description": "超时毫秒，默认 120000，上限 600000"
+      }
+    }
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "result": {
+        "type": "string"
+      }
+    }
+  },
+  "source": {
+    "type": "NATIVE",
+    "endpointOrIdentifier": "run_command"
+  },
+  "sideEffect": "IRREVERSIBLE",
+  "timeoutMillis": 600000,
+  "status": "ACTIVE"
+}

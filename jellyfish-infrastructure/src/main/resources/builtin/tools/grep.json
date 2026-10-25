@@ -1,0 +1,48 @@
+{
+  "id": "grep",
+  "name": "grep",
+  "description": "在工作区内按正则搜索文本，返回 文件:行号:内容。定位改动点的首选工具。",
+  "inputSchema": {
+    "type": "object",
+    "required": [
+      "pattern"
+    ],
+    "properties": {
+      "pattern": {
+        "type": "string",
+        "description": "正则表达式"
+      },
+      "path": {
+        "type": "string",
+        "description": "搜索起点，默认工作区根"
+      },
+      "glob": {
+        "type": "string",
+        "description": "可选：文件名 glob，如 *.java"
+      },
+      "ignoreCase": {
+        "type": "boolean",
+        "description": "是否忽略大小写"
+      },
+      "context": {
+        "type": "integer",
+        "description": "每条命中额外显示的上下文行数，默认 0"
+      }
+    }
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "result": {
+        "type": "string"
+      }
+    }
+  },
+  "source": {
+    "type": "NATIVE",
+    "endpointOrIdentifier": "grep"
+  },
+  "sideEffect": "READ_ONLY",
+  "timeoutMillis": 30000,
+  "status": "ACTIVE"
+}

@@ -4,6 +4,8 @@ import io.github.zcd0831.jellyfish.application.action.BudgetService;
 import io.github.zcd0831.jellyfish.application.action.port.CatalogRepository;
 import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationPort;
 import io.github.zcd0831.jellyfish.application.memory.ExperienceDistillationService;
+import io.github.zcd0831.jellyfish.application.memory.PlanCompletionCurator;
+import io.github.zcd0831.jellyfish.application.memory.SkillDistillationService;
 import io.github.zcd0831.jellyfish.application.memory.ExperienceFeedbackService;
 import io.github.zcd0831.jellyfish.application.memory.ExperienceRetriever;
 import io.github.zcd0831.jellyfish.application.memory.port.ExperienceRepository;
@@ -51,13 +53,17 @@ final class LoopSupport {
                 budgetService);
         ExperienceFeedbackService feedback = new ExperienceFeedbackService(experiences, policies,
                 new FileCommitScope(dir, codec), publisher);
-        ExperienceDistillationService distillation = new ExperienceDistillationService(experiences, records,
-                model, catalog, policies, budgetService, new FileCommitScope(dir, codec), publisher, progress);
+        ExperienceDistillationService distillation = new ExperienceDistillationService(experiences, policies,
+                new FileCommitScope(dir, codec), publisher, progress);
+        SkillDistillationService skills = new SkillDistillationService(catalog, policies,
+                new FileCommitScope(dir, codec), publisher, progress);
+        PlanCompletionCurator curator = new PlanCompletionCurator(records, model, catalog, policies,
+                budgetService, distillation, skills);
         ExecutorService pool = Executors.newFixedThreadPool(2);
         SubagentLauncher launcher = new SubagentLauncher(startSession, runSession, sessions, records,
                 budgetService, policies, progress, pool);
         return new ExecutionLoop(contextWindow, reActLoop, verificationRunner, plans, new PlanFactory(), catalog,
                 policies, new FileCommitScope(dir, codec), publisher, progress, model, budgetService, retriever,
-                feedback, distillation, reflections, launcher, experiences);
+                feedback, curator, reflections, launcher, experiences);
     }
 }

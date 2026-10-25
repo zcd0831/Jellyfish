@@ -70,6 +70,7 @@
         <jackson.version>2.17.2</jackson.version>
         <junit.version>5.10.2</junit.version>
         <jtokkit.version>0.6.1</jtokkit.version>
+        <pf4j.version>3.16.0</pf4j.version>
 
         <maven-compiler-plugin.version>3.11.0</maven-compiler-plugin.version>
         <maven-shade-plugin.version>3.5.3</maven-shade-plugin.version>
@@ -199,6 +200,13 @@
                 <artifactId>mockito-inline</artifactId>
                 <version>${mockito.version}</version>
                 <scope>test</scope>
+            </dependency>
+
+            <!-- 插件运行时（技术决策 D24）：3.16.0 的 class 字节码为 Java 8（major 52），实测可在 JDK 8 运行 -->
+            <dependency>
+                <groupId>org.pf4j</groupId>
+                <artifactId>pf4j</artifactId>
+                <version>${pf4j.version}</version>
             </dependency>
 
             <!-- 测试（技术决策 D13：JUnit 5 为主，假端口优先） -->

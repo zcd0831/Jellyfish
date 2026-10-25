@@ -1,5 +1,6 @@
 package io.github.zcd0831.jellyfish.application.action;
 
+import io.github.zcd0831.jellyfish.application.action.local.CommandRules;
 import io.github.zcd0831.jellyfish.application.action.port.CatalogRepository;
 import io.github.zcd0831.jellyfish.application.action.port.ExternalToolPort;
 import io.github.zcd0831.jellyfish.application.perception.port.PolicyRepository;
@@ -25,15 +26,28 @@ import java.util.Map;
  * 工具执行的唯一入口：合法性 → 入参校验 → 放行审批 → 按来源分发 → 截断归档。
  * 规则出处：模块-行动 §8.1。
  */
-public final class ToolExecutor {
+public final class ToolExecutor implements ToolInvoker {
 
     private static final String ASK_USER = "ask_user";
+    private static final String RUN_COMMAND = "run_command";
 
     private final CatalogRepository catalog;
     private final ExternalToolPort externalTools;
     private final ArtifactStore artifacts;
     private final HumanInteractionPort human;
     private final PolicyRepository policies;
+    /** 首次同意后进本会话信任清单的三个工具（D25-4）。 */
+    private static final List<String> WRITES =
+            java.util.Arrays.asList("edit_file", "write_file", "delete_file");
+
+    /**
+     * 本会话已同意的写入：这是**运行期状态**，不落盘、进程退出即失效（D25-4）——
+     * 持久信任一条写权限是用户自己该做的决定，不该由一次点击替他做。
+     */
+    private final java.util.Map<io.github.zcd0831.jellyfish.domain.shared.SessionId,
+            java.util.Set<String>> trustedWrites =
+            new java.util.concurrent.ConcurrentHashMap<io.github.zcd0831.jellyfish.domain.shared.SessionId,
+                    java.util.Set<String>>();
     private final InternalToolHandlers handlers;
 
     public ToolExecutor(CatalogRepository catalog, ExternalToolPort externalTools, ArtifactStore artifacts,
@@ -46,6 +60,7 @@ public final class ToolExecutor {
         this.handlers = handlers;
     }
 
+    @Override
     public ToolExecOutcome execute(Session session, String toolName, Map<String, Object> args, RecordId recordId) {
         RuntimePolicy policy = policies.load();
         ToolDefinition tool = findTool(toolName);
@@ -62,13 +77,9 @@ public final class ToolExecutor {
         if (!violations.isEmpty()) {
             return ToolExecOutcome.plain("参数不合法：" + join(violations));
         }
-        if (needsApproval(tool, policy)) {
-            Answer answer = human.ask(new Question(Question.Source.APPROVAL,
-                    "工具 " + toolName + " 可能产生副作用，允许执行吗？", null));
-            if (answer.kind() == Answer.Kind.CANCELLED
-                    || !io.github.zcd0831.jellyfish.application.shared.Approvals.isApproved(answer.text())) {
-                return ToolExecOutcome.plain("用户拒绝执行：" + toolName);
-            }
+        String refusal = approve(session, tool, args, policy);
+        if (refusal != null) {
+            return ToolExecOutcome.plain(refusal);
         }
         String raw = dispatch(session, tool, args);
         return truncate(raw, session, recordId, policy);
@@ -109,8 +120,68 @@ public final class ToolExecutor {
         return new ToolExecOutcome(content.substring(0, limit), true, uri);
     }
 
-    private boolean needsApproval(ToolDefinition tool, RuntimePolicy policy) {
-        return tool.sideEffect() != SideEffectLevel.READ_ONLY && !policy.isToolTrusted(tool.id());
+    /** 返回 null 表示可以继续；否则是"用户拒绝执行"的结果内容。 */
+    private String approve(Session session, ToolDefinition tool, Map<String, Object> args, RuntimePolicy policy) {
+        String question = approvalQuestion(session, tool, args, policy);
+        if (question == null) {
+            return null;
+        }
+        Answer answer = human.ask(new Question(Question.Source.APPROVAL, question, null));
+        boolean approved = answer.kind() != Answer.Kind.CANCELLED
+                && io.github.zcd0831.jellyfish.application.shared.Approvals.isApproved(answer.text());
+        if (!approved) {
+            return "用户拒绝执行：" + tool.name();
+        }
+        if (isWorkspaceWrite(tool)) {
+            trustedWritesOf(session).addAll(WRITES);
+        }
+        return null;
+    }
+
+    private boolean isWorkspaceWrite(ToolDefinition tool) {
+        return tool.source().getType() == SourceType.NATIVE && WRITES.contains(tool.id().getValue());
+    }
+
+    private java.util.Set<String> trustedWritesOf(Session session) {
+        java.util.Set<String> trusted = trustedWrites.get(session.id());
+        if (trusted != null) {
+            return trusted;
+        }
+        java.util.Set<String> created =
+                java.util.concurrent.ConcurrentHashMap.<String>newKeySet();
+        java.util.Set<String> existing = trustedWrites.putIfAbsent(session.id(), created);
+        return existing == null ? created : existing;
+    }
+
+    /**
+     * 规则 5 管一般工具；`run_command` 例外，改由绊线判定（§7.1 规则 10、D25-5）——
+     * 只有它执行的是 shell 字符串，其余本地工具的参数都是结构化路径。
+     */
+    private String approvalQuestion(Session session, ToolDefinition tool, Map<String, Object> args,
+                                    RuntimePolicy policy) {
+        if (isShellCommand(tool)) {
+            Object command = args.get("command");
+            String line = command == null ? "" : String.valueOf(command);
+            CommandRules.Verdict verdict = CommandRules.assess(line);
+            if (verdict.allowed()) {
+                return null;
+            }
+            return "命中高危规则，要执行这条命令吗？\n  原因：" + verdict.reason()
+                    + "\n  命令：" + CommandRules.summarize(line);
+        }
+        if (tool.sideEffect() == SideEffectLevel.READ_ONLY || policy.isToolTrusted(tool.id())) {
+            return null;
+        }
+        if (isWorkspaceWrite(tool)) {
+            return trustedWritesOf(session).contains(tool.id().getValue()) ? null
+                    : "允许本会话在此工作区内写入与删除文件吗？\n  工具：" + tool.name()
+                    + "\n  同意后本次会话不再逐次询问（重启或换会话重新确认）";
+        }
+        return "工具 " + tool.name() + " 可能产生副作用，允许执行吗？";
+    }
+
+    private static boolean isShellCommand(ToolDefinition tool) {
+        return tool.source().getType() == SourceType.NATIVE && RUN_COMMAND.equals(tool.id().getValue());
     }
 
     private boolean isBoundToAgent(Session session, ToolId toolId) {

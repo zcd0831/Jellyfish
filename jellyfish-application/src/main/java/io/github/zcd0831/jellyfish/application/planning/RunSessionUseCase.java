@@ -1,7 +1,13 @@
 package io.github.zcd0831.jellyfish.application.planning;
 
+import io.github.zcd0831.jellyfish.application.action.ToolInvoker;
 import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationException;
+import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationPort;
+import io.github.zcd0831.jellyfish.application.perception.ContextWindowService;
 import io.github.zcd0831.jellyfish.application.perception.port.RecordStore;
+import io.github.zcd0831.jellyfish.application.planning.port.PlanRepository;
+import io.github.zcd0831.jellyfish.application.shared.port.HumanInteractionPort;
+import io.github.zcd0831.jellyfish.application.shared.port.ProgressPort;
 import io.github.zcd0831.jellyfish.application.perception.port.SessionRepository;
 import io.github.zcd0831.jellyfish.application.shared.CancellationToken;
 import io.github.zcd0831.jellyfish.application.shared.ChunkSink;
@@ -28,15 +34,29 @@ public final class RunSessionUseCase {
     private final RecordStore records;
     private final CommitScope commitScope;
     private final DomainEventPublisher eventPublisher;
-    private final ExecutionLoop executionLoop;
+    private final SessionRunner runner;
+    private final ModelInvocationPort model;
+    private final ToolInvoker tools;
+    private final HumanInteractionPort human;
+    private final ProgressPort progress;
+    private final PlanRepository plans;
+    private final ContextWindowService contextWindow;
 
     public RunSessionUseCase(SessionRepository sessions, RecordStore records, CommitScope commitScope,
-                             DomainEventPublisher eventPublisher, ExecutionLoop executionLoop) {
+                             DomainEventPublisher eventPublisher, SessionRunner runner,
+                             ModelInvocationPort model, ToolInvoker tools, HumanInteractionPort human,
+                             ProgressPort progress, PlanRepository plans, ContextWindowService contextWindow) {
         this.sessions = sessions;
         this.records = records;
         this.commitScope = commitScope;
         this.eventPublisher = eventPublisher;
-        this.executionLoop = executionLoop;
+        this.runner = runner;
+        this.model = model;
+        this.tools = tools;
+        this.human = human;
+        this.progress = progress;
+        this.plans = plans;
+        this.contextWindow = contextWindow;
     }
 
     /** 没有令牌的调用（测试复跑、内部复用）按"永不取消"处理（§8.4.1）。 */
@@ -59,7 +79,7 @@ public final class RunSessionUseCase {
         commitScope.commit();
 
         try {
-            ExecutionLoop.Outcome outcome = executionLoop.run(session, sink, token);
+            RunOutcome outcome = runner.run(session, sink, token, context(session, sink, token));
             finish(session);
             return Result.ok(RunSessionResult.of(map(outcome)));
         } catch (java.util.concurrent.CancellationException cancelled) {
@@ -72,7 +92,12 @@ public final class RunSessionUseCase {
         }
     }
 
-    private static RunSessionResult.Outcome map(ExecutionLoop.Outcome outcome) {
+    /** 交给扩展点的扶手：插件换掉循环时也能拿到同一套能力（D24-5）。 */
+    private RunContext context(Session session, ChunkSink sink, CancellationToken token) {
+        return new RunContext(session, sink, token, model, tools, human, progress, plans, contextWindow);
+    }
+
+    private static RunSessionResult.Outcome map(RunOutcome outcome) {
         switch (outcome) {
             case CONVERGED:
                 return RunSessionResult.Outcome.CONVERGED;

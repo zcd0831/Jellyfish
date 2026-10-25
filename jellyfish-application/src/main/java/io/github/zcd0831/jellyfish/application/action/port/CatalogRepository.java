@@ -31,4 +31,7 @@ public interface CatalogRepository {
     void saveModel(Model model);
 
     void saveSkill(SkillDefinition skill);
+
+    /** ACTIVE 技能总数（含人写、不含 jar 内置），供技能容量判定。规则出处：模块-记忆 §8.5。 */
+    int countActiveSkills();
 }

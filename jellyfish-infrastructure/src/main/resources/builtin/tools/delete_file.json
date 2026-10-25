@@ -1,0 +1,36 @@
+{
+  "id": "delete_file",
+  "name": "delete_file",
+  "description": "删除工作区内的文件；删除目录必须显式 recursive=true。不可逆，删除前先确认路径。",
+  "inputSchema": {
+    "type": "object",
+    "required": [
+      "path"
+    ],
+    "properties": {
+      "path": {
+        "type": "string",
+        "description": "相对工作区根的路径"
+      },
+      "recursive": {
+        "type": "boolean",
+        "description": "删除目录及其内容，默认 false"
+      }
+    }
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "result": {
+        "type": "string"
+      }
+    }
+  },
+  "source": {
+    "type": "NATIVE",
+    "endpointOrIdentifier": "delete_file"
+  },
+  "sideEffect": "IRREVERSIBLE",
+  "timeoutMillis": 10000,
+  "status": "ACTIVE"
+}

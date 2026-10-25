@@ -53,6 +53,7 @@ class ModelInvokerBranchesTest {
         public void saveProvider(Provider provider) { }
         public void saveModel(Model model) { }
         public void saveSkill(SkillDefinition skill) { }
+        public int countActiveSkills() { return 0; }
     }
 
     private static Model model(String id, ModelStatus status) {

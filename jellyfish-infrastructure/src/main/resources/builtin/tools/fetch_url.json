@@ -1,0 +1,36 @@
+{
+  "id": "fetch_url",
+  "name": "fetch_url",
+  "description": "抓取一个 http/https 页面并转成纯文本，用于查文档、报错信息与版本兼容性。",
+  "inputSchema": {
+    "type": "object",
+    "required": [
+      "url"
+    ],
+    "properties": {
+      "url": {
+        "type": "string",
+        "description": "完整 URL，只支持 http/https"
+      },
+      "maxChars": {
+        "type": "integer",
+        "description": "最多返回多少字符，默认 8000"
+      }
+    }
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "result": {
+        "type": "string"
+      }
+    }
+  },
+  "source": {
+    "type": "NATIVE",
+    "endpointOrIdentifier": "fetch_url"
+  },
+  "sideEffect": "READ_ONLY",
+  "timeoutMillis": 40000,
+  "status": "ACTIVE"
+}

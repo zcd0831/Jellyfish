@@ -1,7 +1,7 @@
 ---
 name: 主代理
 description: 面向用户的默认代理：直接回答、按需调用工具、必要时反问
-tools: [ask_user, generate_plan, submit_step, spawn_subagents, load_skill]
+tools: [ask_user, generate_plan, submit_step, spawn_subagents, load_skill, read_file, list_dir, grep, fetch_url, edit_file, write_file, delete_file, run_command]
 skills: []
 status: active
 ---

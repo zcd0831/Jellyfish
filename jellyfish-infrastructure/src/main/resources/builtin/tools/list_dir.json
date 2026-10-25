@@ -1,0 +1,38 @@
+{
+  "id": "list_dir",
+  "name": "list_dir",
+  "description": "列出工作区内的目录。用来先看清项目结构，避免猜路径。",
+  "inputSchema": {
+    "type": "object",
+    "required": [],
+    "properties": {
+      "path": {
+        "type": "string",
+        "description": "相对工作区根的路径，默认工作区根"
+      },
+      "depth": {
+        "type": "integer",
+        "description": "向下展开几层，默认 2，最多 3"
+      },
+      "pattern": {
+        "type": "string",
+        "description": "可选：文件名 glob，如 *.java"
+      }
+    }
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "result": {
+        "type": "string"
+      }
+    }
+  },
+  "source": {
+    "type": "NATIVE",
+    "endpointOrIdentifier": "list_dir"
+  },
+  "sideEffect": "READ_ONLY",
+  "timeoutMillis": 10000,
+  "status": "ACTIVE"
+}

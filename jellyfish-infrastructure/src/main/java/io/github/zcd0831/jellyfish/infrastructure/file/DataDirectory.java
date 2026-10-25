@@ -59,6 +59,10 @@ public final class DataDirectory {
         return root.resolve("models");
     }
 
+    public Path plugins() {
+        return root.resolve("plugins");
+    }
+
     public Path experience() {
         return root.resolve("experience");
     }

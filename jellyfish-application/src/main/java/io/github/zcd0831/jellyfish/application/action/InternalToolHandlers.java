@@ -9,7 +9,9 @@ import java.util.Map;
  */
 public final class InternalToolHandlers {
 
-    private final Map<String, InternalToolHandler> byName = new LinkedHashMap<String, InternalToolHandler>();
+    /** 插件启停会增删处理器 ⇒ 必须并发安全且可写（M42）。 */
+    private final Map<String, InternalToolHandler> byName =
+            new java.util.concurrent.ConcurrentHashMap<String, InternalToolHandler>();
 
     public InternalToolHandlers(List<NamedHandler> handlers) {
         for (NamedHandler handler : handlers) {
@@ -19,6 +21,15 @@ public final class InternalToolHandlers {
 
     public static InternalToolHandlers empty() {
         return new InternalToolHandlers(java.util.Collections.<NamedHandler>emptyList());
+    }
+
+    /** 插件装/卸时增删：`PLUGIN` 来源的工具与内置工具共用这张表（模块-行动 §8.1）。 */
+    public void register(String toolName, InternalToolHandler handler) {
+        byName.put(toolName, handler);
+    }
+
+    public void unregister(String toolName) {
+        byName.remove(toolName);
     }
 
     public InternalToolHandler find(String toolName) {

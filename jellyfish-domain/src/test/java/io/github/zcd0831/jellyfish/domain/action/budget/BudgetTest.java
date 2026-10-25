@@ -22,7 +22,7 @@ class BudgetTest {
                 d.contextWindowRecordCount(), d.systemRecordRatioLimit(), d.toolResultTruncateLength(),
                 d.subagentExecutionTimeoutMillis(), d.experienceCapacity(), d.experienceTopN(),
                 d.experiencePerPlan(), d.experienceInitialConfidence(), d.experienceConfidenceStep(),
-                d.experienceRetireThreshold(), d.budgetWarnRatio(), limit,
+                d.experienceRetireThreshold(), d.skillCapacity(), d.budgetWarnRatio(), limit,
                 d.modelFallbackChain(), d.trustedToolIds());
     }
 

@@ -14,8 +14,13 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
-/** skills/<skillId>/SKILL.md。规则出处：模块-基础设施层 §4（人写资产）。 */
+/**
+ * skills/&lt;skillId&gt;/SKILL.md：技能没有单独的状态文件，status / mutable 都在 front-matter 里。
+ * 规则出处：模块-基础设施层 §4（人写 + 机写混合）、D23。
+ */
 final class SkillCatalog {
+
+    private static final String BUILTIN_PREFIX = "builtin.";
 
     private final DataDirectory dataDirectory;
 
@@ -31,20 +36,33 @@ final class SkillCatalog {
         return out;
     }
 
+    /** 技能写入的唯一落点（模块-应用层 §6）：front-matter + 正文一起原子重写。 */
     void save(SkillDefinition skill) {
-        Path dir = dataDirectory.skills().resolve(skill.id().getValue());
-        // SOP 正文原样落盘：技能是人写资产，系统不重排格式
-        AtomicFiles.write(dir.resolve("SKILL.md"), skill.sopTemplate().getRawMarkdown());
+        StringBuilder text = new StringBuilder();
+        text.append("---\n");
+        text.append("name: ").append(skill.name()).append('\n');
+        text.append("description: ").append(skill.description()).append('\n');
+        text.append("triggerCondition: ").append(skill.triggerCondition()).append('\n');
+        text.append("status: ").append(skill.status().name().toLowerCase()).append('\n');
+        text.append("mutable: ").append(skill.isMutable()).append('\n');
+        text.append("---\n");
+        text.append(skill.sopTemplate().getRawMarkdown());
+        AtomicFiles.write(dataDirectory.skills().resolve(skill.id().getValue()).resolve("SKILL.md"), text.toString());
     }
 
     private static SkillDefinition toDomain(String id, FrontMatter frontMatter) {
         return new SkillDefinition(SkillId.of(id), frontMatter.get("name"), frontMatter.get("description"),
-                frontMatter.get("trigger"), new InstructionTemplate(frontMatter.body().trim(),
-                frontMatter.list("variables")), status(frontMatter.get("status")));
+                frontMatter.get("triggerCondition"), new InstructionTemplate(frontMatter.body().trim()),
+                status(frontMatter.get("status")), mutable(frontMatter.get("mutable")));
     }
 
     private static SkillStatus status(String raw) {
         return raw == null ? SkillStatus.ACTIVE : SkillStatus.valueOf(raw.toUpperCase());
+    }
+
+    /** 缺省可变：人写技能默认允许系统改进（§7.3 规则 ③）。 */
+    private static boolean mutable(String raw) {
+        return raw == null || !"false".equalsIgnoreCase(raw.trim());
     }
 
     private static List<Path> skillFiles(Path dir) {
@@ -55,7 +73,7 @@ final class SkillCatalog {
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir)) {
             for (Path skillDir : stream) {
                 Path file = skillDir.resolve("SKILL.md");
-                if (Files.isRegularFile(file)) {
+                if (Files.isRegularFile(file) && !skillDir.getFileName().toString().startsWith(BUILTIN_PREFIX)) {
                     out.add(file);
                 }
             }

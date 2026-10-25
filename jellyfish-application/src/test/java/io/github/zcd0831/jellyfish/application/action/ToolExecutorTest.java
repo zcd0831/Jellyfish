@@ -167,4 +167,63 @@ class ToolExecutorTest {
         assertTrue(executor(handlers).execute(session, "t1", args(), RecordId.of("r"))
                 .content().contains("处理器结果"));
     }
+
+    @Test
+    void 命中绊线的命令先问人() {
+        ToolExecutor subject = executor(InternalToolHandlers.empty());
+        givenTool(tool("run_command", SideEffectLevel.IRREVERSIBLE, SourceType.NATIVE, ToolStatus.ACTIVE, "{}"));
+        when(human.ask(any(Question.class))).thenReturn(Answer.answered("不同意"));
+
+        String out = subject.execute(session, "run_command", shellArgs("rm -rf /"), RecordId.of("r1")).content();
+
+        assertTrue(out.contains("用户拒绝执行"));
+        org.mockito.Mockito.verify(human).ask(
+                org.mockito.ArgumentMatchers.argThat(q -> q.prompt().contains("递归删除系统目录或家目录")));
+    }
+
+    @Test
+    void 未命中绊线的命令直接执行() {
+        ToolExecutor subject = executor(InternalToolHandlers.empty());
+        givenTool(tool("run_command", SideEffectLevel.IRREVERSIBLE, SourceType.NATIVE, ToolStatus.ACTIVE, "{}"));
+        subject.execute(session, "run_command", shellArgs("mvn -o test"), RecordId.of("r1"));
+
+        org.mockito.Mockito.verify(human, org.mockito.Mockito.never()).ask(any(Question.class));
+    }
+
+    private static Map<String, Object> shellArgs(String command) {
+        Map<String, Object> args = new LinkedHashMap<String, Object>();
+        args.put("command", command);
+        return args;
+    }
+
+    @Test
+    void 首次写要问一次之后本会话不再问() {
+        ToolExecutor subject = executor(InternalToolHandlers.empty());
+        givenTool(tool("edit_file", SideEffectLevel.REPEATABLE, SourceType.NATIVE, ToolStatus.ACTIVE, "{}"));
+        when(human.ask(any(Question.class))).thenReturn(Answer.answered("同意"));
+
+        subject.execute(session, "edit_file", args("path", "a.txt"), RecordId.of("r1"));
+        subject.execute(session, "edit_file", args("path", "b.txt"), RecordId.of("r2"));
+
+        org.mockito.Mockito.verify(human, org.mockito.Mockito.times(1)).ask(any(Question.class));
+    }
+
+    @Test
+    void 信任按会话隔离且不覆盖命令工具() {
+        ToolExecutor subject = executor(InternalToolHandlers.empty());
+        givenTool(tool("edit_file", SideEffectLevel.REPEATABLE, SourceType.NATIVE, ToolStatus.ACTIVE, "{}"));
+        when(human.ask(any(Question.class))).thenReturn(Answer.answered("同意"));
+        Session other = Session.create(SessionId.of("s2"), null, AgentId.of("a"), ModelId.of("m1"), 1L, null);
+
+        subject.execute(session, "edit_file", args("path", "a.txt"), RecordId.of("r1"));
+        subject.execute(other, "edit_file", args("path", "a.txt"), RecordId.of("r2"));
+
+        org.mockito.Mockito.verify(human, org.mockito.Mockito.times(2)).ask(any(Question.class));
+    }
+
+    private static Map<String, Object> args(String key, String value) {
+        Map<String, Object> args = new LinkedHashMap<String, Object>();
+        args.put(key, value);
+        return args;
+    }
 }

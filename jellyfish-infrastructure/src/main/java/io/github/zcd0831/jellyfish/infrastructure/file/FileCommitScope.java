@@ -2,6 +2,7 @@ package io.github.zcd0831.jellyfish.infrastructure.file;
 
 import io.github.zcd0831.jellyfish.application.shared.port.CommitScope;
 import io.github.zcd0831.jellyfish.domain.action.budget.Budget;
+import io.github.zcd0831.jellyfish.domain.action.plugin.PluginManifest;
 import io.github.zcd0831.jellyfish.domain.memory.experience.Experience;
 import io.github.zcd0831.jellyfish.domain.memory.reflection.Reflection;
 import io.github.zcd0831.jellyfish.domain.planning.plan.Plan;
@@ -26,6 +27,8 @@ public final class FileCommitScope implements CommitScope {
      * 事务状态按线程隔离：主循环与各子代理可能并行写不同会话目录，
      * 共享一份 staging 会让一个线程的提交带上另一个线程的写入（D05.1 的"每会话一个写者"）。
      */
+    private static final Object GLOBAL_ASSET_LOCK = new Object();
+
     private final ThreadLocal<Staging> staging = new ThreadLocal<Staging>() {
         @Override
         protected Staging initialValue() {
@@ -57,6 +60,17 @@ public final class FileCommitScope implements CommitScope {
     @Override
     public void stageReplace(Object aggregate) {
         staging.get().replacements.add(aggregate);
+    }
+
+    /**
+     * 全局资产写段：staging 是线程隔离的，而 skills/、experience/ 会被并行子会话同时写，
+     * 所以这里用一把进程内静态锁把"读—判—写"合成一个不可分割的动作。
+     */
+    @Override
+    public void globalWrite(Runnable work) {
+        synchronized (GLOBAL_ASSET_LOCK) {
+            work.run();
+        }
     }
 
     @Override
@@ -128,6 +142,12 @@ public final class FileCommitScope implements CommitScope {
             Experience experience = (Experience) aggregate;
             AtomicFiles.write(dir.experience().resolve(experience.id().getValue() + ".json"),
                     codec.write(FileExperienceRepository.ExperienceDto.from(experience)));
+            return;
+        }
+        if (aggregate instanceof PluginManifest) {
+            PluginManifest manifest = (PluginManifest) aggregate;
+            AtomicFiles.write(dir.plugins().resolve(manifest.id().getValue()).resolve("plugin.json"),
+                    codec.write(FilePluginRepository.PluginDto.from(manifest)));
             return;
         }
         if (aggregate instanceof Budget) {

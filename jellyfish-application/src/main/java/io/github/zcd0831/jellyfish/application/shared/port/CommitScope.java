@@ -17,6 +17,13 @@ public interface CommitScope {
     /** 替换一个可变聚合（Session / Plan / Budget / RuntimePolicy 等）。 */
     void stageReplace(Object aggregate);
 
+    /**
+     * 全局资产写段（skills/、experience/）：并行子会话会同时沉淀，
+     * 容量"读—判—写"必须在同一段内完成，否则两次 CREATE 会一起越过上限。
+     * 规则出处：模块-应用层 §7.2、模块-基础设施层 §5。
+     */
+    void globalWrite(Runnable work);
+
     /** 按固定顺序落盘；失败即整个作用域失败，不得返回成功。 */
     void commit();
 }

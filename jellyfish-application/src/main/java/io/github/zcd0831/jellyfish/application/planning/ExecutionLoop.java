@@ -2,7 +2,7 @@ package io.github.zcd0831.jellyfish.application.planning;
 
 import io.github.zcd0831.jellyfish.application.action.BudgetService;
 import io.github.zcd0831.jellyfish.application.memory.DistillationInput;
-import io.github.zcd0831.jellyfish.application.memory.ExperienceDistillationService;
+import io.github.zcd0831.jellyfish.application.memory.PlanCompletionCurator;
 import io.github.zcd0831.jellyfish.application.memory.ExperienceFeedbackService;
 import io.github.zcd0831.jellyfish.application.memory.ExperienceRetriever;
 import io.github.zcd0831.jellyfish.application.memory.FeedbackInput;
@@ -49,7 +49,9 @@ import io.github.zcd0831.jellyfish.domain.shared.DomainEvent;
 import io.github.zcd0831.jellyfish.domain.shared.PlanId;
 import io.github.zcd0831.jellyfish.domain.shared.AgentId;
 import io.github.zcd0831.jellyfish.domain.shared.ExperienceId;
+import io.github.zcd0831.jellyfish.domain.shared.DomainInvariantViolation;
 import io.github.zcd0831.jellyfish.domain.shared.SessionId;
+import io.github.zcd0831.jellyfish.domain.shared.SkillId;
 import io.github.zcd0831.jellyfish.domain.shared.StepId;
 import io.github.zcd0831.jellyfish.domain.shared.ToolId;
 
@@ -63,13 +65,7 @@ import java.util.UUID;
  * 外循环：算上下文 → 取 step → 跑一次内循环 → 验证 → 按三条出口推进。
  * 唯一有权推进计划状态机的地方。规则出处：模块-应用层 §8.1、模型图 §5.1、模块-规划 §8.1。
  */
-public final class ExecutionLoop {
-
-    public enum Outcome {
-        CONVERGED,
-        SUSPENDED,
-        ROUNDS_EXHAUSTED
-    }
+public final class ExecutionLoop implements SessionRunner {
 
     private final ContextWindowService contextWindow;
     private final ReActLoop reActLoop;
@@ -85,7 +81,7 @@ public final class ExecutionLoop {
     private final BudgetService budgetService;
     private final ExperienceRetriever experienceRetriever;
     private final ExperienceFeedbackService experienceFeedback;
-    private final ExperienceDistillationService experienceDistillation;
+    private final PlanCompletionCurator planCompletionCurator;
     private final ReflectionRepository reflections;
     private final io.github.zcd0831.jellyfish.application.memory.port.ExperienceRepository experiences;
     private final SubagentLauncher subagentLauncher;
@@ -96,7 +92,7 @@ public final class ExecutionLoop {
                          DomainEventPublisher eventPublisher, ProgressPort progress, ModelInvocationPort model,
                          BudgetService budgetService, ExperienceRetriever experienceRetriever,
                          ExperienceFeedbackService experienceFeedback,
-                         ExperienceDistillationService experienceDistillation,
+                         PlanCompletionCurator planCompletionCurator,
                          ReflectionRepository reflections, SubagentLauncher subagentLauncher,
                          io.github.zcd0831.jellyfish.application.memory.port.ExperienceRepository experiences) {
         this.contextWindow = contextWindow;
@@ -113,18 +109,18 @@ public final class ExecutionLoop {
         this.budgetService = budgetService;
         this.experienceRetriever = experienceRetriever;
         this.experienceFeedback = experienceFeedback;
-        this.experienceDistillation = experienceDistillation;
+        this.planCompletionCurator = planCompletionCurator;
         this.reflections = reflections;
         this.subagentLauncher = subagentLauncher;
         this.experiences = experiences;
     }
 
-    /** 无令牌的调用按"永不取消"处理（§8.4.1）。 */
-    public Outcome run(Session session, ChunkSink sink) {
-        return run(session, sink, CancellationToken.never());
-    }
-
-    public Outcome run(Session session, ChunkSink sink, CancellationToken token) {
+    /**
+     * `context` 只服务外部实现：默认循环的依赖由构造器注入，因此这里不读它
+     * （模块-规划 §4：`RunContext` 是给插件实现的扶手）。
+     */
+    @Override
+    public RunOutcome run(Session session, ChunkSink sink, CancellationToken token, RunContext context) {
         RuntimePolicy policy = policies.load();
         Plan plan = runningPlan(session);
         boolean collapsedOnce = false;
@@ -158,14 +154,20 @@ public final class ExecutionLoop {
                 throw failure;   // 模型不可用：不改任何状态
             }
 
+            recordSkillUsage(plan, step, attempt, iteration);
+
             if (!iteration.isConverged()) {
                 if (step == null) {
-                    return Outcome.ROUNDS_EXHAUSTED;
+                    return RunOutcome.ROUNDS_EXHAUSTED;
                 }
-                plan.markAttemptFailed(step.id(), iteration.attemptNo());
+                if (attempt == null) {
+                    throw new DomainInvariantViolation("撞轮次上限时没有可判失败的 attempt");
+                }
+                // 判的是"当前这个 attempt"；iteration.round 是内循环轮次，两者不是一回事
+                plan.markAttemptFailed(step.id(), attempt.attemptNo());
                 commitPlan(plan);
                 if (advanceAfterFailure(session, plan, step, "撞 maxReActRounds")) {
-                    return Outcome.CONVERGED;
+                    return RunOutcome.CONVERGED;
                 }
                 continue;
             }
@@ -181,12 +183,12 @@ public final class ExecutionLoop {
                 if (created != null) {
                     // 计划还在执行态却没有任何可执行步骤：没有可推进的东西，按收敛退出，
                     // 避免"step 为空 → 又捡回同一个计划"的死循环
-                    return Outcome.CONVERGED;
+                    return RunOutcome.CONVERGED;
                 }
-                return Outcome.CONVERGED;
+                return RunOutcome.CONVERGED;
             }
             if (!iteration.submitted()) {
-                return Outcome.SUSPENDED;   // 挂起：attempt 不落终态，等用户下次输入
+                return RunOutcome.SUSPENDED;   // 挂起：attempt 不落终态，等用户下次输入
             }
 
             if (!stepNeedsVerification(step)) {
@@ -216,7 +218,7 @@ public final class ExecutionLoop {
                     if (advanceAfterFailure(session, plan, step,
                             report.failureReason() == null ? String.valueOf(report.outcome())
                                     : report.failureReason())) {
-                        return Outcome.CONVERGED;
+                        return RunOutcome.CONVERGED;
                     }
                     continue;
                 }
@@ -225,7 +227,7 @@ public final class ExecutionLoop {
             if (plan.status() == PlanStatus.COMPLETED) {
                 // 计划完结后再跑一轮自由内循环，由模型产出结论（模型图 §5.1）
                 publish(plan.pullEvents());
-                distill(session, plan);
+                curate(session, plan);
                 plan = null;
             }
         }
@@ -250,7 +252,7 @@ public final class ExecutionLoop {
         plan.terminate("重划用尽：" + reason);
         commitPlan(plan);
         publish(plan.pullEvents());
-        distill(session, plan);
+        curate(session, plan);
         return true;
     }
 
@@ -390,8 +392,22 @@ public final class ExecutionLoop {
         return latest.attemptNo();
     }
 
-    /** 计划完结（含终局失败）：组装事实摘要交给沉淀服务，记忆不遍历 Plan。 */
-    private void distill(Session session, Plan plan) {
+    /**
+     * 技能使用痕迹落在 attempt 上：改进判定要"这次用过的技能"，而内循环只认识 PlanStep。
+     * 规则出处：模块-规划 §5、模块-记忆 §8.6。
+     */
+    private void recordSkillUsage(Plan plan, PlanStep step, Attempt attempt, IterationResult iteration) {
+        if (plan == null || step == null || attempt == null || iteration.usedSkillIds().isEmpty()) {
+            return;
+        }
+        for (SkillId skillId : iteration.usedSkillIds()) {
+            plan.recordSkillUsage(step.id(), attempt.attemptNo(), skillId);
+        }
+        commitPlan(plan);
+    }
+
+    /** 计划完结（含终局失败）：组装事实摘要交给编排者，记忆不遍历 Plan。 */
+    private void curate(Session session, Plan plan) {
         List<StepTrace> traces = new ArrayList<StepTrace>();
         for (PlanStep step : plan.steps()) {
             Attempt latest = step.attempts().isEmpty() ? null
@@ -399,11 +415,12 @@ public final class ExecutionLoop {
             traces.add(new StepTrace(step.id(), step.description(), step.status(),
                     latest == null ? null : latest.recordRange(), latest == null
                     ? Collections.<SessionId>emptyList() : latest.childSessionIds(),
+                    latest == null ? Collections.<SkillId>emptyList() : latest.usedSkillIds(),
                     latest == null || latest.outcome() == AttemptOutcome.SUCCEEDED ? null
                             : plan.terminationReason(),
                     latest == null || latest.reflectionId() == null ? null : reflectionOf(latest)));
         }
-        experienceDistillation.distill(session, new DistillationInput(plan.id(), session.id(), plan.goal(),
+        planCompletionCurator.curate(session, new DistillationInput(plan.id(), session.id(), plan.goal(),
                 plan.status(), traces));
     }
 

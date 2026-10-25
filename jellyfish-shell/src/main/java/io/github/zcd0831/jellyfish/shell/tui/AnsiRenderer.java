@@ -31,7 +31,7 @@ public final class AnsiRenderer {
         this.out = out;
         this.width = width <= 0 ? 80 : width;
         this.color = color;
-        this.markdown = new MarkdownStream(color);
+        this.markdown = new MarkdownStream(color, this.width);
     }
 
     /** 流式增量：先过 Markdown 行内解析，再按可见宽度折行（围栏内不折，交给终端）。 */

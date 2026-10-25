@@ -22,6 +22,7 @@ final class MarkdownStream {
     private static final int MAX_LINK = 200;
 
     private final boolean color;
+    private final int width;
     private final StringBuilder out = new StringBuilder();
 
     private boolean lineStart = true;
@@ -42,9 +43,20 @@ final class MarkdownStream {
     private boolean skipQuoteSpace;
     /** 正在攒一个 `[文字](url)`：跨分块时先存着，凑齐 `)` 再决定渲染还是原样吐出。 */
     private StringBuilder linkBuffer;
+    /** 行首 `|` 开头的行要先攒着：只有下一行是分隔行才确认是表格。 */
+    private boolean holdingLine;
+    private String pendingHeader;
+    private boolean inTable;
+    private final StringBuilder rawLine = new StringBuilder();
+    private final java.util.List<String> tableLines = new java.util.ArrayList<String>();
 
     MarkdownStream(boolean color) {
+        this(color, 80);
+    }
+
+    MarkdownStream(boolean color, int width) {
         this.color = color;
+        this.width = width <= 0 ? 80 : width;
     }
 
     /** 是否在围栏内：围栏内不折行，交给终端自己折。 */
@@ -55,6 +67,20 @@ final class MarkdownStream {
     /** 一轮结束时收尾：把还没配对的标记按字面吐出，并复位围栏（下一轮从干净状态开始）。 */
     String finish() {
         out.setLength(0);
+        if (inTable) {
+            flushTable();
+        }
+        if (holdingLine) {
+            String raw = rawLine.toString();
+            rawLine.setLength(0);
+            holdingLine = false;
+            emitPlainLine(raw);
+        }
+        if (pendingHeader != null) {
+            String raw = pendingHeader;
+            pendingHeader = null;
+            emitPlainLine(raw);
+        }
         if (linkBuffer != null) {
             emitLinkBufferAsIs();
         }
@@ -81,6 +107,13 @@ final class MarkdownStream {
 
     private void accept(char c) {
         if (c == '\n') {
+            if (holdingLine || inTable) {
+                String raw = rawLine.toString();
+                rawLine.setLength(0);
+                holdingLine = false;
+                handleTableLine(raw);
+                return;
+            }
             if (skippingFenceLine) {
                 skippingFenceLine = false;
                 lineStart = true;
@@ -124,6 +157,16 @@ final class MarkdownStream {
             if (c == ' ') {
                 return;
             }
+        }
+        if (holdingLine) {
+            rawLine.append(c);
+            return;
+        }
+        if (lineStart && c == '|') {
+            holdingLine = true;
+            rawLine.setLength(0);
+            rawLine.append(c);
+            return;
         }
         if (lineStart) {
             lineStart(c);
@@ -253,6 +296,63 @@ final class MarkdownStream {
     }
 
     /** 行结束/收尾时把"看到了但没配对的标记"按字面吐出来。 */
+    /** 表格是块级语法：攒够一块再画，画不了就原样输出。 */
+    private void handleTableLine(String raw) {
+        if (inTable) {
+            if (MarkdownTable.split(raw) != null) {
+                tableLines.add(raw);
+                return;
+            }
+            flushTable();
+            emitPlainLine(raw);
+            return;
+        }
+        if (pendingHeader != null) {
+            if (MarkdownTable.isSeparator(raw)) {
+                inTable = true;
+                tableLines.add(pendingHeader);
+                tableLines.add(raw);
+                pendingHeader = null;
+                return;
+            }
+            emitPlainLine(pendingHeader);
+            pendingHeader = null;
+            handleTableLine(raw);
+            return;
+        }
+        if (MarkdownTable.split(raw) != null) {
+            pendingHeader = raw;
+            return;
+        }
+        emitPlainLine(raw);
+    }
+
+    private void flushTable() {
+        if (tableLines.isEmpty()) {
+            return;
+        }
+        String rendered = MarkdownTable.render(tableLines, width, color);
+        for (int i = 0; i < rendered.length(); i++) {
+            char c = rendered.charAt(i);
+            if (c == '\n') {
+                out.append('\n');
+            } else {
+                out.append(c);
+            }
+        }
+        tableLines.clear();
+        inTable = false;
+    }
+
+    /** 非表格行：按行内规则渲染并换行（此时字符是攒着的，可以整行处理）。 */
+    private void emitPlainLine(String raw) {
+        for (int i = 0; i < raw.length(); i++) {
+            accept(raw.charAt(i));
+        }
+        out.append('\n');
+        resetLine();
+    }
+
     /** 语法成立就渲染成 `文字（url）`，否则原样吐出（不猜）。 */
     private void emitLink() {
         String raw = linkBuffer.toString();

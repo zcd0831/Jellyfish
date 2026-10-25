@@ -22,13 +22,20 @@ import java.util.Map;
  * OpenAI 兼容的 `/chat/completions` 映射（D16）。只做 JSON ↔ 值对象，不发请求。
  * 规则出处：技术决策 D16 第 2/3/4 条、M12。
  */
-final class ChatCompletionsProtocol {
+public final class ChatCompletionsProtocol implements ChatProtocolAdapter {
 
     static final String PATH = "/chat/completions";
 
     private final ObjectMapper mapper = new ObjectMapper();
 
+    /** 测试与历史调用点的便捷重载（默认输出上限未知）。 */
     String buildRequest(ModelInvocationRequest request, String modelName, boolean stream) {
+        return buildRequest(request, modelName, 0, stream);
+    }
+
+    @Override
+    public String buildRequest(ModelInvocationRequest request, String modelName, int maxOutputTokens,
+                               boolean stream) {
         ObjectNode root = mapper.createObjectNode();
         root.put("model", modelName);
         root.put("stream", stream);
@@ -99,7 +106,8 @@ final class ChatCompletionsProtocol {
         return "user";
     }
 
-    ModelInvocationResult parseResponse(String body, ModelId servedModelId) {
+    @Override
+    public ModelInvocationResult parseResponse(String body, ModelId servedModelId) {
         JsonNode root = read(body);
         JsonNode message = root.path("choices").path(0).path("message");
         String text = message.path("content").isNull() ? null : message.path("content").asText(null);
@@ -149,8 +157,25 @@ final class ChatCompletionsProtocol {
         }
     }
 
+    @Override
+    public String url(String baseEndpoint, String modelName, String apiKey, boolean stream) {
+        return baseEndpoint.endsWith(PATH) ? baseEndpoint : baseEndpoint + PATH;
+    }
+
+    @Override
+    public Map<String, String> headers(String apiKey) {
+        Map<String, String> headers = new LinkedHashMap<String, String>();
+        headers.put("Authorization", "Bearer " + apiKey);
+        return headers;
+    }
+
+    @Override
+    public StreamAccumulator newStreamAccumulator() {
+        return new StreamAccumulator();
+    }
+
     /** 流式增量累加：文本片段与按 index 归属的 tool_calls 片段。规则出处：D06、D16-3。 */
-    final class StreamAccumulator {
+    public final class StreamAccumulator implements ChatProtocolAdapter.StreamAccumulator {
 
         private final StringBuilder text = new StringBuilder();
         private final StringBuilder reasoning = new StringBuilder();
@@ -159,7 +184,8 @@ final class ChatCompletionsProtocol {
         private String lastDelta;
 
         /** 返回 false 表示这是最后一条（`[DONE]`）。 */
-        boolean accept(String data) {
+        @Override
+        public boolean accept(String data) {
             if ("[DONE]".equals(data)) {
                 return false;
             }
@@ -195,11 +221,13 @@ final class ChatCompletionsProtocol {
         }
 
         /** 当前这条 chunk 的文本增量；仅供外壳打字机效果，不回灌给模型。 */
-        String lastDelta() {
+        @Override
+        public String lastDelta() {
             return lastDelta;
         }
 
-        ModelInvocationResult result(ModelId servedModelId) {
+        @Override
+        public ModelInvocationResult result(ModelId servedModelId) {
             List<ToolCall> toolCalls = new ArrayList<>();
             for (CallBuilder builder : calls.values()) {
                 toolCalls.add(builder.build());

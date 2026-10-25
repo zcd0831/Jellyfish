@@ -13,6 +13,7 @@ import io.github.zcd0831.jellyfish.application.shared.ProgressEvent;
 import io.github.zcd0831.jellyfish.application.shared.port.ProgressPort;
 import io.github.zcd0831.jellyfish.application.shared.port.TokenCounter;
 import io.github.zcd0831.jellyfish.domain.action.model.ApiCredential;
+import io.github.zcd0831.jellyfish.domain.action.model.ChatProtocol;
 import io.github.zcd0831.jellyfish.domain.action.model.Model;
 import io.github.zcd0831.jellyfish.domain.action.model.ModelError;
 import io.github.zcd0831.jellyfish.domain.action.model.Provider;
@@ -40,7 +41,10 @@ public final class ModelInvoker implements ModelInvocationPort {
     private final ChatTransport transport;
     private final ProgressPort progress;
     private final TokenCounter tokenCounter;
-    private final ChatCompletionsProtocol protocol = new ChatCompletionsProtocol();
+    /** 协议适配器按 `Provider.protocol` 选择；本期只实现 OPENAI_CHAT。 */
+    private final ChatCompletionsProtocol openAiProtocol = new ChatCompletionsProtocol();
+    private final AnthropicMessagesProtocol anthropicProtocol = new AnthropicMessagesProtocol();
+    private final GeminiProtocol geminiProtocol = new GeminiProtocol();
     private final Random jitter = new Random();
     private final Sleeper sleeper;
     private final CredentialLookup credentials;
@@ -120,9 +124,16 @@ public final class ModelInvoker implements ModelInvocationPort {
             if (provider == null || !provider.isActive()) {
                 continue;
             }
+            ChatProtocolAdapter adapter = adapterFor(provider);
+            if (adapter == null) {
+                ModelCallLog.unavailable(modelId.getValue(), ModelError.UNAVAILABLE.code());
+                lastFailure = new ModelInvocationException(ModelError.UNAVAILABLE,
+                        "协议未实现：" + provider.protocol() + "（" + modelId.getValue() + "）");
+                continue;
+            }
             hardCheck(request.estimatedPromptTokens(), model);
             try {
-                return callWithRetry(request, model, provider, sink);
+                return callWithRetry(request, model, provider, adapter, sink);
             } catch (ModelInvocationException e) {
                 if (e.error() == ModelError.CONTEXT_EXCEEDED) {
                     throw e;
@@ -144,12 +155,26 @@ public final class ModelInvoker implements ModelInvocationPort {
         }
     }
 
+    /** 协议 → 适配器；未实现的协议返回 null，由调用方按"不可用"降级。 */
+    private ChatProtocolAdapter adapterFor(Provider provider) {
+        if (provider.protocol() == ChatProtocol.OPENAI_CHAT) {
+            return openAiProtocol;
+        }
+        if (provider.protocol() == ChatProtocol.ANTHROPIC_MESSAGES) {
+            return anthropicProtocol;
+        }
+        if (provider.protocol() == ChatProtocol.GEMINI) {
+            return geminiProtocol;
+        }
+        return null;
+    }
+
     private ModelInvocationResult callWithRetry(ModelInvocationRequest request, Model model, Provider provider,
-                                                ChunkSink sink) {
+                                                ChatProtocolAdapter adapter, ChunkSink sink) {
         int attempt = 0;
         while (true) {
             try {
-                return callOnce(request, model, provider, sink);
+                return callOnce(request, model, provider, adapter, sink);
             } catch (RetryableFailure e) {
                 if (transport.cancelledByUser()) {
                     throw new java.util.concurrent.CancellationException("用户取消了本次模型调用");
@@ -173,22 +198,22 @@ public final class ModelInvoker implements ModelInvocationPort {
     }
 
     private ModelInvocationResult callOnce(ModelInvocationRequest request, Model model, Provider provider,
-                                           ChunkSink sink) {
+                                           ChatProtocolAdapter adapter, ChunkSink sink) {
         String apiKey = credentials.lookup(credentialEnv(provider));
         if (apiKey == null || apiKey.trim().isEmpty()) {
             throw new ModelInvocationException(ModelError.AUTH_FAILED,
                     "provider " + provider.id().getValue() + ": 环境变量 " + credentialEnv(provider) + " 未设置");
         }
-        Map<String, String> headers = new LinkedHashMap<>();
-        headers.put("Authorization", "Bearer " + apiKey);
-        String url = endpoint(provider);
-        String body = protocol.buildRequest(request, model.modelName(), sink != null);
+        Map<String, String> headers = adapter.headers(apiKey);
+        String url = adapter.url(provider.apiEndpoint(), model.modelName(), apiKey, sink != null);
+        String body = adapter.buildRequest(request, model.modelName(),
+                model.contextLimit().getMaxOutputTokens(), sink != null);
 
         if (sink == null) {
             ChatTransport.Response response = execute(url, headers, body);
             if (response.status() >= 200 && response.status() < 300) {
                 try {
-                    ModelInvocationResult result = protocol.parseResponse(response.body(), model.id());
+                    ModelInvocationResult result = adapter.parseResponse(response.body(), model.id());
                     return withUsageFallback(request, model, result);
                 } catch (ModelResponseFormatException broken) {
                     // 响应体不是协议约定的 JSON：属于端点行为异常，映射成上下文错误码（D11）
@@ -199,7 +224,7 @@ public final class ModelInvoker implements ModelInvocationPort {
             throw mapFailure(response, model);
         }
 
-        final ChatCompletionsProtocol.StreamAccumulator accumulator = protocol.new StreamAccumulator();
+        final ChatProtocolAdapter.StreamAccumulator accumulator = adapter.newStreamAccumulator();
         try {
             transport.postStreaming(url, headers, body, new ChatTransport.LineSink() {
                 @Override
@@ -272,7 +297,10 @@ public final class ModelInvoker implements ModelInvocationPort {
         }
         String lower = body.toLowerCase();
         return lower.contains("context_length") || lower.contains("maximum context")
-                || lower.contains("context window") || lower.contains("too many tokens");
+                || lower.contains("context window") || lower.contains("too many tokens")
+                // Anthropic: "prompt is too long"; Gemini: "input token count exceeds the maximum"
+                || lower.contains("prompt is too long") || lower.contains("input token count")
+                || lower.contains("exceeds the maximum number of tokens");
     }
 
     private static Long retryAfterMillis(ChatTransport.Response response) {
@@ -300,11 +328,6 @@ public final class ModelInvoker implements ModelInvocationPort {
             Thread.currentThread().interrupt();
             throw new java.util.concurrent.CancellationException("模型调用等待期间被取消");
         }
-    }
-
-    private String endpoint(Provider provider) {
-        String base = provider.apiEndpoint();
-        return base.endsWith(ChatCompletionsProtocol.PATH) ? base : base + ChatCompletionsProtocol.PATH;
     }
 
     private static String credentialEnv(Provider provider) {

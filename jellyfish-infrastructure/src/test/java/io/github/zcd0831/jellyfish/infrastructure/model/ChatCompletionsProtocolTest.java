@@ -78,6 +78,36 @@ class ChatCompletionsProtocolTest {
     }
 
     @Test
+    void 文本与多个工具调用落在同一条assistant消息里() {
+        List<ChatMessage> messages = Arrays.asList(
+                ChatMessage.of(RecordRole.USER, "读两个文件"),
+                ChatMessage.assistant("我先读一下", Arrays.asList(
+                        new ToolCall("c1", "read_file", "{\"path\":\"a\"}"),
+                        new ToolCall("c2", "read_file", "{\"path\":\"b\"}"))),
+                ChatMessage.toolResult("c1", "A"),
+                ChatMessage.toolResult("c2", "B"));
+
+        String body = protocol.buildRequest(request(messages), "deepseek-flash", 4096, true);
+
+        com.fasterxml.jackson.databind.JsonNode root = readTree(body);
+        com.fasterxml.jackson.databind.JsonNode assistant = root.path("messages").path(2);
+        assertEquals("assistant", assistant.path("role").asText());
+        assertEquals("我先读一下", assistant.path("content").asText());
+        assertEquals(2, assistant.path("tool_calls").size(), "两个调用必须在同一条 assistant 消息里");
+        assertEquals("tool", root.path("messages").path(3).path("role").asText());
+        assertEquals("c1", root.path("messages").path(3).path("tool_call_id").asText());
+        assertEquals("c2", root.path("messages").path(4).path("tool_call_id").asText());
+    }
+
+    private static com.fasterxml.jackson.databind.JsonNode readTree(String json) {
+        try {
+            return new com.fasterxml.jackson.databind.ObjectMapper().readTree(json);
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    @Test
     void 带reasoning的工具消息原样回传reasoning_content() {
         List<ChatMessage> messages = Arrays.asList(
                 ChatMessage.assistant(null, Arrays.asList(new ToolCall("call_1", "read_file", "{}")), "我想先看目录"),

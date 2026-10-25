@@ -30,6 +30,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** 端口在"模型/供应商不可用""响应异常"等边界上的分支。 */
 class ModelInvokerBranchesTest {
@@ -63,6 +64,11 @@ class ModelInvokerBranchesTest {
 
     private static Provider provider(ProviderStatus status) {
         return new Provider(ProviderId.of("p1"), "p", "http://localhost:1/v1", ChatProtocol.OPENAI_CHAT,
+                new ApiCredential("K"), status);
+    }
+
+    private static Provider provider(ProviderStatus status, ChatProtocol protocol) {
+        return new Provider(ProviderId.of("p1"), "p", "http://localhost:1/v1", protocol,
                 new ApiCredential("K"), status);
     }
 
@@ -157,6 +163,24 @@ class ModelInvokerBranchesTest {
     }
 
     @Test
+    void Anthropic与Gemini的超限文案也映射为上下文超限() {
+        Catalog catalog = new Catalog(Collections.singletonList(model("m1", ModelStatus.ACTIVE)),
+                Collections.singletonList(provider(ProviderStatus.ACTIVE)));
+
+        ModelInvocationException anthropic = assertThrows(ModelInvocationException.class,
+                () -> invoker(catalog, new Transport(new ChatTransport.Response(400,
+                        "{\"error\":{\"message\":\"prompt is too long: 250000 tokens > 200000 maximum\"}}",
+                        null), null), "k").invoke(request()));
+        assertEquals(ModelError.CONTEXT_EXCEEDED, anthropic.error());
+
+        ModelInvocationException gemini = assertThrows(ModelInvocationException.class,
+                () -> invoker(catalog, new Transport(new ChatTransport.Response(400,
+                        "{\"error\":{\"message\":\"The input token count (250000) exceeds the maximum "
+                                + "number of tokens allowed (200000).\"}}", null), null), "k").invoke(request()));
+        assertEquals(ModelError.CONTEXT_EXCEEDED, gemini.error());
+    }
+
+    @Test
     void 未识别的状态码按不可用处理() {
         Catalog catalog = new Catalog(Collections.singletonList(model("m1", ModelStatus.ACTIVE)),
                 Collections.singletonList(provider(ProviderStatus.ACTIVE)));
@@ -165,6 +189,70 @@ class ModelInvokerBranchesTest {
                 () -> invoker(catalog, new Transport(new ChatTransport.Response(418, "{}", null), null), "k")
                         .invoke(request()));
         assertEquals(ModelError.UNAVAILABLE, e.error());
+    }
+
+    @Test
+    void Anthropic协议走自己的端点与请求头() {
+        Catalog catalog = new Catalog(Collections.singletonList(
+                new Model(ModelId.of("m1"), ProviderId.of("p1"), "claude-sonnet-4-5", ModelStatus.ACTIVE,
+                        new ContextLimit(1000, 100), Collections.emptyList())),
+                Collections.singletonList(provider(ProviderStatus.ACTIVE, ChatProtocol.ANTHROPIC_MESSAGES)));
+        final String[] seen = new String[3];
+        ChatTransport transport = new ChatTransport() {
+            public Response post(String url, Map<String, String> headers, String body) {
+                seen[0] = url;
+                seen[1] = headers.get("x-api-key");
+                seen[2] = body;
+                return new Response(200, "{\"content\":[{\"type\":\"text\",\"text\":\"hi\"}],"
+                        + "\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}", null);
+            }
+
+            public void postStreaming(String url, Map<String, String> headers, String body, LineSink sink) { }
+
+            public void cancelActive() { }
+
+            public boolean cancelledByUser() {
+                return false;
+            }
+        };
+
+        invoker(catalog, transport, "secret").invoke(request());
+
+        assertTrue(seen[0].endsWith("/v1/messages"), seen[0]);
+        assertEquals("secret", seen[1]);
+        assertTrue(seen[2].contains("\"max_tokens\""), "Anthropic 必填 max_tokens");
+    }
+
+    @Test
+    void Gemini协议走自己的端点与请求头() {
+        Catalog catalog = new Catalog(Collections.singletonList(
+                new Model(ModelId.of("m1"), ProviderId.of("p1"), "gemini-2.5-pro", ModelStatus.ACTIVE,
+                        new ContextLimit(1000, 100), Collections.emptyList())),
+                Collections.singletonList(new Provider(ProviderId.of("p1"), "p",
+                        "https://generativelanguage.googleapis.com", ChatProtocol.GEMINI,
+                        new ApiCredential("K"), ProviderStatus.ACTIVE)));
+        final String[] seen = new String[2];
+        ChatTransport transport = new ChatTransport() {
+            public Response post(String url, Map<String, String> headers, String body) {
+                seen[0] = url;
+                seen[1] = headers.get("x-goog-api-key");
+                return new Response(200, "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"hi\"}]}}],"
+                        + "\"usageMetadata\":{\"promptTokenCount\":1,\"candidatesTokenCount\":1}}", null);
+            }
+
+            public void postStreaming(String url, Map<String, String> headers, String body, LineSink sink) { }
+
+            public void cancelActive() { }
+
+            public boolean cancelledByUser() {
+                return false;
+            }
+        };
+
+        invoker(catalog, transport, "secret").invoke(request());
+
+        assertTrue(seen[0].contains("/v1beta/models/gemini-2.5-pro:generateContent"), seen[0]);
+        assertEquals("secret", seen[1]);
     }
 
     @Test

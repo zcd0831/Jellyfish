@@ -74,7 +74,6 @@ class ExecutionLoopTest {
     private final ExperienceFeedbackService feedback = mock(ExperienceFeedbackService.class);
     private final PlanCompletionCurator curator = mock(PlanCompletionCurator.class);
     private final ReflectionRepository reflections = mock(ReflectionRepository.class);
-    private final SubagentLauncher launcher = mock(SubagentLauncher.class);
     private final ExperienceRepository experiences = mock(ExperienceRepository.class);
 
     private final Session session = Session.create(SessionId.of("s1"), null, AgentId.of("a"),
@@ -100,7 +99,7 @@ class ExecutionLoopTest {
                         : Collections.singletonList(planScript.peek()));
         return new ExecutionLoop(contextWindow, reActLoop, verificationRunner, plans, new io.github.zcd0831.jellyfish.domain.planning.plan.PlanFactory(),
                 catalog, policies, commitScope, events -> { }, event -> { }, model, budget, retriever,
-                feedback, curator, reflections, launcher, experiences);
+                feedback, curator, reflections, experiences);
     }
 
     /** 默认实现不读上下文（依赖由构造器注入），所以这里给空值即可。 */
@@ -293,7 +292,7 @@ class ExecutionLoopTest {
     }
 
     @Test
-    void 达反思阈值时跑反思子代理并落反思() {
+    void 达反思阈值时调内置反思代理并落反思() {
         policy = policy.adjust(new java.util.LinkedHashMap<String, Object>() {{
             put("maxRetries", 3);
             put("reflectionThreshold", 1);
@@ -307,12 +306,22 @@ class ExecutionLoopTest {
         when(verificationRunner.verify(any(Session.class), any(Plan.class), any(), anyInt(), any()))
                 .thenReturn(failed())
                 .thenReturn(passed());
-        when(launcher.launch(any(Session.class), any())).thenReturn(Collections.singletonList(
-                SubagentResult.of(SessionId.of("child"), "下次先读文件")));
+        when(catalog.agents()).thenReturn(Collections.singletonList(reflectAgent()));
+        when(model.invoke(any(ModelInvocationRequest.class))).thenReturn(new ModelInvocationResult(
+                "下次先读文件", Collections.emptyList(), new ModelUsage(1, 1), ModelId.of("m1")));
 
         loop().run(session, ChunkSink.NOOP, NO_TOKEN, NO_CONTEXT);
 
-        verify(launcher).launch(any(Session.class), any());
         verify(commitScope, times(1)).stageFact(any(io.github.zcd0831.jellyfish.domain.memory.reflection.Reflection.class));
+        verify(budget).recordUsage(any(Session.class), org.mockito.ArgumentMatchers.anyLong());
+    }
+
+    private static io.github.zcd0831.jellyfish.domain.action.agent.AgentDefinition reflectAgent() {
+        return new io.github.zcd0831.jellyfish.domain.action.agent.AgentDefinition(
+                AgentId.of("builtin.reflect"), "反思代理",
+                io.github.zcd0831.jellyfish.domain.action.agent.AgentSource.BUILT_IN,
+                new io.github.zcd0831.jellyfish.domain.action.agent.PromptTemplate("你是复盘者", java.util.Collections.<String>emptyList()),
+                io.github.zcd0831.jellyfish.domain.action.agent.AgentStatus.ACTIVE,
+                java.util.Collections.emptyList(), java.util.Collections.emptyList());
     }
 }

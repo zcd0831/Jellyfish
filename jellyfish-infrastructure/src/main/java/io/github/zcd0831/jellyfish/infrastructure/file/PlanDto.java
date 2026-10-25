@@ -123,7 +123,6 @@ public class PlanDto {
         public String verificationReportId;
         public String reflectionId;
         public String outcome;
-        public List<String> childSessionIds = new ArrayList<String>();
 
         static AttemptDto from(Attempt attempt) {
             AttemptDto dto = new AttemptDto();
@@ -136,9 +135,6 @@ public class PlanDto {
                     ? null : attempt.verificationReportId().getValue();
             dto.reflectionId = attempt.reflectionId() == null ? null : attempt.reflectionId().getValue();
             dto.outcome = attempt.outcome() == null ? null : attempt.outcome().name();
-            for (SessionId childSessionId : attempt.childSessionIds()) {
-                dto.childSessionIds.add(childSessionId.getValue());
-            }
             return dto;
         }
 
@@ -154,9 +150,6 @@ public class PlanDto {
             }
             if (outcome != null) {
                 attempt.finish(AttemptOutcome.valueOf(outcome));
-            }
-            for (String childSessionId : childSessionIds) {
-                attempt.addChildSession(SessionId.of(childSessionId));
             }
             return attempt;
         }

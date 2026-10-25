@@ -81,11 +81,11 @@ class PlanCompletionCuratorTest {
     }
 
     private static StepTrace traceWithoutSkill() {
-        return new StepTrace(StepId.of("step1"), "做事", StepStatus.SUCCEEDED, null, null, null, null, null);
+        return new StepTrace(StepId.of("step1"), "做事", StepStatus.SUCCEEDED, null, null, null, null);
     }
 
     private static StepTrace traceWithSkill(String skillId) {
-        return new StepTrace(StepId.of("step1"), "做事", StepStatus.SUCCEEDED, null, null,
+        return new StepTrace(StepId.of("step1"), "做事", StepStatus.SUCCEEDED, null,
                 Collections.singletonList(SkillId.of(skillId)), null, null);
     }
 
@@ -172,7 +172,7 @@ class PlanCompletionCuratorTest {
         when(records.range(any(SessionId.class), any(RecordId.class), any(RecordId.class))).thenReturn(range);
 
         StepTrace trace = new StepTrace(StepId.of("step1"), "做事", StepStatus.FAILED,
-                new RecordRange(RecordId.of("r1"), RecordId.of("r2")), null, null, "失败", "反思");
+                new RecordRange(RecordId.of("r1"), RecordId.of("r2")), null, "失败", "反思");
         curator().curate(session, input(trace));
 
         org.mockito.ArgumentCaptor<ModelInvocationRequest> captor =
@@ -192,7 +192,7 @@ class PlanCompletionCuratorTest {
                 .thenThrow(new IllegalArgumentException("区间不存在"));
 
         StepTrace trace = new StepTrace(StepId.of("step1"), "做事", StepStatus.FAILED,
-                new RecordRange(RecordId.of("r1"), RecordId.of("r2")), null, null, "失败", null);
+                new RecordRange(RecordId.of("r1"), RecordId.of("r2")), null, "失败", null);
         DistillationOutcome outcome = curator().curate(session, input(trace));
 
         assertTrue(outcome.isEmpty());

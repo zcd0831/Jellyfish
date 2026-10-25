@@ -137,15 +137,7 @@ class S2AcceptanceTest {
                                 policies, new FileCommitScope(dir, codec), publisher, event -> { }));
         ExecutionLoop executionLoop = new ExecutionLoop(contextWindow, reActLoop, verificationRunner, plans,
                 planFactory, catalog, policies, new FileCommitScope(dir, codec), publisher, event -> { }, model,
-                budgetService, retriever, feedback, curator, reflections,
-                new io.github.zcd0831.jellyfish.application.planning.SubagentLauncher(startSession,
-                        new io.github.zcd0831.jellyfish.application.planning.RunSessionProvider() {
-                            @Override
-                            public RunSessionUseCase get() {
-                                return runSessionHolder[0];
-                            }
-                        }, sessions, records, budgetService, policies, event -> { },
-                        java.util.concurrent.Executors.newFixedThreadPool(2)), experiences);
+                budgetService, retriever, feedback, curator, reflections, experiences);
         runSession = new RunSessionUseCase(sessions, records, new FileCommitScope(dir, codec), publisher,
                 executionLoop, model, toolExecutor, human, event -> { }, plans, contextWindow);
         runSessionHolder[0] = runSession;

@@ -67,6 +67,8 @@ import java.util.UUID;
  */
 public final class ExecutionLoop implements SessionRunner {
 
+    private static final AgentId REFLECT_AGENT = AgentId.of("builtin.reflect");
+
     private final ContextWindowService contextWindow;
     private final ReActLoop reActLoop;
     private final VerificationRunner verificationRunner;
@@ -84,7 +86,6 @@ public final class ExecutionLoop implements SessionRunner {
     private final PlanCompletionCurator planCompletionCurator;
     private final ReflectionRepository reflections;
     private final io.github.zcd0831.jellyfish.application.memory.port.ExperienceRepository experiences;
-    private final SubagentLauncher subagentLauncher;
 
     public ExecutionLoop(ContextWindowService contextWindow, ReActLoop reActLoop,
                          VerificationRunner verificationRunner, PlanRepository plans, PlanFactory planFactory,
@@ -93,7 +94,7 @@ public final class ExecutionLoop implements SessionRunner {
                          BudgetService budgetService, ExperienceRetriever experienceRetriever,
                          ExperienceFeedbackService experienceFeedback,
                          PlanCompletionCurator planCompletionCurator,
-                         ReflectionRepository reflections, SubagentLauncher subagentLauncher,
+                         ReflectionRepository reflections,
                          io.github.zcd0831.jellyfish.application.memory.port.ExperienceRepository experiences) {
         this.contextWindow = contextWindow;
         this.reActLoop = reActLoop;
@@ -111,7 +112,6 @@ public final class ExecutionLoop implements SessionRunner {
         this.experienceFeedback = experienceFeedback;
         this.planCompletionCurator = planCompletionCurator;
         this.reflections = reflections;
-        this.subagentLauncher = subagentLauncher;
         this.experiences = experiences;
     }
 
@@ -358,7 +358,7 @@ public final class ExecutionLoop implements SessionRunner {
 
     /** 本期"注入"与"建议"同源：分配即注入（奖惩不对称仍按两段分支执行）。 */
     private static FeedbackInput feedbackOf(PlanStep step) {
-        return new FeedbackInput(step.id(), step.assignedExperienceIds(), step.assignedExperienceIds());
+        return new FeedbackInput(step.id(), step.assignedExperienceIds());
     }
 
     /**
@@ -370,21 +370,51 @@ public final class ExecutionLoop implements SessionRunner {
         if (!policies.load().needsReflection(failed)) {
             return;
         }
-        List<SubagentRequest> requests = Collections.singletonList(new SubagentRequest(
-                AgentId.of("builtin.reflect"), session.activeModelId(),
-                "原定目标：" + step.description() + "\n失败原因：" + failureReason
-                        + "\n请给出下一次该改什么。"));
-        List<SubagentResult> results = subagentLauncher.launch(session, requests);
-        if (results.isEmpty()) {
+        String conclusion = reflect(session, step, failureReason);
+        if (conclusion == null) {
             return;
         }
-        Reflection reflection = Reflection.record(plan.id(), step.id(), failedIn(step), results.get(0).conclusion(),
+        Reflection reflection = Reflection.record(plan.id(), step.id(), failedIn(step), conclusion,
                 System.currentTimeMillis());
         commitScope.stageFact(reflection);
         plan.recordReflection(step.id(), reflection.attemptNo(), reflection.id());
         commitScope.stageReplace(plan);
         commitScope.commit();
         publish(reflection.pullEvents());
+    }
+
+    /**
+     * 反思是"一段文本进、一段结论出"，直连端口即可（与检索、沉淀、裁判一致）。
+     * 代理缺失或调用失败 ⇒ 本次不反思：把错误文案存成反思结论比不反思更糟。
+     */
+    private String reflect(Session session, PlanStep step, String failureReason) {
+        AgentDefinition agent = agentOf(REFLECT_AGENT);
+        if (agent == null) {
+            return null;
+        }
+        String task = "原定目标：" + step.description() + "\n失败原因：" + failureReason
+                + "\n请给出下一次该改什么。";
+        try {
+            ModelInvocationResult result = model.invoke(new ModelInvocationRequest(session.activeModelId(),
+                    agent.basePrompt().getTemplateText(),
+                    Collections.singletonList(ChatMessage.of(RecordRole.USER, task)),
+                    Collections.emptyList(), 0, null));
+            if (result.usage() != null) {
+                budgetService.recordUsage(session, result.usage().total());
+            }
+            return result.text() == null || result.text().trim().isEmpty() ? null : result.text();
+        } catch (RuntimeException unavailable) {
+            return null;
+        }
+    }
+
+    private AgentDefinition agentOf(AgentId agentId) {
+        for (AgentDefinition agent : catalog.agents()) {
+            if (agent.id().equals(agentId) && agent.isActive()) {
+                return agent;
+            }
+        }
+        return null;
     }
 
     private static int failedIn(PlanStep step) {
@@ -413,8 +443,7 @@ public final class ExecutionLoop implements SessionRunner {
             Attempt latest = step.attempts().isEmpty() ? null
                     : step.attempts().get(step.attempts().size() - 1);
             traces.add(new StepTrace(step.id(), step.description(), step.status(),
-                    latest == null ? null : latest.recordRange(), latest == null
-                    ? Collections.<SessionId>emptyList() : latest.childSessionIds(),
+                    latest == null ? null : latest.recordRange(),
                     latest == null ? Collections.<SkillId>emptyList() : latest.usedSkillIds(),
                     latest == null || latest.outcome() == AttemptOutcome.SUCCEEDED ? null
                             : plan.terminationReason(),

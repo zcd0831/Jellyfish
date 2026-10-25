@@ -109,20 +109,19 @@ class S4MemoryTest {
     }
 
     @Test
-    void 成功只奖励被建议的而失败惩罚注入的全部() {
+    void 成功与失败作用于同一份分配经验() {
         saved("e1", 0.5);
         saved("e2", 0.5);
         FeedbackInput input = new FeedbackInput(StepId.of("step1"),
-                Arrays.asList(ExperienceId.of("e1"), ExperienceId.of("e2")),
-                Collections.singletonList(ExperienceId.of("e1")));
+                Arrays.asList(ExperienceId.of("e1"), ExperienceId.of("e2")));
 
         feedback.onStepSucceeded(input);
         assertEquals(0.6, confidence("e1"), 1e-9);
-        assertEquals(0.5, confidence("e2"), 1e-9, "未被建议的经验不该被奖励");
+        assertEquals(0.6, confidence("e2"), 1e-9);
 
         feedback.onStepFailed(input);
         assertEquals(0.5, confidence("e1"), 1e-9);
-        assertEquals(0.4, confidence("e2"), 1e-9);
+        assertEquals(0.5, confidence("e2"), 1e-9);
     }
 
     @Test
@@ -144,7 +143,7 @@ class S4MemoryTest {
     void 一次判定只产出一条经验且场景与教训落库() {
         model.reply = "{\"experience\":{\"applicableScenario\":\"需要改代码时\","
                 + "\"instruction\":\"先读再改\",\"expectedOutcome\":\"不破坏上下文\"}}";
-        StepTrace trace = new StepTrace(StepId.of("step1"), "改代码", StepStatus.FAILED, null, null, null,
+        StepTrace trace = new StepTrace(StepId.of("step1"), "改代码", StepStatus.FAILED, null, null,
                 "没读就改", "应先读文件");
 
         curator.curate(session, new DistillationInput(PlanId.of("p1"), session.id(), "改个 bug",
@@ -159,7 +158,7 @@ class S4MemoryTest {
     void 判定为技能时不写经验() {
         model.reply = "{\"skill\":{\"name\":\"依赖升级\",\"description\":\"升版本\","
                 + "\"triggerCondition\":\"升级依赖时\",\"sopBody\":\"## 步骤\"}}";
-        StepTrace trace = new StepTrace(StepId.of("step1"), "顺利的步骤", StepStatus.SUCCEEDED, null, null,
+        StepTrace trace = new StepTrace(StepId.of("step1"), "顺利的步骤", StepStatus.SUCCEEDED, null,
                 null, null, null);
 
         curator.curate(session, new DistillationInput(PlanId.of("p1"), session.id(), "目标",

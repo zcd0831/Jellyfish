@@ -15,7 +15,7 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * 奖惩不对称：成功只奖励"被建议的"，失败惩罚"本次注入的全部"（宁可错杀）。
+ * 成功与失败作用于同一份"本次分配的经验"：成功奖励、失败惩罚（宁可错杀）。
  * 规则出处：模块-记忆 §4、§7.1 规则 ⑦⑧、§8.3。
  */
 public final class ExperienceFeedbackService {
@@ -35,7 +35,7 @@ public final class ExperienceFeedbackService {
 
     public void onStepSucceeded(FeedbackInput input) {
         RuntimePolicy policy = policies.load();
-        for (ExperienceId id : distinct(input.suggestedExperienceIds())) {
+        for (ExperienceId id : distinct(input.experienceIds())) {
             Experience experience = find(id);
             if (experience == null) {
                 continue;
@@ -47,7 +47,7 @@ public final class ExperienceFeedbackService {
 
     public void onStepFailed(FeedbackInput input) {
         RuntimePolicy policy = policies.load();
-        for (ExperienceId id : distinct(input.injectedExperienceIds())) {
+        for (ExperienceId id : distinct(input.experienceIds())) {
             Experience experience = find(id);
             if (experience == null) {
                 continue;

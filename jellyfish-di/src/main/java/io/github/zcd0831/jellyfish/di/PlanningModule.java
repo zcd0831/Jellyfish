@@ -136,11 +136,10 @@ public final class PlanningModule {
                                 ExperienceRetriever experienceRetriever,
                                 ExperienceFeedbackService experienceFeedback,
                                 PlanCompletionCurator planCompletionCurator,
-                                ReflectionRepository reflections, SubagentLauncher subagentLauncher,
-                                ExperienceRepository experiences) {
+                                ReflectionRepository reflections, ExperienceRepository experiences) {
         return new ExecutionLoop(contextWindow, reActLoop, verificationRunner, plans, planFactory, catalog,
                 policies, commitScope, publisher, progress, model, budgetService, experienceRetriever,
-                experienceFeedback, planCompletionCurator, reflections, subagentLauncher, experiences);
+                experienceFeedback, planCompletionCurator, reflections, experiences);
     }
 
     /** 零插件时就是默认编排；插件装上后由路由接管（D24-6，见 PluginModule）。 */

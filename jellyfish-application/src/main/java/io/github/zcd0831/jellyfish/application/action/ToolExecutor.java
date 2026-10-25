@@ -85,9 +85,15 @@ public final class ToolExecutor implements ToolInvoker {
         return truncate(raw, session, recordId, policy);
     }
 
+    /**
+     * `INTERNAL` / `NATIVE` / `PLUGIN` 共用同一张处理器注册表，只有 `REST` / `MCP` 才是出站调用。
+     * 规则出处：模块-行动 §5（ToolSource）、§8.1 分发图、§7.1 规则 3/4。
+     */
     private String dispatch(Session session, ToolDefinition tool, Map<String, Object> args) {
-        if (tool.source().getType() == SourceType.INTERNAL) {
-            if (ASK_USER.equals(tool.source().getEndpointOrIdentifier())) {
+        SourceType source = tool.source().getType();
+        if (source == SourceType.INTERNAL || source == SourceType.NATIVE || source == SourceType.PLUGIN) {
+            if (source == SourceType.INTERNAL
+                    && ASK_USER.equals(tool.source().getEndpointOrIdentifier())) {
                 Object question = args.get("question");
                 Answer answer = human.ask(new Question(Question.Source.MAIN_SESSION,
                         question == null ? "（模型没有提供问题文本）" : String.valueOf(question), null));
@@ -95,7 +101,6 @@ public final class ToolExecutor implements ToolInvoker {
             }
             InternalToolHandler handler = handlers.find(tool.source().getEndpointOrIdentifier());
             if (handler == null) {
-                // 其余内置工具的处理器随各自切片加入（S3/S5），本期如实回报
                 return "工具尚未实现：" + tool.name();
             }
             return handler.handle(session, args).content();

@@ -66,8 +66,8 @@ public final class HttpJsonClient implements ChatTransport {
         try (okhttp3.Response response = call.execute()) {
             if (response.code() >= 400) {
                 ResponseBody errorBody = response.body();
-                throw new IllegalStateException("流式请求失败：HTTP " + response.code() + " "
-                        + (errorBody == null ? "" : errorBody.string()));
+                throw new HttpStatusException(response.code(),
+                        errorBody == null ? "" : errorBody.string(), response.header("Retry-After"));
             }
             ResponseBody responseBody = response.body();
             if (responseBody == null) {

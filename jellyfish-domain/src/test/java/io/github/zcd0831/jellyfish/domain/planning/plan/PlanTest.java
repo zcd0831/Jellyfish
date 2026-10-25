@@ -129,6 +129,22 @@ class PlanTest {
     }
 
     @Test
+    void 记录区间多段合并成一条连续区间() {
+        Plan plan = plan(1);
+        Attempt attempt = plan.beginCurrentStep();
+
+        plan.extendAttemptRange(StepId.of("step1"), attempt.attemptNo(),
+                new RecordRange(io.github.zcd0831.jellyfish.domain.shared.RecordId.of("r1"),
+                        io.github.zcd0831.jellyfish.domain.shared.RecordId.of("r2")));
+        plan.extendAttemptRange(StepId.of("step1"), attempt.attemptNo(),
+                new RecordRange(io.github.zcd0831.jellyfish.domain.shared.RecordId.of("r3"),
+                        io.github.zcd0831.jellyfish.domain.shared.RecordId.of("r4")));
+
+        assertEquals("r1", attempt.recordRange().getStartRecordId().getValue());
+        assertEquals("r4", attempt.recordRange().getEndRecordId().getValue());
+    }
+
+    @Test
     void 反思挂到指定attempt上() {
         Plan plan = plan(1);
         Attempt attempt = plan.beginCurrentStep();

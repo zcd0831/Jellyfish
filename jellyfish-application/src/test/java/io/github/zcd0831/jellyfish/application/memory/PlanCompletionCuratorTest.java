@@ -184,6 +184,32 @@ class PlanCompletionCuratorTest {
     }
 
     @Test
+    void 轨迹结构化且不含reasoning() {
+        when(catalog.agents()).thenReturn(Collections.singletonList(distillAgent()));
+        when(catalog.skills()).thenReturn(Collections.<SkillDefinition>emptyList());
+        when(model.invoke(any(ModelInvocationRequest.class))).thenReturn(reply("{}"));
+        List<Record> range = new ArrayList<Record>();
+        range.add(new Record(RecordId.of("r1"), RecordRole.ASSISTANT, "我先看看", null, 1, 1L));
+        range.add(new Record(RecordId.of("r2"), RecordRole.TOOL_REQUEST,
+                "{\"callId\":\"c1\",\"name\":\"list_dir\",\"arguments\":\"{\\\"path\\\":\\\".\\\"}\"}",
+                "这里是不能进沉淀的内部推理", null, 0, 2, 2L));
+        range.add(new Record(RecordId.of("r3"), RecordRole.TOOL_RESULT, "目录里有 pom.xml", null, 3, 3L));
+        when(records.range(any(SessionId.class), any(RecordId.class), any(RecordId.class))).thenReturn(range);
+
+        StepTrace trace = new StepTrace(StepId.of("step1"), "做事", StepStatus.SUCCEEDED,
+                new RecordRange(RecordId.of("r1"), RecordId.of("r3")), null, null, null);
+        curator().curate(session, input(trace));
+
+        org.mockito.ArgumentCaptor<ModelInvocationRequest> captor =
+                org.mockito.ArgumentCaptor.forClass(ModelInvocationRequest.class);
+        verify(model).invoke(captor.capture());
+        String material = captor.getValue().messages().get(0).content();
+        assertTrue(material.contains("list_dir"), material);
+        assertTrue(material.contains("目录里有 pom.xml"), material);
+        assertTrue(!material.contains("这里是不能进沉淀的内部推理"), "reasoning 不进沉淀");
+    }
+
+    @Test
     void 轨迹不可读时仍完成判定() {
         when(catalog.agents()).thenReturn(Collections.singletonList(distillAgent()));
         when(catalog.skills()).thenReturn(Collections.<SkillDefinition>emptyList());

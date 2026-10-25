@@ -47,6 +47,7 @@ import java.util.Deque;
 import java.util.EnumSet;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -186,6 +187,46 @@ class ExecutionLoopTest {
         assertEquals(PlanStatus.COMPLETED, plan.status());
         verify(curator).curate(any(Session.class), any(DistillationInput.class));
         verify(feedback).onStepSucceeded(any());
+    }
+
+    @Test
+    void 每段ReAct结束都把新增记录区间写进attempt() {
+        Plan plan = plan();
+        planScript.add(plan);
+        when(reActLoop.runIteration(any(Session.class), any(), any(ChunkSink.class))).thenAnswer(invocation -> {
+            Session running = invocation.getArgument(0);
+            running.appendRecord(io.github.zcd0831.jellyfish.domain.perception.session.RecordRole.USER,
+                    "继续", null, 2L);
+            return converged();
+        });
+
+        loop().run(session, ChunkSink.NOOP, NO_TOKEN, NO_CONTEXT);
+
+        assertTrue(plan.steps().get(0).attempts().get(0).recordRange() != null,
+                "挂起也要把已发生的轨迹记进 attempt");
+        assertEquals(plan.steps().get(0).attempts().get(0).recordRange().getStartRecordId(),
+                plan.steps().get(0).attempts().get(0).recordRange().getEndRecordId(), "只有一条记录时区间退化为点");
+    }
+
+    @Test
+    void 环境故障也把中止记录记进区间且不判失败() {
+        Plan plan = plan();
+        planScript.add(plan);
+        when(reActLoop.runIteration(any(Session.class), any(), any(ChunkSink.class))).thenAnswer(invocation -> {
+            Session running = invocation.getArgument(0);
+            running.appendRecord(io.github.zcd0831.jellyfish.domain.perception.session.RecordRole.TOOL_REQUEST,
+                    "{\"callId\":\"c1\",\"name\":\"read_file\",\"arguments\":\"{}\"}", null, 2L);
+            running.appendRecord(io.github.zcd0831.jellyfish.domain.perception.session.RecordRole.TOOL_RESULT,
+                    "（本轮中止）", null, 3L);
+            throw new ModelInvocationException(ModelError.UNAVAILABLE, "挂了");
+        });
+
+        assertThrows(ModelInvocationException.class,
+                () -> loop().run(session, ChunkSink.NOOP, NO_TOKEN, NO_CONTEXT));
+
+        assertTrue(plan.steps().get(0).attempts().get(0).recordRange() != null);
+        assertEquals(StepStatus.RUNNING, plan.steps().get(0).status(), "环境故障不推进步骤状态");
+        assertNull(plan.steps().get(0).attempts().get(0).outcome(), "attempt 不落终态");
     }
 
     @Test

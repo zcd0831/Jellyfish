@@ -78,6 +78,41 @@ class ChatCompletionsProtocolTest {
     }
 
     @Test
+    void 带reasoning的工具消息原样回传reasoning_content() {
+        List<ChatMessage> messages = Arrays.asList(
+                ChatMessage.assistant(null, Arrays.asList(new ToolCall("call_1", "read_file", "{}")), "我想先看目录"),
+                ChatMessage.toolResult("call_1", "内容"));
+
+        String body = protocol.buildRequest(request(messages), "deepseek-flash", true);
+
+        assertTrue(body.contains("\"reasoning_content\":\"我想先看目录\""), body);
+    }
+
+    @Test
+    void 解析非流式响应里的reasoning_content() {
+        String body = "{\"choices\":[{\"message\":{\"content\":\"好的\","
+                + "\"reasoning_content\":\"先想想\","
+                + "\"tool_calls\":[{\"id\":\"c1\",\"type\":\"function\","
+                + "\"function\":{\"name\":\"read_file\",\"arguments\":\"{}\"}}]}}]}";
+
+        ModelInvocationResult result = protocol.parseResponse(body, ModelId.of("m1"));
+
+        assertEquals("先想想", result.reasoning());
+    }
+
+    @Test
+    void 流式累加reasoning_content() {
+        ChatCompletionsProtocol.StreamAccumulator accumulator = protocol.new StreamAccumulator();
+
+        accumulator.accept("{\"choices\":[{\"delta\":{\"reasoning_content\":\"先\"}}]}");
+        accumulator.accept("{\"choices\":[{\"delta\":{\"reasoning_content\":\"想想\"}}]}");
+        accumulator.accept("{\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"c1\","
+                + "\"function\":{\"name\":\"read_file\",\"arguments\":\"{}\"}}]}}]}");
+
+        assertEquals("先想想", accumulator.result(ModelId.of("m1")).reasoning());
+    }
+
+    @Test
     void 流式累加文本与分段到达的工具参数() {
         ChatCompletionsProtocol.StreamAccumulator accumulator = protocol.new StreamAccumulator();
 

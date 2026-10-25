@@ -66,8 +66,17 @@ public class Session {
 
     /** 规则出处：模块-感知 §7.1 规则 5（只追加）。 */
     public Record appendRecord(RecordRole role, String content, ToolResultPayload payload, long now) {
-        Record record = new Record(RecordId.of(java.util.UUID.randomUUID().toString()), role, content,
-                payload, nextSequence(), now);
+        return appendRecord(role, content, null, payload, now);
+    }
+
+    /**
+     * 追加一条带思维内容的记录：`reasoning` 只允许落在 TOOL_REQUEST 上。
+     * 规则出处：模块-感知 §7.1 规则 15（reasoning 是回放用事实）。
+     */
+    public Record appendRecord(RecordRole role, String content, String reasoning, ToolResultPayload payload,
+                               long now) {
+        Record record = new Record(RecordId.of(java.util.UUID.randomUUID().toString()), role, content, reasoning,
+                payload, 0, nextSequence(), now);
         records.add(record);
         return record;
     }
@@ -83,10 +92,12 @@ public class Session {
     public ContextWindow buildContextForLlm(ContextWindowPolicy policy, TokenEstimator estimator, int inputCeiling) {
         List<Record> system = selectByRole(RecordRole.SYSTEM);
         Record latestSummary = latest(RecordRole.SUMMARY);
-        List<Record> recent = recent(policy.getRecordCount());
+        int coveredThrough = latestSummary == null ? 0 : latestSummary.summaryCoversUpTo();
+        List<Record> recent = recentAligned(policy.getRecordCount(), coveredThrough);
 
         int systemTokens = tokensOf(system, estimator);
-        int summaryTokens = latestSummary == null ? 0 : estimator.estimate(latestSummary.content());
+        int summaryTokens = latestSummary == null ? 0 : tokensOf(
+                java.util.Collections.singletonList(latestSummary), estimator);
         int windowTokens = tokensOf(recent, estimator);
         int usedTokens = systemTokens + summaryTokens + windowTokens;
 
@@ -105,9 +116,15 @@ public class Session {
         return new ContextWindow(windowRecords, usage);
     }
 
-    /** 规则出处：模块-感知 §8.2 第 3 步、§7.1 规则 9 ③。 */
-    public void markSummarized(String summary, long now) {
-        appendRecord(RecordRole.SUMMARY, summary, null, now);
+    /**
+     * 追加一条摘要，并记住它覆盖到哪条记录：窗口推导只取覆盖边界之后的记录，
+     * 否则折叠不会让窗口变短（规则 9/11）。
+     * 规则出处：模块-感知 §8.2 第 3 步、§7.1 规则 9 ③ / 规则 11。
+     */
+    public void markSummarized(String summary, int coveredThroughSequence, long now) {
+        Record record = new Record(RecordId.of(java.util.UUID.randomUUID().toString()), RecordRole.SUMMARY,
+                summary, null, null, coveredThroughSequence, nextSequence(), now);
+        records.add(record);
         pendingEvents.add(new SummarizationCompleted());
     }
 
@@ -155,18 +172,99 @@ public class Session {
     }
 
     /**
-     * 最近 n 条"对话"记录：SYSTEM 注入不参与淘汰（规则 10），SUMMARY 已由第 ② 步单独取最新一条，
-     * 旧的摘要不再进窗口——否则折叠只是往窗口里堆摘要。
+     * 最近 n 条"对话"记录，但**按模型输出轮整轮对齐**、且只取摘要覆盖边界之后的记录。
+     * 规则出处：模块-感知 §7.1 规则 9 ③、规则 10、规则 14。
+     *
+     * <p>对齐是请求合法性的前提：`assistant(tool_calls)` 与它的 `tool` 结果必须同进同出，
+     * 否则模型端点会以 400 拒绝；这里不做"事后修补"，不变量违反直接抛。
      */
-    private List<Record> recent(int count) {
+    private List<Record> recentAligned(int count, int coveredThroughSequence) {
+        if (count <= 0) {
+            return new ArrayList<>();
+        }
+        List<List<Record>> turns = turnsAfter(coveredThroughSequence);
         List<Record> out = new ArrayList<>();
-        for (int i = records.size() - 1; i >= 0 && out.size() < count; i--) {
-            RecordRole role = records.get(i).role();
-            if (role != RecordRole.SYSTEM && role != RecordRole.SUMMARY) {
-                out.add(0, records.get(i));
-            }
+        int index = turns.size() - 1;
+        while (index >= 0 && (out.isEmpty() || out.size() < count)) {
+            List<Record> turn = turns.get(index);
+            out.addAll(0, turn);
+            index--;
         }
         return out;
+    }
+
+    /**
+     * 按"模型输出轮"分组：一轮 = `[ASSISTANT] + (TOOL_REQUEST + TOOL_RESULT)⁺`；
+     * 无工具调用的回合自成一轮，USER / 其它角色也各自成轮。
+     * 窗口推导与折叠都以这个单位裁剪，保证不切在轮中间（规则 14）。
+     *
+     * @param coveredThroughSequence 只取 `sequence` 大于它的记录（0 表示不排除）
+     */
+    public List<List<Record>> turnsAfter(int coveredThroughSequence) {
+        List<Record> conversational = new ArrayList<>();
+        for (Record record : records) {
+            if (record.role() == RecordRole.SYSTEM || record.role() == RecordRole.SUMMARY) {
+                continue;
+            }
+            if (record.sequence() <= coveredThroughSequence) {
+                continue;
+            }
+            conversational.add(record);
+        }
+        List<List<Record>> turns = new ArrayList<>();
+        List<Record> current = new ArrayList<>();
+        for (Record record : conversational) {
+            if (!current.isEmpty() && !continuesTurn(current.get(current.size() - 1).role(), record.role())) {
+                turns.add(current);
+                current = new ArrayList<>();
+            }
+            current.add(record);
+        }
+        if (!current.isEmpty()) {
+            turns.add(current);
+        }
+        assertToolPairs(turns);
+        return turns;
+    }
+
+    /** 同一个模型输出轮内的相邻关系；其余情况一律开新轮。 */
+    private static boolean continuesTurn(RecordRole previous, RecordRole next) {
+        if (previous == RecordRole.ASSISTANT) {
+            return next == RecordRole.TOOL_REQUEST;
+        }
+        if (previous == RecordRole.TOOL_REQUEST) {
+            return next == RecordRole.TOOL_RESULT;
+        }
+        if (previous == RecordRole.TOOL_RESULT) {
+            // 一次模型输出里的多个工具调用会连续落成多对请求/结果
+            return next == RecordRole.TOOL_REQUEST;
+        }
+        return false;
+    }
+
+    /** 每个 TOOL_REQUEST 必须紧跟它的 TOOL_RESULT；否则历史已不合法，不再"修补"。 */
+    private static void assertToolPairs(List<List<Record>> turns) {
+        for (List<Record> turn : turns) {
+            boolean pending = false;
+            for (Record record : turn) {
+                if (record.role() == RecordRole.TOOL_REQUEST) {
+                    if (pending) {
+                        throw new DomainInvariantViolation("工具请求没有对应的结果：" + record.id().getValue());
+                    }
+                    pending = true;
+                } else if (record.role() == RecordRole.TOOL_RESULT) {
+                    if (!pending) {
+                        throw new DomainInvariantViolation("工具结果没有对应的请求：" + record.id().getValue());
+                    }
+                    pending = false;
+                } else if (pending) {
+                    throw new DomainInvariantViolation("工具请求没有对应的结果：" + record.id().getValue());
+                }
+            }
+            if (pending) {
+                throw new DomainInvariantViolation("流水末尾有未闭合的工具请求");
+            }
+        }
     }
 
     private static List<Record> merge(List<Record> system, Record summary, List<Record> recent) {
@@ -183,10 +281,16 @@ public class Session {
         return new ArrayList<>(recent);
     }
 
+    /** 计量口径：发出去多少算多少——带 reasoning 的工具请求把 reasoning 也算进去（规则 15）。 */
     private static int tokensOf(List<Record> records, TokenEstimator estimator) {
         int total = 0;
         for (Record r : records) {
-            total += estimator.estimate(r.content());
+            if (r.content() != null) {
+                total += estimator.estimate(r.content());
+            }
+            if (r.reasoning() != null) {
+                total += estimator.estimate(r.reasoning());
+            }
         }
         return total;
     }

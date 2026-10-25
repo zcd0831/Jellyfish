@@ -1,10 +1,10 @@
 package io.github.zcd0831.jellyfish.application.perception;
 
 import io.github.zcd0831.jellyfish.application.action.BudgetService;
+import io.github.zcd0831.jellyfish.application.action.port.ChatMessage;
 import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationPort;
 import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationRequest;
 import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationResult;
-import io.github.zcd0831.jellyfish.application.action.port.ChatMessage;
 import io.github.zcd0831.jellyfish.application.perception.port.PolicyRepository;
 import io.github.zcd0831.jellyfish.application.shared.ProgressEvent;
 import io.github.zcd0831.jellyfish.application.shared.TechnicalLog;
@@ -83,23 +83,47 @@ public final class ContextWindowService {
         collapse(session, currentWindow(session));
     }
 
+    /**
+     * 折叠 = 把窗口变短：从未被摘要覆盖的记录里，按"模型输出轮"从最旧一条开始整轮摘掉，
+     * 直到移除的量够把用量压回上限以内（至少一轮、且至少留一轮）。
+     * 规则出处：模块-感知 §7.1 规则 9 ③ / 规则 14、§8.2 要点 4。
+     */
     private void collapse(Session session, ContextWindow window) {
-        List<Record> outside = recordsOutside(window, session);
-        if (outside.isEmpty()) {
+        List<List<Record>> turns = session.turnsAfter(coveredThrough(session));
+        if (turns.size() < 2) {
+            return;   // 没有可折的旧轮，或只剩一轮：折了就等于把当前对话全丢掉
+        }
+        int used = window.getUsage().getUsedTokens();
+        int ceiling = window.getUsage().getInputCeiling();
+        int need = Math.max(0, used - ceiling);
+
+        int removed = 0;
+        int foldCount = 0;
+        while (foldCount < turns.size() - 1) {
+            removed += tokensOf(turns.get(foldCount));
+            foldCount++;
+            if (removed >= need) {
+                break;
+            }
+        }
+        if (foldCount == 0) {
             return;
         }
+        List<List<Record>> folded = turns.subList(0, foldCount);
+        int covered = lastSequenceOf(folded);
         progress.emit(ProgressEvent.of(ProgressEvent.Kind.SUMMARIZING, "上下文压缩中"));
-        TechnicalLog.fold(session.id().getValue(), window.getUsage().getUsedTokens());
+        TechnicalLog.fold(session.id().getValue(), used);
 
         ModelInvocationResult result = model.invoke(new ModelInvocationRequest(session.activeModelId(),
                 SUMMARY_INSTRUCTION,
-                Collections.singletonList(ChatMessage.of(RecordRole.USER, join(outside))),
+                Collections.singletonList(ChatMessage.of(RecordRole.USER, join(folded))),
                 Collections.emptyList(), 0, null));
         if (result.usage() != null) {
             budgetService.recordUsage(session, result.usage().total());
         }
 
-        session.markSummarized(result.text() == null ? "" : result.text(), System.currentTimeMillis());
+        session.markSummarized(result.text() == null ? "" : result.text(), covered,
+                System.currentTimeMillis());
         commitScope.stageAppend(session.id(), lastRecord(session));
         commitScope.stageReplace(session);
         commitScope.commit();
@@ -107,19 +131,20 @@ public final class ContextWindowService {
         progress.emit(ProgressEvent.of(ProgressEvent.Kind.SUMMARY_DONE, "上下文已压缩"));
     }
 
-    /** 待摘要区间：不进窗口、且不是 SYSTEM / SUMMARY 的旧记录。 */
-    private static List<Record> recordsOutside(ContextWindow window, Session session) {
-        List<Record> inWindow = window.getRecords();
-        List<Record> outside = new ArrayList<Record>();
+    /** 最新摘要覆盖到哪条记录；没有摘要即 0（规则 9 ③）。 */
+    private static int coveredThrough(Session session) {
+        int covered = 0;
         for (Record record : session.records()) {
-            if (record.role() == RecordRole.SYSTEM || record.role() == RecordRole.SUMMARY) {
-                continue;
-            }
-            if (!inWindow.contains(record)) {
-                outside.add(record);
+            if (record.role() == RecordRole.SUMMARY) {
+                covered = record.summaryCoversUpTo();
             }
         }
-        return outside;
+        return covered;
+    }
+
+    private static int lastSequenceOf(List<List<Record>> turns) {
+        List<Record> last = turns.get(turns.size() - 1);
+        return last.get(last.size() - 1).sequence();
     }
 
     private static Record lastRecord(Session session) {
@@ -127,12 +152,28 @@ public final class ContextWindowService {
         return records.get(records.size() - 1);
     }
 
-    private static String join(List<Record> records) {
+    /** 摘要素材只汇总可见内容与工具结果；reasoning 不进摘要（§7.1 规则 15）。 */
+    private static String join(List<List<Record>> turns) {
         StringBuilder out = new StringBuilder();
-        for (Record record : records) {
-            out.append(record.role().name()).append(": ").append(record.content()).append('\n');
+        for (List<Record> turn : turns) {
+            for (Record record : turn) {
+                out.append(record.role().name()).append(": ").append(record.content()).append('\n');
+            }
         }
         return out.toString();
+    }
+
+    private int tokensOf(List<Record> records) {
+        int total = 0;
+        for (Record record : records) {
+            if (record.content() != null) {
+                total += estimator.estimate(record.content());
+            }
+            if (record.reasoning() != null) {
+                total += estimator.estimate(record.reasoning());
+            }
+        }
+        return total;
     }
 
     /** 供 ReActLoop 复用同一套上限计算，避免两处各算一遍。 */

@@ -7,20 +7,27 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * 模型调用结果：文本 + 工具调用 + 用量 + 实际服务的模型。
+ * 模型调用结果：文本 + 工具调用 + 思维内容 + 用量 + 实际服务的模型。
  * 规则出处：模块-行动 §5、§8.2 第 3 条；适配器不记账（D08）。
  */
 public final class ModelInvocationResult {
 
     private final String text;
     private final List<ToolCall> toolCalls;
+    private final String reasoning;
     private final ModelUsage usage;
     private final ModelId servedModelId;
 
     public ModelInvocationResult(String text, List<ToolCall> toolCalls, ModelUsage usage, ModelId servedModelId) {
+        this(text, toolCalls, null, usage, servedModelId);
+    }
+
+    public ModelInvocationResult(String text, List<ToolCall> toolCalls, String reasoning, ModelUsage usage,
+                                 ModelId servedModelId) {
         this.text = text;
         this.toolCalls = Collections.unmodifiableList(new ArrayList<ToolCall>(
                 toolCalls == null ? Collections.<ToolCall>emptyList() : toolCalls));
+        this.reasoning = reasoning;
         this.usage = usage;
         this.servedModelId = servedModelId;
     }
@@ -31,6 +38,11 @@ public final class ModelInvocationResult {
 
     public List<ToolCall> toolCalls() {
         return toolCalls;
+    }
+
+    /** 思维内容；只有思维模式模型才非空，回放时必须原样带回（模块-行动 §8.2 第 6 条）。 */
+    public String reasoning() {
+        return reasoning;
     }
 
     public ModelUsage usage() {

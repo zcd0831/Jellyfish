@@ -37,6 +37,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -152,6 +153,88 @@ class ReActLoopTest {
         IterationResult result = loop(oneRound).runIteration(session(), null, null);
 
         assertFalse(result.isConverged());
+    }
+
+    private static String call(String callId, String name, String arguments) {
+        return "{\"callId\":\"" + callId + "\",\"name\":\"" + name + "\",\"arguments\":\""
+                + arguments + "\"}";
+    }
+
+    private List<ChatMessage> capturedMessages(Session session, List<ModelInvocationRequest> captured) {
+        ReActLoop subject = loop(RuntimePolicy.defaults());
+        // 注意顺序：loop() 自己会打一份空窗口的桩，真实窗口必须后打
+        when(contextWindow.currentWindow(any(Session.class))).thenReturn(new ContextWindow(
+                new ArrayList<Record>(session.records()), new ContextUsage(10, 1000, 0, 0, 0)));
+        when(model.invoke(any(ModelInvocationRequest.class))).thenAnswer(invocation -> {
+            captured.add(invocation.getArgument(0));
+            return reply("答复", Collections.<ToolCall>emptyList(), ModelId.of("m1"));
+        });
+        subject.runIteration(session, null, null);
+        return captured.get(0).messages();
+    }
+
+    @Test
+    void 回放时工具请求与结果成对还原且带回reasoning() {
+        Session session = session();
+        session.appendRecord(RecordRole.TOOL_REQUEST, call("c1", "read_file", "{}"), "先看看目录", null, 3L);
+        session.appendRecord(RecordRole.TOOL_RESULT, "文件内容", null, 4L);
+        List<ModelInvocationRequest> captured = new ArrayList<ModelInvocationRequest>();
+
+        List<ChatMessage> messages = capturedMessages(session, captured);
+
+        ChatMessage assistant = messages.get(messages.size() - 2);
+        assertEquals(1, assistant.toolCalls().size());
+        assertEquals("c1", assistant.toolCalls().get(0).callId());
+        assertEquals("先看看目录", assistant.reasoning(), "reasoning 必须随工具请求回放");
+        ChatMessage tool = messages.get(messages.size() - 1);
+        assertEquals("c1", tool.toolCallId(), "工具结果必须带 tool_call_id，否则端点 400");
+        assertEquals("文件内容", tool.content());
+    }
+
+    @Test
+    void 摘要作为user消息回灌给模型() {
+        Session session = session();
+        session.markSummarized("早前要点", 0, 3L);
+        List<ModelInvocationRequest> captured = new ArrayList<ModelInvocationRequest>();
+
+        List<ChatMessage> messages = capturedMessages(session, captured);
+
+        boolean hasSummary = messages.stream().anyMatch(m -> m.role() == RecordRole.SUMMARY
+                && m.content().startsWith("【更早对话的摘要】") && m.content().contains("早前要点"));
+        assertTrue(hasSummary, "折叠后的摘要必须真的进请求");
+    }
+
+    @Test
+    void 工具执行抛错时把未闭合的请求补成中止结果() {
+        Session session = session();
+        when(model.invoke(any(ModelInvocationRequest.class))).thenReturn(reply(null,
+                Collections.singletonList(new ToolCall("c1", "read_file", "{}")), ModelId.of("m1")));
+        when(toolExecutor.execute(any(Session.class), anyString(), any(Map.class), any(RecordId.class)))
+                .thenThrow(new IllegalStateException("工具进程被杀"));
+
+        assertThrows(RuntimeException.class,
+                () -> loop(RuntimePolicy.defaults()).runIteration(session, null, null));
+
+        Record last = session.records().get(session.records().size() - 1);
+        assertEquals(RecordRole.TOOL_RESULT, last.role());
+        assertTrue(last.content().contains("本轮中止"), last.content());
+    }
+
+    @Test
+    void 记录工具请求时把reasoning落进流水() {
+        Session session = session();
+        when(model.invoke(any(ModelInvocationRequest.class))).thenReturn(
+                new ModelInvocationResult(null,
+                        Collections.singletonList(new ToolCall("c1", "read_file", "{}")), "想一下",
+                        new ModelUsage(1, 1), ModelId.of("m1")));
+        when(toolExecutor.execute(any(Session.class), anyString(), any(Map.class), any(RecordId.class)))
+                .thenReturn(ToolExecOutcome.plain("内容"));
+
+        loop(RuntimePolicy.defaults()).runIteration(session, null, null);
+
+        Record request = session.records().stream()
+                .filter(r -> r.role() == RecordRole.TOOL_REQUEST).findFirst().get();
+        assertEquals("想一下", request.reasoning());
     }
 
     @Test

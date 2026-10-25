@@ -43,7 +43,7 @@ class SessionBranchesTest {
         Session session = session();
         session.appendRecord(RecordRole.SYSTEM, "注入", null, 1L);
         session.appendRecord(RecordRole.USER, "u1", null, 2L);
-        session.markSummarized("摘要", 3L);
+        session.markSummarized("摘要", 2, 3L);
 
         ContextWindow window = session.buildContextForLlm(new ContextWindowPolicy(0, 0.99),
                 text -> 1, 100);

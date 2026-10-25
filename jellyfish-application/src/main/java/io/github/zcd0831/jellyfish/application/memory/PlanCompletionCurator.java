@@ -117,6 +117,10 @@ public final class PlanCompletionCurator {
         return out.toString();
     }
 
+    /**
+     * 轨迹结构化：每轮一行"工具名(参数摘要) → 结果摘要"，而不是原文拼接。
+     * 只读 `content`——`reasoning` 是回放用事实，永不进沉淀（模块-记忆 §8.6 要点 2）。
+     */
     private String traceOf(Session session, StepTrace trace) {
         if (trace.recordRange() == null) {
             return "（无轨迹区间）";
@@ -126,20 +130,55 @@ public final class PlanCompletionCurator {
                     trace.recordRange().getEndRecordId());
             StringBuilder out = new StringBuilder();
             int budget = policies.load().toolResultTruncateLength();
+            int round = 0;
             for (Record record : range) {
-                if (record.role() == RecordRole.SYSTEM) {
+                if (record.role() == RecordRole.SYSTEM || record.role() == RecordRole.SUMMARY) {
                     continue;
                 }
                 if (out.length() >= budget) {
                     out.append("…");
                     break;
                 }
-                out.append(record.role()).append(": ").append(record.content()).append("\n");
+                switch (record.role()) {
+                    case ASSISTANT:
+                        out.append("第 ").append(++round).append(" 轮：")
+                                .append(oneLine(record.content(), 160)).append('\n');
+                        break;
+                    case USER:
+                        out.append("用户：").append(oneLine(record.content(), 160)).append('\n');
+                        break;
+                    case TOOL_REQUEST:
+                        out.append("第 ").append(Math.max(round, 1)).append(" 轮：")
+                                .append(describeCall(record.content())).append(" → ");
+                        break;
+                    case TOOL_RESULT:
+                        out.append("结果：").append(oneLine(record.content(), 200)).append('\n');
+                        break;
+                    default:
+                        break;
+                }
             }
             return out.toString();
         } catch (RuntimeException missing) {
             return "（轨迹不可读）";
         }
+    }
+
+    /** 工具请求在流水里是单行 JSON：取工具名与参数，压成一行人读。 */
+    private static String describeCall(String content) {
+        Map<String, Object> fields = Json.parseObject(content);
+        Object name = fields.get("name");
+        Object arguments = fields.get("arguments");
+        return (name == null ? "（未知工具）" : String.valueOf(name))
+                + "(" + oneLine(arguments == null ? "" : String.valueOf(arguments), 120) + ")";
+    }
+
+    private static String oneLine(String text, int limit) {
+        if (text == null) {
+            return "";
+        }
+        String flat = text.replace('\n', ' ').replace('\r', ' ').trim();
+        return flat.length() <= limit ? flat : flat.substring(0, limit) + "…";
     }
 
     private String ask(Session session, AgentDefinition agent, String material) {

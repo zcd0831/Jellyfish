@@ -168,6 +168,61 @@ class ModelInvokerBranchesTest {
     }
 
     @Test
+    void 流式的4xx不重试且保留错误码() {
+        Catalog catalog = new Catalog(Collections.singletonList(model("m1", ModelStatus.ACTIVE)),
+                Collections.singletonList(provider(ProviderStatus.ACTIVE)));
+        final int[] attempts = {0};
+        ChatTransport streaming = new ChatTransport() {
+            public Response post(String url, Map<String, String> headers, String body) {
+                throw new UnsupportedOperationException("流式用例不该走阻塞路径");
+            }
+
+            public void postStreaming(String url, Map<String, String> headers, String body, LineSink sink) {
+                attempts[0]++;
+                throw new HttpStatusException(401, "{\"error\":\"bad key\"}", null);
+            }
+
+            public void cancelActive() { }
+
+            public boolean cancelledByUser() {
+                return false;
+            }
+        };
+
+        ModelInvocationException e = assertThrows(ModelInvocationException.class,
+                () -> invoker(catalog, streaming, "k").invokeStreaming(request(), ChunkSink.NOOP));
+
+        assertEquals(ModelError.AUTH_FAILED, e.error());
+        assertEquals(1, attempts[0], "401 是确定性错误，不该退避重试");
+    }
+
+    @Test
+    void 流式的超限错误映射为上下文超限() {
+        Catalog catalog = new Catalog(Collections.singletonList(model("m1", ModelStatus.ACTIVE)),
+                Collections.singletonList(provider(ProviderStatus.ACTIVE)));
+        ChatTransport streaming = new ChatTransport() {
+            public Response post(String url, Map<String, String> headers, String body) {
+                throw new UnsupportedOperationException();
+            }
+
+            public void postStreaming(String url, Map<String, String> headers, String body, LineSink sink) {
+                throw new HttpStatusException(400, "{\"error\":\"maximum context length exceeded\"}", null);
+            }
+
+            public void cancelActive() { }
+
+            public boolean cancelledByUser() {
+                return false;
+            }
+        };
+
+        ModelInvocationException e = assertThrows(ModelInvocationException.class,
+                () -> invoker(catalog, streaming, "k").invokeStreaming(request(), ChunkSink.NOOP));
+
+        assertEquals(ModelError.CONTEXT_EXCEEDED, e.error());
+    }
+
+    @Test
     void 无usage时用本地计数兜底() {
         Catalog catalog = new Catalog(Collections.singletonList(model("m1", ModelStatus.ACTIVE)),
                 Collections.singletonList(provider(ProviderStatus.ACTIVE)));

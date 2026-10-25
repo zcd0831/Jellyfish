@@ -13,7 +13,11 @@ public class RecordLineDto {
     public RecordId id;
     public RecordRole role;
     public String content;
+    /** 只占 TOOL_REQUEST：产出该工具调用请求的 assistant 消息的 reasoning_content（模块-感知 §7.1-15）。 */
+    public String reasoning;
     public ToolResultPayload toolPayload;
+    /** 只占 SUMMARY：该摘要覆盖到（含）哪条记录的 sequence（模块-感知 §7.1-9/11）。 */
+    public int summaryCoversUpTo;
     public int sequence;
     public long date;
 }

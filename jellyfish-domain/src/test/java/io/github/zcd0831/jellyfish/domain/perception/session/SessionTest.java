@@ -10,6 +10,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -28,6 +29,10 @@ class SessionTest {
     private static Session newSession() {
         return Session.create(SessionId.of("s1"), null, AgentId.of("builtin.main"),
                 ModelId.of("m1"), 1000L, null);
+    }
+
+    private static String call(String callId, String name) {
+        return "{\"callId\":\"" + callId + "\",\"name\":\"" + name + "\",\"arguments\":\"{}\"}";
     }
 
     @Test
@@ -60,11 +65,12 @@ class SessionTest {
     }
 
     @Test
-    void 只取最新一条SUMMARY() {
+    void 只取最新一条SUMMARY且被覆盖的记录不再进窗口() {
         Session session = newSession();
-        session.markSummarized("旧摘要", 1L);
-        session.appendRecord(RecordRole.USER, "u1", null, 2L);
-        session.markSummarized("新摘要", 3L);
+        session.appendRecord(RecordRole.USER, "u1", null, 1L);
+        session.markSummarized("旧摘要", 1, 2L);
+        session.appendRecord(RecordRole.USER, "u2", null, 3L);
+        session.markSummarized("新摘要", 3, 4L);
 
         ContextWindow window = session.buildContextForLlm(new ContextWindowPolicy(5, 0.9), CHARS, 100000);
 
@@ -73,6 +79,20 @@ class SessionTest {
                 .count();
         assertEquals(1, summaries);
         assertEquals("新摘要", window.getRecords().get(0).content());
+        assertEquals(1, window.getRecords().size(), "覆盖边界之前的记录不再进窗口");
+    }
+
+    @Test
+    void 摘要之后的记录仍然进窗口() {
+        Session session = newSession();
+        session.appendRecord(RecordRole.USER, "u1", null, 1L);
+        session.markSummarized("摘要", 1, 2L);
+        session.appendRecord(RecordRole.USER, "u2", null, 3L);
+
+        ContextWindow window = session.buildContextForLlm(new ContextWindowPolicy(5, 0.9), CHARS, 100000);
+
+        assertEquals(RecordRole.SUMMARY, window.getRecords().get(0).role());
+        assertEquals("u2", window.getRecords().get(1).content());
     }
 
     @Test
@@ -92,12 +112,53 @@ class SessionTest {
     void 折叠后追加SUMMARY并raise事件() {
         Session session = newSession();
 
-        session.markSummarized("摘要", 1L);
+        session.markSummarized("摘要", 0, 1L);
 
         assertEquals(RecordRole.SUMMARY, session.records().get(0).role());
         assertEquals(1, session.pullEvents().size());
         assertEquals("session.summarization-completed", session.pullEvents().isEmpty()
                 ? "session.summarization-completed" : "unexpected");
+    }
+
+    @Test
+    void 窗口按模型输出轮整轮对齐() {
+        Session session = newSession();
+        session.appendRecord(RecordRole.USER, "u1", null, 1L);
+        session.appendRecord(RecordRole.ASSISTANT, "看一下", null, 2L);
+        session.appendRecord(RecordRole.TOOL_REQUEST, call("c1", "list_dir"), null, 3L);
+        session.appendRecord(RecordRole.TOOL_RESULT, "结果", null, 4L);
+        session.appendRecord(RecordRole.USER, "u2", null, 5L);
+
+        // 只取最近 2 条会把边界切在 TOOL_RESULT 上 ⇒ 必须把整轮一起纳入
+        ContextWindow window = session.buildContextForLlm(new ContextWindowPolicy(2, 0.9), CHARS, 100000);
+
+        assertEquals(4, window.getRecords().size());
+        assertEquals(RecordRole.ASSISTANT, window.getRecords().get(0).role());
+        assertEquals(RecordRole.TOOL_REQUEST, window.getRecords().get(1).role());
+        assertEquals(RecordRole.TOOL_RESULT, window.getRecords().get(2).role());
+        assertEquals("u2", window.getRecords().get(3).content());
+    }
+
+    @Test
+    void 未闭合的工具请求是不变量违反而不是静默丢弃() {
+        Session session = newSession();
+        session.appendRecord(RecordRole.USER, "u1", null, 1L);
+        session.appendRecord(RecordRole.TOOL_REQUEST, call("c1", "list_dir"), null, 2L);
+
+        assertThrows(io.github.zcd0831.jellyfish.domain.shared.DomainInvariantViolation.class,
+                () -> session.buildContextForLlm(new ContextWindowPolicy(5, 0.9), CHARS, 100000));
+    }
+
+    @Test
+    void reasoning计入窗口用量() {
+        Session session = newSession();
+        session.appendRecord(RecordRole.TOOL_REQUEST, call("c1", "list_dir"), "思考了十个字符", null, 1L);
+        session.appendRecord(RecordRole.TOOL_RESULT, "结果", null, 2L);
+
+        ContextWindow window = session.buildContextForLlm(new ContextWindowPolicy(5, 0.9), CHARS, 100000);
+
+        int withoutReasoning = call("c1", "list_dir").length() + "结果".length();
+        assertEquals(withoutReasoning + "思考了十个字符".length(), window.getUsage().getUsedTokens());
     }
 
     @Test

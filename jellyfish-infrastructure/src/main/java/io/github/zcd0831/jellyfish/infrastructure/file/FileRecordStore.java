@@ -133,13 +133,16 @@ public final class FileRecordStore implements RecordStore {
         d.id = r.id();
         d.role = r.role();
         d.content = r.content();
+        d.reasoning = r.reasoning();
         d.toolPayload = r.toolPayload();
+        d.summaryCoversUpTo = r.summaryCoversUpTo();
         d.sequence = r.sequence();
         d.date = r.date();
         return d;
     }
 
     private static Record toDomain(RecordLineDto d) {
-        return new Record(d.id, d.role, d.content, d.toolPayload, d.sequence, d.date);
+        return new Record(d.id, d.role, d.content, d.reasoning, d.toolPayload, d.summaryCoversUpTo,
+                d.sequence, d.date);
     }
 }

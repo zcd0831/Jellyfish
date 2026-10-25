@@ -77,6 +77,10 @@ final class ChatCompletionsProtocol {
                 function.put("arguments", call.argumentsJson());
             }
         }
+        // 思维模式：带 tool_calls 的 assistant 消息必须原样带回 reasoning_content（模块-行动 §8.2 第 6 条）
+        if (message.reasoning() != null) {
+            node.put("reasoning_content", message.reasoning());
+        }
         return node;
     }
 
@@ -99,8 +103,13 @@ final class ChatCompletionsProtocol {
         JsonNode root = read(body);
         JsonNode message = root.path("choices").path(0).path("message");
         String text = message.path("content").isNull() ? null : message.path("content").asText(null);
-        return new ModelInvocationResult(text, parseToolCalls(message.path("tool_calls")),
+        String reasoning = textOf(message.path("reasoning_content"));
+        return new ModelInvocationResult(text, parseToolCalls(message.path("tool_calls")), reasoning,
                 parseUsage(root.path("usage")), servedModelId);
+    }
+
+    private static String textOf(JsonNode node) {
+        return node.isMissingNode() || node.isNull() ? null : node.asText();
     }
 
     private List<ToolCall> parseToolCalls(JsonNode calls) {
@@ -144,6 +153,7 @@ final class ChatCompletionsProtocol {
     final class StreamAccumulator {
 
         private final StringBuilder text = new StringBuilder();
+        private final StringBuilder reasoning = new StringBuilder();
         private final Map<Integer, CallBuilder> calls = new LinkedHashMap<>();
         private ModelUsage usage;
         private String lastDelta;
@@ -159,6 +169,10 @@ final class ChatCompletionsProtocol {
                 usage = parseUsage(usageNode);
             }
             JsonNode delta = chunk.path("choices").path(0).path("delta");
+            String reasoningPiece = textOf(delta.path("reasoning_content"));
+            if (reasoningPiece != null) {
+                reasoning.append(reasoningPiece);
+            }
             JsonNode content = delta.path("content");
             lastDelta = null;
             if (!content.isMissingNode() && !content.isNull()) {
@@ -190,8 +204,8 @@ final class ChatCompletionsProtocol {
             for (CallBuilder builder : calls.values()) {
                 toolCalls.add(builder.build());
             }
-            return new ModelInvocationResult(text.length() == 0 ? null : text.toString(), toolCalls, usage,
-                    servedModelId);
+            return new ModelInvocationResult(text.length() == 0 ? null : text.toString(), toolCalls,
+                    reasoning.length() == 0 ? null : reasoning.toString(), usage, servedModelId);
         }
     }
 

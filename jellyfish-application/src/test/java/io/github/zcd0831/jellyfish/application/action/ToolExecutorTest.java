@@ -169,6 +169,21 @@ class ToolExecutorTest {
     }
 
     @Test
+    void 本地能力走处理器注册表而不是出站调用() {
+        givenTool(tool("list_dir", SideEffectLevel.READ_ONLY, SourceType.NATIVE, ToolStatus.ACTIVE, "{}"));
+        InternalToolHandlers handlers = new InternalToolHandlers(Collections.singletonList(
+                new InternalToolHandlers.NamedHandler("list_dir", new InternalToolHandler() {
+                    @Override
+                    public ToolExecOutcome handle(Session session, Map<String, Object> args) {
+                        return ToolExecOutcome.plain("目录内容");
+                    }
+                })));
+
+        assertTrue(executor(handlers).execute(session, "list_dir", args(), RecordId.of("r"))
+                .content().contains("目录内容"));
+    }
+
+    @Test
     void 命中绊线的命令先问人() {
         ToolExecutor subject = executor(InternalToolHandlers.empty());
         givenTool(tool("run_command", SideEffectLevel.IRREVERSIBLE, SourceType.NATIVE, ToolStatus.ACTIVE, "{}"));

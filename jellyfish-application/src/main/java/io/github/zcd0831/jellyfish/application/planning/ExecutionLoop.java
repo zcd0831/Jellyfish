@@ -141,18 +141,24 @@ public final class ExecutionLoop implements SessionRunner {
                 attempt = step.attempts().get(step.attempts().size() - 1);
             }
 
+            int firstRecordIndex = session.records().size();
             IterationResult iteration;
             try {
                 iteration = reActLoop.runIteration(session, step, sink);
-            } catch (ModelInvocationException failure) {
-                if (failure.error() == ModelError.CONTEXT_EXCEEDED && !collapsedOnce) {
+            } catch (RuntimeException failure) {
+                // 中止事实也属于本次 attempt 的轨迹，先延伸区间再决定怎么处理（模块-规划 §7.1 规则 10）
+                extendAttemptRange(session, plan, step, attempt, firstRecordIndex);
+                if (failure instanceof ModelInvocationException
+                        && ((ModelInvocationException) failure).error() == ModelError.CONTEXT_EXCEEDED
+                        && !collapsedOnce) {
                     // 请求超限：强制折叠一次后重试，不消耗重试名额（模块-应用层 §9）
                     contextWindow.forceCollapse(session);
                     collapsedOnce = true;
                     continue;
                 }
-                throw failure;   // 模型不可用：不改任何状态
+                throw failure;   // 模型不可用/取消：不推进状态
             }
+            extendAttemptRange(session, plan, step, attempt, firstRecordIndex);
 
             recordSkillUsage(plan, step, attempt, iteration);
 
@@ -433,6 +439,24 @@ public final class ExecutionLoop implements SessionRunner {
         for (SkillId skillId : iteration.usedSkillIds()) {
             plan.recordSkillUsage(step.id(), attempt.attemptNo(), skillId);
         }
+        commitPlan(plan);
+    }
+
+    /**
+     * 把本段 ReAct 新增的记录区间延伸进当前 attempt：挂起、环境故障都保留已发生的轨迹。
+     * 规则出处：模块-规划 §7.1 规则 10、§5.2。
+     */
+    private void extendAttemptRange(Session session, Plan plan, PlanStep step, Attempt attempt, int firstRecordIndex) {
+        if (plan == null || step == null || attempt == null) {
+            return;
+        }
+        List<Record> records = session.records();
+        if (records.size() <= firstRecordIndex) {
+            return;
+        }
+        RecordRange range = new RecordRange(records.get(firstRecordIndex).id(),
+                records.get(records.size() - 1).id());
+        plan.extendAttemptRange(step.id(), attempt.attemptNo(), range);
         commitPlan(plan);
     }
 

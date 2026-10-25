@@ -214,6 +214,9 @@ public final class ModelInvoker implements ModelInvocationPort {
                     return more;
                 }
             });
+        } catch (HttpStatusException status) {
+            // 4xx 是确定性错误：交给同一份失败映射，重试只会把同样的非法请求再发一遍
+            throw mapFailure(new ChatTransport.Response(status.status(), status.body(), status.retryAfter()), model);
         } catch (RuntimeException e) {
             if (transport.cancelledByUser()) {
                 throw new java.util.concurrent.CancellationException("用户取消了本次模型调用");
@@ -230,7 +233,7 @@ public final class ModelInvoker implements ModelInvocationPort {
             return result;
         }
         int tokens = tokenCounter.count(request.systemPrompt(), request.messages(), model.id());
-        return new ModelInvocationResult(result.text(), result.toolCalls(),
+        return new ModelInvocationResult(result.text(), result.toolCalls(), result.reasoning(),
                 new ModelUsage(tokens, 0L), result.servedModelId());
     }
 

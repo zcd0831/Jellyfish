@@ -277,7 +277,7 @@ class S3AcceptanceTest {
 
         @Override
         public ModelProfile describe(ModelId modelId) {
-            return new ModelProfile(8000, 4096);
+            return new ModelProfile(80000, 4096);
         }
     }
 

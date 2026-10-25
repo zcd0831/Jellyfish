@@ -29,6 +29,10 @@ public final class JtokkitStrategy {
             if (message.toolCallId() != null) {
                 text.append('\n').append(message.toolCallId());
             }
+            if (message.reasoning() != null) {
+                // reasoning 随请求发出，同样占输入 token（模块-感知 §7.1 规则 15）
+                text.append('\n').append(message.reasoning());
+            }
         }
         return encoding.countTokens(text.toString());
     }

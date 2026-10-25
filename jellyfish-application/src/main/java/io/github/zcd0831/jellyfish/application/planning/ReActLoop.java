@@ -18,13 +18,14 @@ import io.github.zcd0831.jellyfish.application.shared.Question;
 import io.github.zcd0831.jellyfish.application.shared.port.CommitScope;
 import io.github.zcd0831.jellyfish.application.shared.port.HumanInteractionPort;
 import io.github.zcd0831.jellyfish.domain.perception.policy.RuntimePolicy;
-import io.github.zcd0831.jellyfish.domain.planning.plan.PlanStep;
 import io.github.zcd0831.jellyfish.domain.perception.session.ContextWindow;
 import io.github.zcd0831.jellyfish.domain.perception.session.Record;
 import io.github.zcd0831.jellyfish.domain.perception.session.RecordRole;
 import io.github.zcd0831.jellyfish.domain.perception.session.Session;
 import io.github.zcd0831.jellyfish.domain.perception.session.ToolResultPayload;
 import io.github.zcd0831.jellyfish.domain.perception.session.ToolSchemaSnapshot;
+import io.github.zcd0831.jellyfish.domain.planning.plan.PlanStep;
+import io.github.zcd0831.jellyfish.domain.shared.DomainInvariantViolation;
 import io.github.zcd0831.jellyfish.domain.shared.ModelId;
 import io.github.zcd0831.jellyfish.domain.shared.SkillId;
 
@@ -41,6 +42,10 @@ public final class ReActLoop {
 
     private static final String SUBMIT_STEP = "submit_step";
     private static final String LOAD_SKILL = "load_skill";
+    /** 摘要作为一条 user 消息回灌；前缀是模型可见文案，不是用户文案。 */
+    private static final String SUMMARY_PREFIX = "【更早对话的摘要】\n";
+    /** 环境故障/取消时，给未闭合的工具调用补的中止事实。 */
+    private static final String ABORTED_TOOL_RESULT = "（本轮中止：模型不可用或用户取消，工具结果未回灌）";
 
     private final ModelInvocationPort model;
     private final ToolExecutor toolExecutor;
@@ -68,40 +73,48 @@ public final class ReActLoop {
         ContextWindow window = contextWindow.currentWindow(session);
         List<ChatMessage> messages = toMessages(window);
         List<SkillId> usedSkills = new ArrayList<SkillId>();
-
-        for (int round = 1; round <= policy.maxReActRounds(); round++) {
-            ModelInvocationResult result = invoke(session, step, window, messages, sink);
-            syncModel(session, result.servedModelId());
-            if (result.usage() != null && budgetService.recordUsage(session, result.usage().total())) {
-                askContinue();
-            }
-            if (result.text() != null && !result.text().isEmpty()) {
-                Record record = session.appendRecord(RecordRole.ASSISTANT, result.text(), null,
-                        System.currentTimeMillis());
-                commitAppend(session, record);
-                messages.add(ChatMessage.of(RecordRole.ASSISTANT, result.text()));
-            }
-            if (result.toolCalls().isEmpty()) {
-                return IterationResult.converged(round, usedSkills);
-            }
-            String submittedSummary = null;
-            for (ToolCall call : result.toolCalls()) {
-                messages.add(ChatMessage.assistant(null, Collections.singletonList(call)));
-                if (SUBMIT_STEP.equals(call.name())) {
-                    submittedSummary = summaryOf(call);
-                    messages.add(submit(session, call, submittedSummary));
-                    continue;
+        // 已落 TOOL_REQUEST、尚未落 TOOL_RESULT 的调用：环境故障/取消时必须补成"中止结果"，
+        // 否则流水留下未闭合的工具请求，下一次重建请求必然非法（模块-规划 §7.1 规则 9）。
+        List<ToolCall> pending = new ArrayList<ToolCall>();
+        try {
+            for (int round = 1; round <= policy.maxReActRounds(); round++) {
+                ModelInvocationResult result = invoke(session, step, window, messages, sink);
+                syncModel(session, result.servedModelId());
+                if (result.usage() != null && budgetService.recordUsage(session, result.usage().total())) {
+                    askContinue();
                 }
-                if (LOAD_SKILL.equals(call.name())) {
-                    recordSkillUse(call, usedSkills);
+                if (result.text() != null && !result.text().isEmpty()) {
+                    Record record = session.appendRecord(RecordRole.ASSISTANT, result.text(), null,
+                            System.currentTimeMillis());
+                    commitAppend(session, record);
+                    messages.add(ChatMessage.of(RecordRole.ASSISTANT, result.text()));
                 }
-                messages.add(executeTool(session, call));
+                if (result.toolCalls().isEmpty()) {
+                    return IterationResult.converged(round, usedSkills);
+                }
+                String submittedSummary = null;
+                for (ToolCall call : result.toolCalls()) {
+                    messages.add(ChatMessage.assistant(null, Collections.singletonList(call),
+                            result.reasoning()));
+                    if (SUBMIT_STEP.equals(call.name())) {
+                        submittedSummary = summaryOf(call);
+                        messages.add(submit(session, call, submittedSummary, result.reasoning(), pending));
+                        continue;
+                    }
+                    if (LOAD_SKILL.equals(call.name())) {
+                        recordSkillUse(call, usedSkills);
+                    }
+                    messages.add(executeTool(session, call, result.reasoning(), pending));
+                }
+                if (submittedSummary != null) {
+                    return IterationResult.submitted(submittedSummary, round, usedSkills);
+                }
             }
-            if (submittedSummary != null) {
-                return IterationResult.submitted(submittedSummary, round, usedSkills);
-            }
+            return IterationResult.notConverged(policy.maxReActRounds(), usedSkills);
+        } catch (RuntimeException failure) {
+            closePendingToolCalls(session, pending);
+            throw failure;
         }
-        return IterationResult.notConverged(policy.maxReActRounds(), usedSkills);
     }
 
     private ModelInvocationResult invoke(Session session, PlanStep step, ContextWindow window,
@@ -141,12 +154,15 @@ public final class ReActLoop {
     }
 
     /** submit_step 只登记，不执行：真正的判定在外循环的验证链（§8.2）。 */
-    private ChatMessage submit(Session session, ToolCall call, String summary) {
-        Record request = session.appendRecord(RecordRole.TOOL_REQUEST, describe(call), null,
+    private ChatMessage submit(Session session, ToolCall call, String summary, String reasoning,
+                               List<ToolCall> pending) {
+        Record request = session.appendRecord(RecordRole.TOOL_REQUEST, describe(call), reasoning, null,
                 System.currentTimeMillis());
         commitAppend(session, request);
+        pending.add(call);
         Record result = session.appendRecord(RecordRole.TOOL_RESULT, "已登记，等待验收", null,
                 System.currentTimeMillis());
+        pending.remove(call);
         commitAppend(session, result);
         return ChatMessage.toolResult(call.callId(), "已登记，等待验收");
     }
@@ -164,16 +180,18 @@ public final class ReActLoop {
         }
     }
 
-    private ChatMessage executeTool(Session session, ToolCall call) {
-        Record request = session.appendRecord(RecordRole.TOOL_REQUEST, describe(call), null,
+    private ChatMessage executeTool(Session session, ToolCall call, String reasoning, List<ToolCall> pending) {
+        Record request = session.appendRecord(RecordRole.TOOL_REQUEST, describe(call), reasoning, null,
                 System.currentTimeMillis());
         commitAppend(session, request);
+        pending.add(call);
 
         Map<String, Object> args = Json.parseObject(call.argumentsJson());
         ToolExecOutcome outcome = toolExecutor.execute(session, call.name(), args, request.id());
 
         Record result = session.appendRecord(RecordRole.TOOL_RESULT, outcome.content(),
                 new ToolResultPayload(outcome.isTruncated(), outcome.resourceUri()), System.currentTimeMillis());
+        pending.remove(call);
         commitAppend(session, result);
         if (LOAD_SKILL.equals(call.name())) {
             // SOP 注入为 SYSTEM 记录：此后不参与滑窗（§7.3 规则 ③）
@@ -182,6 +200,21 @@ public final class ReActLoop {
             commitAppend(session, injected);
         }
         return ChatMessage.toolResult(call.callId(), outcome.content());
+    }
+
+    /** 异常路径的收尾：把没拿到结果的工具调用补成一条中止事实（只追加，不撤销已发生的副作用）。 */
+    private void closePendingToolCalls(Session session, List<ToolCall> pending) {
+        for (ToolCall call : pending) {
+            try {
+                Record aborted = session.appendRecord(RecordRole.TOOL_RESULT, ABORTED_TOOL_RESULT, null,
+                        System.currentTimeMillis());
+                commitAppend(session, aborted);
+            } catch (RuntimeException cannotRecord) {
+                // 收尾失败不掩盖原始异常：流水残留在下次启动对账里处理（模块-应用层 §9）
+                return;
+            }
+        }
+        pending.clear();
     }
 
     /** 工具请求以单行 JSON 落流水，供续跑时重建调用关系。 */
@@ -213,25 +246,33 @@ public final class ReActLoop {
     }
 
     /**
-     * 流水 → 消息：ASSISTANT/TOOL_REQUEST/TOOL_RESULT 都按角色回放；
-     * TOOL_REQUEST 的 content 是单行 JSON，能恢复到 assistant 的工具调用形态。
+     * 窗口 → 消息：摘要按 user 回灌；工具请求与它紧跟的结果成对还原（tool_call_id 不能丢）。
+     * 规则出处：模块-感知 §7.1 规则 14/16、模块-行动 §8.2 第 6 条。
      */
     private static List<ChatMessage> toMessages(ContextWindow window) {
+        List<Record> records = window.getRecords();
         List<ChatMessage> messages = new ArrayList<ChatMessage>();
-        for (Record record : window.getRecords()) {
-            if (record.role() == RecordRole.SYSTEM || record.role() == RecordRole.SUMMARY) {
-                continue;
-            }
+        for (int i = 0; i < records.size(); i++) {
+            Record record = records.get(i);
             switch (record.role()) {
+                case SYSTEM:
+                    continue;   // 已并入 systemPrompt（模块-感知 §7.1 规则 13）
+                case SUMMARY:
+                    messages.add(ChatMessage.of(RecordRole.SUMMARY, SUMMARY_PREFIX + record.content()));
+                    break;
                 case ASSISTANT:
                     messages.add(ChatMessage.of(RecordRole.ASSISTANT, record.content()));
                     break;
                 case TOOL_REQUEST:
-                    messages.add(ChatMessage.assistant(null, parseCall(record.content())));
+                    messages.add(ChatMessage.assistant(null, parseCalls(record.content()), record.reasoning()));
+                    if (i + 1 >= records.size() || records.get(i + 1).role() != RecordRole.TOOL_RESULT) {
+                        throw new DomainInvariantViolation("窗口里工具请求没有紧跟结果：" + record.id().getValue());
+                    }
+                    messages.add(ChatMessage.toolResult(callIdOf(record.content()),
+                            records.get(++i).content()));
                     break;
                 case TOOL_RESULT:
-                    messages.add(ChatMessage.of(RecordRole.TOOL_RESULT, record.content()));
-                    break;
+                    throw new DomainInvariantViolation("窗口里工具结果没有对应的请求：" + record.id().getValue());
                 default:
                     messages.add(ChatMessage.of(record.role(), record.content()));
             }
@@ -239,7 +280,7 @@ public final class ReActLoop {
         return messages;
     }
 
-    private static List<ToolCall> parseCall(String content) {
+    private static List<ToolCall> parseCalls(String content) {
         Map<String, Object> fields = Json.parseObject(content);
         Object name = fields.get("name");
         if (name == null) {
@@ -250,5 +291,11 @@ public final class ReActLoop {
         return Collections.singletonList(new ToolCall(
                 callId == null ? "" : String.valueOf(callId), String.valueOf(name),
                 arguments == null ? "{}" : String.valueOf(arguments)));
+    }
+
+    private static String callIdOf(String content) {
+        Map<String, Object> fields = Json.parseObject(content);
+        Object callId = fields.get("callId");
+        return callId == null ? "" : String.valueOf(callId);
     }
 }

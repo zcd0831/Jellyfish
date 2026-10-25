@@ -56,4 +56,20 @@ class FileRecordStoreTest {
         assertEquals(1, range.get(0).sequence());
         assertEquals(2, range.get(1).sequence());
     }
+
+    @Test
+    void reasoning与摘要覆盖边界都能落盘读回() {
+        givenSession("s1");
+        FileRecordStore store = new FileRecordStore(dir(), new JsonCodec());
+
+        store.append(SessionId.of("s1"), new Record(RecordId.of("r1"), RecordRole.TOOL_REQUEST,
+                "{\"callId\":\"c1\"}", "内部推理", null, 0, 1, 1000L));
+        store.append(SessionId.of("s1"), new Record(RecordId.of("r2"), RecordRole.SUMMARY,
+                "摘要正文", null, null, 1, 2, 1001L));
+
+        List<Record> all = store.last(SessionId.of("s1"), 10);
+        assertEquals("内部推理", all.get(0).reasoning());
+        assertEquals(1, all.get(1).summaryCoversUpTo());
+        assertEquals("摘要正文", all.get(1).content());
+    }
 }

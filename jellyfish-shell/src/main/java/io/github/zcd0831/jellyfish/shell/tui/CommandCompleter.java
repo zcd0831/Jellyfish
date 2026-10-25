@@ -5,17 +5,12 @@ import org.jline.reader.Completer;
 import org.jline.reader.LineReader;
 import org.jline.reader.ParsedLine;
 
-import java.util.Arrays;
 import java.util.List;
 
 /**
- * 只补全 `/` 命令：候选是固定表，不做动态查询（D20-4）。
+ * 只补全 `/` 命令：候选来自 {@link Commands}（唯一清单），不做动态查询。
  */
 public final class CommandCompleter implements Completer {
-
-    static final List<String> COMMANDS = Arrays.asList(
-            "/cancel", "/archive", "/delete", "/policy",
-            "/tools", "/agents", "/models", "/providers", "/skills", "/help", "/exit");
 
     @Override
     public void complete(LineReader reader, ParsedLine line, List<Candidate> candidates) {
@@ -23,7 +18,7 @@ public final class CommandCompleter implements Completer {
         if (!word.startsWith("/")) {
             return;
         }
-        for (String command : COMMANDS) {
+        for (String command : Commands.NAMES) {
             if (command.startsWith(word)) {
                 candidates.add(new Candidate(command));
             }

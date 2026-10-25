@@ -36,9 +36,15 @@ import javax.inject.Singleton;
 public final class ShellModule {
 
     private final PrintStream out;
+    private final boolean noColor;
 
     public ShellModule(PrintStream out) {
+        this(out, false);
+    }
+
+    public ShellModule(PrintStream out, boolean noColor) {
         this.out = out;
+        this.noColor = noColor;
     }
 
     /** 终端归外壳所有（D19）；宽度与 TTY 能力都从它取，boot 不碰（D21-3）。 */
@@ -46,6 +52,8 @@ public final class ShellModule {
     @Singleton
     Terminal terminal() {
         try {
+            // 非 TTY 时 JLine 会退化成 dumb 终端并打一条 WARNING；那不是错误，静音它（D20-7）
+            java.util.logging.Logger.getLogger("org.jline").setLevel(java.util.logging.Level.SEVERE);
             return TerminalBuilder.builder().system(true).build();
         } catch (IOException e) {
             throw new IllegalStateException("无法初始化终端", e);
@@ -61,7 +69,9 @@ public final class ShellModule {
     @Provides
     @Singleton
     AnsiRenderer ansiRenderer(OutputGateway gateway, Terminal terminal) {
-        return new AnsiRenderer(gateway.sink(), terminal.getWidth());
+        // 管道/重定向时终端没有颜色能力；`--no-color` 再强制关一次
+        boolean color = !noColor && !Terminal.TYPE_DUMB.equals(terminal.getType());
+        return new AnsiRenderer(gateway.sink(), terminal.getWidth(), color);
     }
 
     @Provides

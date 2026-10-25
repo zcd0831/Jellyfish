@@ -18,12 +18,18 @@ public final class AnsiRenderer {
     private final PrintStream out;
     private final int width;
     private int column;
+    private final boolean color;
     /** 状态行是否占着当前行：占着就不能在它上面打正文（D20-10）。 */
     private boolean statusActive;
 
     public AnsiRenderer(PrintStream out, int width) {
+        this(out, width, true);
+    }
+
+    public AnsiRenderer(PrintStream out, int width, boolean color) {
         this.out = out;
         this.width = width <= 0 ? 80 : width;
+        this.color = color;
     }
 
     /** 流式增量：不回显的换行交给渲染器，保证 CJK 宽度与折行正确。 */
@@ -61,14 +67,14 @@ public final class AnsiRenderer {
 
     public synchronized void assistantPrefix() {
         clearStatusLine();
-        out.print(CYAN + "助手 " + RESET);
+        out.print(paint(CYAN) + "助手 " + paint(RESET));
         column = 3;
     }
 
     /** 工具开始：`  ↳ read_file（path=…）`，常驻一行，不覆盖正文。 */
     public synchronized void tool(String name, String detail) {
         endTurn();
-        out.println(DIM + "  ↳ " + name + (detail.isEmpty() ? "" : "：" + detail) + RESET);
+        out.println(paint(DIM) + "  ↳ " + name + (detail.isEmpty() ? "" : "：" + detail) + paint(RESET));
         column = 0;
         out.flush();
     }
@@ -76,7 +82,7 @@ public final class AnsiRenderer {
     /** 工具结束：`  ✓ read_file 完成 12ms：…`。 */
     public synchronized void toolDone(String text) {
         endTurn();
-        out.println(DIM + "  ✓ " + text + RESET);
+        out.println(paint(DIM) + "  ✓ " + text + paint(RESET));
         column = 0;
         out.flush();
     }
@@ -84,7 +90,7 @@ public final class AnsiRenderer {
     /** 提问就地暂停：先断开当前行，再打印来源与问题。 */
     public synchronized void question(String sourceLabel, String prompt) {
         endTurn();
-        out.println(YELLOW + "[" + sourceLabel + "] " + prompt + RESET);
+        out.println(paint(YELLOW) + "[" + sourceLabel + "] " + prompt + paint(RESET));
         column = 0;
         out.flush();
     }
@@ -101,10 +107,15 @@ public final class AnsiRenderer {
         if (!statusActive && column > 0) {
             out.println();
         }
-        out.print(ERASE_LINE + DIM + text + RESET);
+        out.print(ERASE_LINE + paint(DIM) + text + paint(RESET));
         out.flush();
         column = 0;
         statusActive = true;
+    }
+
+    /** 关掉颜色后，所有 ANSI 前缀都退化成空串。 */
+    private String paint(String code) {
+        return color ? code : "";
     }
 
     /** 只在状态行确实占着当前行时才擦，绝不误伤正文。 */
@@ -119,13 +130,13 @@ public final class AnsiRenderer {
 
     public synchronized void error(String text) {
         endTurn();
-        out.println(RED + "错误：" + text + RESET);
+        out.println(paint(RED) + "错误：" + text + paint(RESET));
         column = 0;
     }
 
     public synchronized void info(String text) {
         endTurn();
-        out.println(DIM + text + RESET);
+        out.println(paint(DIM) + text + paint(RESET));
         column = 0;
     }
 

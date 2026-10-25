@@ -94,6 +94,7 @@ public final class TuiApp implements QuestionBroker.Answerer {
     public void run() {
         renderer.info("Jellyfish 1.0.0-alpha　/help 查看命令，exit 退出");
         if (Terminal.TYPE_DUMB.equals(terminal.getType())) {
+            renderer.info("（当前不是终端：无行编辑、无颜色；输入按行读取）");
             startDumbInput(System.in);
         } else {
             reader = LineReaderBuilder.builder()
@@ -118,7 +119,7 @@ public final class TuiApp implements QuestionBroker.Answerer {
                         while (mode == InputMode.PAUSED) {
                             waitOnLock();
                         }
-                        prompt = mode == InputMode.QUESTION ? "回答> " : prompt();
+                        prompt = mode == InputMode.QUESTION ? "回答（/cancel 放弃）> " : prompt();
                     }
                     String line;
                     gateway.reading(reader);
@@ -169,8 +170,23 @@ public final class TuiApp implements QuestionBroker.Answerer {
 
     /** 答案进提问、其余进命令队列：任何时刻只有一个消费者。 */
     private void deliver(String line) {
+        String text = line == null ? "" : line.trim();
         synchronized (inputLock) {
             if (mode == InputMode.QUESTION && pending != null) {
+                if ("/cancel".equals(text)) {
+                    // 提问里也能放弃：等价于用户拒绝回答，答案按取消回给调用方
+                    pending.complete(Answer.cancelled());
+                    mode = InputMode.PAUSED;
+                    return;
+                }
+                if (isExit(text)) {
+                    // 正在等答案时退出：先取消本轮，别让主循环卡在提问上
+                    pending.complete(Answer.cancelled());
+                    mode = InputMode.PAUSED;
+                    token.cancel();
+                    commands.offer("exit");
+                    return;
+                }
                 pending.complete(Answer.answered(line));
                 mode = InputMode.PAUSED;
                 return;
@@ -385,9 +401,7 @@ public final class TuiApp implements QuestionBroker.Answerer {
     private void command(String line) {
         String[] parts = line.split("\\s+");
         String name = parts[0];
-        boolean sessionFree = "/policy".equals(name) || "/tools".equals(name) || "/agents".equals(name)
-                || "/models".equals(name) || "/providers".equals(name) || "/skills".equals(name)
-                || "/sessions".equals(name) || "/open".equals(name) || "/plugins".equals(name);
+        boolean sessionFree = !Commands.needsSession(name);
         if ("/help".equals(name)) {
             renderer.info("/sessions /open <id> /cancel /archive /delete /policy k=v /model <id> "
                     + "/tools /agents /models /providers /skills /plugins /exit");

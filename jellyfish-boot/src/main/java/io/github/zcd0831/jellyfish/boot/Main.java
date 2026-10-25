@@ -36,7 +36,7 @@ public final class Main {
 
         final AppComponent component = DaggerAppComponent.builder()
                 .infrastructureModule(new InfrastructureModule(dir))
-                .shellModule(new io.github.zcd0831.jellyfish.di.ShellModule(System.out))
+                .shellModule(new io.github.zcd0831.jellyfish.di.ShellModule(System.out, options.noColor()))
                 .build();
         final Thread mainThread = Thread.currentThread();
         Runtime.getRuntime().addShutdownHook(new Thread(new Runnable() {

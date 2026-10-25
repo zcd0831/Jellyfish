@@ -43,6 +43,17 @@ class CommandCompleterTest {
         List<Candidate> candidates = new ArrayList<Candidate>();
         new CommandCompleter().complete(null, word("/"), candidates);
 
-        assertEquals(CommandCompleter.COMMANDS.size(), candidates.size());
+        assertEquals(Commands.NAMES.size(), candidates.size(), "补全候选必须与 /help 同一份清单");
+    }
+
+    @Test
+    void 命令表包含会话与插件命令() {
+        List<Candidate> candidates = new ArrayList<Candidate>();
+        new CommandCompleter().complete(null, word("/s"), candidates);
+
+        assertTrue(candidates.stream().anyMatch(c -> "/sessions".equals(c.value())), "应有 /sessions");
+        assertTrue(Commands.NAMES.contains("/open"), "应有 /open");
+        assertTrue(Commands.NAMES.contains("/plugins"), "应有 /plugins");
+        assertTrue(Commands.NAMES.contains("/model"), "应有 /model");
     }
 }

@@ -44,4 +44,10 @@ class BootOptionsTest {
         assertThrows(IllegalArgumentException.class,
                 () -> BootOptions.parse(new String[]{"--data-dir"}));
     }
+
+    @Test
+    void 可以关掉颜色() {
+        assertTrue(BootOptions.parse(new String[]{"--no-color"}).noColor());
+        assertTrue(!BootOptions.parse(new String[0]).noColor());
+    }
 }

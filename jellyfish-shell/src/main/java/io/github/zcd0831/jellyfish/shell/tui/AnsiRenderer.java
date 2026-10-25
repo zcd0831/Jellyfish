@@ -19,6 +19,7 @@ public final class AnsiRenderer {
     private final int width;
     private int column;
     private final boolean color;
+    private final MarkdownStream markdown;
     /** 状态行是否占着当前行：占着就不能在它上面打正文（D20-10）。 */
     private boolean statusActive;
 
@@ -30,34 +31,54 @@ public final class AnsiRenderer {
         this.out = out;
         this.width = width <= 0 ? 80 : width;
         this.color = color;
+        this.markdown = new MarkdownStream(color);
     }
 
-    /** 流式增量：不回显的换行交给渲染器，保证 CJK 宽度与折行正确。 */
+    /** 流式增量：先过 Markdown 行内解析，再按可见宽度折行（围栏内不折，交给终端）。 */
     public synchronized void append(String delta) {
-        if (delta == null || delta.isEmpty()) {
+        String styled = markdown.feed(delta);
+        if (styled.isEmpty()) {
             return;
         }
         clearStatusLine();
-        for (int i = 0; i < delta.length(); i++) {
-            char c = delta.charAt(i);
+        emit(styled, !markdown.inFence());
+        out.flush();
+    }
+
+    /** 逐个字符输出：ANSI 序列不计宽度，围栏内不主动换行（终端自己折）。 */
+    private void emit(String text, boolean wrap) {
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c == '\u001B') {
+                int end = text.indexOf('m', i);
+                if (end < 0) {
+                    return;
+                }
+                out.print(text.substring(i, end + 1));
+                i = end;
+                continue;
+            }
             if (c == '\n') {
                 out.println();
                 column = 0;
                 continue;
             }
             int w = charWidth(c);
-            if (column + w > width) {
+            if (wrap && column + w > width) {
                 out.println();
                 column = 0;
             }
             out.print(c);
             column += w;
         }
-        out.flush();
     }
 
     /** 一轮结束：确保光标在行首，问答与提示不会粘在一起。 */
     public synchronized void endTurn() {
+        String tail = markdown.finish();
+        if (!tail.isEmpty()) {
+            emit(tail, true);
+        }
         clearStatusLine();
         if (column > 0) {
             out.println();

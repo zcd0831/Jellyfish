@@ -136,7 +136,7 @@ public final class ExecutionLoop implements SessionRunner {
                 attempt = plan.beginCurrentStep();
                 commitPlan(plan);
                 progress.emit(ProgressEvent.of(ProgressEvent.Kind.STEP_STARTED,
-                        "第 " + step.sequence() + " 步：" + step.description()));
+                        "第 " + step.sequence() + "/" + plan.steps().size() + " 步：" + step.description()));
             } else if (step != null && !step.attempts().isEmpty()) {
                 attempt = step.attempts().get(step.attempts().size() - 1);
             }

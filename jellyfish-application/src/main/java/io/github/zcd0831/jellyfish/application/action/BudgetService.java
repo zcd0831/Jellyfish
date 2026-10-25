@@ -3,7 +3,9 @@ package io.github.zcd0831.jellyfish.application.action;
 import io.github.zcd0831.jellyfish.application.action.port.BudgetRepository;
 import io.github.zcd0831.jellyfish.application.perception.port.PolicyRepository;
 import io.github.zcd0831.jellyfish.application.perception.port.SessionRepository;
+import io.github.zcd0831.jellyfish.application.shared.ProgressEvent;
 import io.github.zcd0831.jellyfish.application.shared.port.CommitScope;
+import io.github.zcd0831.jellyfish.application.shared.port.ProgressPort;
 import io.github.zcd0831.jellyfish.application.shared.port.DomainEventPublisher;
 import io.github.zcd0831.jellyfish.domain.action.budget.Budget;
 import io.github.zcd0831.jellyfish.domain.action.budget.BudgetWarning;
@@ -27,14 +29,16 @@ public final class BudgetService {
     private final PolicyRepository policies;
     private final CommitScope commitScope;
     private final DomainEventPublisher eventPublisher;
+    private final ProgressPort progress;
 
     public BudgetService(BudgetRepository budgets, SessionRepository sessions, PolicyRepository policies,
-                         CommitScope commitScope, DomainEventPublisher eventPublisher) {
+                         CommitScope commitScope, DomainEventPublisher eventPublisher, ProgressPort progress) {
         this.budgets = budgets;
         this.sessions = sessions;
         this.policies = policies;
         this.commitScope = commitScope;
         this.eventPublisher = eventPublisher;
+        this.progress = progress;
     }
 
     /** 返回 true 表示本次越过阈值、调用方应询问用户是否继续（不中断）。 */
@@ -46,6 +50,8 @@ public final class BudgetService {
             budget = Budget.openFor(BudgetId.of(UUID.randomUUID().toString()), rootId);
         }
         budget.recordUsage(tokens, policy);
+        progress.emit(ProgressEvent.of(ProgressEvent.Kind.USAGE,
+                "+" + tokens + " / 累计 " + budget.consumedTokens() + " / 上限 " + policy.budgetLimitTokens()));
         commitScope.stageReplace(budget);
         commitScope.commit();
 
@@ -72,6 +78,8 @@ public final class BudgetService {
             budget = Budget.openFor(BudgetId.of(UUID.randomUUID().toString()), rootId);
         }
         budget.recordUsage(tokens, policy);
+        progress.emit(ProgressEvent.of(ProgressEvent.Kind.USAGE,
+                "+" + tokens + " / 累计 " + budget.consumedTokens() + " / 上限 " + policy.budgetLimitTokens()));
         commitScope.stageReplace(budget);
         commitScope.commit();
         eventPublisher.publishAfterCommit(new ArrayList<DomainEvent>(budget.pullEvents()));

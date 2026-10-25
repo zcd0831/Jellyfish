@@ -17,11 +17,23 @@ public final class TuiProgressReporter implements ProgressPort {
     @Override
     public void emit(ProgressEvent event) {
         switch (event.kind()) {
-            case SUMMARY_DONE:
-            case STEP_FINISHED:
+            // 常驻行：计划、步骤、工具调用是"发生了什么"，不能被下一行冲掉
+            case PLAN_CREATED:
+            case STEP_STARTED:
                 renderer.status("");
                 renderer.info("· " + event.message());
                 break;
+            case STEP_FINISHED:
+                renderer.status("");
+                renderer.info("✓ " + event.message());
+                break;
+            case TOOL_STARTED:
+                renderer.tool(event.message(), "");
+                break;
+            case TOOL_FINISHED:
+                renderer.toolDone(event.message());
+                break;
+            // 状态行：可丢、会变的（压缩中、重试倒计时、用量）
             default:
                 renderer.status("· " + event.message());
         }

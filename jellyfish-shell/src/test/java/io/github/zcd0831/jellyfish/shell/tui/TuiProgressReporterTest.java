@@ -20,15 +20,35 @@ class TuiProgressReporterTest {
     }
 
     @Test
-    void 步骤结束转普通行() throws Exception {
-        String text = render(ProgressEvent.Kind.STEP_FINISHED);
+    void 计划与步骤走常驻行() throws Exception {
+        for (ProgressEvent.Kind kind : new ProgressEvent.Kind[]{ProgressEvent.Kind.PLAN_CREATED,
+                ProgressEvent.Kind.STEP_STARTED, ProgressEvent.Kind.STEP_FINISHED}) {
+            String text = render(kind);
 
-        assertTrue(text.contains("· 消息"), "应打印消息：" + text);
-        assertTrue(text.endsWith("\n"), "结束类事件应独占一行：" + text);
+            assertTrue(text.contains("消息"), "应打印消息：" + kind + text);
+            assertTrue(text.endsWith("\n"), "计划/步骤必须常驻一行：" + kind);
+        }
     }
 
     @Test
-    void 其余事件走状态行() throws Exception {
+    void 工具开始与结束各占一行() throws Exception {
+        String started = render(ProgressEvent.Kind.TOOL_STARTED);
+        String finished = render(ProgressEvent.Kind.TOOL_FINISHED);
+
+        assertTrue(started.contains("↳ 消息"), "工具开始要有前缀：" + started);
+        assertTrue(finished.contains("✓ 消息"), "工具结束要有结果标记：" + finished);
+    }
+
+    @Test
+    void 用量走状态行() throws Exception {
+        String text = render(ProgressEvent.Kind.USAGE);
+
+        assertTrue(text.contains("\r\u001B[2K"), "用量是易变的，走状态行：" + text);
+        assertTrue(!text.endsWith("\n"));
+    }
+
+    @Test
+    void 阶段类事件走状态行() throws Exception {
         String text = render(ProgressEvent.Kind.RETRY_SCHEDULED);
 
         assertTrue(text.contains("\r\u001B[2K"), "非结束类事件应原地覆盖状态行：" + text);

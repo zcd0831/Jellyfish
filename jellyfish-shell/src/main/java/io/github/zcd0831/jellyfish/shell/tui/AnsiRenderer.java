@@ -65,9 +65,20 @@ public final class AnsiRenderer {
         column = 3;
     }
 
-    public synchronized void tool(String name, String outcome) {
-        out.println(DIM + "  · " + name + "：" + firstLine(outcome) + RESET);
+    /** 工具开始：`  ↳ read_file（path=…）`，常驻一行，不覆盖正文。 */
+    public synchronized void tool(String name, String detail) {
+        endTurn();
+        out.println(DIM + "  ↳ " + name + (detail.isEmpty() ? "" : "：" + detail) + RESET);
         column = 0;
+        out.flush();
+    }
+
+    /** 工具结束：`  ✓ read_file 完成 12ms：…`。 */
+    public synchronized void toolDone(String text) {
+        endTurn();
+        out.println(DIM + "  ✓ " + text + RESET);
+        column = 0;
+        out.flush();
     }
 
     /** 提问就地暂停：先断开当前行，再打印来源与问题。 */

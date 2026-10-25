@@ -16,6 +16,7 @@ import io.github.zcd0831.jellyfish.application.shared.port.ArtifactStore;
 import io.github.zcd0831.jellyfish.application.shared.port.CommitScope;
 import io.github.zcd0831.jellyfish.application.shared.port.DomainEventPublisher;
 import io.github.zcd0831.jellyfish.application.shared.port.HumanInteractionPort;
+import io.github.zcd0831.jellyfish.application.shared.port.ProgressPort;
 
 import javax.inject.Singleton;
 
@@ -27,8 +28,8 @@ public final class ActionModule {
     @Singleton
     BudgetService budgetService(BudgetRepository budgets, SessionRepository sessions,
                                 PolicyRepository policies, CommitScope commitScope,
-                                DomainEventPublisher publisher) {
-        return new BudgetService(budgets, sessions, policies, commitScope, publisher);
+                                DomainEventPublisher publisher, ProgressPort progress) {
+        return new BudgetService(budgets, sessions, policies, commitScope, publisher, progress);
     }
 
     @Provides
@@ -40,8 +41,8 @@ public final class ActionModule {
     @Singleton
     ToolExecutor toolExecutor(CatalogRepository catalog, ExternalToolPort externalTools,
                               ArtifactStore artifacts, HumanInteractionPort human, PolicyRepository policies,
-                              InternalToolHandlers handlers) {
-        return new ToolExecutor(catalog, externalTools, artifacts, human, policies, handlers);
+                              InternalToolHandlers handlers, ProgressPort progress) {
+        return new ToolExecutor(catalog, externalTools, artifacts, human, policies, handlers, progress);
     }
 
     /** 工具闸门的扩展点视图：插件换掉循环后仍走同一条路（D24-5）。 */

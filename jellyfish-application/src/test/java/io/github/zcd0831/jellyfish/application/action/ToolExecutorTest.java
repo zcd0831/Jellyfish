@@ -30,6 +30,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
@@ -38,6 +39,10 @@ import static org.mockito.Mockito.when;
 
 /** 工具执行的合法性 / 审批 / 分发 / 截断分支。规则出处：模块-行动 §8.1。 */
 class ToolExecutorTest {
+
+    private final io.github.zcd0831.jellyfish.application.shared.port.ProgressPort progress =
+            event -> { };
+
 
     private final CatalogRepository catalog = mock(CatalogRepository.class);
     private final ExternalToolPort external = mock(ExternalToolPort.class);
@@ -50,7 +55,7 @@ class ToolExecutorTest {
 
     private ToolExecutor executor(InternalToolHandlers handlers) {
         when(policies.load()).thenReturn(RuntimePolicy.defaults());
-        return new ToolExecutor(catalog, external, artifacts, human, policies, handlers);
+        return new ToolExecutor(catalog, external, artifacts, human, policies, handlers, progress);
     }
 
     private void givenTool(ToolDefinition tool) {
@@ -240,5 +245,24 @@ class ToolExecutorTest {
         Map<String, Object> args = new LinkedHashMap<String, Object>();
         args.put(key, value);
         return args;
+    }
+
+    @Test
+    void 工具调用前后各发一条进度事件() {
+        givenTool(tool("read_file", SideEffectLevel.READ_ONLY, SourceType.REST, ToolStatus.ACTIVE,
+                "{\"type\":\"object\"}"));
+        java.util.List<io.github.zcd0831.jellyfish.application.shared.ProgressEvent> events = new java.util.ArrayList<>();
+        when(external.invoke(any(), anyMap())).thenReturn("内容");
+        when(policies.load()).thenReturn(RuntimePolicy.defaults());
+        ToolExecutor reporting = new ToolExecutor(catalog, external, artifacts, human, policies,
+                InternalToolHandlers.empty(), events::add);
+
+        reporting.execute(session, "read_file", java.util.Collections.<String, Object>singletonMap("path", "/tmp/a"),
+                io.github.zcd0831.jellyfish.domain.shared.RecordId.of("r1"));
+
+        assertEquals(2, events.size());
+        assertEquals(io.github.zcd0831.jellyfish.application.shared.ProgressEvent.Kind.TOOL_STARTED, events.get(0).kind());
+        assertTrue(events.get(0).message().contains("read_file"));
+        assertEquals(io.github.zcd0831.jellyfish.application.shared.ProgressEvent.Kind.TOOL_FINISHED, events.get(1).kind());
     }
 }

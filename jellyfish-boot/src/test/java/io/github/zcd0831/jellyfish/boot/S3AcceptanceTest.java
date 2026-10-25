@@ -130,7 +130,7 @@ class S3AcceptanceTest {
         budgets = new FileBudgetRepository(dir, codec);
         catalog = FileCatalogRepository.standalone(dir, codec);
         InProcessEventPublisher publisher = new InProcessEventPublisher();
-        budgetService = new BudgetService(budgets, sessions, policies, new FileCommitScope(dir, codec), publisher);
+        budgetService = new BudgetService(budgets, sessions, policies, new FileCommitScope(dir, codec), publisher, event -> { });
         titleGenerator = new SessionTitleGenerator(model, budgetService);
         ContextWindowService contextWindow = new ContextWindowService(model, policies,
                 new FileCommitScope(dir, codec), publisher, event -> { }, budgetService, new EstimatorStrategy());
@@ -138,7 +138,7 @@ class S3AcceptanceTest {
         PlanFactory planFactory = new PlanFactory();
         FakeHuman human = new FakeHuman();
         ToolExecutor toolExecutor = new ToolExecutor(catalog, new HttpToolAdapter(), new FileArtifactStore(dir),
-                human, policies, InternalToolHandlers.empty());
+                human, policies, InternalToolHandlers.empty(), event -> { });
         ReActLoop reActLoop = new ReActLoop(model, toolExecutor, budgetService, contextWindow, policies,
                 new FileCommitScope(dir, codec), human);
         VerificationRunner verificationRunner = new VerificationRunner(model, catalog, human, budgetService,
@@ -170,7 +170,7 @@ class S3AcceptanceTest {
         ToolExecutor spawnExecutor = new ToolExecutor(catalog, new HttpToolAdapter(),
                 new FileArtifactStore(dir), human, policies,
                 new InternalToolHandlers(Collections.singletonList(new InternalToolHandlers.NamedHandler(
-                        "spawn_subagents", new SpawnSubagentsHandler(launcher)))));
+                        "spawn_subagents", new SpawnSubagentsHandler(launcher)))), event -> { });
         toolExecutorHolder = spawnExecutor;
 
         main = Session.create(SessionId.of("main"), null,

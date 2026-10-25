@@ -243,9 +243,10 @@ public final class TuiApp implements QuestionBroker.Answerer {
         token.reset();
         renderer.status("思考中…");
         org.jline.terminal.Attributes original = withoutEcho();
+        TurnOutput sink = new TurnOutput();
         Result<RunSessionResult> result;
         try {
-            result = runSession.run(currentSession, text, sink(), token);
+            result = runSession.run(currentSession, text, sink, token);
         } finally {
             restore(original);
         }
@@ -259,20 +260,23 @@ public final class TuiApp implements QuestionBroker.Answerer {
         }
     }
 
-    private ChunkSink sink() {
-        return new ChunkSink() {
-            private boolean started;
+    /** 本轮输出：记住有没有打出过字（取消时据此说清"上面那段没保存"）。 */
+    private final class TurnOutput implements ChunkSink {
+        private boolean started;
 
-            @Override
-            public void accept(String delta) {
-                if (!started) {
-                    renderer.status("");
-                    renderer.assistantPrefix();
-                    started = true;
-                }
-                renderer.append(delta);
+        @Override
+        public void accept(String delta) {
+            if (!started) {
+                renderer.status("");
+                renderer.assistantPrefix();
+                started = true;
             }
-        };
+            renderer.append(delta);
+        }
+
+        boolean rendered() {
+            return started;
+        }
     }
 
     /**

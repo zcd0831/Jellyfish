@@ -7,7 +7,9 @@ import io.github.zcd0831.jellyfish.application.perception.port.PolicyRepository;
 import io.github.zcd0831.jellyfish.application.shared.Answer;
 import io.github.zcd0831.jellyfish.application.shared.Question;
 import io.github.zcd0831.jellyfish.application.shared.port.ArtifactStore;
+import io.github.zcd0831.jellyfish.application.shared.ProgressEvent;
 import io.github.zcd0831.jellyfish.application.shared.port.HumanInteractionPort;
+import io.github.zcd0831.jellyfish.application.shared.port.ProgressPort;
 import io.github.zcd0831.jellyfish.domain.action.agent.AgentDefinition;
 import io.github.zcd0831.jellyfish.domain.action.tool.SideEffectLevel;
 import io.github.zcd0831.jellyfish.domain.action.tool.SourceType;
@@ -36,6 +38,7 @@ public final class ToolExecutor implements ToolInvoker {
     private final ArtifactStore artifacts;
     private final HumanInteractionPort human;
     private final PolicyRepository policies;
+    private final ProgressPort progress;
     /** 首次同意后进本会话信任清单的三个工具（D25-4）。 */
     private static final List<String> WRITES =
             java.util.Arrays.asList("edit_file", "write_file", "delete_file");
@@ -51,17 +54,63 @@ public final class ToolExecutor implements ToolInvoker {
     private final InternalToolHandlers handlers;
 
     public ToolExecutor(CatalogRepository catalog, ExternalToolPort externalTools, ArtifactStore artifacts,
-                        HumanInteractionPort human, PolicyRepository policies, InternalToolHandlers handlers) {
+                        HumanInteractionPort human, PolicyRepository policies, InternalToolHandlers handlers,
+                        ProgressPort progress) {
         this.catalog = catalog;
         this.externalTools = externalTools;
         this.artifacts = artifacts;
         this.human = human;
         this.policies = policies;
+        this.progress = progress;
         this.handlers = handlers;
     }
 
     @Override
     public ToolExecOutcome execute(Session session, String toolName, Map<String, Object> args, RecordId recordId) {
+        boolean reportable = !ASK_USER.equals(toolName);
+        long startedAt = System.currentTimeMillis();
+        if (reportable) {
+            progress.emit(ProgressEvent.of(ProgressEvent.Kind.TOOL_STARTED, toolName + "（" + summarize(args) + "）"));
+        }
+        ToolExecOutcome outcome = executeTool(session, toolName, args, recordId);
+        if (reportable) {
+            long elapsed = System.currentTimeMillis() - startedAt;
+            // 结果对象没有成功/失败标志（失败也是结果），只报"完成 + 结果首行"，不臆断成败
+            progress.emit(ProgressEvent.of(ProgressEvent.Kind.TOOL_FINISHED,
+                    toolName + " 完成 " + elapsed + "ms：" + firstLine(outcome.content(), 60)));
+        }
+        return outcome;
+    }
+
+    /** 参数摘要只取一眼能看懂的部分，别把整段 JSON 塞进界面。 */
+    private static String summarize(Map<String, Object> args) {
+        if (args == null || args.isEmpty()) {
+            return "无参数";
+        }
+        StringBuilder text = new StringBuilder();
+        for (Map.Entry<String, Object> entry : args.entrySet()) {
+            if (text.length() > 0) {
+                text.append(", ");
+            }
+            String value = String.valueOf(entry.getValue());
+            text.append(entry.getKey()).append('=').append(firstLine(value, 40));
+            if (text.length() > 100) {
+                break;
+            }
+        }
+        return text.toString();
+    }
+
+    private static String firstLine(String value, int limit) {
+        if (value == null) {
+            return "";
+        }
+        int nl = value.indexOf('\n');
+        String line = nl < 0 ? value : value.substring(0, nl);
+        return line.length() > limit ? line.substring(0, limit) + "…" : line;
+    }
+
+    private ToolExecOutcome executeTool(Session session, String toolName, Map<String, Object> args, RecordId recordId) {
         RuntimePolicy policy = policies.load();
         ToolDefinition tool = findTool(toolName);
         if (tool == null) {

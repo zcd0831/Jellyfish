@@ -94,13 +94,13 @@ class S1AcceptanceTest {
         InProcessEventPublisher publisher = new InProcessEventPublisher();
         SystemClock clock = new SystemClock();
         BudgetService budgetService = new BudgetService(budgets, sessions, policies,
-                new FileCommitScope(dir, codec), publisher);
+                new FileCommitScope(dir, codec), publisher, event -> { });
         ContextWindowService contextWindow = new ContextWindowService(model, policies,
                 new FileCommitScope(dir, codec), publisher, event -> { }, budgetService,
                 new EstimatorStrategy());
         ToolExecutor toolExecutor = new ToolExecutor(catalog, new HttpToolAdapter(),
                 new io.github.zcd0831.jellyfish.infrastructure.file.FileArtifactStore(dir), human, policies,
-                io.github.zcd0831.jellyfish.application.action.InternalToolHandlers.empty());
+                io.github.zcd0831.jellyfish.application.action.InternalToolHandlers.empty(), event -> { });
         ReActLoop reActLoop = new ReActLoop(model, toolExecutor, budgetService, contextWindow, policies,
                 new FileCommitScope(dir, codec), human);
         final io.github.zcd0831.jellyfish.application.planning.port.PlanRepository plans =

@@ -103,7 +103,7 @@ class S2AcceptanceTest {
         FileCatalogRepository catalog = FileCatalogRepository.standalone(dir, codec);
         InProcessEventPublisher publisher = new InProcessEventPublisher();
         BudgetService budgetService = new BudgetService(budgets, sessions, policies,
-                new FileCommitScope(dir, codec), publisher);
+                new FileCommitScope(dir, codec), publisher, event -> { });
         ContextWindowService contextWindow = new ContextWindowService(model, policies,
                 new FileCommitScope(dir, codec), publisher, event -> { }, budgetService, new EstimatorStrategy());
         plans = new FilePlanRepository(dir, codec);
@@ -112,7 +112,7 @@ class S2AcceptanceTest {
                 new FileArtifactStore(dir), human, policies,
                 new InternalToolHandlers(Collections.singletonList(new InternalToolHandlers.NamedHandler(
                         "generate_plan", new GeneratePlanHandler(planFactory, plans, catalog,
-                        new FileCommitScope(dir, codec), publisher)))));
+                        new FileCommitScope(dir, codec), publisher)))), event -> { });
         ReActLoop reActLoop = new ReActLoop(model, toolExecutor, budgetService, contextWindow, policies,
                 new FileCommitScope(dir, codec), human);
         VerificationRunner verificationRunner = new VerificationRunner(model, catalog, human, budgetService,

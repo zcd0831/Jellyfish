@@ -85,7 +85,7 @@ class S4MemoryTest {
         FileCatalogRepository catalog = FileCatalogRepository.standalone(dir, codec);
         InProcessEventPublisher publisher = new InProcessEventPublisher();
         budgetService = new BudgetService(new FileBudgetRepository(dir, codec), sessions, policies,
-                new FileCommitScope(dir, codec), publisher);
+                new FileCommitScope(dir, codec), publisher, event -> { });
         feedback = new ExperienceFeedbackService(experiences, policies, new FileCommitScope(dir, codec),
                 publisher);
         retriever = new ExperienceRetriever(experiences, model, catalog, policies, budgetService);

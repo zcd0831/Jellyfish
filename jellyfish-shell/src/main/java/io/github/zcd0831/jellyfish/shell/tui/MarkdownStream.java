@@ -17,6 +17,9 @@ final class MarkdownStream {
     private static final String CODE = "\u001B[36m";
     private static final String DIM = "\u001B[2m";
     private static final String RESET = "\u001B[0m";
+    private static final java.util.regex.Pattern LINK =
+            java.util.regex.Pattern.compile("\\[([^\\]]*)\\]\\(([^)]*)\\)");
+    private static final int MAX_LINK = 200;
 
     private final boolean color;
     private final StringBuilder out = new StringBuilder();
@@ -37,6 +40,8 @@ final class MarkdownStream {
     private int hashRun;
     private char markerCandidate;
     private boolean skipQuoteSpace;
+    /** 正在攒一个 `[文字](url)`：跨分块时先存着，凑齐 `)` 再决定渲染还是原样吐出。 */
+    private StringBuilder linkBuffer;
 
     MarkdownStream(boolean color) {
         this.color = color;
@@ -50,6 +55,9 @@ final class MarkdownStream {
     /** 一轮结束时收尾：把还没配对的标记按字面吐出，并复位围栏（下一轮从干净状态开始）。 */
     String finish() {
         out.setLength(0);
+        if (linkBuffer != null) {
+            emitLinkBufferAsIs();
+        }
         closePendingMarker();
         flushStyle();
         lineStart = true;
@@ -79,6 +87,9 @@ final class MarkdownStream {
                 return;
             }
             closePendingMarker();
+            if (linkBuffer != null) {
+                emitLinkBufferAsIs();
+            }
             skipLineMarker();
             out.append('\n');
             resetLine();
@@ -116,6 +127,21 @@ final class MarkdownStream {
         }
         if (lineStart) {
             lineStart(c);
+            return;
+        }
+        if (linkBuffer != null) {
+            linkBuffer.append(c);
+            if (c == ')') {
+                emitLink();
+            } else if (linkBuffer.length() > MAX_LINK) {
+                emitLinkBufferAsIs();
+            }
+            return;
+        }
+        if (c == '[') {
+            linkBuffer = new StringBuilder("[").append("");
+            linkBuffer.setLength(0);
+            linkBuffer.append('[');
             return;
         }
         if (c == '`') {
@@ -227,6 +253,51 @@ final class MarkdownStream {
     }
 
     /** 行结束/收尾时把"看到了但没配对的标记"按字面吐出来。 */
+    /** 语法成立就渲染成 `文字（url）`，否则原样吐出（不猜）。 */
+    private void emitLink() {
+        String raw = linkBuffer.toString();
+        linkBuffer = null;
+        java.util.regex.Matcher matcher = LINK.matcher(raw);
+        if (!matcher.matches()) {
+            for (int i = 0; i < raw.length(); i++) {
+                emit(raw.charAt(i));
+            }
+            return;
+        }
+        String text = matcher.group(1);
+        String url = matcher.group(2);
+        for (int i = 0; i < text.length(); i++) {
+            emit(text.charAt(i));
+        }
+        emit('（');
+        String before = styleOf();
+        emitted = before;
+        boolean codeWas = code;
+        code = false;
+        bold = false;
+        italic = false;
+        quote = false;
+        heading = false;
+        ensureStyle();
+        for (int i = 0; i < url.length(); i++) {
+            out.append(url.charAt(i));
+        }
+        if (color) {
+            out.append(RESET);
+        }
+        emitted = "";
+        out.append('）');
+        code = codeWas;
+    }
+
+    private void emitLinkBufferAsIs() {
+        String raw = linkBuffer.toString();
+        linkBuffer = null;
+        for (int i = 0; i < raw.length(); i++) {
+            emit(raw.charAt(i));
+        }
+    }
+
     private void closePendingMarker() {
         if (backtickRun > 0) {
             for (int i = 0; i < backtickRun; i++) {

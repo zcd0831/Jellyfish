@@ -151,13 +151,20 @@ public final class AnsiRenderer {
 
     public synchronized void error(String text) {
         endTurn();
-        out.println(paint(RED) + "错误：" + text + paint(RESET));
+        out.println(paint(RED) + "✗ 错误：" + text + paint(RESET));
+        column = 0;
+    }
+
+    /** 分隔线（回合小结等）：不缩进，和正文分开。 */
+    public synchronized void divider(String text) {
+        endTurn();
+        out.println(paint(DIM) + text + paint(RESET));
         column = 0;
     }
 
     public synchronized void info(String text) {
         endTurn();
-        out.println(paint(DIM) + text + paint(RESET));
+        out.println(paint(DIM) + "  " + text + paint(RESET));
         column = 0;
     }
 

@@ -73,9 +73,29 @@ public final class ContextWindowService {
 
     public void ensureWithinLimit(Session session) {
         ContextWindow window = currentWindow(session);
+        announceContextUsage(session, window);
         if (window.getUsage().getUsedTokens() > window.getUsage().getInputCeiling()) {
             collapse(session, window);
+            announceContextUsage(session, currentWindow(session));
         }
+    }
+
+    /** 上下文占用 / 模型输入上限：界面常驻展示用（可丢弃，不影响折叠判定）。 */
+    private void announceContextUsage(Session session, ContextWindow window) {
+        int maxInput = model.describe(session.activeModelId()).maxInputTokens();
+        progress.emit(ProgressEvent.of(ProgressEvent.Kind.CONTEXT_USAGE,
+                "上下文 " + tokens(window.getUsage().getUsedTokens()) + " / " + tokens(maxInput)));
+    }
+
+    /** 1.2k / 950 这类短写法：界面上只求一眼可读。 */
+    static String tokens(int value) {
+        if (value < 1000) {
+            return String.valueOf(value);
+        }
+        if (value % 1000 == 0) {
+            return (value / 1000) + "k";
+        }
+        return String.format(java.util.Locale.ROOT, "%.1fk", value / 1000.0);
     }
 
     /** 承接"请求超限"后的补充折叠：不消耗重试名额（§8.2 要点 8）。 */

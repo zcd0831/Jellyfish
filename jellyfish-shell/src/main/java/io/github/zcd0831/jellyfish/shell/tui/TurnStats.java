@@ -13,6 +13,8 @@ import java.util.regex.Pattern;
  */
 public final class TurnStats {
 
+    private static final Pattern CONTEXT =
+            Pattern.compile("上下文\\s*([0-9.]+k?)\\s*/\\s*([0-9.]+k?)");
     private static final Pattern USAGE = Pattern.compile("\\+(\\d+)\\s*/\\s*累计\\s*(\\d+)\\s*/\\s*上限\\s*(\\d+)");
 
     private int modelCalls;
@@ -23,6 +25,8 @@ public final class TurnStats {
     private int stepsTotal;
     private int tools;
     private long startedAt;
+    /** 上下文占用与模型输入上限：跨轮保留（reset 不清），提示符常驻展示。 */
+    private volatile String contextLabel;
 
     public void reset() {
         modelCalls = 0;
@@ -42,6 +46,9 @@ public final class TurnStats {
                 break;
             case TOOL_STARTED:
                 tools++;
+                break;
+            case CONTEXT_USAGE:
+                observeContext(event.message());
                 break;
             case STEP_STARTED:
                 stepsStarted++;
@@ -76,6 +83,22 @@ public final class TurnStats {
         }
         text.append(" / ").append(elapsedSeconds()).append("s ——");
         return text.toString();
+    }
+
+    /** `上下文 12.3k / 50k` → 提示符里显示成 `[12.3k/50k]`。 */
+    private void observeContext(String message) {
+        if (message == null) {
+            return;
+        }
+        Matcher matcher = CONTEXT.matcher(message);
+        if (matcher.find()) {
+            contextLabel = matcher.group(1) + "/" + matcher.group(2);
+        }
+    }
+
+    /** 提示符里的上下文占用；还没算出来时返回 null。 */
+    String contextLabel() {
+        return contextLabel;
     }
 
     private void observeUsage(String message) {

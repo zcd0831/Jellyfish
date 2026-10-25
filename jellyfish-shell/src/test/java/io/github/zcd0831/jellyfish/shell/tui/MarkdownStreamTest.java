@@ -74,4 +74,22 @@ class MarkdownStreamTest {
         assertTrue(tail.isEmpty(), "围栏内不产生多余字符：" + tail);
         assertFalse(markdown.inFence(), "收尾要复位围栏，下一轮才不会继续原样");
     }
+
+    @Test
+    void 链接渲染成文字加括号里的地址() {
+        assertEquals("看文档（https://x.y/z）", plain("看[文档](https://x.y/z)"));
+    }
+
+    @Test
+    void 链接跨分块也能凑齐() {
+        MarkdownStream markdown = new MarkdownStream(false);
+        String out = markdown.feed("看[文") + markdown.feed("档](https://x.y") + markdown.feed("/z)");
+
+        assertEquals("看文档（https://x.y/z）", out);
+    }
+
+    @Test
+    void 不是链接的方括号原样输出() {
+        assertEquals("[1] 条目", plain("[1] 条目"));
+    }
 }

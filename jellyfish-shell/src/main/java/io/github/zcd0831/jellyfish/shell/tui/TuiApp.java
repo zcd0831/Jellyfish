@@ -92,7 +92,7 @@ public final class TuiApp implements QuestionBroker.Answerer {
     }
 
     public void run() {
-        renderer.info("Jellyfish 1.0.0-alpha　/help 查看命令，exit 退出");
+        renderer.divider("Jellyfish 1.0.0-alpha　/help 查看命令，exit 退出");
         if (Terminal.TYPE_DUMB.equals(terminal.getType())) {
             renderer.info("（当前不是终端：无行编辑、无颜色；输入按行读取）");
             startDumbInput(System.in);
@@ -242,7 +242,11 @@ public final class TuiApp implements QuestionBroker.Answerer {
     }
 
     private String prompt() {
-        return currentSession == null ? "新会话> " : "继续> ";
+        String label = stats.contextLabel();
+        String usage = label == null ? "" : "[" + label + "] ";
+        // 没有上下文占用时不要多出空格：`继续 > ` 比 `继续  > ` 好看
+        String head = currentSession == null ? "新会话" : "继续";
+        return usage.isEmpty() ? head + "> " : head + " " + usage.trim() + "> ";
     }
 
     private void handle(String text) {
@@ -291,7 +295,7 @@ public final class TuiApp implements QuestionBroker.Answerer {
     private void printSummary() {
         String summary = stats.summary();
         if (summary != null) {
-            renderer.info(summary);
+            renderer.divider(summary);
         }
     }
 

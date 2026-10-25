@@ -49,4 +49,16 @@ class TurnStatsTest {
         assertTrue(summary.contains("1 次模型调用"), summary);
         assertEquals(false, summary.contains("累计"));
     }
+
+    @Test
+    void 上下文占用跨轮保留并供提示符使用() {
+        TurnStats stats = new TurnStats();
+        stats.reset();
+        stats.observe(ProgressEvent.of(ProgressEvent.Kind.CONTEXT_USAGE, "上下文 12.3k / 50k"));
+
+        assertEquals("12.3k/50k", stats.contextLabel());
+
+        stats.reset();
+        assertEquals("12.3k/50k", stats.contextLabel(), "新的一轮不该把上下文占用清掉");
+    }
 }

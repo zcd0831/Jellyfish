@@ -70,13 +70,22 @@ public class Session {
     }
 
     /**
-     * 追加一条带思维内容的记录：`reasoning` 只允许落在 TOOL_REQUEST 上。
-     * 规则出处：模块-感知 §7.1 规则 15（reasoning 是回放用事实）。
+     * 追加一条带模型私有状态的记录：`reasoning` + `producerModelId` 一起写，回放时按产者过滤。
+     * 规则出处：模块-感知 §7.1 规则 15。
      */
     public Record appendRecord(RecordRole role, String content, String reasoning, ToolResultPayload payload,
                                long now) {
+        return appendRecord(role, content, reasoning, null, null, payload, now);
+    }
+
+    /**
+     * 追加一条属于某次模型响应的记录：同一响应的全部记录共享 `turnId`。
+     * 规则出处：模块-感知 §7.1 规则 14/17。
+     */
+    public Record appendRecord(RecordRole role, String content, String reasoning, String turnId,
+                               String producerModelId, ToolResultPayload payload, long now) {
         Record record = new Record(RecordId.of(java.util.UUID.randomUUID().toString()), role, content, reasoning,
-                payload, 0, nextSequence(), now);
+                turnId, producerModelId, payload, 0, nextSequence(), now);
         records.add(record);
         return record;
     }
@@ -213,41 +222,39 @@ public class Session {
         }
         List<List<Record>> turns = new ArrayList<>();
         List<Record> current = new ArrayList<>();
+        String currentTurnId = null;
         for (Record record : conversational) {
-            if (!current.isEmpty() && !continuesTurn(current.get(current.size() - 1).role(), record.role())) {
+            // turnId 同为 null 的两条记录（如 USER）不属同一轮：null 表示"各自成轮"
+            boolean sameTurn = record.turnId() != null && record.turnId().equals(currentTurnId);
+            if (!current.isEmpty() && !sameTurn) {
                 turns.add(current);
                 current = new ArrayList<>();
             }
             current.add(record);
+            currentTurnId = record.turnId();
         }
         if (!current.isEmpty()) {
             turns.add(current);
         }
-        assertToolPairs(turns);
+        assertTurnShape(turns);
         return turns;
     }
 
-    /** 同一个模型输出轮内的相邻关系；其余情况一律开新轮。 */
-    private static boolean continuesTurn(RecordRole previous, RecordRole next) {
-        if (previous == RecordRole.ASSISTANT) {
-            return next == RecordRole.TOOL_REQUEST;
-        }
-        if (previous == RecordRole.TOOL_REQUEST) {
-            return next == RecordRole.TOOL_RESULT;
-        }
-        if (previous == RecordRole.TOOL_RESULT) {
-            // 一次模型输出里的多个工具调用会连续落成多对请求/结果
-            return next == RecordRole.TOOL_REQUEST;
-        }
-        return false;
-    }
-
-    /** 每个 TOOL_REQUEST 必须紧跟它的 TOOL_RESULT；否则历史已不合法，不再"修补"。 */
-    private static void assertToolPairs(List<List<Record>> turns) {
+    /**
+     * 一次模型响应只能有一条 assistant 消息：`ASSISTANT` 至多一条，且工具请求/结果必须成对。
+     * 规则出处：模块-感知 §7.1 规则 14/17。
+     */
+    private static void assertTurnShape(List<List<Record>> turns) {
         for (List<Record> turn : turns) {
+            int assistants = 0;
             boolean pending = false;
             for (Record record : turn) {
-                if (record.role() == RecordRole.TOOL_REQUEST) {
+                if (record.role() == RecordRole.ASSISTANT) {
+                    assistants++;
+                    if (pending) {
+                        throw new DomainInvariantViolation("工具请求没有对应的结果：" + record.id().getValue());
+                    }
+                } else if (record.role() == RecordRole.TOOL_REQUEST) {
                     if (pending) {
                         throw new DomainInvariantViolation("工具请求没有对应的结果：" + record.id().getValue());
                     }
@@ -264,7 +271,23 @@ public class Session {
             if (pending) {
                 throw new DomainInvariantViolation("流水末尾有未闭合的工具请求");
             }
+            if (assistants > 1) {
+                throw new DomainInvariantViolation("同一轮模型响应出现了多条 assistant 记录");
+            }
         }
+    }
+
+    /** 是否存在未拿到结果的工具请求（切换模型前的硬闸）。规则出处：模块-感知 §7.1 规则 2。 */
+    public boolean hasOpenToolRound() {
+        int open = 0;
+        for (Record record : records) {
+            if (record.role() == RecordRole.TOOL_REQUEST) {
+                open++;
+            } else if (record.role() == RecordRole.TOOL_RESULT && open > 0) {
+                open--;
+            }
+        }
+        return open > 0;
     }
 
     private static List<Record> merge(List<Record> system, Record summary, List<Record> recent) {

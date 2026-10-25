@@ -174,21 +174,73 @@ class ReActLoopTest {
     }
 
     @Test
-    void 回放时工具请求与结果成对还原且带回reasoning() {
+    void 回放时同一轮还原成一条assistant消息且带回reasoning() {
         Session session = session();
-        session.appendRecord(RecordRole.TOOL_REQUEST, call("c1", "read_file", "{}"), "先看看目录", null, 3L);
-        session.appendRecord(RecordRole.TOOL_RESULT, "文件内容", null, 4L);
+        session.appendRecord(RecordRole.ASSISTANT, "我先看看", null, "t1", "m1", null, 3L);
+        session.appendRecord(RecordRole.TOOL_REQUEST, call("c1", "read_file", "{}"), "先看看目录", "t1", "m1",
+                null, 4L);
+        session.appendRecord(RecordRole.TOOL_RESULT, "文件内容", null, "t1", "m1", null, 5L);
         List<ModelInvocationRequest> captured = new ArrayList<ModelInvocationRequest>();
 
         List<ChatMessage> messages = capturedMessages(session, captured);
 
         ChatMessage assistant = messages.get(messages.size() - 2);
+        assertEquals("我先看看", assistant.content(), "文本与调用必须在同一条消息里");
         assertEquals(1, assistant.toolCalls().size());
         assertEquals("c1", assistant.toolCalls().get(0).callId());
         assertEquals("先看看目录", assistant.reasoning(), "reasoning 必须随工具请求回放");
         ChatMessage tool = messages.get(messages.size() - 1);
         assertEquals("c1", tool.toolCallId(), "工具结果必须带 tool_call_id，否则端点 400");
         assertEquals("文件内容", tool.content());
+    }
+
+    @Test
+    void 切换模型后旧模型的reasoning不再回放() {
+        Session session = session();
+        session.appendRecord(RecordRole.TOOL_REQUEST, call("c1", "read_file", "{}"), "旧模型的推理", "t1", "m1",
+                null, 3L);
+        session.appendRecord(RecordRole.TOOL_RESULT, "文件内容", null, "t1", "m1", null, 4L);
+        session.switchModel(ModelId.of("m2"));
+        List<ModelInvocationRequest> captured = new ArrayList<ModelInvocationRequest>();
+
+        List<ChatMessage> messages = capturedMessages(session, captured);
+
+        ChatMessage assistant = messages.get(messages.size() - 2);
+        assertEquals(null, assistant.reasoning(), "私有状态只回放给产者模型");
+    }
+
+    @Test
+    void 一次响应的文本与多个调用进同一条assistant消息() {
+        Session session = session();
+        final List<ModelInvocationRequest> captured = new ArrayList<ModelInvocationRequest>();
+        when(model.invoke(any(ModelInvocationRequest.class))).thenAnswer(invocation -> {
+            captured.add(invocation.getArgument(0));
+            if (captured.size() == 1) {
+                return new ModelInvocationResult("我先读两个文件", Arrays.asList(
+                        new ToolCall("c1", "read_file", "{\"path\":\"a\"}"),
+                        new ToolCall("c2", "read_file", "{\"path\":\"b\"}")), "推理",
+                        new ModelUsage(1, 1), ModelId.of("m1"));
+            }
+            return new ModelInvocationResult("完成", Collections.<ToolCall>emptyList(), new ModelUsage(1, 1),
+                    ModelId.of("m1"));
+        });
+        when(toolExecutor.execute(any(Session.class), anyString(), any(Map.class), any(RecordId.class)))
+                .thenReturn(ToolExecOutcome.plain("内容"));
+        ReActLoop subject = loop(RuntimePolicy.defaults());
+        when(contextWindow.currentWindow(any(Session.class))).thenAnswer(invocation -> {
+            Session running = invocation.getArgument(0);
+            return new ContextWindow(new ArrayList<Record>(running.records()),
+                    new ContextUsage(10, 1000, 0, 0, 0));
+        });
+
+        subject.runIteration(session, null, null);
+
+        List<ChatMessage> messages = captured.get(1).messages();
+        ChatMessage turn = messages.get(messages.size() - 3);
+        assertEquals("我先读两个文件", turn.content());
+        assertEquals(2, turn.toolCalls().size(), "两个调用必须在同一条 assistant 消息里");
+        assertEquals("c1", messages.get(messages.size() - 2).toolCallId());
+        assertEquals("c2", messages.get(messages.size() - 1).toolCallId(), "工具结果按调用顺序紧随其后");
     }
 
     @Test

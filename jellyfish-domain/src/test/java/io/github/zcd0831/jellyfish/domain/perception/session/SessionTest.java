@@ -121,12 +121,12 @@ class SessionTest {
     }
 
     @Test
-    void 窗口按模型输出轮整轮对齐() {
+    void 窗口按turnId整轮对齐() {
         Session session = newSession();
         session.appendRecord(RecordRole.USER, "u1", null, 1L);
-        session.appendRecord(RecordRole.ASSISTANT, "看一下", null, 2L);
-        session.appendRecord(RecordRole.TOOL_REQUEST, call("c1", "list_dir"), null, 3L);
-        session.appendRecord(RecordRole.TOOL_RESULT, "结果", null, 4L);
+        session.appendRecord(RecordRole.ASSISTANT, "看一下", null, "t1", "m1", null, 2L);
+        session.appendRecord(RecordRole.TOOL_REQUEST, call("c1", "list_dir"), null, "t1", "m1", null, 3L);
+        session.appendRecord(RecordRole.TOOL_RESULT, "结果", null, "t1", "m1", null, 4L);
         session.appendRecord(RecordRole.USER, "u2", null, 5L);
 
         // 只取最近 2 条会把边界切在 TOOL_RESULT 上 ⇒ 必须把整轮一起纳入
@@ -143,22 +143,44 @@ class SessionTest {
     void 未闭合的工具请求是不变量违反而不是静默丢弃() {
         Session session = newSession();
         session.appendRecord(RecordRole.USER, "u1", null, 1L);
-        session.appendRecord(RecordRole.TOOL_REQUEST, call("c1", "list_dir"), null, 2L);
+        session.appendRecord(RecordRole.TOOL_REQUEST, call("c1", "list_dir"), null, "t1", "m1", null, 2L);
 
         assertThrows(io.github.zcd0831.jellyfish.domain.shared.DomainInvariantViolation.class,
                 () -> session.buildContextForLlm(new ContextWindowPolicy(5, 0.9), CHARS, 100000));
     }
 
     @Test
-    void reasoning计入窗口用量() {
+    void 同一轮出现两条assistant记录是模型形态违规() {
         Session session = newSession();
-        session.appendRecord(RecordRole.TOOL_REQUEST, call("c1", "list_dir"), "思考了十个字符", null, 1L);
-        session.appendRecord(RecordRole.TOOL_RESULT, "结果", null, 2L);
+        session.appendRecord(RecordRole.ASSISTANT, "前半句", null, "t1", "m1", null, 1L);
+        session.appendRecord(RecordRole.ASSISTANT, "后半句", null, "t1", "m1", null, 2L);
+
+        assertThrows(io.github.zcd0831.jellyfish.domain.shared.DomainInvariantViolation.class,
+                () -> session.buildContextForLlm(new ContextWindowPolicy(5, 0.9), CHARS, 100000));
+    }
+
+    @Test
+    void reasoning计入窗口用量并带产者() {
+        Session session = newSession();
+        session.appendRecord(RecordRole.TOOL_REQUEST, call("c1", "list_dir"), "思考了十个字符", "t1", "m-model",
+                null, 1L);
+        session.appendRecord(RecordRole.TOOL_RESULT, "结果", null, "t1", "m-model", null, 2L);
 
         ContextWindow window = session.buildContextForLlm(new ContextWindowPolicy(5, 0.9), CHARS, 100000);
 
         int withoutReasoning = call("c1", "list_dir").length() + "结果".length();
         assertEquals(withoutReasoning + "思考了十个字符".length(), window.getUsage().getUsedTokens());
+        assertEquals("m-model", session.records().get(0).producerModelId());
+    }
+
+    @Test
+    void 工具轮未闭合能被识别出来() {
+        Session session = newSession();
+        session.appendRecord(RecordRole.TOOL_REQUEST, call("c1", "list_dir"), null, "t1", "m1", null, 1L);
+        assertTrue(session.hasOpenToolRound());
+
+        session.appendRecord(RecordRole.TOOL_RESULT, "结果", null, "t1", "m1", null, 2L);
+        assertFalse(session.hasOpenToolRound());
     }
 
     @Test

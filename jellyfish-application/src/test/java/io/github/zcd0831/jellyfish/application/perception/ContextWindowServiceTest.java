@@ -137,10 +137,11 @@ class ContextWindowServiceTest {
     void 摘要素材不含reasoning() {
         policy = tightPolicy(10, 20);
         Session session = Session.create(SessionId.of("s1"), null, AgentId.of("a"), ModelId.of("m1"), 1L, null);
-        session.appendRecord(RecordRole.ASSISTANT, "看一下", null, 1L);
+        session.appendRecord(RecordRole.ASSISTANT, "看一下", null, "t1", "m1", null, 1L);
         session.appendRecord(RecordRole.TOOL_REQUEST,
-                "{\"callId\":\"c1\",\"name\":\"list_dir\",\"arguments\":\"{}\"}", "内部推理过程", null, 2L);
-        session.appendRecord(RecordRole.TOOL_RESULT, "0123456789012345678", null, 3L);
+                "{\"callId\":\"c1\",\"name\":\"list_dir\",\"arguments\":\"{}\"}", "内部推理过程", "t1", "m1",
+                null, 2L);
+        session.appendRecord(RecordRole.TOOL_RESULT, "0123456789012345678", null, "t1", "m1", null, 3L);
         session.appendRecord(RecordRole.USER, "0123456789", null, 4L);
 
         service().ensureWithinLimit(session);

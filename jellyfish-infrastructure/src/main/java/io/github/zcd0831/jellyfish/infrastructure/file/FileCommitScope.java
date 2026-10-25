@@ -189,12 +189,21 @@ public final class FileCommitScope implements CommitScope {
         return dto;
     }
 
+    /**
+     * 流水行的唯一写路径：**字段必须与 `RecordLineDto` / `FileRecordStore.toDto` 逐一对齐**——
+     * 漏一个字段，内存里正确、落盘后丢失，重启即真相改变。
+     * 规则出处：模块-基础设施层 §3（RecordStore 行字段）。
+     */
     private static RecordLineDto toLine(Record r) {
         RecordLineDto d = new RecordLineDto();
         d.id = r.id();
         d.role = r.role();
         d.content = r.content();
+        d.reasoning = r.reasoning();
+        d.turnId = r.turnId();
+        d.producerModelId = r.producerModelId();
         d.toolPayload = r.toolPayload();
+        d.summaryCoversUpTo = r.summaryCoversUpTo();
         d.sequence = r.sequence();
         d.date = r.date();
         return d;

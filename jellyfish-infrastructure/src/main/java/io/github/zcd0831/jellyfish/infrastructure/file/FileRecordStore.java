@@ -134,6 +134,8 @@ public final class FileRecordStore implements RecordStore {
         d.role = r.role();
         d.content = r.content();
         d.reasoning = r.reasoning();
+        d.turnId = r.turnId();
+        d.producerModelId = r.producerModelId();
         d.toolPayload = r.toolPayload();
         d.summaryCoversUpTo = r.summaryCoversUpTo();
         d.sequence = r.sequence();
@@ -142,7 +144,7 @@ public final class FileRecordStore implements RecordStore {
     }
 
     private static Record toDomain(RecordLineDto d) {
-        return new Record(d.id, d.role, d.content, d.reasoning, d.toolPayload, d.summaryCoversUpTo,
-                d.sequence, d.date);
+        return new Record(d.id, d.role, d.content, d.reasoning, d.turnId, d.producerModelId, d.toolPayload,
+                d.summaryCoversUpTo, d.sequence, d.date);
     }
 }

@@ -47,6 +47,34 @@ class FileCommitScopeTest {
     }
 
     @Test
+    void 流水的全部字段都经生产写路径落盘() {
+        Record record = new Record(RecordId.of("r1"), RecordRole.TOOL_REQUEST,
+                "{\"callId\":\"c1\",\"name\":\"read_file\",\"arguments\":\"{}\"}", "内部推理", "t1",
+                "m1", null, 0, 1, 2L);
+        FileCommitScope scope = new FileCommitScope(dir(), new JsonCodec());
+        scope.stageAppend(SessionId.of("s1"), record);
+        scope.commit();
+
+        Record loaded = new FileRecordStore(dir(), new JsonCodec()).last(SessionId.of("s1"), 1).get(0);
+        assertEquals("内部推理", loaded.reasoning(), "reasoning 丢失会让思维模式回放 400");
+        assertEquals("t1", loaded.turnId(), "turnId 丢失会破坏一响应一消息的重建");
+        assertEquals("m1", loaded.producerModelId(), "产者丢失会让旧模型的 reasoning 被错发");
+        assertEquals(0, loaded.summaryCoversUpTo());
+    }
+
+    @Test
+    void 摘要覆盖边界也经生产写路径落盘() {
+        Record summary = new Record(RecordId.of("r1"), RecordRole.SUMMARY, "摘要正文", null, null, null, null,
+                7, 1, 2L);
+        FileCommitScope scope = new FileCommitScope(dir(), new JsonCodec());
+        scope.stageAppend(SessionId.of("s1"), summary);
+        scope.commit();
+
+        Record loaded = new FileRecordStore(dir(), new JsonCodec()).last(SessionId.of("s1"), 1).get(0);
+        assertEquals(7, loaded.summaryCoversUpTo(), "覆盖边界丢失会让重启后的折叠失效");
+    }
+
+    @Test
     void 不支持的类型立即失败而不是静默丢写() {
         FileCommitScope scope = new FileCommitScope(dir(), new JsonCodec());
         scope.stageReplace("不是聚合");

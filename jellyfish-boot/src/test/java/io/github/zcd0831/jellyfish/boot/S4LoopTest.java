@@ -79,6 +79,8 @@ class S4LoopTest {
     Path tmp;
 
     private final JsonCodec codec = new JsonCodec();
+    private final java.util.List<io.github.zcd0831.jellyfish.application.shared.ProgressEvent> announced =
+            new java.util.ArrayList<io.github.zcd0831.jellyfish.application.shared.ProgressEvent>();
     private final FakeModel model = new FakeModel();
     private DataDirectory dir;
     private StartSessionUseCase startSession;
@@ -105,7 +107,7 @@ class S4LoopTest {
         InProcessEventPublisher publisher = new InProcessEventPublisher();
         experiences = new FileExperienceRepository(dir, codec);
         BudgetService budgetService = new BudgetService(budgets, sessions, policies,
-                new FileCommitScope(dir, codec), publisher, event -> { });
+                new FileCommitScope(dir, codec), publisher, announced::add);
         ContextWindowService contextWindow = new ContextWindowService(model, policies,
                 new FileCommitScope(dir, codec), publisher, event -> { }, budgetService, new EstimatorStrategy());
         plans = new FilePlanRepository(dir, codec);
@@ -124,7 +126,7 @@ class S4LoopTest {
                 new SessionTitleGenerator(model, budgetService), new SystemPromptAssembler(),
                 new FileCommitScope(dir, codec), new SystemClock());
         ExecutionLoop executionLoop = LoopSupport.build(dir, codec, model, policies, catalog, budgetService,
-                contextWindow, reActLoop, verificationRunner, plans, publisher, event -> { }, startSession,
+                contextWindow, reActLoop, verificationRunner, plans, publisher, announced::add, startSession,
                 sessions, records, new RunSessionProvider() {
                     @Override
                     public RunSessionUseCase get() {
@@ -267,5 +269,37 @@ class S4LoopTest {
         public Answer ask(Question question) {
             return Answer.answered("同意");
         }
+    }
+
+    @Test
+    void 计划与步骤的进度事件带N分之M() {
+        announced.clear();
+        model.seed(text("标题"));
+        SessionId sessionId = startSession.start(null, null, "做两件事").value();
+        model.seed(toolCall("c1", "generate_plan",
+                "{\"goal\":\"做两件事\",\"steps\":[{\"description\":\"第一步\"},"
+                        + "{\"description\":\"第二步\"}]}"));
+        model.seed(text("计划已创建"));
+        model.seed(toolCall("c2", "submit_step", "{\"summary\":\"第一步做完了\"}"));
+        model.seed(text("第一步完成"));
+        model.seed(toolCall("c3", "submit_step", "{\"summary\":\"第二步做完了\"}"));
+        model.seed(text("全部完成"));
+
+        runSession.run(sessionId, null, ChunkSink.NOOP);
+
+        int plans = 0;
+        boolean stepStarted = false;
+        for (io.github.zcd0831.jellyfish.application.shared.ProgressEvent event : announced) {
+            if (event.kind() == io.github.zcd0831.jellyfish.application.shared.ProgressEvent.Kind.PLAN_CREATED) {
+                plans++;
+                assertTrue(event.message().contains("步"), "计划播报要带步数：" + event.message());
+            }
+            if (event.kind() == io.github.zcd0831.jellyfish.application.shared.ProgressEvent.Kind.STEP_STARTED) {
+                stepStarted = true;
+                assertTrue(event.message().contains("/"), "步骤播报要带 N/M：" + event.message());
+            }
+        }
+        assertEquals(1, plans, "一次计划只播报一次");
+        assertTrue(stepStarted, "应至少播报一个步骤");
     }
 }

@@ -124,10 +124,18 @@ public final class ExecutionLoop implements SessionRunner {
         RuntimePolicy policy = policies.load();
         Plan plan = runningPlan(session);
         boolean collapsedOnce = false;
+        boolean planAnnounced = false;
 
         while (true) {
             // 每一轮开始先看取消：流式/工具刚被打断时，不再进入下一轮（§8.4.1）
             token.throwIfCancelled();
+            // 计划可能在循环中途由 generate_plan 产生：每轮重读，播报一次
+            plan = runningPlan(session);
+            if (!planAnnounced && plan != null && plan.hasExecutablePlan()) {
+                progress.emit(ProgressEvent.of(ProgressEvent.Kind.PLAN_CREATED,
+                        "计划：" + plan.goal() + "（" + plan.steps().size() + " 步）"));
+                planAnnounced = true;
+            }
             contextWindow.ensureWithinLimit(session);
             PlanStep step = plan != null && plan.hasExecutablePlan() ? plan.getCurrentStep() : null;
             Attempt attempt = null;
@@ -202,7 +210,7 @@ public final class ExecutionLoop implements SessionRunner {
                 commitPlan(plan);
                 feedbackSucceeded(step);
                 progress.emit(ProgressEvent.of(ProgressEvent.Kind.STEP_FINISHED,
-                        "第 " + step.sequence() + " 步完成（免验证）"));
+                        "第 " + step.sequence() + "/" + plan.steps().size() + " 步完成（免验证）"));
             } else {
                 VerificationReport report = verificationRunner.verify(session, plan, step,
                         attempt == null ? 0 : attempt.attemptNo(), iteration.submittedSummary());
@@ -212,7 +220,7 @@ public final class ExecutionLoop implements SessionRunner {
                     commitPlan(plan);
                     feedbackSucceeded(step);
                     progress.emit(ProgressEvent.of(ProgressEvent.Kind.STEP_FINISHED,
-                            "第 " + step.sequence() + " 步验收通过"));
+                            "第 " + step.sequence() + "/" + plan.steps().size() + " 步验收通过"));
                 } else {
                     plan.markStepFailed(step.id(), report.id());
                     commitPlan(plan);
@@ -220,7 +228,8 @@ public final class ExecutionLoop implements SessionRunner {
                     feedbackFailed(step);
                     reflectIfNeeded(session, plan, step, report.failureReason());
                     progress.emit(ProgressEvent.of(ProgressEvent.Kind.STEP_FINISHED,
-                            "第 " + step.sequence() + " 步验收未通过：" + report.outcome()));
+                            "第 " + step.sequence() + "/" + plan.steps().size()
+                                    + " 步验收未通过：" + report.outcome()));
                     if (advanceAfterFailure(session, plan, step,
                             report.failureReason() == null ? String.valueOf(report.outcome())
                                     : report.failureReason())) {

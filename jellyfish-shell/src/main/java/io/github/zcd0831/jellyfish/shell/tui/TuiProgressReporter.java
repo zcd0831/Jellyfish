@@ -9,13 +9,16 @@ import io.github.zcd0831.jellyfish.application.shared.port.ProgressPort;
 public final class TuiProgressReporter implements ProgressPort {
 
     private final AnsiRenderer renderer;
+    private final TurnStats stats;
 
-    public TuiProgressReporter(AnsiRenderer renderer) {
+    public TuiProgressReporter(AnsiRenderer renderer, TurnStats stats) {
         this.renderer = renderer;
+        this.stats = stats;
     }
 
     @Override
     public void emit(ProgressEvent event) {
+        stats.observe(event);
         switch (event.kind()) {
             // 常驻行：计划、步骤、工具调用是"发生了什么"，不能被下一行冲掉
             case PLAN_CREATED:

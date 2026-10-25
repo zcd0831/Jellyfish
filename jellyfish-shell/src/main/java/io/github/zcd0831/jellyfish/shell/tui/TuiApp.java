@@ -56,6 +56,7 @@ public final class TuiApp implements QuestionBroker.Answerer {
     private final AnsiRenderer renderer;
     private final OutputGateway gateway;
     private final Terminal terminal;
+    private final TurnStats stats;
     private final ShellCancellationToken token;
 
     private final BlockingQueue<String> commands = new LinkedBlockingQueue<String>();
@@ -72,7 +73,7 @@ public final class TuiApp implements QuestionBroker.Answerer {
                   ManageSessionUseCase manageSession, AdjustPolicyUseCase adjustPolicy,
                   CatalogRepository catalog, AnsiRenderer renderer, QuestionBroker broker,
                   OutputGateway gateway, Terminal terminal, ShellCancellationToken token,
-                  ManagePluginsUseCase plugins) {
+                  ManagePluginsUseCase plugins, TurnStats stats) {
         this.startSession = startSession;
         this.runSession = runSession;
         this.manageSession = manageSession;
@@ -83,6 +84,7 @@ public final class TuiApp implements QuestionBroker.Answerer {
         this.gateway = gateway;
         this.terminal = terminal;
         this.token = token;
+        this.stats = stats;
         broker.bind(this);
     }
 
@@ -241,6 +243,7 @@ public final class TuiApp implements QuestionBroker.Answerer {
     private void runOnce(String text) {
         pauseInput();
         token.reset();
+        stats.reset();
         renderer.status("思考中…");
         org.jline.terminal.Attributes original = withoutEcho();
         TurnOutput sink = new TurnOutput();
@@ -253,10 +256,23 @@ public final class TuiApp implements QuestionBroker.Answerer {
         renderer.endTurn();
         if (!result.isOk()) {
             printError(result.error());
+            printSummary();
             return;
         }
         if (result.value().outcome() == RunSessionResult.Outcome.CANCELLED) {
-            renderer.info("（本轮已取消）");
+            // 已流出的字留在屏幕上，但它们没有进历史（断流不落）——必须说清楚
+            renderer.info(sink.rendered()
+                    ? "（已取消：上面的回答没有写进历史）"
+                    : "（已取消：还没开始回答）");
+        }
+        printSummary();
+    }
+
+    /** 回合小结：一行 dim 文本，回看时知道这一轮花了多少、做了几步。 */
+    private void printSummary() {
+        String summary = stats.summary();
+        if (summary != null) {
+            renderer.info(summary);
         }
     }
 

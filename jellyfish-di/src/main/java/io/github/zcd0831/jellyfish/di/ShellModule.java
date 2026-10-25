@@ -19,6 +19,7 @@ import io.github.zcd0831.jellyfish.shell.tui.ShellCancellationToken;
 import io.github.zcd0831.jellyfish.shell.tui.TuiApp;
 import io.github.zcd0831.jellyfish.shell.tui.TuiHumanInteraction;
 import io.github.zcd0831.jellyfish.shell.tui.TuiProgressReporter;
+import io.github.zcd0831.jellyfish.shell.tui.TurnStats;
 import org.jline.terminal.Terminal;
 import org.jline.terminal.TerminalBuilder;
 
@@ -76,8 +77,14 @@ public final class ShellModule {
 
     @Provides
     @Singleton
-    ProgressPort progressPort(AnsiRenderer renderer, PortRoutes routes) {
-        return routes.resolve("ProgressPort", (ProgressPort) new TuiProgressReporter(renderer));
+    TurnStats turnStats() {
+        return new TurnStats();
+    }
+
+    @Provides
+    @Singleton
+    ProgressPort progressPort(AnsiRenderer renderer, PortRoutes routes, TurnStats stats) {
+        return routes.resolve("ProgressPort", (ProgressPort) new TuiProgressReporter(renderer, stats));
     }
 
     /** 唯一取消令牌：Ctrl-C 与 `/cancel` 都走它；令牌回调负责让在途 HTTP 读立刻失败（§8.4.1）。 */
@@ -100,8 +107,8 @@ public final class ShellModule {
                   ManageSessionUseCase manageSession, AdjustPolicyUseCase adjustPolicy,
                   CatalogRepository catalog, AnsiRenderer renderer, QuestionBroker broker,
                   OutputGateway gateway, Terminal terminal, ShellCancellationToken token,
-                  ManagePluginsUseCase plugins) {
+                  ManagePluginsUseCase plugins, TurnStats stats) {
         return new TuiApp(startSession, runSession, manageSession, adjustPolicy, catalog, renderer, broker,
-                gateway, terminal, token, plugins);
+                gateway, terminal, token, plugins, stats);
     }
 }

@@ -15,7 +15,7 @@ class TuiProgressReporterTest {
     private static String render(ProgressEvent.Kind kind) throws UnsupportedEncodingException {
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();
         AnsiRenderer renderer = new AnsiRenderer(new PrintStream(bytes, true, "UTF-8"), 80);
-        new TuiProgressReporter(renderer).emit(ProgressEvent.of(kind, "消息"));
+        new TuiProgressReporter(renderer, new TurnStats()).emit(ProgressEvent.of(kind, "消息"));
         return bytes.toString("UTF-8");
     }
 

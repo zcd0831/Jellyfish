@@ -91,6 +91,13 @@ public final class ContextWindowService {
         progress.emit(ProgressEvent.of(ProgressEvent.Kind.CONTEXT_USAGE, contextLabel(session)));
     }
 
+    /** 主循环请求结束后：记账 + 记下观测 + 立刻把标签推给界面（不必等下一轮）。 */
+    public boolean recordTurnUsage(Session session, io.github.zcd0831.jellyfish.application.action.port.ModelUsage usage) {
+        boolean warned = budgetService.recordTurnUsage(session, usage);
+        announceContextUsage(session);
+        return warned;
+    }
+
     /** 界面标签：最近一次请求的用量 / 模型输入上限（回放历史会话时也用它）。 */
     public String contextLabel(Session session) {
         int maxInput = model.describe(session.activeModelId()).maxInputTokens();

@@ -204,7 +204,7 @@ class S5UseCasesTest {
     }
 
     @Test
-    void 记账顺手把本轮请求用量写进台账文件() {
+    void 主循环请求的用量写进台账文件且辅助调用不覆盖() {
         SessionId id = newSession();
         io.github.zcd0831.jellyfish.application.action.BudgetService budget =
                 new io.github.zcd0831.jellyfish.application.action.BudgetService(
@@ -212,7 +212,7 @@ class S5UseCasesTest {
                         sessions, policies, new io.github.zcd0831.jellyfish.infrastructure.file.FileCommitScope(dir, codec),
                         new InProcessEventPublisher(), event -> { });
 
-        budget.recordUsage(sessions.load(id),
+        budget.recordTurnUsage(sessions.load(id),
                 new io.github.zcd0831.jellyfish.application.action.port.ModelUsage(18200L, 300L));
 
         io.github.zcd0831.jellyfish.domain.action.budget.Budget saved =
@@ -220,6 +220,12 @@ class S5UseCasesTest {
         assertEquals(18200L, saved.lastPromptTokens());
         assertEquals(id.getValue(), saved.lastPromptSessionId());
         assertTrue(!saved.lastPromptEstimated(), "厂商给的就是精确值");
+
+        // 辅助调用（标题生成这类小请求）只记账，不覆盖窗口观测
+        budget.recordUsage(sessions.load(id),
+                new io.github.zcd0831.jellyfish.application.action.port.ModelUsage(30L, 10L));
+        assertEquals(18200L, new io.github.zcd0831.jellyfish.infrastructure.file.FileBudgetRepository(dir, codec)
+                .load(id).lastPromptTokens(), "小请求不能把真实窗口数字盖掉");
     }
 
     @Test

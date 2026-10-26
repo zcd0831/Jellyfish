@@ -55,9 +55,6 @@ public final class BudgetService {
         }
         long tokens = usage.total();
         budget.recordUsage(tokens, policy);
-        if (usage.inputTokens() > 0) {
-            budget.observePrompt(session.id(), usage.inputTokens(), usage.estimated());
-        }
         progress.emit(ProgressEvent.of(ProgressEvent.Kind.USAGE,
                 "+" + tokens + " / 累计 " + budget.consumedTokens() + " / 上限 " + policy.budgetLimitTokens()));
         commitScope.stageReplace(budget);
@@ -91,6 +88,26 @@ public final class BudgetService {
         commitScope.stageReplace(budget);
         commitScope.commit();
         eventPublisher.publishAfterCommit(new ArrayList<DomainEvent>(budget.pullEvents()));
+    }
+
+    /**
+     * 主循环的请求：记账之外再记"本轮实际注入量"。
+     * 辅助调用（生成标题、检索经验、反思、摘要…）不走这里——它们的小请求会覆盖真实窗口的数字。
+     * 规则出处：模块-行动 §3.4。
+     */
+    public boolean recordTurnUsage(Session session, ModelUsage usage) {
+        boolean warned = recordUsage(session, usage);
+        if (usage.inputTokens() > 0) {
+            SessionId rootId = rootOf(session);
+            Budget budget = budgets.load(rootId);
+            if (budget == null) {
+                budget = Budget.openFor(BudgetId.of(UUID.randomUUID().toString()), rootId);
+            }
+            budget.observePrompt(session.id(), usage.inputTokens(), usage.estimated());
+            commitScope.stageReplace(budget);
+            commitScope.commit();
+        }
+        return warned;
     }
 
     public Budget budgetOf(SessionId rootId) {

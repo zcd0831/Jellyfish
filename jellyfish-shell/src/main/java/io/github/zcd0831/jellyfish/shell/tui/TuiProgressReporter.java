@@ -36,6 +36,9 @@ public final class TuiProgressReporter implements ProgressPort {
             case TOOL_FINISHED:
                 renderer.toolDone(event.message());
                 break;
+            // 上下文占用只喂底部状态栏：再打一行就是重复
+            case CONTEXT_USAGE:
+                break;
             // 状态行：可丢、会变的（压缩中、重试倒计时、用量）
             default:
                 renderer.status("· " + event.message());

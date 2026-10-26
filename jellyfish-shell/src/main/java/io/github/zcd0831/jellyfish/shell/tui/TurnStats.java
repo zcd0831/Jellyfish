@@ -96,6 +96,15 @@ public final class TurnStats {
         }
     }
 
+    /** 累计用量与上限：状态栏展示（跨轮沿用事件里的累计数）。 */
+    public long tokensTotal() {
+        return tokensTotal;
+    }
+
+    public long limit() {
+        return limit;
+    }
+
     /** 打开历史会话时直接给定标签，不必等下一轮才有 CONTEXT_USAGE。 */
     public void restoreContextLabel(String label) {
         this.contextLabel = label == null ? null : label.replaceAll("\\s*/\\s*", "/");

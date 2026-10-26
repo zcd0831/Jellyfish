@@ -89,7 +89,7 @@ public final class ReActLoop {
             for (int round = 1; round <= policy.maxReActRounds(); round++) {
                 ModelInvocationResult result = invoke(session, step, window, messages, sink);
                 syncModel(session, result.servedModelId());
-                if (result.usage() != null && budgetService.recordUsage(session, result.usage())) {
+                if (result.usage() != null && contextWindow.recordTurnUsage(session, result.usage())) {
                     askContinue();
                 }
                 String turnId = UUID.randomUUID().toString();

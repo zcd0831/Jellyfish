@@ -528,6 +528,15 @@ public final class TuiApp implements QuestionBroker.Answerer {
         if (transcript.hasEarlier()) {
             renderer.info("（上面是最近 " + REPLAY_RECORDS + " 条，更早的没有显示）");
         }
+        StringBuilder line = new StringBuilder("—— 上下文 "
+                + transcript.contextLabel().replaceAll("\\s*/\\s*", "/"));
+        if (transcript.consumedTokens() > 0) {
+            line.append(" / 累计 ").append(transcript.consumedTokens());
+            if (transcript.budgetLimitTokens() > 0) {
+                line.append(" / 上限 ").append(transcript.budgetLimitTokens());
+            }
+        }
+        renderer.divider(line.append(" ——").toString());
         renderer.info("（已切到该会话，继续输入即可）");
     }
 

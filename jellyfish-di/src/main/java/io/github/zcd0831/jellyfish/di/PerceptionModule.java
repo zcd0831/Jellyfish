@@ -54,8 +54,8 @@ public final class PerceptionModule {
     @Singleton
     ManageSessionUseCase manageSessionUseCase(SessionRepository sessions, ArtifactStore artifacts,
                                               CommitScope commitScope, DomainEventPublisher publisher,
-                                              RecordStore records) {
-        return new ManageSessionUseCase(sessions, artifacts, commitScope, publisher, records);
+                                              RecordStore records, ContextWindowService contextWindow) {
+        return new ManageSessionUseCase(sessions, artifacts, commitScope, publisher, records, contextWindow);
     }
 
     @Provides

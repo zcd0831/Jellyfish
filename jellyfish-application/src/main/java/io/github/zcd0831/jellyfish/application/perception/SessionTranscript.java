@@ -19,15 +19,17 @@ public final class SessionTranscript {
     private final long createdDate;
     private final List<Record> records;
     private final boolean hasEarlier;
+    private final String contextLabel;
 
     public SessionTranscript(SessionId sessionId, String title, ModelId modelId, long createdDate,
-                             List<Record> records, boolean hasEarlier) {
+                             List<Record> records, boolean hasEarlier, String contextLabel) {
         this.sessionId = sessionId;
         this.title = title;
         this.modelId = modelId;
         this.createdDate = createdDate;
         this.records = records;
         this.hasEarlier = hasEarlier;
+        this.contextLabel = contextLabel;
     }
 
     public SessionId sessionId() {
@@ -53,5 +55,10 @@ public final class SessionTranscript {
     /** 还有更早的记录没取出来（界面据此提示一句）。 */
     public boolean hasEarlier() {
         return hasEarlier;
+    }
+
+    /** "最近一次请求的用量 / 输入上限"：打开历史会话时提示符直接用，不必等下一轮。 */
+    public String contextLabel() {
+        return contextLabel;
     }
 }

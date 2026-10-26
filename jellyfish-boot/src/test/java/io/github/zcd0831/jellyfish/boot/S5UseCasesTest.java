@@ -47,6 +47,8 @@ class S5UseCasesTest {
     private ManageSessionUseCase manageSession;
     private AdjustPolicyUseCase adjustPolicy;
     private ManageCatalogUseCase manageCatalog;
+    private io.github.zcd0831.jellyfish.infrastructure.file.FileCommitScope commitScope;
+    private io.github.zcd0831.jellyfish.infrastructure.file.FileBudgetRepository budgets;
 
     @BeforeEach
     void setUp() {
@@ -55,9 +57,38 @@ class S5UseCasesTest {
         InProcessEventPublisher publisher = new InProcessEventPublisher();
         sessions = new FileSessionRepository(dir, codec);
         policies = new FilePolicyRepository(dir, codec);
+        commitScope = new FileCommitScope(dir, codec);
+        budgets = new io.github.zcd0831.jellyfish.infrastructure.file.FileBudgetRepository(dir, codec);
+        io.github.zcd0831.jellyfish.application.action.BudgetService budgetService =
+                new io.github.zcd0831.jellyfish.application.action.BudgetService(
+                        budgets, sessions, policies, commitScope, publisher, event -> { });
+        io.github.zcd0831.jellyfish.application.perception.ContextWindowService window =
+                new io.github.zcd0831.jellyfish.application.perception.ContextWindowService(
+                        new io.github.zcd0831.jellyfish.application.action.port.ModelInvocationPort() {
+                            @Override
+                            public io.github.zcd0831.jellyfish.application.action.port.ModelInvocationResult invoke(
+                                    io.github.zcd0831.jellyfish.application.action.port.ModelInvocationRequest request) {
+                                throw new UnsupportedOperationException();
+                            }
+
+                            @Override
+                            public io.github.zcd0831.jellyfish.application.action.port.ModelInvocationResult invokeStreaming(
+                                    io.github.zcd0831.jellyfish.application.action.port.ModelInvocationRequest request,
+                                    io.github.zcd0831.jellyfish.application.shared.ChunkSink sink) {
+                                throw new UnsupportedOperationException();
+                            }
+
+                            @Override
+                            public io.github.zcd0831.jellyfish.application.action.port.ModelProfile describe(
+                                    io.github.zcd0831.jellyfish.domain.shared.ModelId modelId) {
+                                return new io.github.zcd0831.jellyfish.application.action.port.ModelProfile(50000, 4096);
+                            }
+                        },
+                        policies, commitScope, publisher, event -> { }, budgetService,
+                        text -> text == null ? 0 : text.length() / 4);
         manageSession = new ManageSessionUseCase(sessions, new FileArtifactStore(dir),
-                new FileCommitScope(dir, codec), publisher, store());
-        adjustPolicy = new AdjustPolicyUseCase(policies, new FileCommitScope(dir, codec), publisher);
+                commitScope, publisher, store(), window);
+        adjustPolicy = new AdjustPolicyUseCase(policies, commitScope, publisher);
         manageCatalog = new ManageCatalogUseCase(FileCatalogRepository.standalone(dir, codec));
     }
 
@@ -189,5 +220,21 @@ class S5UseCasesTest {
         assertEquals(18200L, saved.lastPromptTokens());
         assertEquals(id.getValue(), saved.lastPromptSessionId());
         assertTrue(!saved.lastPromptEstimated(), "厂商给的就是精确值");
+    }
+
+    @Test
+    void 回放带回上下文占用标签且随观测变化() {
+        SessionId id = newSession();
+
+        assertEquals("— / 50k", manageSession.transcript(id, 10).value().contextLabel(),
+                "还没有请求过：不拿估算冒充");
+
+        io.github.zcd0831.jellyfish.domain.action.budget.Budget budget =
+                io.github.zcd0831.jellyfish.domain.action.budget.Budget.openFor(
+                        io.github.zcd0831.jellyfish.domain.shared.BudgetId.of("b1"), id);
+        budget.observePrompt(id, 18200L, false);
+        budgets.save(budget);
+
+        assertEquals("18.2k / 50k", manageSession.transcript(id, 10).value().contextLabel());
     }
 }

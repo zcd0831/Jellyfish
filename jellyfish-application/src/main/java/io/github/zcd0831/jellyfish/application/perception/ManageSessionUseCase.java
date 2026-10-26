@@ -28,14 +28,17 @@ public final class ManageSessionUseCase {
     private final CommitScope commitScope;
     private final DomainEventPublisher eventPublisher;
     private final RecordStore records;
+    private final ContextWindowService contextWindow;
 
     public ManageSessionUseCase(SessionRepository sessions, ArtifactStore artifacts, CommitScope commitScope,
-                                DomainEventPublisher eventPublisher, RecordStore records) {
+                                DomainEventPublisher eventPublisher, RecordStore records,
+                                ContextWindowService contextWindow) {
         this.sessions = sessions;
         this.artifacts = artifacts;
         this.commitScope = commitScope;
         this.eventPublisher = eventPublisher;
         this.records = records;
+        this.contextWindow = contextWindow;
     }
 
     /**
@@ -94,7 +97,7 @@ public final class ManageSessionUseCase {
         boolean hasEarlier = tail.size() > wanted;
         List<Record> shown = hasEarlier ? tail.subList(tail.size() - wanted, tail.size()) : tail;
         return Result.ok(new SessionTranscript(session.id(), session.title(), session.activeModelId(),
-                session.createdDate(), new ArrayList<Record>(shown), hasEarlier));
+                session.createdDate(), new ArrayList<Record>(shown), hasEarlier, contextWindow.contextLabel(session)));
     }
 
     /** 列出可用会话（含子会话），界面据此让人挑一个加载（D22）。 */

@@ -88,6 +88,11 @@ public final class ContextWindowService {
      * 折叠判定仍用请求前的估算（window），两者不混用。规则出处：模块-应用层 §6。
      */
     private void announceContextUsage(Session session) {
+        progress.emit(ProgressEvent.of(ProgressEvent.Kind.CONTEXT_USAGE, contextLabel(session)));
+    }
+
+    /** 界面标签：最近一次请求的用量 / 模型输入上限（回放历史会话时也用它）。 */
+    public String contextLabel(Session session) {
         int maxInput = model.describe(session.activeModelId()).maxInputTokens();
         Budget budget = budgetService.budgetOf(session);
         String value = "—";
@@ -95,7 +100,7 @@ public final class ContextWindowService {
                 && budget.lastPromptTokens() > 0) {
             value = (budget.lastPromptEstimated() ? "≈" : "") + tokens((int) budget.lastPromptTokens());
         }
-        progress.emit(ProgressEvent.of(ProgressEvent.Kind.CONTEXT_USAGE, value + " / " + tokens(maxInput)));
+        return value + " / " + tokens(maxInput);
     }
 
     /** 1.2k / 950 这类短写法：界面上只求一眼可读。 */

@@ -492,6 +492,7 @@ public final class TuiApp implements QuestionBroker.Answerer {
         currentSession = sessionId;
         stats.reset();
         replay(loaded.value());
+        stats.restoreContextLabel(loaded.value().contextLabel());
     }
 
     /** 只回放"人话"：用户与助手正文；工具压一行、摘要一行、系统注入与 reasoning 一律不显示。 */

@@ -96,6 +96,11 @@ public final class TurnStats {
         }
     }
 
+    /** 打开历史会话时直接给定标签，不必等下一轮才有 CONTEXT_USAGE。 */
+    public void restoreContextLabel(String label) {
+        this.contextLabel = label == null ? null : label.replaceAll("\\s*/\\s*", "/");
+    }
+
     /** 提示符里的上下文占用；还没算出来时返回 null。 */
     String contextLabel() {
         return contextLabel;

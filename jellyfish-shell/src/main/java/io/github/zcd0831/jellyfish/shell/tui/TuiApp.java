@@ -43,6 +43,8 @@ import java.util.concurrent.atomic.AtomicLong;
 public final class TuiApp implements QuestionBroker.Answerer {
 
     private static final long DOUBLE_INTERRUPT_MILLIS = 2000L;
+    /** 回放条数：约 30 轮对话，再多也没人看。 */
+    private static final int REPLAY_RECORDS = 100;
 
     private enum InputMode {
         PROMPT, PAUSED, QUESTION
@@ -447,8 +449,7 @@ public final class TuiApp implements QuestionBroker.Answerer {
         if ("/sessions".equals(name)) {
             listSessions();
         } else if ("/open".equals(name) && parts.length > 1) {
-            currentSession = SessionId.of(parts[1]);
-            renderer.info("（已切换到 " + parts[1] + "）");
+            openSession(SessionId.of(parts[1]));
         } else if ("/archive".equals(name)) {
             print(manageSession.archive(currentSession));
             currentSession = null;
@@ -478,6 +479,66 @@ public final class TuiApp implements QuestionBroker.Answerer {
         } else {
             list(name);
         }
+    }
+
+    /** 切到已有会话并回放最近记录：用户想接着聊，不该自己再翻一遍历史。 */
+    private void openSession(SessionId sessionId) {
+        Result<io.github.zcd0831.jellyfish.application.perception.SessionTranscript> loaded =
+                manageSession.transcript(sessionId, REPLAY_RECORDS);
+        if (!loaded.isOk()) {
+            printError(loaded.error());
+            return;
+        }
+        currentSession = sessionId;
+        replay(loaded.value());
+    }
+
+    /** 只回放"人话"：用户与助手正文；工具压一行、摘要一行、系统注入与 reasoning 一律不显示。 */
+    private void replay(io.github.zcd0831.jellyfish.application.perception.SessionTranscript transcript) {
+        renderer.divider("—— 会话：" + transcript.title() + "（" + transcript.modelId().getValue()
+                + "，" + dateFormat().format(new java.util.Date(transcript.createdDate())) + "） ——");
+        for (io.github.zcd0831.jellyfish.domain.perception.session.Record record : transcript.records()) {
+            switch (record.role()) {
+                case USER:
+                    renderer.userPrefix();
+                    renderer.append(record.content());
+                    renderer.endTurn();
+                    break;
+                case ASSISTANT:
+                    renderer.assistantPrefix();
+                    renderer.append(record.content());
+                    renderer.endTurn();
+                    break;
+                case TOOL_REQUEST:
+                    renderer.info("↳ " + record.content());
+                    break;
+                case TOOL_RESULT:
+                    renderer.info("✓ " + firstLine(record.content(), 80));
+                    break;
+                case SUMMARY:
+                    renderer.info("〔更早对话已压缩为摘要〕");
+                    break;
+                default:
+                    // SYSTEM（经验/SOP 注入）不是对话内容，回放时不显示
+            }
+        }
+        if (transcript.hasEarlier()) {
+            renderer.info("（上面是最近 " + REPLAY_RECORDS + " 条，更早的没有显示）");
+        }
+        renderer.info("（已切到该会话，继续输入即可）");
+    }
+
+    private static java.text.SimpleDateFormat dateFormat() {
+        return new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.ROOT);
+    }
+
+    private static String firstLine(String text, int limit) {
+        if (text == null) {
+            return "";
+        }
+        int newline = text.indexOf('\n');
+        String line = newline < 0 ? text : text.substring(0, newline);
+        return line.length() > limit ? line.substring(0, limit) + "…" : line;
     }
 
     /** 会话列表只来自存在的目录（D22：没有状态字段，存在即可用）。 */

@@ -41,6 +41,7 @@ class S5UseCasesTest {
     Path tmp;
 
     private final JsonCodec codec = new JsonCodec();
+    private DataDirectory dir;
     private FileSessionRepository sessions;
     private FilePolicyRepository policies;
     private ManageSessionUseCase manageSession;
@@ -50,11 +51,12 @@ class S5UseCasesTest {
     @BeforeEach
     void setUp() {
         DataDirectory dir = DataDirectory.of(tmp.toString());
+        this.dir = dir;
         InProcessEventPublisher publisher = new InProcessEventPublisher();
         sessions = new FileSessionRepository(dir, codec);
         policies = new FilePolicyRepository(dir, codec);
         manageSession = new ManageSessionUseCase(sessions, new FileArtifactStore(dir),
-                new FileCommitScope(dir, codec), publisher);
+                new FileCommitScope(dir, codec), publisher, store());
         adjustPolicy = new AdjustPolicyUseCase(policies, new FileCommitScope(dir, codec), publisher);
         manageCatalog = new ManageCatalogUseCase(FileCatalogRepository.standalone(dir, codec));
     }
@@ -135,5 +137,38 @@ class S5UseCasesTest {
         assertTrue(builtinAgent != null, "应能读到内置代理");
 
         assertFalse(manageCatalog.saveAgent(builtinAgent).isOk(), "内置代理不允许经用例写入");
+    }
+
+    @Test
+    void 回放返回最近若干条并标出是否还有更早的() {
+        SessionId id = newSession();
+        io.github.zcd0831.jellyfish.application.perception.port.RecordStore store = store();
+        for (int i = 0; i < 5; i++) {
+            store.append(id, new io.github.zcd0831.jellyfish.domain.perception.session.Record(
+                    io.github.zcd0831.jellyfish.domain.shared.RecordId.of("r" + i),
+                    io.github.zcd0831.jellyfish.domain.perception.session.RecordRole.USER,
+                    "第" + i + "条", null, i + 1, System.currentTimeMillis()));
+        }
+
+        io.github.zcd0831.jellyfish.application.perception.SessionTranscript tail =
+                manageSession.transcript(id, 3).value();
+
+        assertEquals(3, tail.records().size());
+        assertTrue(tail.hasEarlier(), "还有更早的记录");
+        assertEquals("第4条", tail.records().get(2).content());
+
+        io.github.zcd0831.jellyfish.application.perception.SessionTranscript all =
+                manageSession.transcript(id, 50).value();
+        assertEquals(5, all.records().size());
+        assertTrue(!all.hasEarlier());
+    }
+
+    @Test
+    void 回放不存在的会话返回会话不存在() {
+        assertFalse(manageSession.transcript(SessionId.of("nope"), 10).isOk());
+    }
+
+    private io.github.zcd0831.jellyfish.application.perception.port.RecordStore store() {
+        return new io.github.zcd0831.jellyfish.infrastructure.file.FileRecordStore(dir, codec);
     }
 }

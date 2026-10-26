@@ -1,5 +1,6 @@
 package io.github.zcd0831.jellyfish.application.perception;
 
+import io.github.zcd0831.jellyfish.application.perception.port.RecordStore;
 import io.github.zcd0831.jellyfish.application.perception.port.SessionRepository;
 import io.github.zcd0831.jellyfish.application.perception.port.SessionSummary;
 import io.github.zcd0831.jellyfish.application.shared.Result;
@@ -7,6 +8,7 @@ import io.github.zcd0831.jellyfish.application.shared.UseCaseError;
 import io.github.zcd0831.jellyfish.application.shared.port.ArtifactStore;
 import io.github.zcd0831.jellyfish.application.shared.port.CommitScope;
 import io.github.zcd0831.jellyfish.application.shared.port.DomainEventPublisher;
+import io.github.zcd0831.jellyfish.domain.perception.session.Record;
 import io.github.zcd0831.jellyfish.domain.perception.session.Session;
 import io.github.zcd0831.jellyfish.domain.perception.session.SessionError;
 import io.github.zcd0831.jellyfish.domain.shared.DomainEvent;
@@ -25,13 +27,15 @@ public final class ManageSessionUseCase {
     private final ArtifactStore artifacts;
     private final CommitScope commitScope;
     private final DomainEventPublisher eventPublisher;
+    private final RecordStore records;
 
     public ManageSessionUseCase(SessionRepository sessions, ArtifactStore artifacts, CommitScope commitScope,
-                                DomainEventPublisher eventPublisher) {
+                                DomainEventPublisher eventPublisher, RecordStore records) {
         this.sessions = sessions;
         this.artifacts = artifacts;
         this.commitScope = commitScope;
         this.eventPublisher = eventPublisher;
+        this.records = records;
     }
 
     /**
@@ -74,6 +78,23 @@ public final class ManageSessionUseCase {
         artifacts.deleteSession(sessionId);
         sessions.delete(sessionId);
         return Result.ok(null);
+    }
+
+    /**
+     * 回放：会话头 + 最近 limit 条记录（只读，不动任何状态）。
+     * 规则出处：模块-应用层 §8.4（查看/回放）。
+     */
+    public Result<SessionTranscript> transcript(SessionId sessionId, int limit) {
+        Session session = sessions.load(sessionId);
+        if (session == null) {
+            return Result.fail(UseCaseError.of(SessionError.NOT_FOUND, "会话不存在", sessionId));
+        }
+        int wanted = Math.max(1, limit);
+        List<Record> tail = records.last(sessionId, wanted + 1);
+        boolean hasEarlier = tail.size() > wanted;
+        List<Record> shown = hasEarlier ? tail.subList(tail.size() - wanted, tail.size()) : tail;
+        return Result.ok(new SessionTranscript(session.id(), session.title(), session.activeModelId(),
+                session.createdDate(), new ArrayList<Record>(shown), hasEarlier));
     }
 
     /** 列出可用会话（含子会话），界面据此让人挑一个加载（D22）。 */

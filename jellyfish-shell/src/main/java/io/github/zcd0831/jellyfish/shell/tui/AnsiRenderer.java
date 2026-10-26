@@ -86,6 +86,13 @@ public final class AnsiRenderer {
         }
     }
 
+    /** 用户前缀：回放历史时用来区分"谁说的"。 */
+    public synchronized void userPrefix() {
+        clearStatusLine();
+        out.print(paint(DIM) + "你 " + paint(RESET));
+        column = 2;
+    }
+
     public synchronized void assistantPrefix() {
         clearStatusLine();
         out.print(paint(CYAN) + "助手 " + paint(RESET));

@@ -20,9 +20,12 @@ public final class SessionTranscript {
     private final List<Record> records;
     private final boolean hasEarlier;
     private final String contextLabel;
+    private final long consumedTokens;
+    private final long budgetLimitTokens;
 
     public SessionTranscript(SessionId sessionId, String title, ModelId modelId, long createdDate,
-                             List<Record> records, boolean hasEarlier, String contextLabel) {
+                             List<Record> records, boolean hasEarlier, String contextLabel,
+                             long consumedTokens, long budgetLimitTokens) {
         this.sessionId = sessionId;
         this.title = title;
         this.modelId = modelId;
@@ -30,6 +33,8 @@ public final class SessionTranscript {
         this.records = records;
         this.hasEarlier = hasEarlier;
         this.contextLabel = contextLabel;
+        this.consumedTokens = consumedTokens;
+        this.budgetLimitTokens = budgetLimitTokens;
     }
 
     public SessionId sessionId() {
@@ -60,5 +65,15 @@ public final class SessionTranscript {
     /** "最近一次请求的用量 / 输入上限"：打开历史会话时提示符直接用，不必等下一轮。 */
     public String contextLabel() {
         return contextLabel;
+    }
+
+    /** 会话族已消耗的 token（台账值；没有台账时为 0）。 */
+    public long consumedTokens() {
+        return consumedTokens;
+    }
+
+    /** 会话族的总额度：状态栏显示 `累计 X / Y` 的 Y。 */
+    public long budgetLimitTokens() {
+        return budgetLimitTokens;
     }
 }

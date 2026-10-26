@@ -62,7 +62,6 @@ public final class TuiApp implements QuestionBroker.Answerer {
     private final ManagePluginsUseCase plugins;
     private final AnsiRenderer renderer;
     private final OutputGateway gateway;
-    private org.jline.utils.Status status;
     private final Terminal terminal;
     private final TurnStats stats;
     private final ShellCancellationToken token;
@@ -111,9 +110,6 @@ public final class TuiApp implements QuestionBroker.Answerer {
                     .option(LineReader.Option.DISABLE_EVENT_EXPANSION, true)
                     .build();
             terminal.handle(Terminal.Signal.INT, signal -> onInterrupt());
-            if (terminal instanceof org.jline.terminal.impl.AbstractTerminal) {
-                status = new org.jline.utils.Status((org.jline.terminal.impl.AbstractTerminal) terminal);
-            }
             bindInsertNewline();
             startInputThread();
         }
@@ -143,7 +139,6 @@ public final class TuiApp implements QuestionBroker.Answerer {
                             waitOnLock();
                         }
                         prompt = mode == InputMode.QUESTION ? "回答（/cancel 放弃）> " : prompt();
-                        refreshStatus();
                     }
                     String line;
                     gateway.reading(reader);
@@ -238,7 +233,6 @@ public final class TuiApp implements QuestionBroker.Answerer {
             }
             String text = line.trim();
             if (isExit(text)) {
-                hideStatus();
                 renderer.endTurn();
                 gateway.close();
                 return;
@@ -247,7 +241,6 @@ public final class TuiApp implements QuestionBroker.Answerer {
                 resumePrompt();
                 continue;
             }
-            hideStatus();
             if (text.startsWith("/")) {
                 command(text);
             } else {
@@ -260,7 +253,6 @@ public final class TuiApp implements QuestionBroker.Answerer {
     private void resumePrompt() {
         synchronized (inputLock) {
             mode = InputMode.PROMPT;
-            refreshStatus();
             inputLock.notifyAll();
         }
     }
@@ -282,34 +274,6 @@ public final class TuiApp implements QuestionBroker.Answerer {
         return currentSession == null ? "新会话> " : "继续> ";
     }
 
-    /**
-     * 底部状态栏：会话、上下文占用、累计用量。
-     * 只在等输入时挂出来；跑一轮时收起来，免得和流式输出抢行。
-     */
-    private void refreshStatus() {
-        if (status == null) {
-            return;
-        }
-        List<String> parts = new ArrayList<String>();
-        if (currentSession != null) {
-            String id = currentSession.getValue();
-            parts.add("会话 " + (id.length() > 8 ? id.substring(0, 8) : id));
-        }
-        String label = stats.contextLabel();
-        parts.add("上下文 " + (label == null ? "—" : label));
-        if (stats.limit() > 0) {
-            parts.add("累计 " + stats.tokensTotal() + " / " + stats.limit());
-        }
-        status.update(Collections.singletonList(new org.jline.utils.AttributedString(
-                String.join("  ·  ", parts), org.jline.utils.AttributedStyle.DEFAULT.faint())));
-    }
-
-    /** 跑一轮时收起状态栏：JLine 的状态栏和直接写终端的内容会互相覆盖。 */
-    private void hideStatus() {
-        if (status != null) {
-            status.update(Collections.emptyList());
-        }
-    }
 
     private void handle(String text) {
         if (currentSession == null) {
@@ -327,7 +291,6 @@ public final class TuiApp implements QuestionBroker.Answerer {
 
     private void runOnce(String text) {
         pauseInput();
-        hideStatus();
         token.reset();
         stats.reset();
         renderer.status("思考中…");
@@ -530,6 +493,7 @@ public final class TuiApp implements QuestionBroker.Answerer {
         stats.reset();
         replay(loaded.value());
         stats.restoreContextLabel(loaded.value().contextLabel());
+        stats.restoreUsage(loaded.value().consumedTokens(), loaded.value().budgetLimitTokens());
     }
 
     /** 只回放"人话"：用户与助手正文；工具压一行、摘要一行、系统注入与 reasoning 一律不显示。 */

@@ -87,7 +87,7 @@ class S5UseCasesTest {
                         policies, commitScope, publisher, event -> { }, budgetService,
                         text -> text == null ? 0 : text.length() / 4);
         manageSession = new ManageSessionUseCase(sessions, new FileArtifactStore(dir),
-                commitScope, publisher, store(), window);
+                commitScope, publisher, store(), window, budgets, policies);
         adjustPolicy = new AdjustPolicyUseCase(policies, commitScope, publisher);
         manageCatalog = new ManageCatalogUseCase(FileCatalogRepository.standalone(dir, codec));
     }
@@ -242,5 +242,14 @@ class S5UseCasesTest {
         budgets.save(budget);
 
         assertEquals("18.2k / 50k", manageSession.transcript(id, 10).value().contextLabel());
+        assertEquals(0L, manageSession.transcript(id, 10).value().consumedTokens(), "还没记账");
+
+        budget.recordUsage(300L, io.github.zcd0831.jellyfish.domain.perception.policy.RuntimePolicy.defaults());
+        budgets.save(budget);
+        io.github.zcd0831.jellyfish.application.perception.SessionTranscript after =
+                manageSession.transcript(id, 10).value();
+        assertEquals(300L, after.consumedTokens(), "台账累计随回放带出，状态栏不必等下一轮");
+        assertEquals(io.github.zcd0831.jellyfish.domain.perception.policy.RuntimePolicy.defaults().budgetLimitTokens(),
+                after.budgetLimitTokens());
     }
 }

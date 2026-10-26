@@ -61,4 +61,17 @@ class TurnStatsTest {
         stats.reset();
         assertEquals("12.3k/50k", stats.contextLabel(), "新的一轮不该把上下文占用清掉");
     }
+
+    @Test
+    void 本轮小结带上上下文占用() {
+        TurnStats stats = new TurnStats();
+        stats.reset();
+        stats.observe(ProgressEvent.of(ProgressEvent.Kind.USAGE, "+2591 / 累计 2591 / 上限 1000000"));
+        stats.observe(ProgressEvent.of(ProgressEvent.Kind.CONTEXT_USAGE, "100/50k"));
+
+        String summary = stats.summary();
+
+        assertTrue(summary.contains("/ 上下文 100/50k /"), summary);
+        assertTrue(summary.startsWith("—— 本轮 1 次模型调用 / +2591 tokens"), summary);
+    }
 }

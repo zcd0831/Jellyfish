@@ -81,6 +81,9 @@ public final class TurnStats {
         if (tools > 0) {
             text.append(" / ").append(tools).append(" 个工具");
         }
+        if (contextLabel != null) {
+            text.append(" / 上下文 ").append(contextLabel);
+        }
         text.append(" / ").append(elapsedSeconds()).append("s ——");
         return text.toString();
     }
@@ -103,6 +106,12 @@ public final class TurnStats {
 
     public long limit() {
         return limit;
+    }
+
+    /** 打开历史会话时恢复台账累计（台账是持久事实，不必等下一次 USAGE）。 */
+    public void restoreUsage(long total, long limit) {
+        this.tokensTotal = total;
+        this.limit = limit;
     }
 
     /** 打开历史会话时直接给定标签，不必等下一轮才有 CONTEXT_USAGE。 */

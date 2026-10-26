@@ -1,6 +1,8 @@
 package io.github.zcd0831.jellyfish.application.perception;
 
+import io.github.zcd0831.jellyfish.application.action.port.BudgetRepository;
 import io.github.zcd0831.jellyfish.application.perception.port.RecordStore;
+import io.github.zcd0831.jellyfish.application.perception.port.PolicyRepository;
 import io.github.zcd0831.jellyfish.application.perception.port.SessionRepository;
 import io.github.zcd0831.jellyfish.application.perception.port.SessionSummary;
 import io.github.zcd0831.jellyfish.application.shared.Result;
@@ -8,6 +10,7 @@ import io.github.zcd0831.jellyfish.application.shared.UseCaseError;
 import io.github.zcd0831.jellyfish.application.shared.port.ArtifactStore;
 import io.github.zcd0831.jellyfish.application.shared.port.CommitScope;
 import io.github.zcd0831.jellyfish.application.shared.port.DomainEventPublisher;
+import io.github.zcd0831.jellyfish.domain.action.budget.Budget;
 import io.github.zcd0831.jellyfish.domain.perception.session.Record;
 import io.github.zcd0831.jellyfish.domain.perception.session.Session;
 import io.github.zcd0831.jellyfish.domain.perception.session.SessionError;
@@ -29,16 +32,21 @@ public final class ManageSessionUseCase {
     private final DomainEventPublisher eventPublisher;
     private final RecordStore records;
     private final ContextWindowService contextWindow;
+    private final BudgetRepository budgets;
+    private final PolicyRepository policies;
 
     public ManageSessionUseCase(SessionRepository sessions, ArtifactStore artifacts, CommitScope commitScope,
                                 DomainEventPublisher eventPublisher, RecordStore records,
-                                ContextWindowService contextWindow) {
+                                ContextWindowService contextWindow, BudgetRepository budgets,
+                                PolicyRepository policies) {
         this.sessions = sessions;
         this.artifacts = artifacts;
         this.commitScope = commitScope;
         this.eventPublisher = eventPublisher;
         this.records = records;
         this.contextWindow = contextWindow;
+        this.budgets = budgets;
+        this.policies = policies;
     }
 
     /**
@@ -96,8 +104,24 @@ public final class ManageSessionUseCase {
         List<Record> tail = records.last(sessionId, wanted + 1);
         boolean hasEarlier = tail.size() > wanted;
         List<Record> shown = hasEarlier ? tail.subList(tail.size() - wanted, tail.size()) : tail;
+        Budget budget = budgets.load(rootOf(session));
         return Result.ok(new SessionTranscript(session.id(), session.title(), session.activeModelId(),
-                session.createdDate(), new ArrayList<Record>(shown), hasEarlier, contextWindow.contextLabel(session)));
+                session.createdDate(), new ArrayList<Record>(shown), hasEarlier, contextWindow.contextLabel(session),
+                budget == null ? 0L : budget.consumedTokens(),
+                policies.load().budgetLimitTokens()));
+    }
+
+    /** 台账在会话族根上：子会话往上找根（与 BudgetService 同一规则）。 */
+    private SessionId rootOf(Session session) {
+        SessionId current = session.id();
+        SessionId parent = session.parentSessionId();
+        int guard = 0;
+        while (parent != null && guard++ < 16) {
+            current = parent;
+            Session look = sessions.load(parent);
+            parent = look == null ? null : look.parentSessionId();
+        }
+        return current;
     }
 
     /** 列出可用会话（含子会话），界面据此让人挑一个加载（D22）。 */

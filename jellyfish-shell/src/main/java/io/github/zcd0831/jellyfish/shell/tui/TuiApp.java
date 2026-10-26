@@ -67,6 +67,8 @@ public final class TuiApp implements QuestionBroker.Answerer {
     private final Object inputLock = new Object();
 
     private InputMode mode = InputMode.PAUSED;
+    /** 多行草稿：只在输入线程里读写。 */
+    private final DraftInput draft = new DraftInput();
     private CompletableFuture<Answer> pending;
     private volatile SessionId currentSession;
     private LineReader reader;
@@ -103,10 +105,22 @@ public final class TuiApp implements QuestionBroker.Answerer {
                     .option(LineReader.Option.DISABLE_EVENT_EXPANSION, true)
                     .build();
             terminal.handle(Terminal.Signal.INT, signal -> onInterrupt());
+            bindInsertNewline();
             startInputThread();
         }
         resumePrompt();
         loop();
+    }
+
+    /** `Alt+Enter` 在缓冲区插入换行（C1 乙）；绑定失败不影响行尾 `\` 续行。 */
+    private void bindInsertNewline() {
+        try {
+            reader.getWidgets().put("jellyfish-insert-newline", new InsertNewlineWidget(reader));
+            reader.getKeyMaps().get(LineReader.MAIN)
+                    .bind(new org.jline.reader.Reference("jellyfish-insert-newline"), "\u001B\r");
+        } catch (RuntimeException unsupported) {
+            // 终端/键位表不支持就算了，行尾 `\` 仍可用
+        }
     }
 
     private void startInputThread() {
@@ -191,9 +205,16 @@ public final class TuiApp implements QuestionBroker.Answerer {
                 mode = InputMode.PAUSED;
                 return;
             }
+        }
+        if (draft.accept(line)) {
+            // 行尾 `\` 续行：保持 PROMPT，输入线程继续读下一行
+            return;
+        }
+        String complete = draft.take();
+        synchronized (inputLock) {
             mode = InputMode.PAUSED;
         }
-        commands.offer(line);
+        commands.offer(complete);
     }
 
     private void loop() {
@@ -242,6 +263,9 @@ public final class TuiApp implements QuestionBroker.Answerer {
     }
 
     private String prompt() {
+        if (draft.isContinuing()) {
+            return "...> ";
+        }
         String label = stats.contextLabel();
         String usage = label == null ? "" : "[" + label + "] ";
         // 没有上下文占用时不要多出空格：`继续 > ` 比 `继续  > ` 好看
@@ -394,6 +418,11 @@ public final class TuiApp implements QuestionBroker.Answerer {
 
     /** Ctrl-C 在提示符处：清行继续，两秒内第二次退出（D20-5）。 */
     private void onPromptInterrupt() {
+        if (draft.isContinuing()) {
+            draft.clear();
+            renderer.info("（已放弃这段多行输入）");
+            return;
+        }
         long now = System.currentTimeMillis();
         if (now - lastPromptInterrupt.getAndSet(now) <= DOUBLE_INTERRUPT_MILLIS) {
             commands.offer("exit");

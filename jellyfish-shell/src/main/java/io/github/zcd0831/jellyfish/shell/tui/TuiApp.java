@@ -101,7 +101,7 @@ public final class TuiApp implements QuestionBroker.Answerer {
         } else {
             reader = LineReaderBuilder.builder()
                     .terminal(terminal)
-                    .completer(new CommandCompleter())
+                    .completer(new CommandCompleter(new TuiParameterCandidates(manageSession, catalog)))
                     .option(LineReader.Option.DISABLE_EVENT_EXPANSION, true)
                     .build();
             terminal.handle(Terminal.Signal.INT, signal -> onInterrupt());

@@ -282,7 +282,7 @@ public final class ExecutionLoop implements SessionRunner {
                     Collections.singletonList(ChatMessage.of(RecordRole.USER, "目标：" + plan.goal())),
                     Collections.emptyList(), 0, null));
             if (result.usage() != null) {
-                budgetService.recordUsage(session, result.usage().total());
+                budgetService.recordUsage(session, result.usage());
             }
             Map<String, Object> args = Json.parseObject(result.text());
             Plan draft = planFactory.create(PlanId.of(UUID.randomUUID().toString()), session.id(), args,
@@ -415,7 +415,7 @@ public final class ExecutionLoop implements SessionRunner {
                     Collections.singletonList(ChatMessage.of(RecordRole.USER, task)),
                     Collections.emptyList(), 0, null));
             if (result.usage() != null) {
-                budgetService.recordUsage(session, result.usage().total());
+                budgetService.recordUsage(session, result.usage());
             }
             return result.text() == null || result.text().trim().isEmpty() ? null : result.text();
         } catch (RuntimeException unavailable) {

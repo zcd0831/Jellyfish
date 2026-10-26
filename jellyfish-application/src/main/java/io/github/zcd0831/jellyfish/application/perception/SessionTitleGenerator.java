@@ -34,7 +34,7 @@ public final class SessionTitleGenerator {
                     INSTRUCTION, Collections.singletonList(ChatMessage.of(RecordRole.USER, firstInput)),
                     Collections.emptyList(), 0, null));
             if (result.usage() != null) {
-                budgetService.recordUsage(session, result.usage().total());
+                budgetService.recordUsage(session, result.usage());
             }
             String title = result.text() == null ? "" : result.text().trim();
             if (!title.isEmpty() && title.length() <= MAX_TITLE_LENGTH) {

@@ -130,7 +130,7 @@ public final class VerificationRunner {
                     Collections.singletonList(ChatMessage.of(RecordRole.USER, input)),
                     Collections.emptyList(), 0, null));
             if (result.usage() != null) {
-                budgetService.recordUsage(session, result.usage().total());
+                budgetService.recordUsage(session, result.usage());
             }
             return parseVerdict(result.text());
         } catch (RuntimeException unavailable) {

@@ -1,17 +1,28 @@
 package io.github.zcd0831.jellyfish.application.action.port;
 
 /**
- * 一次调用的精确用量：台账口径，只有厂商不给时才回退估算。
- * 规则出处：技术决策 D08 第 1 节。
+ * 一次调用的用量：厂商给了就是精确值，没给时回退本地估算并由 {@link #estimated()} 标出。
+ * 规则出处：模块-行动 §8.3（用量展示口径）。
  */
 public final class ModelUsage {
 
     private final long inputTokens;
     private final long outputTokens;
+    private final boolean estimated;
 
     public ModelUsage(long inputTokens, long outputTokens) {
+        this(inputTokens, outputTokens, false);
+    }
+
+    public ModelUsage(long inputTokens, long outputTokens, boolean estimated) {
         this.inputTokens = inputTokens;
         this.outputTokens = outputTokens;
+        this.estimated = estimated;
+    }
+
+    /** 厂商未返回 usage、由本地计数兜底。界面据此加 ≈，不要把估算当精确值。 */
+    public boolean estimated() {
+        return estimated;
     }
 
     public long inputTokens() {

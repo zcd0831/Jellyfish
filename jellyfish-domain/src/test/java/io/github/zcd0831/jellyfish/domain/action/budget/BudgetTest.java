@@ -63,4 +63,22 @@ class BudgetTest {
 
         assertFalse(budget.warned());
     }
+
+    @Test
+    void 记下最近一次请求的用量并在折叠后清掉() {
+        Budget budget = Budget.openFor(BudgetId.of("b1"), SessionId.of("s1"));
+
+        budget.observePrompt(SessionId.of("s2"), 18200L, false);
+
+        assertEquals(18200L, budget.lastPromptTokens());
+        assertFalse(budget.lastPromptEstimated(), "厂商给的是精确值");
+        assertEquals("s2", budget.lastPromptSessionId());
+
+        budget.observePrompt(SessionId.of("s2"), 300L, true);
+        assertTrue(budget.lastPromptEstimated(), "厂商没给时是估算，界面要加 ≈");
+
+        budget.forgetPromptObservation();
+        assertEquals(0L, budget.lastPromptTokens());
+        assertEquals(null, budget.lastPromptSessionId());
+    }
 }

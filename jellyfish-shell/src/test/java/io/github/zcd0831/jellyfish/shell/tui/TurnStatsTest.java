@@ -54,7 +54,7 @@ class TurnStatsTest {
     void 上下文占用跨轮保留并供提示符使用() {
         TurnStats stats = new TurnStats();
         stats.reset();
-        stats.observe(ProgressEvent.of(ProgressEvent.Kind.CONTEXT_USAGE, "上下文 12.3k / 50k"));
+        stats.observe(ProgressEvent.of(ProgressEvent.Kind.CONTEXT_USAGE, "12.3k / 50k"));
 
         assertEquals("12.3k/50k", stats.contextLabel());
 

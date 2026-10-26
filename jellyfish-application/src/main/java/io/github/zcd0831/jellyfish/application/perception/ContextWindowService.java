@@ -11,6 +11,7 @@ import io.github.zcd0831.jellyfish.application.shared.TechnicalLog;
 import io.github.zcd0831.jellyfish.application.shared.port.CommitScope;
 import io.github.zcd0831.jellyfish.application.shared.port.DomainEventPublisher;
 import io.github.zcd0831.jellyfish.application.shared.port.ProgressPort;
+import io.github.zcd0831.jellyfish.domain.action.budget.Budget;
 import io.github.zcd0831.jellyfish.domain.perception.policy.RuntimePolicy;
 import io.github.zcd0831.jellyfish.domain.perception.session.ContextUsage;
 import io.github.zcd0831.jellyfish.domain.perception.session.ContextWindow;
@@ -73,18 +74,28 @@ public final class ContextWindowService {
 
     public void ensureWithinLimit(Session session) {
         ContextWindow window = currentWindow(session);
-        announceContextUsage(session, window);
+        announceContextUsage(session);
         if (window.getUsage().getUsedTokens() > window.getUsage().getInputCeiling()) {
             collapse(session, window);
-            announceContextUsage(session, currentWindow(session));
+            budgetService.forgetPromptObservation(session);
+            announceContextUsage(session);
         }
     }
 
-    /** 上下文占用 / 模型输入上限：界面常驻展示用（可丢弃，不影响折叠判定）。 */
-    private void announceContextUsage(Session session, ContextWindow window) {
+    /**
+     * 请求用量 / 模型输入上限：界面常驻展示用。
+     * 数值取 Budget 里"最近一次请求"的观测（厂商精确值，估算加 ≈）；没有就显示 —（新会话、刚折叠）。
+     * 折叠判定仍用请求前的估算（window），两者不混用。规则出处：模块-应用层 §6。
+     */
+    private void announceContextUsage(Session session) {
         int maxInput = model.describe(session.activeModelId()).maxInputTokens();
-        progress.emit(ProgressEvent.of(ProgressEvent.Kind.CONTEXT_USAGE,
-                "上下文 " + tokens(window.getUsage().getUsedTokens()) + " / " + tokens(maxInput)));
+        Budget budget = budgetService.budgetOf(session);
+        String value = "—";
+        if (budget != null && session.id().getValue().equals(budget.lastPromptSessionId())
+                && budget.lastPromptTokens() > 0) {
+            value = (budget.lastPromptEstimated() ? "≈" : "") + tokens((int) budget.lastPromptTokens());
+        }
+        progress.emit(ProgressEvent.of(ProgressEvent.Kind.CONTEXT_USAGE, value + " / " + tokens(maxInput)));
     }
 
     /** 1.2k / 950 这类短写法：界面上只求一眼可读。 */
@@ -101,6 +112,8 @@ public final class ContextWindowService {
     /** 承接"请求超限"后的补充折叠：不消耗重试名额（§8.2 要点 8）。 */
     public void forceCollapse(Session session) {
         collapse(session, currentWindow(session));
+        budgetService.forgetPromptObservation(session);
+        announceContextUsage(session);
     }
 
     /**
@@ -139,7 +152,7 @@ public final class ContextWindowService {
                 Collections.singletonList(ChatMessage.of(RecordRole.USER, join(folded))),
                 Collections.emptyList(), 0, null));
         if (result.usage() != null) {
-            budgetService.recordUsage(session, result.usage().total());
+            budgetService.recordUsage(session, result.usage());
         }
 
         session.markSummarized(result.text() == null ? "" : result.text(), covered,

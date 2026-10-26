@@ -171,4 +171,23 @@ class S5UseCasesTest {
     private io.github.zcd0831.jellyfish.application.perception.port.RecordStore store() {
         return new io.github.zcd0831.jellyfish.infrastructure.file.FileRecordStore(dir, codec);
     }
+
+    @Test
+    void 记账顺手把本轮请求用量写进台账文件() {
+        SessionId id = newSession();
+        io.github.zcd0831.jellyfish.application.action.BudgetService budget =
+                new io.github.zcd0831.jellyfish.application.action.BudgetService(
+                        new io.github.zcd0831.jellyfish.infrastructure.file.FileBudgetRepository(dir, codec),
+                        sessions, policies, new io.github.zcd0831.jellyfish.infrastructure.file.FileCommitScope(dir, codec),
+                        new InProcessEventPublisher(), event -> { });
+
+        budget.recordUsage(sessions.load(id),
+                new io.github.zcd0831.jellyfish.application.action.port.ModelUsage(18200L, 300L));
+
+        io.github.zcd0831.jellyfish.domain.action.budget.Budget saved =
+                new io.github.zcd0831.jellyfish.infrastructure.file.FileBudgetRepository(dir, codec).load(id);
+        assertEquals(18200L, saved.lastPromptTokens());
+        assertEquals(id.getValue(), saved.lastPromptSessionId());
+        assertTrue(!saved.lastPromptEstimated(), "厂商给的就是精确值");
+    }
 }

@@ -42,7 +42,7 @@ public final class FileBudgetRepository implements BudgetRepository {
         try {
             BudgetDto dto = codec.read(new String(Files.readAllBytes(file), StandardCharsets.UTF_8), BudgetDto.class);
             return new Budget(BudgetId.of(dto.id), SessionId.of(dto.sessionFamilyRootId), dto.consumedTokens,
-                    dto.warned);
+                    dto.warned, dto.lastPromptTokens, dto.lastPromptEstimated, dto.lastPromptSessionId);
         } catch (IOException e) {
             throw new UncheckedIOException("读取台账失败：" + file, e);
         }
@@ -50,13 +50,21 @@ public final class FileBudgetRepository implements BudgetRepository {
 
     @Override
     public void save(Budget budget) {
+        AtomicFiles.write(dataDirectory.sessionDir(budget.sessionFamilyRootId().getValue()).resolve("budget.json"),
+                codec.write(toDto(budget)));
+    }
+
+    /** 映射只留这一份：`FileCommitScope` 也走它，免得新增字段时漏掉一处。 */
+    public static BudgetDto toDto(Budget budget) {
         BudgetDto dto = new BudgetDto();
         dto.id = budget.id().getValue();
         dto.sessionFamilyRootId = budget.sessionFamilyRootId().getValue();
         dto.consumedTokens = budget.consumedTokens();
         dto.warned = budget.warned();
-        AtomicFiles.write(dataDirectory.sessionDir(budget.sessionFamilyRootId().getValue()).resolve("budget.json"),
-                codec.write(dto));
+        dto.lastPromptTokens = budget.lastPromptTokens();
+        dto.lastPromptEstimated = budget.lastPromptEstimated();
+        dto.lastPromptSessionId = budget.lastPromptSessionId();
+        return dto;
     }
 
     private Path file(SessionId rootSessionId) {
@@ -69,5 +77,8 @@ public final class FileBudgetRepository implements BudgetRepository {
         public String sessionFamilyRootId;
         public long consumedTokens;
         public boolean warned;
+        public long lastPromptTokens;
+        public boolean lastPromptEstimated;
+        public String lastPromptSessionId;
     }
 }

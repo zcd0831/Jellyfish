@@ -64,7 +64,7 @@ public final class ExperienceRetriever {
                     Collections.singletonList(ChatMessage.of(RecordRole.USER, material)),
                     Collections.emptyList(), 0, null));
             if (result.usage() != null) {
-                budgetService.recordUsage(session, result.usage().total());
+                budgetService.recordUsage(session, result.usage());
             }
             return parse(result.text(), input);
         } catch (RuntimeException unavailable) {

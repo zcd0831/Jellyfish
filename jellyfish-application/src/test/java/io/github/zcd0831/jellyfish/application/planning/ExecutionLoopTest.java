@@ -354,7 +354,7 @@ class ExecutionLoopTest {
         loop().run(session, ChunkSink.NOOP, NO_TOKEN, NO_CONTEXT);
 
         verify(commitScope, times(1)).stageFact(any(io.github.zcd0831.jellyfish.domain.memory.reflection.Reflection.class));
-        verify(budget).recordUsage(any(Session.class), org.mockito.ArgumentMatchers.anyLong());
+        verify(budget).recordUsage(any(Session.class), org.mockito.ArgumentMatchers.any());
     }
 
     private static io.github.zcd0831.jellyfish.domain.action.agent.AgentDefinition reflectAgent() {

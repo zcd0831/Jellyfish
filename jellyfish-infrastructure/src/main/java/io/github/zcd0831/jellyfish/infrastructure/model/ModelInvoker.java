@@ -259,7 +259,7 @@ public final class ModelInvoker implements ModelInvocationPort {
         }
         int tokens = tokenCounter.count(request.systemPrompt(), request.messages(), model.id());
         return new ModelInvocationResult(result.text(), result.toolCalls(), result.reasoning(),
-                new ModelUsage(tokens, 0L), result.servedModelId());
+                new ModelUsage(tokens, 0L, true), result.servedModelId());
     }
 
     private ChatTransport.Response execute(String url, Map<String, String> headers, String body) {

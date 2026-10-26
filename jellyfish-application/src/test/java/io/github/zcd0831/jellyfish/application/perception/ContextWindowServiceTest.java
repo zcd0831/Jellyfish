@@ -66,6 +66,7 @@ class ContextWindowServiceTest {
 
     private final CommitScope commitScope = mock(CommitScope.class);
     private final BudgetService budget = mock(BudgetService.class);
+    private final List<String> events = new ArrayList<String>();
     private RuntimePolicy policy = RuntimePolicy.defaults();
 
     private final PolicyRepository policies = new PolicyRepository() {
@@ -81,8 +82,66 @@ class ContextWindowServiceTest {
     };
 
     private ContextWindowService service() {
-        when(budget.recordUsage(any(Session.class), anyLong())).thenReturn(false);
-        return new ContextWindowService(model, policies, commitScope, events -> { }, event -> { }, budget, CHARS);
+        when(budget.recordUsage(any(Session.class), any())).thenReturn(false);
+        events.clear();
+        return new ContextWindowService(model, policies, commitScope, events -> { }, event -> {
+            if (event.kind() == io.github.zcd0831.jellyfish.application.shared.ProgressEvent.Kind.CONTEXT_USAGE) {
+                events.add(event.message());
+            }
+        }, budget, CHARS);
+    }
+
+    private static io.github.zcd0831.jellyfish.domain.action.budget.Budget observed(long tokens, boolean estimated) {
+        io.github.zcd0831.jellyfish.domain.action.budget.Budget budget =
+                io.github.zcd0831.jellyfish.domain.action.budget.Budget.openFor(
+                        io.github.zcd0831.jellyfish.domain.shared.BudgetId.of("b1"), SessionId.of("s1"));
+        budget.observePrompt(SessionId.of("s1"), tokens, estimated);
+        return budget;
+    }
+
+    @Test
+    void 提示符显示厂商返回的用量而不是估算() {
+        Session session = sessionWith(1);
+        when(budget.budgetOf(any(Session.class))).thenReturn(observed(18200L, false));
+        ContextWindowService subject = service();
+
+        subject.ensureWithinLimit(session);
+
+        assertEquals("18.2k / 1k", events.get(0), "厂商精确值，不带 ≈");
+    }
+
+    @Test
+    void 厂商没给用量时带估算标记() {
+        Session session = sessionWith(1);
+        when(budget.budgetOf(any(Session.class))).thenReturn(observed(300L, true));
+
+        service().ensureWithinLimit(session);
+
+        assertEquals("≈300 / 1k", events.get(0));
+    }
+
+    @Test
+    void 没有观测时显示占位而不是估算冒充() {
+        Session session = sessionWith(1);
+        when(budget.budgetOf(any(Session.class))).thenReturn(null);
+
+        service().ensureWithinLimit(session);
+
+        assertEquals("— / 1k", events.get(0));
+    }
+
+    @Test
+    void 折叠后清掉观测并回到占位() {
+        policy = tightPolicy(10, 20);
+        Session session = sessionWith(6);
+        // 折叠前读一次（有观测），折叠清掉后再读一次（没了）
+        when(budget.budgetOf(any(Session.class))).thenReturn(observed(60L, false), (io.github.zcd0831.jellyfish.domain.action.budget.Budget) null);
+        ContextWindowService subject = service();
+
+        subject.ensureWithinLimit(session);
+
+        org.mockito.Mockito.verify(budget).forgetPromptObservation(session);
+        assertEquals("— / 1k", events.get(events.size() - 1), "旧数值不再描述当前窗口");
     }
 
     private static Session sessionWith(int userRecords) {

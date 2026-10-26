@@ -14,7 +14,7 @@ import java.util.regex.Pattern;
 public final class TurnStats {
 
     private static final Pattern CONTEXT =
-            Pattern.compile("上下文\\s*([0-9.]+k?)\\s*/\\s*([0-9.]+k?)");
+            Pattern.compile("^(≈?[0-9.]+k?|—)\\s*/\\s*([0-9.]+k?)$");
     private static final Pattern USAGE = Pattern.compile("\\+(\\d+)\\s*/\\s*累计\\s*(\\d+)\\s*/\\s*上限\\s*(\\d+)");
 
     private int modelCalls;

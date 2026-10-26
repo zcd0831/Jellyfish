@@ -490,6 +490,7 @@ public final class TuiApp implements QuestionBroker.Answerer {
             return;
         }
         currentSession = sessionId;
+        stats.reset();
         replay(loaded.value());
     }
 

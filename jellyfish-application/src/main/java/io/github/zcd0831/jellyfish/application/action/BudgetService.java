@@ -1,6 +1,7 @@
 package io.github.zcd0831.jellyfish.application.action;
 
 import io.github.zcd0831.jellyfish.application.action.port.BudgetRepository;
+import io.github.zcd0831.jellyfish.application.action.port.ModelUsage;
 import io.github.zcd0831.jellyfish.application.perception.port.PolicyRepository;
 import io.github.zcd0831.jellyfish.application.perception.port.SessionRepository;
 import io.github.zcd0831.jellyfish.application.shared.ProgressEvent;
@@ -41,15 +42,22 @@ public final class BudgetService {
         this.progress = progress;
     }
 
-    /** 返回 true 表示本次越过阈值、调用方应询问用户是否继续（不中断）。 */
-    public boolean recordUsage(Session session, long tokens) {
+    /**
+     * 返回 true 表示本次越过阈值、调用方应询问用户是否继续（不中断）。
+     * 顺手记下本轮请求的输入用量，界面提示符据此显示"实际 / 上限"（模块-行动 §8.3）。
+     */
+    public boolean recordUsage(Session session, ModelUsage usage) {
         SessionId rootId = rootOf(session);
         RuntimePolicy policy = policies.load();
         Budget budget = budgets.load(rootId);
         if (budget == null) {
             budget = Budget.openFor(BudgetId.of(UUID.randomUUID().toString()), rootId);
         }
+        long tokens = usage.total();
         budget.recordUsage(tokens, policy);
+        if (usage.inputTokens() > 0) {
+            budget.observePrompt(session.id(), usage.inputTokens(), usage.estimated());
+        }
         progress.emit(ProgressEvent.of(ProgressEvent.Kind.USAGE,
                 "+" + tokens + " / 累计 " + budget.consumedTokens() + " / 上限 " + policy.budgetLimitTokens()));
         commitScope.stageReplace(budget);
@@ -87,6 +95,23 @@ public final class BudgetService {
 
     public Budget budgetOf(SessionId rootId) {
         return budgets.load(rootId);
+    }
+
+    /** 族台账：界面读观测值时用（会话可能在族内任意位置）。 */
+    public Budget budgetOf(Session session) {
+        return budgets.load(rootOf(session));
+    }
+
+    /** 折叠后清掉观测：旧数值不再描述当前窗口（模块-行动 §8.3）。 */
+    public void forgetPromptObservation(Session session) {
+        SessionId rootId = rootOf(session);
+        Budget budget = budgets.load(rootId);
+        if (budget == null || budget.lastPromptSessionId() == null) {
+            return;
+        }
+        budget.forgetPromptObservation();
+        commitScope.stageReplace(budget);
+        commitScope.commit();
     }
 
     /** 子会话不自建台账：沿 parentSessionId 上溯到族根（模块-行动 §7.5 规则 ⑤）。 */

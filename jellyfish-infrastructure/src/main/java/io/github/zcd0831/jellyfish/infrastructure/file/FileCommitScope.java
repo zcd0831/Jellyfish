@@ -153,7 +153,7 @@ public final class FileCommitScope implements CommitScope {
         if (aggregate instanceof Budget) {
             Budget budget = (Budget) aggregate;
             AtomicFiles.write(sessionDirOf(budget.sessionFamilyRootId()).resolve("budget.json"),
-                    codec.write(toBudget(budget)));
+                    codec.write(FileBudgetRepository.toDto(budget)));
             return;
         }
         throw new UnsupportedOperationException("unsupported aggregate: " + aggregate.getClass().getName());
@@ -180,14 +180,6 @@ public final class FileCommitScope implements CommitScope {
                 .resolve("sub").resolve(session.id().getValue()).resolve("meta.json");
     }
 
-    private static FileBudgetRepository.BudgetDto toBudget(Budget budget) {
-        FileBudgetRepository.BudgetDto dto = new FileBudgetRepository.BudgetDto();
-        dto.id = budget.id().getValue();
-        dto.sessionFamilyRootId = budget.sessionFamilyRootId().getValue();
-        dto.consumedTokens = budget.consumedTokens();
-        dto.warned = budget.warned();
-        return dto;
-    }
 
     /**
      * 流水行的唯一写路径：**字段必须与 `RecordLineDto` / `FileRecordStore.toDto` 逐一对齐**——

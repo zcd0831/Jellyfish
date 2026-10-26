@@ -57,4 +57,20 @@ public abstract class BudgetRepositoryContract {
         assertEquals(30L, repository().load(SessionId.of("s1")).consumedTokens());
         assertTrue(!repository().load(SessionId.of("s1")).warned());
     }
+
+    @Test
+    void 请求用量观测被持久化并可清空() {
+        Budget budget = Budget.openFor(BudgetId.of("b1"), SessionId.of("s1"));
+        budget.observePrompt(SessionId.of("s1"), 18200L, true);
+        repository().save(budget);
+
+        Budget reloaded = repository().load(SessionId.of("s1"));
+        assertEquals(18200L, reloaded.lastPromptTokens());
+        assertTrue(reloaded.lastPromptEstimated());
+        assertEquals("s1", reloaded.lastPromptSessionId());
+
+        reloaded.forgetPromptObservation();
+        repository().save(reloaded);
+        assertEquals(0L, repository().load(SessionId.of("s1")).lastPromptTokens());
+    }
 }

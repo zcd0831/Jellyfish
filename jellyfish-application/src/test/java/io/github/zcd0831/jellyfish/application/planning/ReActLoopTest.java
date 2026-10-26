@@ -69,7 +69,7 @@ class ReActLoopTest {
         when(policies.load()).thenReturn(policy);
         when(contextWindow.currentWindow(any(Session.class))).thenReturn(new ContextWindow(
                 new ArrayList<Record>(), new ContextUsage(10, 1000, 0, 0, 0)));
-        when(budget.recordUsage(any(Session.class), anyInt())).thenReturn(false);
+        when(budget.recordUsage(any(Session.class), any())).thenReturn(false);
         return new ReActLoop(model, toolExecutor, budget, contextWindow, policies, commitScope, human);
     }
 

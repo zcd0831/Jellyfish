@@ -438,7 +438,7 @@ public final class TuiApp implements QuestionBroker.Answerer {
         String name = parts[0];
         boolean sessionFree = !Commands.needsSession(name);
         if ("/help".equals(name)) {
-            renderer.info("/sessions /open <id> /cancel /archive /delete /policy k=v /model <id> "
+            renderer.info("/sessions /open <id> /new /cancel /archive /delete /policy k=v /model <id> "
                     + "/tools /agents /models /providers /skills /plugins /exit");
             return;
         }
@@ -446,7 +446,12 @@ public final class TuiApp implements QuestionBroker.Answerer {
             renderer.info("（还没有会话）");
             return;
         }
-        if ("/sessions".equals(name)) {
+        if ("/new".equals(name)) {
+            // 当前会话留在 sessions/ 里，下一条输入开新会话：不必退出重进
+            currentSession = null;
+            stats.reset();
+            renderer.info("（新会话：下一条输入将开启）");
+        } else if ("/sessions".equals(name)) {
             listSessions();
         } else if ("/open".equals(name) && parts.length > 1) {
             openSession(SessionId.of(parts[1]));

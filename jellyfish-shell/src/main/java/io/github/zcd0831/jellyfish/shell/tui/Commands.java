@@ -11,7 +11,7 @@ final class Commands {
 
     /** 命令名（含前导 `/`），顺序即 `/help` 的展示顺序。 */
     static final List<String> NAMES = Collections.unmodifiableList(Arrays.asList(
-            "/sessions", "/open", "/cancel", "/archive", "/delete",
+            "/sessions", "/open", "/new", "/cancel", "/archive", "/delete",
             "/model", "/policy", "/plugins",
             "/tools", "/agents", "/models", "/providers", "/skills",
             "/help", "/exit"));

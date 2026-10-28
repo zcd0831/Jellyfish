@@ -36,26 +36,17 @@ public final class PlanCompletionCurator {
 
     private static final AgentId DISTILL_AGENT = AgentId.of("builtin.distill");
 
-    private final RecordStore records;
-    private final ModelInvocationPort model;
     private final CatalogRepository catalog;
-    private final PolicyRepository policies;
-    private final BudgetService budgetService;
     private final ExperienceDistillationService experienceDistillation;
     private final SkillDistillationService skillDistillation;
     private final InternalSessionRunner forks;
     private final CommitScope commitScope;
 
-    public PlanCompletionCurator(RecordStore records, ModelInvocationPort model, CatalogRepository catalog,
-                                 PolicyRepository policies, BudgetService budgetService,
+    public PlanCompletionCurator(CatalogRepository catalog,
                                  ExperienceDistillationService experienceDistillation,
                                  SkillDistillationService skillDistillation, InternalSessionRunner forks,
                                  CommitScope commitScope) {
-        this.records = records;
-        this.model = model;
         this.catalog = catalog;
-        this.policies = policies;
-        this.budgetService = budgetService;
         this.experienceDistillation = experienceDistillation;
         this.skillDistillation = skillDistillation;
         this.forks = forks;

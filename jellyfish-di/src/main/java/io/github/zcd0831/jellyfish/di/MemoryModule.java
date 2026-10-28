@@ -61,13 +61,10 @@ public final class MemoryModule {
 
     @Provides
     @Singleton
-    PlanCompletionCurator planCompletionCurator(RecordStore records, ModelInvocationPort model,
-                                                CatalogRepository catalog, PolicyRepository policies,
-                                                BudgetService budgetService, CommitScope commitScope,
+    PlanCompletionCurator planCompletionCurator(CatalogRepository catalog, CommitScope commitScope,
                                                 io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner forks,
                                                 ExperienceDistillationService experienceDistillation,
                                                 SkillDistillationService skillDistillation) {
-        return new PlanCompletionCurator(records, model, catalog, policies, budgetService,
-                experienceDistillation, skillDistillation, forks, commitScope);
+        return new PlanCompletionCurator(catalog, experienceDistillation, skillDistillation, forks, commitScope);
     }
 }

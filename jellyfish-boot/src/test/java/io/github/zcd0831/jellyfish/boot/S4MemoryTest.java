@@ -105,8 +105,8 @@ class S4MemoryTest {
                         return model.reply;
                     }
                 };
-        curator = new PlanCompletionCurator(records, model, catalog, policies, budgetService, distillation,
-                skills, forks, new FileCommitScope(dir, codec));
+        curator = new PlanCompletionCurator(catalog, distillation, skills, forks,
+                new FileCommitScope(dir, codec));
 
         session = Session.create(SessionId.of("s1"), null, AgentId.of("builtin.main"), ModelId.of("m1"),
                 1L, null);

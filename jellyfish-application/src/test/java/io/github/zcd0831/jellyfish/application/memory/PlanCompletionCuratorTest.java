@@ -48,11 +48,7 @@ import static org.mockito.Mockito.when;
 /** 编排者：一次调用、一个判定、互斥分派（07-memory §7.9.6）。 */
 class PlanCompletionCuratorTest {
 
-    private final RecordStore records = mock(RecordStore.class);
-    private final ModelInvocationPort model = mock(ModelInvocationPort.class);
     private final CatalogRepository catalog = mock(CatalogRepository.class);
-    private final PolicyRepository policies = mock(PolicyRepository.class);
-    private final BudgetService budget = mock(BudgetService.class);
     private final ExperienceDistillationService experienceWriter = mock(ExperienceDistillationService.class);
     private final SkillDistillationService skillWriter = mock(SkillDistillationService.class);
     private final io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner forks =
@@ -64,9 +60,7 @@ class PlanCompletionCuratorTest {
             ModelId.of("m1"), 1L, null);
 
     private PlanCompletionCurator curator() {
-        when(policies.load()).thenReturn(RuntimePolicy.defaults());
-        return new PlanCompletionCurator(records, model, catalog, policies, budget, experienceWriter, skillWriter,
-                forks, commitScope);
+        return new PlanCompletionCurator(catalog, experienceWriter, skillWriter, forks, commitScope);
     }
 
     private static AgentDefinition distillAgent() {
@@ -101,7 +95,7 @@ class PlanCompletionCuratorTest {
         DistillationOutcome outcome = curator().curate(session, input(traceWithoutSkill()));
 
         assertTrue(outcome.isEmpty());
-        verify(model, never()).invoke(any(ModelInvocationRequest.class));
+        verify(forks, never()).run(any(Session.class), any());
     }
 
     @Test

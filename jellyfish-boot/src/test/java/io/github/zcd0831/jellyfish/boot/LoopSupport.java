@@ -63,8 +63,8 @@ final class LoopSupport {
                 new io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner(startSession, sessions,
                         reActLoop, scope, new FileCommitScope(dir, codec),
                         () -> System.currentTimeMillis());
-        PlanCompletionCurator curator = new PlanCompletionCurator(records, model, catalog, policies,
-                budgetService, distillation, skills, forks, new FileCommitScope(dir, codec));
+        PlanCompletionCurator curator = new PlanCompletionCurator(catalog, distillation, skills, forks,
+                new FileCommitScope(dir, codec));
         ExecutorService pool = Executors.newFixedThreadPool(2);
         SubagentLauncher launcher = new SubagentLauncher(startSession, runSession, sessions, records,
                 budgetService, policies, progress, pool);

@@ -132,8 +132,8 @@ class S2AcceptanceTest {
                 new io.github.zcd0831.jellyfish.application.memory.ExperienceDistillationService(experiences,
                         policies, new FileCommitScope(dir, codec), publisher, event -> { });
         io.github.zcd0831.jellyfish.application.memory.PlanCompletionCurator curator =
-                new io.github.zcd0831.jellyfish.application.memory.PlanCompletionCurator(records, model,
-                        catalog, policies, budgetService, distillation,
+                new io.github.zcd0831.jellyfish.application.memory.PlanCompletionCurator(
+                        catalog, distillation,
                         new io.github.zcd0831.jellyfish.application.memory.SkillDistillationService(catalog,
                                 policies, new FileCommitScope(dir, codec), publisher, event -> { }),
                         new io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner(

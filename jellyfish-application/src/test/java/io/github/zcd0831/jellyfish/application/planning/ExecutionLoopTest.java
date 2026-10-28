@@ -415,4 +415,34 @@ class ExecutionLoopTest {
                 io.github.zcd0831.jellyfish.domain.action.agent.AgentStatus.ACTIVE,
                 java.util.Collections.emptyList(), java.util.Collections.emptyList());
     }
+
+    @Test
+    void 折叠产生的SUMMARY不算轨迹证据() {
+        Plan plan = plan();   // 无验证声明：提交即完成
+        planScript.add(plan);
+        java.util.concurrent.atomic.AtomicReference<io.github.zcd0831.jellyfish.domain.shared.RecordId> assistantId =
+                new java.util.concurrent.atomic.AtomicReference<io.github.zcd0831.jellyfish.domain.shared.RecordId>();
+        java.util.concurrent.atomic.AtomicReference<io.github.zcd0831.jellyfish.domain.shared.RecordId> resultId =
+                new java.util.concurrent.atomic.AtomicReference<io.github.zcd0831.jellyfish.domain.shared.RecordId>();
+        when(reActLoop.runIteration(any(Session.class), any(), any(ChunkSink.class))).thenAnswer(call -> {
+            if (call.getArgument(1) == null) {
+                return converged();
+            }
+            session.markSummarized("折叠发生在 attempt 中间", 0, 2L);
+            assistantId.set(session.appendRecord(io.github.zcd0831.jellyfish.domain.perception.session.RecordRole.ASSISTANT,
+                    "看一下", null, "t1", "m1", null, 3L).id());
+            session.appendRecord(io.github.zcd0831.jellyfish.domain.perception.session.RecordRole.TOOL_REQUEST,
+                    "{\"callId\":\"c1\",\"name\":\"read_file\",\"arguments\":\"{}\"}", null, "t1", "m1", null, 4L);
+            resultId.set(session.appendRecord(io.github.zcd0831.jellyfish.domain.perception.session.RecordRole.TOOL_RESULT,
+                    "内容", null, "t1", "m1", null, 5L).id());
+            return submitted("完成");
+        });
+
+        loop().run(session, ChunkSink.NOOP, NO_TOKEN, NO_CONTEXT);
+
+        io.github.zcd0831.jellyfish.domain.planning.plan.RecordRange range =
+                plan.steps().get(0).attempts().get(0).recordRange();
+        assertEquals(assistantId.get(), range.getStartRecordId(), "起点跳过 SUMMARY");
+        assertEquals(resultId.get(), range.getEndRecordId());
+    }
 }

@@ -467,19 +467,29 @@ public final class ExecutionLoop implements SessionRunner {
 
     /**
      * 把本段 ReAct 新增的记录区间延伸进当前 attempt：挂起、环境故障都保留已发生的轨迹。
-     * 规则出处：06-planning §6.8.1 规则 10、§5.2。
+     * SUMMARY 不算证据：内循环折叠会在 attempt 中间追加它，拿它当边界等于把摘要当轨迹
+     * （04-perception §4.8.1 规则 23、06-planning §6.8.1 规则 10）。
      */
     private void extendAttemptRange(Session session, Plan plan, PlanStep step, Attempt attempt, int firstRecordIndex) {
         if (plan == null || step == null || attempt == null) {
             return;
         }
+        Record first = null;
+        Record last = null;
         List<Record> records = session.records();
-        if (records.size() <= firstRecordIndex) {
+        for (int i = firstRecordIndex; i < records.size(); i++) {
+            if (records.get(i).role() == RecordRole.SUMMARY) {
+                continue;
+            }
+            if (first == null) {
+                first = records.get(i);
+            }
+            last = records.get(i);
+        }
+        if (first == null) {
             return;
         }
-        RecordRange range = new RecordRange(records.get(firstRecordIndex).id(),
-                records.get(records.size() - 1).id());
-        plan.extendAttemptRange(step.id(), attempt.attemptNo(), range);
+        plan.extendAttemptRange(step.id(), attempt.attemptNo(), new RecordRange(first.id(), last.id()));
         commitPlan(plan);
     }
 

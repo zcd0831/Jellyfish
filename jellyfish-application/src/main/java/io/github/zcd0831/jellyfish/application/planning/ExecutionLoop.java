@@ -135,9 +135,8 @@ public final class ExecutionLoop implements SessionRunner {
         while (true) {
             // 每一轮开始先看取消：流式/工具刚被打断时，不再进入下一轮（08-application §8.9.4.1）
             token.throwIfCancelled();
-            // 计划可能在循环中途由 generate_plan 产生：每轮重读，播报一次
+            // 计划可能在循环中途由 generate_plan 产生：每轮重读，播报一次（重划另有 PLAN_REPLAN）
             Plan plan = runningPlan(session);
-            // todo 这里的plan推送只推一次，replan之后不会更新
             if (!planAnnounced && plan != null && plan.hasExecutablePlan()) {
                 progress.emit(ProgressEvent.of(ProgressEvent.Kind.PLAN_CREATED,
                         "计划：" + plan.goal() + "（" + pendingSteps(plan) + " 步）"));

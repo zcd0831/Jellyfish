@@ -17,8 +17,7 @@ public class RuntimePolicy {
     private final int maxReActRounds;
     private final int summarizationTokenThreshold;
     private final int inputSafetyMargin;
-    private final int contextWindowRecordCount;
-    private final double systemRecordRatioLimit;
+    private final int collapseRetainRecordCount;
     private final int toolResultTruncateLength;
     private final int subagentExecutionTimeoutMillis;
     private final int experienceCapacity;
@@ -34,8 +33,8 @@ public class RuntimePolicy {
     private final List<ToolId> trustedToolIds;
 
     public RuntimePolicy(int maxRetries, int reflectionThreshold, int maxReplanGeneration, int maxReActRounds,
-                         int summarizationTokenThreshold, int inputSafetyMargin, int contextWindowRecordCount,
-                         double systemRecordRatioLimit, int toolResultTruncateLength,
+                         int summarizationTokenThreshold, int inputSafetyMargin, int collapseRetainRecordCount,
+                         int toolResultTruncateLength,
                          int subagentExecutionTimeoutMillis, int experienceCapacity, int experienceTopN,
                          int experiencePerPlan, double experienceInitialConfidence,
                          double experienceConfidenceStep, double experienceRetireThreshold,
@@ -48,8 +47,7 @@ public class RuntimePolicy {
         this.maxReActRounds = maxReActRounds;
         this.summarizationTokenThreshold = summarizationTokenThreshold;
         this.inputSafetyMargin = inputSafetyMargin;
-        this.contextWindowRecordCount = contextWindowRecordCount;
-        this.systemRecordRatioLimit = systemRecordRatioLimit;
+        this.collapseRetainRecordCount = collapseRetainRecordCount;
         this.toolResultTruncateLength = toolResultTruncateLength;
         this.subagentExecutionTimeoutMillis = subagentExecutionTimeoutMillis;
         this.experienceCapacity = experienceCapacity;
@@ -69,7 +67,7 @@ public class RuntimePolicy {
 
     /** 平台初始化写入的默认值；规则出处：模块-感知 §7.2、D08/D10 的常量口径。 */
     public static RuntimePolicy defaults() {
-        return new RuntimePolicy(3, 2, 2, 20, 100000, 10000, 20, 0.6, 4000, 60000,
+        return new RuntimePolicy(3, 2, 2, 20, 100000, 10000, 20, 4000, 60000,
                 200, 5, 1, 0.5, 0.1, 0.2, 30, 0.8, 1000000L,
                 Collections.<ModelId>emptyList(), Collections.<ToolId>emptyList());
     }
@@ -86,8 +84,7 @@ public class RuntimePolicy {
         int rounds = positiveInt(changes, "maxReActRounds", maxReActRounds);
         int summarization = positiveInt(changes, "summarizationTokenThreshold", summarizationTokenThreshold);
         int margin = nonNegativeInt(changes, "inputSafetyMargin", inputSafetyMargin);
-        int windowRecords = positiveInt(changes, "contextWindowRecordCount", contextWindowRecordCount);
-        double systemRatio = ratio(changes, "systemRecordRatioLimit", systemRecordRatioLimit);
+        int retain = positiveInt(changes, "collapseRetainRecordCount", collapseRetainRecordCount);
         int truncate = positiveInt(changes, "toolResultTruncateLength", toolResultTruncateLength);
         int subagentTimeout = positiveInt(changes, "subagentExecutionTimeoutMillis",
                 subagentExecutionTimeoutMillis);
@@ -102,8 +99,8 @@ public class RuntimePolicy {
         long limitTokens = nonNegativeLong(changes, "budgetLimitTokens", budgetLimitTokens);
         List<ModelId> fallback = modelIds(changes, "modelFallbackChain", modelFallbackChain);
         List<ToolId> trusted = toolIds(changes, "trustedToolIds", trustedToolIds);
-        return new RuntimePolicy(retries, reflection, replan, rounds, summarization, margin, windowRecords,
-                systemRatio, truncate, subagentTimeout, capacity, topN, perPlan, initialConfidence,
+        return new RuntimePolicy(retries, reflection, replan, rounds, summarization, margin, retain,
+                truncate, subagentTimeout, capacity, topN, perPlan, initialConfidence,
                 confidenceStep, retireThreshold, skills, warnRatio, limitTokens, fallback, trusted);
     }
 
@@ -246,12 +243,8 @@ public class RuntimePolicy {
         return inputSafetyMargin;
     }
 
-    public int contextWindowRecordCount() {
-        return contextWindowRecordCount;
-    }
-
-    public double systemRecordRatioLimit() {
-        return systemRecordRatioLimit;
+    public int collapseRetainRecordCount() {
+        return collapseRetainRecordCount;
     }
 
     public int toolResultTruncateLength() {

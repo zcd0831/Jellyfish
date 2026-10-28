@@ -14,8 +14,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 窗口是"推导"出来的：SYSTEM 注入不参与淘汰、只取最新 SUMMARY、超占比整体降级。
- * 规则出处：模块-感知 §7.1 规则 9/10/13、§8.5。
+ * 窗口是"推导"出来的：最新 SUMMARY + 覆盖边界之后的全部记录（含 SYSTEM 注入）。
+ * 规则出处：04-perception §4.8.1 规则 9/10/14、§4.9.5。
  */
 class SessionTest {
 
@@ -48,20 +48,20 @@ class SessionTest {
     }
 
     @Test
-    void 窗口取最近n条非SYSTEM记录且SYSTEM不被挤出() {
+    void 窗口是覆盖边界之后的全部记录且含SYSTEM注入() {
         Session session = newSession();
         session.appendRecord(RecordRole.SYSTEM, "注入内容", null, 1L);
         for (int i = 1; i <= 5; i++) {
             session.appendRecord(RecordRole.USER, "u" + i, null, i);
         }
 
-        ContextWindow window = session.buildContextForLlm(new ContextWindowPolicy(2, 0.9), CHARS, 100000);
+        ContextWindow window = session.buildContextForLlm(CHARS, 100000);
 
-        assertEquals(3, window.getRecords().size());
+        assertEquals(6, window.getRecords().size(), "没有摘要时一条不丢");
         assertEquals(RecordRole.SYSTEM, window.getRecords().get(0).role());
-        assertEquals("u4", window.getRecords().get(1).content());
-        assertEquals("u5", window.getRecords().get(2).content());
-        assertEquals(3, window.getUsage().getWindowRecordCount());
+        assertEquals("u5", window.getRecords().get(5).content());
+        assertEquals(4, window.getUsage().getSystemTokens());
+        assertEquals(6, window.getUsage().getWindowRecordCount());
     }
 
     @Test
@@ -72,7 +72,7 @@ class SessionTest {
         session.appendRecord(RecordRole.USER, "u2", null, 3L);
         session.markSummarized("新摘要", 3, 4L);
 
-        ContextWindow window = session.buildContextForLlm(new ContextWindowPolicy(5, 0.9), CHARS, 100000);
+        ContextWindow window = session.buildContextForLlm(CHARS, 100000);
 
         long summaries = window.getRecords().stream()
                 .filter(r -> r.role() == RecordRole.SUMMARY)
@@ -89,23 +89,24 @@ class SessionTest {
         session.markSummarized("摘要", 1, 2L);
         session.appendRecord(RecordRole.USER, "u2", null, 3L);
 
-        ContextWindow window = session.buildContextForLlm(new ContextWindowPolicy(5, 0.9), CHARS, 100000);
+        ContextWindow window = session.buildContextForLlm(CHARS, 100000);
 
         assertEquals(RecordRole.SUMMARY, window.getRecords().get(0).role());
         assertEquals("u2", window.getRecords().get(1).content());
     }
 
     @Test
-    void 系统注入占比超限时整段丢弃() {
+    void 折叠后SYSTEM注入随覆盖边界一起退出窗口() {
         Session session = newSession();
-        session.appendRecord(RecordRole.SYSTEM, "很长很长很长很长很长的注入", null, 1L);
-        session.appendRecord(RecordRole.USER, "短", null, 2L);
+        session.appendRecord(RecordRole.SYSTEM, "旧注入", null, 1L);
+        session.appendRecord(RecordRole.USER, "u1", null, 2L);
+        session.markSummarized("摘要", 2, 3L);
+        session.appendRecord(RecordRole.SYSTEM, "新注入", null, 4L);
 
-        ContextWindow window = session.buildContextForLlm(new ContextWindowPolicy(20, 0.3), CHARS, 100000);
+        ContextWindow window = session.buildContextForLlm(CHARS, 100000);
 
-        assertFalse(window.getRecords().stream().anyMatch(r -> r.role() == RecordRole.SYSTEM));
-        assertEquals(0, window.getUsage().getSystemTokens());
-        assertEquals(1, window.getRecords().size());
+        assertEquals(2, window.getRecords().size(), "只保留摘要与边界之后的注入");
+        assertEquals("新注入", window.getRecords().get(1).content());
     }
 
     @Test
@@ -121,7 +122,7 @@ class SessionTest {
     }
 
     @Test
-    void 窗口按turnId整轮对齐() {
+    void 窗口按turnId整轮归位() {
         Session session = newSession();
         session.appendRecord(RecordRole.USER, "u1", null, 1L);
         session.appendRecord(RecordRole.ASSISTANT, "看一下", null, "t1", "m1", null, 2L);
@@ -129,14 +130,10 @@ class SessionTest {
         session.appendRecord(RecordRole.TOOL_RESULT, "结果", null, "t1", "m1", null, 4L);
         session.appendRecord(RecordRole.USER, "u2", null, 5L);
 
-        // 只取最近 2 条会把边界切在 TOOL_RESULT 上 ⇒ 必须把整轮一起纳入
-        ContextWindow window = session.buildContextForLlm(new ContextWindowPolicy(2, 0.9), CHARS, 100000);
+        ContextWindow window = session.buildContextForLlm(CHARS, 100000);
 
-        assertEquals(4, window.getRecords().size());
-        assertEquals(RecordRole.ASSISTANT, window.getRecords().get(0).role());
-        assertEquals(RecordRole.TOOL_REQUEST, window.getRecords().get(1).role());
-        assertEquals(RecordRole.TOOL_RESULT, window.getRecords().get(2).role());
-        assertEquals("u2", window.getRecords().get(3).content());
+        assertEquals(5, window.getRecords().size());
+        assertEquals(3, session.turnsAfter(0).size(), "工具轮合成一轮，USER 各自成轮");
     }
 
     @Test
@@ -146,7 +143,7 @@ class SessionTest {
         session.appendRecord(RecordRole.TOOL_REQUEST, call("c1", "list_dir"), null, "t1", "m1", null, 2L);
 
         assertThrows(io.github.zcd0831.jellyfish.domain.shared.DomainInvariantViolation.class,
-                () -> session.buildContextForLlm(new ContextWindowPolicy(5, 0.9), CHARS, 100000));
+                () -> session.buildContextForLlm(CHARS, 100000));
     }
 
     @Test
@@ -156,7 +153,7 @@ class SessionTest {
         session.appendRecord(RecordRole.ASSISTANT, "后半句", null, "t1", "m1", null, 2L);
 
         assertThrows(io.github.zcd0831.jellyfish.domain.shared.DomainInvariantViolation.class,
-                () -> session.buildContextForLlm(new ContextWindowPolicy(5, 0.9), CHARS, 100000));
+                () -> session.buildContextForLlm(CHARS, 100000));
     }
 
     @Test
@@ -166,7 +163,7 @@ class SessionTest {
                 null, 1L);
         session.appendRecord(RecordRole.TOOL_RESULT, "结果", null, "t1", "m-model", null, 2L);
 
-        ContextWindow window = session.buildContextForLlm(new ContextWindowPolicy(5, 0.9), CHARS, 100000);
+        ContextWindow window = session.buildContextForLlm(CHARS, 100000);
 
         int withoutReasoning = call("c1", "list_dir").length() + "结果".length();
         assertEquals(withoutReasoning + "思考了十个字符".length(), window.getUsage().getUsedTokens());

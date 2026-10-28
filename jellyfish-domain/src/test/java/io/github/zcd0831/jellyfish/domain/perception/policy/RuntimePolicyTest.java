@@ -56,7 +56,7 @@ class RuntimePolicyTest {
 
     @Test
     void 比例类必须落在0到1之间() {
-        assertEquals(0.25, policy.adjust(one("systemRecordRatioLimit", "0.25")).systemRecordRatioLimit(), 1e-9);
+        assertEquals(0.3, policy.adjust(one("experienceRetireThreshold", "0.3")).experienceRetireThreshold(), 1e-9);
         assertThrows(DomainInvariantViolation.class, () -> policy.adjust(one("budgetWarnRatio", "1.2")));
         assertThrows(DomainInvariantViolation.class, () -> policy.adjust(one("budgetWarnRatio", "-0.1")));
         assertThrows(DomainInvariantViolation.class, () -> policy.adjust(one("budgetWarnRatio", "abc")));

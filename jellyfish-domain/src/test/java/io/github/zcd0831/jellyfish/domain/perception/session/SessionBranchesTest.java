@@ -31,26 +31,23 @@ class SessionBranchesTest {
 
     @Test
     void 空流水的窗口为空() {
-        ContextWindow window = session().buildContextForLlm(new ContextWindowPolicy(5, 0.9),
-                text -> text == null ? 0 : text.length(), 1000);
+        ContextWindow window = session().buildContextForLlm(text -> text == null ? 0 : text.length(), 1000);
 
         assertTrue(window.getRecords().isEmpty());
         assertEquals(0, window.getUsage().getUsedTokens());
     }
 
     @Test
-    void 窗口条数为零时只剩SYSTEM与摘要() {
+    void 摘要覆盖全部记录时窗口只剩摘要本身() {
         Session session = session();
         session.appendRecord(RecordRole.SYSTEM, "注入", null, 1L);
         session.appendRecord(RecordRole.USER, "u1", null, 2L);
         session.markSummarized("摘要", 2, 3L);
 
-        ContextWindow window = session.buildContextForLlm(new ContextWindowPolicy(0, 0.99),
-                text -> 1, 100);
+        ContextWindow window = session.buildContextForLlm(text -> 1, 100);
 
-        assertEquals(2, window.getRecords().size());
-        assertEquals(RecordRole.SYSTEM, window.getRecords().get(0).role());
-        assertEquals(RecordRole.SUMMARY, window.getRecords().get(1).role());
+        assertEquals(1, window.getRecords().size());
+        assertEquals(RecordRole.SUMMARY, window.getRecords().get(0).role());
     }
 
     @Test

@@ -237,7 +237,7 @@ class S3AcceptanceTest {
         RuntimePolicy d = RuntimePolicy.defaults();
         return new RuntimePolicy(d.maxRetries(), d.reflectionThreshold(), d.maxReplanGeneration(),
                 d.maxReActRounds(), d.summarizationTokenThreshold(), d.inputSafetyMargin(),
-                d.contextWindowRecordCount(), d.systemRecordRatioLimit(), d.toolResultTruncateLength(),
+                d.collapseRetainRecordCount(), d.toolResultTruncateLength(),
                 timeoutMillis, d.experienceCapacity(), d.experienceTopN(), d.experiencePerPlan(),
                 d.experienceInitialConfidence(), d.experienceConfidenceStep(), d.experienceRetireThreshold(),
                 d.skillCapacity(), d.budgetWarnRatio(), d.budgetLimitTokens(), d.modelFallbackChain(),

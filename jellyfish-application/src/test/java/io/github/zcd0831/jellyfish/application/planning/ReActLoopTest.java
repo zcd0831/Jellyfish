@@ -23,6 +23,9 @@ import io.github.zcd0831.jellyfish.domain.perception.session.Record;
 import io.github.zcd0831.jellyfish.domain.perception.session.RecordRole;
 import io.github.zcd0831.jellyfish.domain.perception.session.Session;
 import io.github.zcd0831.jellyfish.domain.perception.session.SystemPromptSnapshot;
+import io.github.zcd0831.jellyfish.domain.planning.plan.PlanStep;
+import io.github.zcd0831.jellyfish.domain.planning.plan.PlanSteps;
+import io.github.zcd0831.jellyfish.domain.shared.StepId;
 import io.github.zcd0831.jellyfish.domain.shared.AgentId;
 import io.github.zcd0831.jellyfish.domain.shared.ModelId;
 import io.github.zcd0831.jellyfish.domain.shared.RecordId;
@@ -30,6 +33,7 @@ import io.github.zcd0831.jellyfish.domain.shared.SessionId;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
+import org.mockito.ArgumentCaptor;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
@@ -43,6 +47,8 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /** 内循环的分支：提交 / load_skill 注入 / 模型切换 / 撞轮次上限 / 流式。 */
@@ -303,5 +309,70 @@ class ReActLoopTest {
         });
 
         assertTrue(seen.length() >= 0);
+    }
+
+    private static int systemRecords(Session session) {
+        int count = 0;
+        for (Record record : session.records()) {
+            if (record.role() == RecordRole.SYSTEM) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    @Test
+    void SYSTEM注入按消息归位且system字段只有快照() {
+        Session session = session();
+        session.appendRecord(RecordRole.SYSTEM, "注入内容", null, 3L);
+        Record injected = session.records().get(session.records().size() - 1);
+        ReActLoop subject = loop(RuntimePolicy.defaults());
+        when(contextWindow.currentWindow(any(Session.class))).thenReturn(new ContextWindow(
+                Collections.singletonList(injected), new ContextUsage(10, 1000, 4, 0, 1)));
+        when(model.invoke(any(ModelInvocationRequest.class)))
+                .thenReturn(reply("好的", Collections.<ToolCall>emptyList(), ModelId.of("m1")));
+
+        subject.runIteration(session, null, null);
+
+        ArgumentCaptor<ModelInvocationRequest> captor = ArgumentCaptor.forClass(ModelInvocationRequest.class);
+        verify(model).invoke(captor.capture());
+        assertEquals("系统提示", captor.getValue().systemPrompt(), "system 只有冻结快照");
+        List<ChatMessage> messages = captor.getValue().messages();
+        assertEquals(RecordRole.SYSTEM, messages.get(messages.size() - 1).role());
+        assertEquals("注入内容", messages.get(messages.size() - 1).content());
+    }
+
+    @Test
+    void 当前步骤以瞬时尾部消息送达且不落流水() {
+        Session session = session();
+        PlanStep step = PlanSteps.draft(StepId.of("p1"), 3, "读一下配置", "目标", "期望", "标准",
+                Collections.<io.github.zcd0831.jellyfish.domain.planning.verification.VerificationType>emptySet());
+        when(model.invoke(any(ModelInvocationRequest.class)))
+                .thenReturn(reply("好的", Collections.<ToolCall>emptyList(), ModelId.of("m1")));
+        ReActLoop subject = loop(RuntimePolicy.defaults());
+        int before = systemRecords(session);
+
+        subject.runIteration(session, step, null);
+
+        ArgumentCaptor<ModelInvocationRequest> captor = ArgumentCaptor.forClass(ModelInvocationRequest.class);
+        verify(model).invoke(captor.capture());
+        List<ChatMessage> messages = captor.getValue().messages();
+        assertEquals("当前步骤（第 3 步）：读一下配置", messages.get(messages.size() - 1).content());
+        assertEquals(before, systemRecords(session), "运行期时序提示不落 Record");
+    }
+
+    @Test
+    void 每一轮模型请求前都先折叠() {
+        Session session = session();
+        when(model.invoke(any(ModelInvocationRequest.class)))
+                .thenReturn(reply(null, Collections.singletonList(new ToolCall("c1", "read_file", "{}")),
+                                ModelId.of("m1")))
+                .thenReturn(reply("完成", Collections.<ToolCall>emptyList(), ModelId.of("m1")));
+        when(toolExecutor.execute(any(Session.class), anyString(), any(Map.class), any(RecordId.class)))
+                .thenReturn(ToolExecOutcome.plain("内容"));
+
+        loop(RuntimePolicy.defaults()).runIteration(session, null, null);
+
+        verify(contextWindow, times(2)).ensureWithinLimit(session);
     }
 }

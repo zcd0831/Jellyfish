@@ -59,8 +59,7 @@ public final class FilePolicyRepository implements PolicyRepository {
         public int maxReActRounds;
         public int summarizationTokenThreshold;
         public int inputSafetyMargin;
-        public int contextWindowRecordCount;
-        public double systemRecordRatioLimit;
+        public int collapseRetainRecordCount;
         public int toolResultTruncateLength;
         public int subagentExecutionTimeoutMillis;
         public int experienceCapacity;
@@ -83,8 +82,7 @@ public final class FilePolicyRepository implements PolicyRepository {
             dto.maxReActRounds = policy.maxReActRounds();
             dto.summarizationTokenThreshold = policy.summarizationTokenThreshold();
             dto.inputSafetyMargin = policy.inputSafetyMargin();
-            dto.contextWindowRecordCount = policy.contextWindowRecordCount();
-            dto.systemRecordRatioLimit = policy.systemRecordRatioLimit();
+            dto.collapseRetainRecordCount = policy.collapseRetainRecordCount();
             dto.toolResultTruncateLength = policy.toolResultTruncateLength();
             dto.subagentExecutionTimeoutMillis = policy.subagentExecutionTimeoutMillis();
             dto.experienceCapacity = policy.experienceCapacity();
@@ -114,9 +112,12 @@ public final class FilePolicyRepository implements PolicyRepository {
             for (String id : trustedToolIds) {
                 trusted.add(ToolId.of(id));
             }
+            // 旧 settings.json 的键已被忽略；缺失（0）时退回默认值，避免写出一个非法策略
+            int retain = collapseRetainRecordCount > 0
+                    ? collapseRetainRecordCount : RuntimePolicy.defaults().collapseRetainRecordCount();
             return new RuntimePolicy(maxRetries, reflectionThreshold, maxReplanGeneration, maxReActRounds,
-                    summarizationTokenThreshold, inputSafetyMargin, contextWindowRecordCount,
-                    systemRecordRatioLimit, toolResultTruncateLength, subagentExecutionTimeoutMillis,
+                    summarizationTokenThreshold, inputSafetyMargin, retain,
+                    toolResultTruncateLength, subagentExecutionTimeoutMillis,
                     experienceCapacity, experienceTopN, experiencePerPlan, experienceInitialConfidence,
                     experienceConfidenceStep, experienceRetireThreshold, skillCapacity, budgetWarnRatio,
                     budgetLimitTokens, fallback, trusted);

@@ -95,34 +95,31 @@ public class Session {
     }
 
     /**
-     * 三步推导 + 一次降级。规则出处：模块-感知 §7.1 规则 9、§8.5。
-     * 系统提示词不在这里：它来自快照，由调用方单独传给模型（§7.1 规则 13）。
+     * 系统提示词不在这里：它来自冻结快照，由调用方单独传给模型（规则 13）。
      */
-    public ContextWindow buildContextForLlm(ContextWindowPolicy policy, TokenEstimator estimator, int inputCeiling) {
-        List<Record> system = selectByRole(RecordRole.SYSTEM);
+    /**
+     * 两区窗口：最新 SUMMARY + 覆盖边界之后的**全部**记录（含 SYSTEM 运行期注入）。
+     * 不读任何配置、不设条数上限——前沿由覆盖边界固定，后沿随对话持续下移。
+     * 规则出处：04-perception §4.8.1 规则 9/10、§4.9.5。
+     */
+    public ContextWindow buildContextForLlm(TokenEstimator estimator, int inputCeiling) {
         Record latestSummary = latest(RecordRole.SUMMARY);
         int coveredThrough = latestSummary == null ? 0 : latestSummary.summaryCoversUpTo();
-        List<Record> recent = recentAligned(policy.getRecordCount(), coveredThrough);
+        List<Record> windowRecords = afterBoundary(coveredThrough);
+        assertTurnShape(turnsAfter(coveredThrough));
 
-        int systemTokens = tokensOf(system, estimator);
-        int summaryTokens = latestSummary == null ? 0 : tokensOf(
-                java.util.Collections.singletonList(latestSummary), estimator);
-        int windowTokens = tokensOf(recent, estimator);
-        int usedTokens = systemTokens + summaryTokens + windowTokens;
+        int systemTokens = tokensOf(systemRecordsIn(windowRecords), estimator);
+        int summaryTokens = latestSummary == null ? 0
+                : tokensOf(java.util.Collections.singletonList(latestSummary), estimator);
+        int usedTokens = summaryTokens + tokensOf(windowRecords, estimator);
 
-        List<Record> windowRecords;
-        if (usedTokens > 0 && (double) systemTokens / usedTokens > policy.getSystemRatioLimit()) {
-            // 降级只保留系统提示词快照：SYSTEM 注入整段丢弃，注入记录不再进入消息
-            windowRecords = withoutSystemRecords(recent);
-            usedTokens = summaryTokens + windowTokens;
-            systemTokens = 0;
-        } else {
-            windowRecords = merge(system, latestSummary, recent);
+        List<Record> records = new ArrayList<Record>();
+        if (latestSummary != null) {
+            records.add(latestSummary);
         }
-
-        ContextUsage usage = new ContextUsage(usedTokens, inputCeiling, systemTokens, summaryTokens,
-                windowRecords.size());
-        return new ContextWindow(windowRecords, usage);
+        records.addAll(windowRecords);
+        return new ContextWindow(records, new ContextUsage(usedTokens, inputCeiling, systemTokens,
+                summaryTokens, records.size()));
     }
 
     /**
@@ -161,16 +158,6 @@ public class Session {
         return events;
     }
 
-    private List<Record> selectByRole(RecordRole role) {
-        List<Record> out = new ArrayList<>();
-        for (Record r : records) {
-            if (r.role() == role) {
-                out.add(r);
-            }
-        }
-        return out;
-    }
-
     private Record latest(RecordRole role) {
         for (int i = records.size() - 1; i >= 0; i--) {
             if (records.get(i).role() == role) {
@@ -187,17 +174,24 @@ public class Session {
      * <p>对齐是请求合法性的前提：`assistant(tool_calls)` 与它的 `tool` 结果必须同进同出，
      * 否则模型端点会以 400 拒绝；这里不做"事后修补"，不变量违反直接抛。
      */
-    private List<Record> recentAligned(int count, int coveredThroughSequence) {
-        if (count <= 0) {
-            return new ArrayList<>();
+    /** 覆盖边界之后的记录：含 SYSTEM 注入，SUMMARY 由窗口首条单独承载。 */
+    private List<Record> afterBoundary(int coveredThroughSequence) {
+        List<Record> out = new ArrayList<Record>();
+        for (Record record : records) {
+            if (record.role() == RecordRole.SUMMARY || record.sequence() <= coveredThroughSequence) {
+                continue;
+            }
+            out.add(record);
         }
-        List<List<Record>> turns = turnsAfter(coveredThroughSequence);
-        List<Record> out = new ArrayList<>();
-        int index = turns.size() - 1;
-        while (index >= 0 && (out.isEmpty() || out.size() < count)) {
-            List<Record> turn = turns.get(index);
-            out.addAll(0, turn);
-            index--;
+        return out;
+    }
+
+    private static List<Record> systemRecordsIn(List<Record> records) {
+        List<Record> out = new ArrayList<Record>();
+        for (Record record : records) {
+            if (record.role() == RecordRole.SYSTEM) {
+                out.add(record);
+            }
         }
         return out;
     }
@@ -288,20 +282,6 @@ public class Session {
             }
         }
         return open > 0;
-    }
-
-    private static List<Record> merge(List<Record> system, Record summary, List<Record> recent) {
-        Set<Record> merged = new LinkedHashSet<>();
-        merged.addAll(system);
-        if (summary != null) {
-            merged.add(summary);
-        }
-        merged.addAll(recent);
-        return new ArrayList<>(merged);
-    }
-
-    private static List<Record> withoutSystemRecords(List<Record> recent) {
-        return new ArrayList<>(recent);
     }
 
     /** 计量口径：发出去多少算多少——带 reasoning 的工具请求把 reasoning 也算进去（规则 15）。 */

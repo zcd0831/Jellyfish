@@ -15,7 +15,7 @@
 | 7 份领域模型文档 | `Jellyfish-Docs/model/`（`模型图.md` + 四份模块文档 + 应用层 + 基础设施层） |
 | 技术决策（D01–D15） | `Jellyfish-Docs/model/tech/技术决策.md` |
 | 可读版（HTML + 图） | 打开 `Jellyfish-Docs/model/docs/index.html` |
-| 首次运行指南 | `Jellyfish-Docs/首次运行.md` |
+| 首次运行指南 | `Jellyfish-Docs/docs/首次运行.md` |
 
 ## 模块
 

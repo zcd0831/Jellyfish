@@ -2,6 +2,7 @@ package io.github.zcd0831.jellyfish.boot;
 
 import io.github.zcd0831.jellyfish.application.action.BudgetService;
 import io.github.zcd0831.jellyfish.application.action.InternalToolHandlers;
+import io.github.zcd0831.jellyfish.application.action.SessionToolScope;
 import io.github.zcd0831.jellyfish.application.action.ToolExecutor;
 import io.github.zcd0831.jellyfish.application.action.port.ChatMessage;
 import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationPort;
@@ -117,7 +118,7 @@ class S4LoopTest {
                 human, policies, new InternalToolHandlers(Collections.singletonList(
                 new InternalToolHandlers.NamedHandler("generate_plan",
                         new GeneratePlanHandler(planFactory, plans, catalog, new FileCommitScope(dir, codec),
-                                publisher)))), event -> { });
+                                publisher)))), event -> { }, new SessionToolScope());
         ReActLoop reActLoop = new ReActLoop(model, toolExecutor, budgetService, contextWindow, policies,
                 new FileCommitScope(dir, codec), human);
         VerificationRunner verificationRunner = new VerificationRunner(model, catalog, human, budgetService,

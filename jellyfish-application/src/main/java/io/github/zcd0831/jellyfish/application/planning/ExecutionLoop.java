@@ -8,6 +8,7 @@ import io.github.zcd0831.jellyfish.application.memory.ExperienceRetriever;
 import io.github.zcd0831.jellyfish.application.memory.FeedbackInput;
 import io.github.zcd0831.jellyfish.application.memory.RetrievalInput;
 import io.github.zcd0831.jellyfish.application.memory.StepBrief;
+import io.github.zcd0831.jellyfish.application.action.SessionToolScope;
 import io.github.zcd0831.jellyfish.application.memory.StepTrace;
 import io.github.zcd0831.jellyfish.application.memory.port.ReflectionRepository;
 import io.github.zcd0831.jellyfish.application.action.port.CatalogRepository;
@@ -68,6 +69,7 @@ import java.util.UUID;
 public final class ExecutionLoop implements SessionRunner {
 
     private static final AgentId REFLECT_AGENT = AgentId.of("builtin.reflect");
+    private static final String REPLAN_TOOL = "replan_plan";
 
     private final ContextWindowService contextWindow;
     private final ReActLoop reActLoop;
@@ -86,6 +88,7 @@ public final class ExecutionLoop implements SessionRunner {
     private final PlanCompletionCurator planCompletionCurator;
     private final ReflectionRepository reflections;
     private final io.github.zcd0831.jellyfish.application.memory.port.ExperienceRepository experiences;
+    private final SessionToolScope scope;
 
     public ExecutionLoop(ContextWindowService contextWindow, ReActLoop reActLoop,
                          VerificationRunner verificationRunner, PlanRepository plans, PlanFactory planFactory,
@@ -95,7 +98,8 @@ public final class ExecutionLoop implements SessionRunner {
                          ExperienceFeedbackService experienceFeedback,
                          PlanCompletionCurator planCompletionCurator,
                          ReflectionRepository reflections,
-                         io.github.zcd0831.jellyfish.application.memory.port.ExperienceRepository experiences) {
+                         io.github.zcd0831.jellyfish.application.memory.port.ExperienceRepository experiences,
+                         SessionToolScope scope) {
         this.contextWindow = contextWindow;
         this.reActLoop = reActLoop;
         this.verificationRunner = verificationRunner;
@@ -113,6 +117,7 @@ public final class ExecutionLoop implements SessionRunner {
         this.planCompletionCurator = planCompletionCurator;
         this.reflections = reflections;
         this.experiences = experiences;
+        this.scope = scope;
     }
 
     /**
@@ -132,7 +137,7 @@ public final class ExecutionLoop implements SessionRunner {
             // todo 这里的plan推送只推一次，replan之后不会更新
             if (!planAnnounced && plan != null && plan.hasExecutablePlan()) {
                 progress.emit(ProgressEvent.of(ProgressEvent.Kind.PLAN_CREATED,
-                        "计划：" + plan.goal() + "（" + plan.steps().size() + " 步）"));
+                        "计划：" + plan.goal() + "（" + pendingSteps(plan) + " 步）"));
                 planAnnounced = true;
             }
             PlanStep step = plan != null && plan.hasExecutablePlan() ? plan.getCurrentStep() : null;
@@ -178,7 +183,7 @@ public final class ExecutionLoop implements SessionRunner {
                 // 判的是"当前这个 attempt"；iteration.round 是内循环轮次，两者不是一回事
                 plan.markAttemptFailed(step.id(), attempt.attemptNo());
                 commitPlan(plan);
-                if (advanceAfterFailure(session, plan, step, "撞 maxReActRounds")) {
+                if (advanceAfterFailure(session, plan, step, "撞 maxReActRounds", sink)) {
                     return RunOutcome.CONVERGED;
                 }
                 continue;
@@ -230,7 +235,7 @@ public final class ExecutionLoop implements SessionRunner {
                                     + " 步验收未通过：" + report.outcome()));
                     if (advanceAfterFailure(session, plan, step,
                             report.failureReason() == null ? String.valueOf(report.outcome())
-                                    : report.failureReason())) {
+                                    : report.failureReason(), sink)) {
                         return RunOutcome.CONVERGED;
                     }
                     continue;
@@ -250,7 +255,8 @@ public final class ExecutionLoop implements SessionRunner {
      * 失败后的推进：先重试，重试次数用尽则重划，重划次数用尽则终止。
      * 「还能不能重试 / 该不该重划」由这里判定，聚合只执行迁移（06-planning §6.8.1）。
      */
-    private boolean advanceAfterFailure(Session session, Plan plan, PlanStep step, String reason) {
+    private boolean advanceAfterFailure(Session session, Plan plan, PlanStep step, String reason,
+                                        ChunkSink sink) {
         RuntimePolicy policy = policies.load();
         if (failedAttempts(step) < policy.maxRetries()) {
             plan.retryStep(step.id());
@@ -258,7 +264,7 @@ public final class ExecutionLoop implements SessionRunner {
             return false;
         }
         if (plan.replanGeneration() < policy.maxReplanGeneration()) {
-            if (replan(session, plan, step, reason)) {
+            if (replan(session, plan, reason)) {
                 return false;
             }
         }
@@ -266,32 +272,42 @@ public final class ExecutionLoop implements SessionRunner {
         commitPlan(plan);
         publish(plan.pullEvents());
         curate(session, plan);
+        conclude(session, sink);
         return true;
     }
 
-    /** 重划：让模型给出新的剩余步骤，聚合只替换未执行尾部。 */
-    private boolean replan(Session session, Plan plan, PlanStep failed, String reason) {
-        RuntimePolicy policy = policies.load();
-        String instruction = "原计划在第 " + failed.sequence() + " 步失败：" + reason
-                + "。请给出修正后的剩余步骤，仍用 steps 数组表达，不要重复已完成的步骤。";
+    /**
+     * 重划：外循环授权一次“无 step 的自由内循环”，工具白名单只有 `replan_plan`——
+     * 复用主请求，历史与工具清单天然都在（06-planning §6.8.1 规则 6）。
+     * 模型不可用/取消由 `runIteration` 上抛：那是环境故障，不推进任何状态。
+     */
+    private boolean replan(Session session, Plan plan, String reason) {
+        int generation = plan.replanGeneration();
+        scope.restrict(session.id(), Collections.singleton(ToolId.of(REPLAN_TOOL)));
         try {
-            ModelInvocationResult result = model.invoke(new ModelInvocationRequest(plan.sessionId() == null
-                    ? session.activeModelId() : session.activeModelId(), instruction,
-                    Collections.singletonList(ChatMessage.of(RecordRole.USER, "目标：" + plan.goal())),
-                    Collections.emptyList(), 0, null));
-            if (result.usage() != null) {
-                budgetService.recordUsage(session, result.usage());
-            }
-            Map<String, Object> args = Json.parseObject(result.text());
-            Plan draft = planFactory.create(PlanId.of(UUID.randomUUID().toString()), session.id(), args,
-                    boundTools(session));
-            plan.applyReplan(draft.steps());
-            commitPlan(plan);
-            publish(Collections.<DomainEvent>emptyList());
-            return true;
-        } catch (RuntimeException cannotReplan) {
-            progress.emit(ProgressEvent.of(ProgressEvent.Kind.RETRY_SCHEDULED, "重划失败：" + cannotReplan.getMessage()));
-            return false;
+            reActLoop.runIteration(session, null, ChunkSink.NOOP);
+        } finally {
+            scope.clear(session.id());
+        }
+        if (plan.replanGeneration() <= generation) {
+            return false;   // 没调工具，或草案被拒：重划失败，不再重划
+        }
+        assignExperiences(session, plan);
+        progress.emit(ProgressEvent.of(ProgressEvent.Kind.PLAN_REPLAN,
+                "重划（第 " + plan.replanGeneration() + " 代）：" + plan.goal()
+                        + "（" + pendingSteps(plan) + " 步）"));
+        return true;
+    }
+
+    /** 外循环失败也补一轮“结论交付”：把失败原因与已沉淀内容讲清楚，工具白名单置空。 */
+    private void conclude(Session session, ChunkSink sink) {
+        scope.restrict(session.id(), Collections.<ToolId>emptySet());
+        try {
+            reActLoop.runIteration(session, null, sink);
+        } catch (RuntimeException bestEffort) {
+            // 结局已定：这一轮失败不改变终局，也不触发任何状态迁移（06-planning §6.9）
+        } finally {
+            scope.clear(session.id());
         }
     }
 
@@ -487,6 +503,17 @@ public final class ExecutionLoop implements SessionRunner {
     private String reflectionOf(Attempt attempt) {
         return reflections.get(attempt.reflectionId()).isPresent()
                 ? reflections.get(attempt.reflectionId()).get().conclusion() : null;
+    }
+
+    /** 进度文案里的 N 只计未 SUPERSEDED 的步骤：旧尾部会保留审计，算进去会越来越大（08-application §8.7）。 */
+    private static int pendingSteps(Plan plan) {
+        int count = 0;
+        for (PlanStep step : plan.steps()) {
+            if (step.status() != StepStatus.SUPERSEDED && step.status() != StepStatus.SUCCEEDED) {
+                count++;
+            }
+        }
+        return count;
     }
 
     private static boolean stepNeedsVerification(PlanStep step) {

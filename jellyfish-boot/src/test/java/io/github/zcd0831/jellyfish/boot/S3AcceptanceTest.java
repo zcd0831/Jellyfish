@@ -3,6 +3,7 @@ package io.github.zcd0831.jellyfish.boot;
 import io.github.zcd0831.jellyfish.application.action.BudgetService;
 import io.github.zcd0831.jellyfish.application.action.InternalToolHandlers;
 import io.github.zcd0831.jellyfish.application.action.ToolExecOutcome;
+import io.github.zcd0831.jellyfish.application.action.SessionToolScope;
 import io.github.zcd0831.jellyfish.application.action.ToolExecutor;
 import io.github.zcd0831.jellyfish.application.action.port.ChatMessage;
 import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationPort;
@@ -138,7 +139,7 @@ class S3AcceptanceTest {
         PlanFactory planFactory = new PlanFactory();
         FakeHuman human = new FakeHuman();
         ToolExecutor toolExecutor = new ToolExecutor(catalog, new HttpToolAdapter(), new FileArtifactStore(dir),
-                human, policies, InternalToolHandlers.empty(), event -> { });
+                human, policies, InternalToolHandlers.empty(), event -> { }, new SessionToolScope());
         ReActLoop reActLoop = new ReActLoop(model, toolExecutor, budgetService, contextWindow, policies,
                 new FileCommitScope(dir, codec), human);
         VerificationRunner verificationRunner = new VerificationRunner(model, catalog, human, budgetService,
@@ -170,7 +171,7 @@ class S3AcceptanceTest {
         ToolExecutor spawnExecutor = new ToolExecutor(catalog, new HttpToolAdapter(),
                 new FileArtifactStore(dir), human, policies,
                 new InternalToolHandlers(Collections.singletonList(new InternalToolHandlers.NamedHandler(
-                        "spawn_subagents", new SpawnSubagentsHandler(launcher)))), event -> { });
+                        "spawn_subagents", new SpawnSubagentsHandler(launcher)))), event -> { }, new SessionToolScope());
         toolExecutorHolder = spawnExecutor;
 
         main = Session.create(SessionId.of("main"), null,

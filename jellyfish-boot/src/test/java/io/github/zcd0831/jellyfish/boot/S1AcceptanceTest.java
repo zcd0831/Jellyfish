@@ -1,6 +1,7 @@
 package io.github.zcd0831.jellyfish.boot;
 
 import io.github.zcd0831.jellyfish.application.action.BudgetService;
+import io.github.zcd0831.jellyfish.application.action.SessionToolScope;
 import io.github.zcd0831.jellyfish.application.action.ToolExecutor;
 import io.github.zcd0831.jellyfish.application.action.port.ChatMessage;
 import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationPort;
@@ -100,7 +101,7 @@ class S1AcceptanceTest {
                 new EstimatorStrategy());
         ToolExecutor toolExecutor = new ToolExecutor(catalog, new HttpToolAdapter(),
                 new io.github.zcd0831.jellyfish.infrastructure.file.FileArtifactStore(dir), human, policies,
-                io.github.zcd0831.jellyfish.application.action.InternalToolHandlers.empty(), event -> { });
+                io.github.zcd0831.jellyfish.application.action.InternalToolHandlers.empty(), event -> { }, new SessionToolScope());
         ReActLoop reActLoop = new ReActLoop(model, toolExecutor, budgetService, contextWindow, policies,
                 new FileCommitScope(dir, codec), human);
         final io.github.zcd0831.jellyfish.application.planning.port.PlanRepository plans =

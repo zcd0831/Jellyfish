@@ -5,6 +5,7 @@ import dagger.Provides;
 import io.github.zcd0831.jellyfish.application.action.BudgetService;
 import io.github.zcd0831.jellyfish.application.action.InternalToolHandlers;
 import io.github.zcd0831.jellyfish.application.action.ManageCatalogUseCase;
+import io.github.zcd0831.jellyfish.application.action.SessionToolScope;
 import io.github.zcd0831.jellyfish.application.action.ToolExecutor;
 import io.github.zcd0831.jellyfish.application.action.ToolInvoker;
 import io.github.zcd0831.jellyfish.application.action.port.BudgetRepository;
@@ -37,12 +38,19 @@ public final class ActionModule {
         return new ManageCatalogUseCase(catalog);
     }
 
+    /** 会话作用域白名单：单例，ToolExecutor 判、外循环声明。 */
+    @Provides
+    @Singleton
+    SessionToolScope sessionToolScope() {
+        return new SessionToolScope();
+    }
+
     @Provides
     @Singleton
     ToolExecutor toolExecutor(CatalogRepository catalog, ExternalToolPort externalTools,
                               ArtifactStore artifacts, HumanInteractionPort human, PolicyRepository policies,
-                              InternalToolHandlers handlers, ProgressPort progress) {
-        return new ToolExecutor(catalog, externalTools, artifacts, human, policies, handlers, progress);
+                              InternalToolHandlers handlers, ProgressPort progress, SessionToolScope scope) {
+        return new ToolExecutor(catalog, externalTools, artifacts, human, policies, handlers, progress, scope);
     }
 
     /** 工具闸门的扩展点视图：插件换掉循环后仍走同一条路。 */

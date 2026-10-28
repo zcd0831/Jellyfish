@@ -31,6 +31,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
@@ -49,13 +50,14 @@ class ToolExecutorTest {
     private final ArtifactStore artifacts = mock(ArtifactStore.class);
     private final HumanInteractionPort human = mock(HumanInteractionPort.class);
     private final PolicyRepository policies = mock(PolicyRepository.class);
+    private final SessionToolScope scope = new SessionToolScope();
 
     private final Session session = Session.create(SessionId.of("s1"), null, AgentId.of("a"),
             ModelId.of("m1"), 1L, null);
 
     private ToolExecutor executor(InternalToolHandlers handlers) {
         when(policies.load()).thenReturn(RuntimePolicy.defaults());
-        return new ToolExecutor(catalog, external, artifacts, human, policies, handlers, progress);
+        return new ToolExecutor(catalog, external, artifacts, human, policies, handlers, progress, scope);
     }
 
     private void givenTool(ToolDefinition tool) {
@@ -255,7 +257,7 @@ class ToolExecutorTest {
         when(external.invoke(any(), anyMap())).thenReturn("内容");
         when(policies.load()).thenReturn(RuntimePolicy.defaults());
         ToolExecutor reporting = new ToolExecutor(catalog, external, artifacts, human, policies,
-                InternalToolHandlers.empty(), events::add);
+                InternalToolHandlers.empty(), events::add, scope);
 
         reporting.execute(session, "read_file", java.util.Collections.<String, Object>singletonMap("path", "/tmp/a"),
                 io.github.zcd0831.jellyfish.domain.shared.RecordId.of("r1"));
@@ -264,5 +266,24 @@ class ToolExecutorTest {
         assertEquals(io.github.zcd0831.jellyfish.application.shared.ProgressEvent.Kind.TOOL_STARTED, events.get(0).kind());
         assertTrue(events.get(0).message().contains("read_file"));
         assertEquals(io.github.zcd0831.jellyfish.application.shared.ProgressEvent.Kind.TOOL_FINISHED, events.get(1).kind());
+    }
+
+    @Test
+    void 白名单外的工具返回失败结果并计入越权() {
+        givenTool(tool("read_file", SideEffectLevel.READ_ONLY, SourceType.NATIVE, ToolStatus.ACTIVE,
+                "{}"));
+        scope.restrict(session.id(), java.util.Collections.singleton(
+                io.github.zcd0831.jellyfish.domain.shared.ToolId.of("submit_step")));
+
+        io.github.zcd0831.jellyfish.application.action.ToolExecOutcome outcome =
+                executor(InternalToolHandlers.empty()).execute(session, "read_file",
+                        java.util.Collections.<String, Object>emptyMap(),
+                        io.github.zcd0831.jellyfish.domain.shared.RecordId.of("r1"));
+
+        assertTrue(outcome.content().contains("不可用"), outcome.content());
+        assertFalse(scope.exceeded(session.id()), "一次越权还没到阈值");
+        scope.recordDenial(session.id());
+        scope.recordDenial(session.id());
+        assertTrue(scope.exceeded(session.id()), "连续越权到阈值就要结束会话");
     }
 }

@@ -36,6 +36,7 @@ import io.github.zcd0831.jellyfish.domain.shared.ModelId;
 import io.github.zcd0831.jellyfish.domain.shared.PlanId;
 import io.github.zcd0831.jellyfish.domain.shared.SessionId;
 import io.github.zcd0831.jellyfish.domain.shared.StepId;
+import io.github.zcd0831.jellyfish.domain.shared.ToolId;
 import io.github.zcd0831.jellyfish.domain.shared.VerificationReportId;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -92,6 +93,11 @@ class ExecutionLoopTest {
         when(reflections.get(any())).thenReturn(java.util.Optional.empty());
     }
 
+    private final io.github.zcd0831.jellyfish.application.action.SessionToolScope scope =
+            new io.github.zcd0831.jellyfish.application.action.SessionToolScope();
+    private final java.util.List<io.github.zcd0831.jellyfish.application.shared.ProgressEvent> progressEvents =
+            new java.util.ArrayList<io.github.zcd0831.jellyfish.application.shared.ProgressEvent>();
+
     private ExecutionLoop loop() {
         // 每个用例可能改过策略：这里重新绑一次，避免用到 setUp 时的旧快照
         when(policies.load()).thenReturn(policy);
@@ -99,8 +105,8 @@ class ExecutionLoopTest {
                 invocation -> planScript.isEmpty() ? Collections.<Plan>emptyList()
                         : Collections.singletonList(planScript.peek()));
         return new ExecutionLoop(contextWindow, reActLoop, verificationRunner, plans, new io.github.zcd0831.jellyfish.domain.planning.plan.PlanFactory(),
-                catalog, policies, commitScope, events -> { }, event -> { }, model, budget, retriever,
-                feedback, curator, reflections, experiences);
+                catalog, policies, commitScope, events -> { }, progressEvents::add, model, budget, retriever,
+                feedback, curator, reflections, experiences, scope);
     }
 
     /** 默认实现不读上下文（依赖由构造器注入），所以这里给空值即可。 */
@@ -273,21 +279,65 @@ class ExecutionLoopTest {
         }});
         Plan plan = plan(VerificationType.DETERMINISTIC);
         planScript.add(plan);
-        when(reActLoop.runIteration(any(Session.class), any(), any(ChunkSink.class)))
-                .thenReturn(submitted("第一次"))
-                .thenReturn(submitted("第二次"))
-                .thenReturn(converged());
+        java.util.concurrent.atomic.AtomicInteger replans = new java.util.concurrent.atomic.AtomicInteger();
+        when(reActLoop.runIteration(any(Session.class), any(), any(ChunkSink.class))).thenAnswer(call -> {
+            if (call.getArgument(1) == null && replans.get() == 0) {
+                // 重划调用的真实效果在 replan_plan 处理器里：这里模拟“聚合已替换尾部”
+                replans.incrementAndGet();
+                plan.applyReplan(Collections.singletonList(PlanSteps.draft(StepId.of("step2"), 0, "换个做法",
+                        "g", "o", "c", Collections.singleton(VerificationType.DETERMINISTIC))));
+                return converged();
+            }
+            if (call.getArgument(1) == null) {
+                return converged();   // 结论交付轮
+            }
+            return replans.get() > 0 ? submitted("第二次") : submitted("第一次");
+        });
         when(verificationRunner.verify(any(Session.class), any(Plan.class), any(), anyInt(), any()))
                 .thenReturn(failed())
                 .thenReturn(passed());
-        when(model.invoke(any(ModelInvocationRequest.class))).thenReturn(new ModelInvocationResult(
-                "{\"steps\":[{\"description\":\"换个做法\",\"goal\":\"g\",\"expectedOutcome\":\"o\","
-                        + "\"verificationCriteria\":\"c\"}]}", Collections.emptyList(),
-                new ModelUsage(1, 1), ModelId.of("m1")));
 
         loop().run(session, ChunkSink.NOOP, NO_TOKEN, NO_CONTEXT);
 
-        assertTrue(plan.replanGeneration() >= 1, "应发生重划");
+        assertEquals(1, plan.replanGeneration(), "应发生一次重划");
+        assertTrue(progressEvents.stream().anyMatch(e ->
+                        e.kind() == io.github.zcd0831.jellyfish.application.shared.ProgressEvent.Kind.PLAN_REPLAN
+                                && e.message().contains("第 1 代")),
+                "重划后要发 PLAN_REPLAN：" + progressEvents);
+    }
+
+    @Test
+    void 重划失败即终止且不再重划() {
+        policy = policy.adjust(new java.util.LinkedHashMap<String, Object>() {{
+            put("maxRetries", 1);
+            put("maxReplanGeneration", 3);
+        }});
+        Plan plan = plan(VerificationType.DETERMINISTIC);
+        planScript.add(plan);
+        java.util.concurrent.atomic.AtomicInteger nullStepCalls = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.concurrent.atomic.AtomicBoolean replanScopeOnlyReplan = new java.util.concurrent.atomic.AtomicBoolean();
+        java.util.concurrent.atomic.AtomicBoolean conclusionToolsBanned = new java.util.concurrent.atomic.AtomicBoolean();
+        when(reActLoop.runIteration(any(Session.class), any(), any(ChunkSink.class))).thenAnswer(call -> {
+            if (call.getArgument(1) != null) {
+                return submitted("第一次");
+            }
+            if (nullStepCalls.incrementAndGet() == 1) {
+                replanScopeOnlyReplan.set(scope.allows(session.id(), ToolId.of("replan_plan"))
+                        && !scope.allows(session.id(), ToolId.of("read_file")));
+            } else {
+                conclusionToolsBanned.set(!scope.allows(session.id(), ToolId.of("read_file")));
+            }
+            return converged();
+        });
+        when(verificationRunner.verify(any(Session.class), any(Plan.class), any(), anyInt(), any()))
+                .thenReturn(failed());
+
+        loop().run(session, ChunkSink.NOOP, NO_TOKEN, NO_CONTEXT);
+
+        assertEquals(PlanStatus.FAILED, plan.status());
+        assertEquals(0, plan.replanGeneration(), "没换成新尾部就不该推进代次");
+        assertTrue(replanScopeOnlyReplan.get(), "重划调用只挂 replan_plan");
+        assertTrue(conclusionToolsBanned.get(), "结论交付轮禁用全部工具");
     }
 
     @Test

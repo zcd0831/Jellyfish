@@ -52,10 +52,11 @@ public final class ToolExecutor implements ToolInvoker {
             new java.util.concurrent.ConcurrentHashMap<io.github.zcd0831.jellyfish.domain.shared.SessionId,
                     java.util.Set<String>>();
     private final InternalToolHandlers handlers;
+    private final SessionToolScope scope;
 
     public ToolExecutor(CatalogRepository catalog, ExternalToolPort externalTools, ArtifactStore artifacts,
                         HumanInteractionPort human, PolicyRepository policies, InternalToolHandlers handlers,
-                        ProgressPort progress) {
+                        ProgressPort progress, SessionToolScope scope) {
         this.catalog = catalog;
         this.externalTools = externalTools;
         this.artifacts = artifacts;
@@ -63,6 +64,7 @@ public final class ToolExecutor implements ToolInvoker {
         this.policies = policies;
         this.progress = progress;
         this.handlers = handlers;
+        this.scope = scope;
     }
 
     @Override
@@ -115,6 +117,10 @@ public final class ToolExecutor implements ToolInvoker {
         ToolDefinition tool = findTool(toolName);
         if (tool == null) {
             return ToolExecOutcome.plain("工具不存在：" + toolName);
+        }
+        if (!scope.allows(session.id(), tool.id())) {
+            scope.recordDenial(session.id());
+            return ToolExecOutcome.plain("该工具在本会话不可用，不要重试：" + toolName);
         }
         if (!tool.isActive()) {
             return ToolExecOutcome.plain("工具不可用（非 ACTIVE）：" + toolName);

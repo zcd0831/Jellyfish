@@ -22,6 +22,7 @@ public final class TuiProgressReporter implements ProgressPort {
         switch (event.kind()) {
             // 常驻行：计划、步骤、工具调用是"发生了什么"，不能被下一行冲掉
             case PLAN_CREATED:
+            case PLAN_REPLAN:
             case STEP_STARTED:
                 renderer.status("");
                 renderer.info("· " + event.message());

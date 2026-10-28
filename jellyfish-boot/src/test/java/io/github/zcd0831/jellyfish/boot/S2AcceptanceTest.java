@@ -2,6 +2,7 @@ package io.github.zcd0831.jellyfish.boot;
 
 import io.github.zcd0831.jellyfish.application.action.BudgetService;
 import io.github.zcd0831.jellyfish.application.action.InternalToolHandlers;
+import io.github.zcd0831.jellyfish.application.action.SessionToolScope;
 import io.github.zcd0831.jellyfish.application.action.ToolExecutor;
 import io.github.zcd0831.jellyfish.application.action.port.ChatMessage;
 import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationPort;
@@ -112,7 +113,7 @@ class S2AcceptanceTest {
                 new FileArtifactStore(dir), human, policies,
                 new InternalToolHandlers(Collections.singletonList(new InternalToolHandlers.NamedHandler(
                         "generate_plan", new GeneratePlanHandler(planFactory, plans, catalog,
-                        new FileCommitScope(dir, codec), publisher)))), event -> { });
+                        new FileCommitScope(dir, codec), publisher)))), event -> { }, new SessionToolScope());
         ReActLoop reActLoop = new ReActLoop(model, toolExecutor, budgetService, contextWindow, policies,
                 new FileCommitScope(dir, codec), human);
         VerificationRunner verificationRunner = new VerificationRunner(model, catalog, human, budgetService,
@@ -137,7 +138,8 @@ class S2AcceptanceTest {
                                 policies, new FileCommitScope(dir, codec), publisher, event -> { }));
         ExecutionLoop executionLoop = new ExecutionLoop(contextWindow, reActLoop, verificationRunner, plans,
                 planFactory, catalog, policies, new FileCommitScope(dir, codec), publisher, event -> { }, model,
-                budgetService, retriever, feedback, curator, reflections, experiences);
+                budgetService, retriever, feedback, curator, reflections, experiences,
+                new SessionToolScope());
         runSession = new RunSessionUseCase(sessions, records, new FileCommitScope(dir, codec), publisher,
                 executionLoop, model, toolExecutor, human, event -> { }, plans, contextWindow);
         runSessionHolder[0] = runSession;

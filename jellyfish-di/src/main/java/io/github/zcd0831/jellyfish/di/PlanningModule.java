@@ -28,7 +28,9 @@ import io.github.zcd0831.jellyfish.application.action.ToolInvoker;
 import io.github.zcd0831.jellyfish.application.planning.SessionRunner;
 import io.github.zcd0831.jellyfish.application.planning.ReActLoop;
 import io.github.zcd0831.jellyfish.application.planning.EnvironmentFeedbackVerifier;
+import io.github.zcd0831.jellyfish.application.action.SessionToolScope;
 import io.github.zcd0831.jellyfish.application.planning.GeneratePlanHandler;
+import io.github.zcd0831.jellyfish.application.planning.ReplanPlanHandler;
 import io.github.zcd0831.jellyfish.application.planning.VerificationRunner;
 import io.github.zcd0831.jellyfish.application.planning.RunSessionUseCase;
 import io.github.zcd0831.jellyfish.application.planning.SpawnSubagentsHandler;
@@ -69,12 +71,21 @@ public final class PlanningModule {
 
     @Provides
     @Singleton
+    ReplanPlanHandler replanPlanHandler(PlanFactory planFactory, PlanRepository plans,
+                                        CatalogRepository catalog, CommitScope commitScope) {
+        return new ReplanPlanHandler(planFactory, plans, catalog, commitScope);
+    }
+
+    @Provides
+    @Singleton
     InternalToolHandlers internalToolHandlers(GeneratePlanHandler generatePlanHandler,
+                                              ReplanPlanHandler replanPlanHandler,
                                               SpawnSubagentsHandler spawnSubagentsHandler,
                                               SkillSopProvider sopProvider, Workspace workspace,
                                               UrlFetcher urlFetcher) {
         List<InternalToolHandlers.NamedHandler> handlers = new ArrayList<InternalToolHandlers.NamedHandler>(Arrays.asList(
                 new InternalToolHandlers.NamedHandler("generate_plan", generatePlanHandler),
+                new InternalToolHandlers.NamedHandler("replan_plan", replanPlanHandler),
                 new InternalToolHandlers.NamedHandler("spawn_subagents", spawnSubagentsHandler),
                 new InternalToolHandlers.NamedHandler("load_skill", new LoadSkillHandler(sopProvider))));
         handlers.addAll(LocalToolHandlers.all(workspace, urlFetcher));
@@ -136,10 +147,11 @@ public final class PlanningModule {
                                 ExperienceRetriever experienceRetriever,
                                 ExperienceFeedbackService experienceFeedback,
                                 PlanCompletionCurator planCompletionCurator,
-                                ReflectionRepository reflections, ExperienceRepository experiences) {
+                                ReflectionRepository reflections, ExperienceRepository experiences,
+                                SessionToolScope scope) {
         return new ExecutionLoop(contextWindow, reActLoop, verificationRunner, plans, planFactory, catalog,
                 policies, commitScope, publisher, progress, model, budgetService, experienceRetriever,
-                experienceFeedback, planCompletionCurator, reflections, experiences);
+                experienceFeedback, planCompletionCurator, reflections, experiences, scope);
     }
 
     /** 零插件时就是默认编排；插件装上后由路由接管。 */

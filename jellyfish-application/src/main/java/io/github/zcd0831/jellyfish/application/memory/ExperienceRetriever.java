@@ -26,7 +26,7 @@ import java.util.Map;
 /**
  * 计划诞生 / 重划时：全库 ACTIVE 交检索子代理语义筛选，返回每步 Top-N。
  * **只返回分配结果，不写 Plan**（由外循环调 `Plan.assignExperiences`）。
- * 规则出处：模块-记忆 §4、§8.1。
+ * 规则出处：07-memory §7.5、§7.9.1。
  */
 public final class ExperienceRetriever {
 

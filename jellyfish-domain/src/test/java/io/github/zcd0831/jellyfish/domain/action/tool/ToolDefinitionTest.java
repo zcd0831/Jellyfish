@@ -12,7 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * 完整 JSON Schema（draft-07）校验，返回违反项而不是抛异常。
- * 规则出处：模块-行动 §7.1 规则 8、技术决策 D17、M10。
+ * 规则出处：05-action §5.8.1 规则 8。
  */
 class ToolDefinitionTest {
 

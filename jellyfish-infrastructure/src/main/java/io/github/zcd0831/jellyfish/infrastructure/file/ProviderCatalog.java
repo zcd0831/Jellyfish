@@ -16,7 +16,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * providers/<id>.json：端点、协议、凭据引用（环境变量名，D09）。由用户自建，不随 jar 播种（M04）。
+ * providers/<id>.json：端点、协议、凭据引用。由用户自建，不随 jar 播种。
  */
 final class ProviderCatalog {
 

@@ -17,7 +17,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
-/** agents/*.md：markdown + front-matter（M04：内置代理在 jar 内，不落盘）。 */
+/** agents/*.md：markdown + front-matter。 */
 final class AgentCatalog {
 
     private static final String BUILTIN_PREFIX = "builtin.";

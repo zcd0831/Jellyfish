@@ -17,7 +17,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
  * 流水：只追加、按 seq 取最近 n 条与区间。
- * 规则出处：模块-感知 §7.1 规则 5、模块-基础设施层 §3。
+ * 规则出处：04-perception §4.8.1 规则 5、09-infrastructure §9.4。
  */
 class FileRecordStoreTest {
 

@@ -11,7 +11,7 @@ import java.util.Map;
 
 /**
  * 组装快照的入参：工具/技能已由调用方按 ACTIVE 与绑定裁剪，领域只做组装。
- * 规则出处：模块-感知 §8.3、M09。
+ * 规则出处：04-perception §4.9.3。
  */
 @Value
 public class AgentSnapshotInput {

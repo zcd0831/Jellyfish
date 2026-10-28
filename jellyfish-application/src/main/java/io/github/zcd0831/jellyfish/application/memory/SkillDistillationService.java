@@ -18,7 +18,7 @@ import java.util.UUID;
 /**
  * 技能写入：把子代理的草稿落成聚合变更，并原子重写 SKILL.md。
  * 零计数、零质量分、零阈值——"要不要改"由子代理判定，这里只守规则。
- * 规则出处：模块-记忆 §7.3、§8.5。
+ * 规则出处：07-memory §7.8.3、§7.9.5。
  */
 public final class SkillDistillationService {
 
@@ -44,7 +44,7 @@ public final class SkillDistillationService {
         if (draft == null || !draft.isComplete()) {
             return;   // 四件套不全：本次沉淀失败，不发事件、不占额度
         }
-        // 容量"读—判—写"必须在全局写段内完成（§8.5 要点 2）
+        // 容量"读—判—写"必须在全局写段内完成（07-memory §7.9.5）
         commitScope.globalWrite(new Runnable() {
             @Override
             public void run() {

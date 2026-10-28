@@ -33,7 +33,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * S5 三个用例：策略校验、归档/删除、内置前缀保留。
- * 规则出处：模块-应用层 §4、§8.4、§8.5，技术决策 D11（C_INVALID_VALUE）、M04。
+ * 规则出处：08-application §8.9.5、§8.9.4、§8.9.5。
  */
 class S5UseCasesTest {
 
@@ -132,7 +132,7 @@ class S5UseCasesTest {
 
         assertTrue(manageSession.archive(id).isOk());
 
-        assertTrue(Files.exists(tmp.resolve("archive").resolve("s1.zip")), "归档 = 压缩成包（D22）");
+        assertTrue(Files.exists(tmp.resolve("archive").resolve("s1.zip")), "归档 = 压缩成包");
         assertFalse(Files.exists(tmp.resolve("sessions").resolve("s1")));
         assertTrue(manageSession.list().value().isEmpty(), "归档后应用不再认识它");
     }

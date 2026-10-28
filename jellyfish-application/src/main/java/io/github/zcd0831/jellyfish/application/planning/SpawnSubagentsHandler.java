@@ -14,7 +14,7 @@ import java.util.Map;
 
 /**
  * `spawn_subagents`：唯一并发点；子代理**不得再开子代理**（深度恒为 1）。
- * 规则出处：模块-行动 §3.1、§8.1、模块-感知 §7.1 规则 6。
+ * 规则出处：05-action §5.4.1、§5.9.1、04-perception §4.8.1 规则 6。
  */
 public final class SpawnSubagentsHandler implements InternalToolHandler {
 

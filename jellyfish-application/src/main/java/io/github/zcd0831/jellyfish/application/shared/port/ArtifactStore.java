@@ -4,7 +4,7 @@ import io.github.zcd0831.jellyfish.domain.shared.RecordId;
 import io.github.zcd0831.jellyfish.domain.shared.SessionId;
 
 /**
- * 工具结果全文落本地文件，返回 resourceUri。规则出处：模块-行动 §7.1 规则 6。
+ * 工具结果全文落本地文件，返回 resourceUri。规则出处：05-action §5.8.1 规则 6。
  */
 public interface ArtifactStore {
 

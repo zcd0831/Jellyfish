@@ -6,8 +6,8 @@ import io.github.zcd0831.jellyfish.domain.shared.StepId;
 import java.util.Set;
 
 /**
- * `PlanStep` 的构造入口：实体本身包内可见，只能经聚合根入口使用（D03 规则 3）。
- * 规则出处：模块-规划 §5。
+ * `PlanStep` 的构造入口：实体本身包内可见，只能经聚合根入口使用。
+ * 规则出处：06-planning §6.6。
  */
 public final class PlanSteps {
 

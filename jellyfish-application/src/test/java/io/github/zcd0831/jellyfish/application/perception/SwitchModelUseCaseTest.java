@@ -32,7 +32,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-/** 显式切换模型：工具轮闭合是唯一硬闸；切换只改会话头。规则出处：模块-感知 §7.1 规则 2。 */
+/** 显式切换模型：工具轮闭合是唯一硬闸；切换只改会话头。规则出处：04-perception §4.8.1 规则 2。 */
 class SwitchModelUseCaseTest {
 
     private final SessionRepository sessions = mock(SessionRepository.class);

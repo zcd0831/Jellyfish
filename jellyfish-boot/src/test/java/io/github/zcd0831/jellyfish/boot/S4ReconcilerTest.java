@@ -40,7 +40,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 启动对账 5 条规则中的 1/2/3/5。规则出处：模块-应用层 §9。
+ * 启动对账 5 条规则中的 1/2/3/5。规则出处：08-application §8.10。
  */
 class S4ReconcilerTest {
 

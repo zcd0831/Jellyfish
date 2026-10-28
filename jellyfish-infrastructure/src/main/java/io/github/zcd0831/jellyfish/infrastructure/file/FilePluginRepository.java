@@ -19,8 +19,8 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * `plugins/<id>/plugin.json`：只存用户意图（信任 / 勾选的能力），"已加载"不落盘（M42、D24-4）。
- * 规则出处：模块-基础设施层 §3、§4。
+ * `plugins/<id>/plugin.json`：只存用户意图（信任 / 勾选的能力），"已加载"不落盘。
+ * 规则出处：09-infrastructure §9.4、§9.5。
  */
 public final class FilePluginRepository implements PluginRepository {
 
@@ -85,7 +85,7 @@ public final class FilePluginRepository implements PluginRepository {
         }
     }
 
-    /** 纯 JSON 形态（D07：camelCase、不写 null、epoch 毫秒）。 */
+    /** 纯 JSON 形态。 */
     public static class PluginDto {
 
         public String version;

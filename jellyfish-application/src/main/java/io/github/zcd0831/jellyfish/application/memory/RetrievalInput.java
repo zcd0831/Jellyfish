@@ -8,7 +8,7 @@ import java.util.List;
 
 /**
  * 检索入参：**不传 Plan 聚合**，只给 planId 与各步摘要。
- * 规则出处：模块-记忆 §5、§8.1。
+ * 规则出处：07-memory §7.6、§7.9.1。
  */
 public final class RetrievalInput {
 

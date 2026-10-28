@@ -13,7 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** 草案校验的各条拒绝分支。规则出处：模块-规划 §8.4。 */
+/** 草案校验的各条拒绝分支。规则出处：06-planning §6.9.4。 */
 class PlanFactoryBranchesTest {
 
     private final PlanFactory factory = new PlanFactory();

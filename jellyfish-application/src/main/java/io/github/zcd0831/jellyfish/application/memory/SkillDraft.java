@@ -4,7 +4,7 @@ import io.github.zcd0831.jellyfish.domain.shared.SkillId;
 
 /**
  * 子代理说的技能（不可信输入）：{@code CREATE} 新建、{@code MERGE} 改已有可变技能。
- * 规则出处：模块-记忆 §5、§8.5。
+ * 规则出处：07-memory §7.6、§7.9.5。
  */
 public final class SkillDraft {
 
@@ -35,8 +35,8 @@ public final class SkillDraft {
     }
 
     /**
-     * 四件套缺一即沉淀失败：描述写坏了技能就不可发现（§7.3 不变量 ④）。
-     * MERGE 也必须带全——目标不可变时要能降级成 CREATE（§8.5），缺三件套就降不了。
+     * 四件套缺一即沉淀失败：描述写坏了技能就不可发现（07-memory §7.8.3）。
+     * MERGE 也必须带全——目标不可变时要能降级成 CREATE（07-memory §7.9.5），缺三件套就降不了。
      */
     public boolean isComplete() {
         return notBlank(name) && notBlank(description) && notBlank(triggerCondition) && notBlank(sopBody);

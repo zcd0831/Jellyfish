@@ -41,7 +41,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * 重试 / 降级 / 硬校验 / 错误分流；不发真实请求（假传输层）。
- * 规则出处：技术决策 D10、D10.1、D11，模块-基础设施层 §10。
  */
 class ModelInvokerTest {
 

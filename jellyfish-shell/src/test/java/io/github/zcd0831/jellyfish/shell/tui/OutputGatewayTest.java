@@ -16,7 +16,6 @@ import static org.mockito.Mockito.when;
 
 /**
  * 输出单写者的两条路径：读取中走 `printAbove`、空闲时直写；状态行（只含 \r）读取期间直接丢弃。
- * 规则出处：D20-2、D20-8、D12.1（进度可丢）。
  */
 class OutputGatewayTest {
 

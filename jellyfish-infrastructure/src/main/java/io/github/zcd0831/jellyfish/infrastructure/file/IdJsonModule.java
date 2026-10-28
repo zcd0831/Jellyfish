@@ -15,7 +15,6 @@ import java.util.List;
 
 /**
  * Id 值对象与字符串互转；领域层不引 Jackson，序列化知识留在本层。
- * 规则出处：技术决策 D02/D03（domain 纯 JDK）、D07（JSON 中 Id 是字符串）。
  */
 final class IdJsonModule extends SimpleModule {
 

@@ -12,7 +12,7 @@ import java.util.Collections;
 
 /**
  * 首条输入 → 标题；失败或超长降级为首句截断，不让建会话失败。
- * 规则出处：模块-感知 §8.4、§7.1 规则 3。
+ * 规则出处：04-perception §4.9.4、§4.8.1 规则 3。
  */
 public final class SessionTitleGenerator {
 
@@ -41,7 +41,7 @@ public final class SessionTitleGenerator {
                 return title;
             }
         } catch (RuntimeException ignored) {
-            // 标题只是展示信息，失败降级即可（§8.4）
+            // 标题只是展示信息，失败降级即可（04-perception §4.9.4）
         }
         return fallback(firstInput);
     }

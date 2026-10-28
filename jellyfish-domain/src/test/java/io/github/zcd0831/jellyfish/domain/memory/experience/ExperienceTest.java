@@ -11,7 +11,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * 置信度演化与淘汰：初值 0.5、±0.1、低于 0.2 淘汰。
- * 规则出处：模块-记忆 §3.1、§7.1 规则 ⑤⑥⑧。
+ * 规则出处：07-memory §7.4.1、§7.8.1 规则 5⑥⑧。
  */
 class ExperienceTest {
 

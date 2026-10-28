@@ -8,7 +8,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-/** 规则出处：模块-行动 §5、M08。 */
+/** 规则出处：05-action §5.6。 */
 class PromptTemplateTest {
 
     @Test

@@ -13,7 +13,7 @@ import java.util.List;
 
 /**
  * 工具 / 代理 / 供应商 / 模型 / 技能的统一目录：jar 内置 + 磁盘用户资产。
- * 规则出处：模块-基础设施层 §3、§4，技术决策 M04。
+ * 规则出处：09-infrastructure §9.4、§9.5。
  */
 public final class FileCatalogRepository implements CatalogRepository {
 
@@ -36,7 +36,7 @@ public final class FileCatalogRepository implements CatalogRepository {
         this.pluginRuntime = pluginRuntime;
     }
 
-    /** 三个来源：jar 内置 + 磁盘用户资产 + **已授权 tools 能力的插件**（M42、D24）。 */
+    /** 三个来源：jar 内置 + 磁盘用户资产 + **已授权 tools 能力的插件**。 */
     /**
      * 自带一套空的插件来源：测试与工具场景用；装配层用 4 参构造，
      * 以便与 {@code PluginAssembler} 共享**同一个**运行时实例。

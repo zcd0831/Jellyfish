@@ -11,7 +11,7 @@ import java.nio.file.Path;
 
 /**
  * 工具结果全文归档；会话销毁时随目录删除。
- * 规则出处：模块-行动 §7.1 规则 6、模块-基础设施层 §3。
+ * 规则出处：05-action §5.8.1 规则 6、09-infrastructure §9.4。
  */
 public final class FileArtifactStore implements ArtifactStore {
 

@@ -8,7 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** 技能聚合：可变性守护与四件套（模块-记忆 §7.3）。 */
+/** 技能聚合：可变性守护与四件套（07-memory §7.8.3）。 */
 class SkillDefinitionTest {
 
     @Test

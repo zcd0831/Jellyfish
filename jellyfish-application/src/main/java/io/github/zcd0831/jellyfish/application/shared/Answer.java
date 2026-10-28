@@ -2,7 +2,6 @@ package io.github.zcd0831.jellyfish.application.shared;
 
 /**
  * 提问的回答；取消是独立分支，不是错误。
- * 规则出处：技术决策 D11（取消不是错误）。
  */
 public final class Answer {
 

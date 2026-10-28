@@ -25,7 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * PF4J 3.16.0 在 JDK 8 上的真实装卸（M42 待实测项 1、2）：
+ * PF4J 3.16.0 在 JDK 8 上的真实装卸：
  * 装 → 启 → 读工具声明 → 停 → 卸，且不落任何状态文件。
  */
 class Pf4jPluginRuntimeTest {

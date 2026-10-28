@@ -3,8 +3,8 @@ package io.github.zcd0831.jellyfish.application.shared.port;
 import io.github.zcd0831.jellyfish.domain.shared.PluginId;
 
 /**
- * 运行时读到的插件事实。`loaded` 是进程内事实，不落盘（D24-4）。
- * 规则出处：模块-行动 §5。
+ * 运行时读到的插件事实。`loaded` 是进程内事实，不落盘。
+ * 规则出处：05-action §5.6。
  */
 public final class PluginDescriptor {
 

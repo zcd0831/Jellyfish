@@ -21,7 +21,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 真跑 HTTP（MockWebServer），不联网。规则出处：技术决策 D10.1、D16-5、M14。
+ * 真跑 HTTP（MockWebServer），不联网。。
  */
 class HttpJsonClientTest {
 

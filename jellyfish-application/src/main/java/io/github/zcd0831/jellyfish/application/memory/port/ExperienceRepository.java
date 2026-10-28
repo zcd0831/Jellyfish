@@ -7,7 +7,7 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * 经验库。规则出处：模块-基础设施层 §3、M24（`find` 供上下文注入使用）。
+ * 经验库。规则出处：09-infrastructure §9.4（`find` 供上下文注入使用）。
  */
 public interface ExperienceRepository {
 

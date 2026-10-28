@@ -68,7 +68,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * S2 验收（D15）：生成计划 → 执行 → 提交 → 免验证完成 → 结论交付；失败触发重试。
+ * S2 验收：生成计划 → 执行 → 提交 → 免验证完成 → 结论交付；失败触发重试。
  * 用脚本化假模型，不联网。
  */
 class S2AcceptanceTest {

@@ -4,7 +4,7 @@ import io.github.zcd0831.jellyfish.domain.shared.StepId;
 
 /**
  * 检索入参里的一个步骤摘要：检索子代理只需要"步号 + 描述"来匹配经验。
- * 规则出处：模块-记忆 §5、M17。
+ * 规则出处：07-memory §7.6。
  */
 public final class StepBrief {
 

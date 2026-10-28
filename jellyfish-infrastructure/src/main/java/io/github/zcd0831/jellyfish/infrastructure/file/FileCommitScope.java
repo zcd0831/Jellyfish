@@ -17,15 +17,14 @@ import java.util.List;
 
 /**
  * 固定按「事实 → 追加 → 替换」执行。
- * 规则出处：模块-应用层 §8.8、模块-基础设施层 §5。
- *
+ * 规则出处：08-application §8.8、09-infrastructure §9.6。
  * <p>已支持 Session / RuntimePolicy / Budget 的替换；报告 / 反思 / 经验 / 计划随各自切片加入。
  */
 public final class FileCommitScope implements CommitScope {
 
     /**
      * 事务状态按线程隔离：主循环与各子代理可能并行写不同会话目录，
-     * 共享一份 staging 会让一个线程的提交带上另一个线程的写入（D05.1 的"每会话一个写者"）。
+     * 共享一份 staging 会让一个线程的提交带上另一个线程的写入。
      */
     private static final Object GLOBAL_ASSET_LOCK = new Object();
 
@@ -161,7 +160,6 @@ public final class FileCommitScope implements CommitScope {
 
     /**
      * 会话目录：子会话在 sub/ 下（深度恒为 1）；新会话的目录还没建时按顶层会话建出来。
-     * 规则出处：技术决策 D05.1。
      */
     private java.nio.file.Path sessionDirOf(SessionId sessionId) {
         try {
@@ -171,7 +169,7 @@ public final class FileCommitScope implements CommitScope {
         }
     }
 
-    /** 子会话在 sub/ 下，深度恒为 1（D05.1）。 */
+    /** 子会话在 sub/ 下，深度恒为 1。 */
     private java.nio.file.Path sessionMetaFile(Session session) {
         if (session.parentSessionId() == null) {
             return dir.sessionDir(session.id().getValue()).resolve("meta.json");
@@ -184,7 +182,7 @@ public final class FileCommitScope implements CommitScope {
     /**
      * 流水行的唯一写路径：**字段必须与 `RecordLineDto` / `FileRecordStore.toDto` 逐一对齐**——
      * 漏一个字段，内存里正确、落盘后丢失，重启即真相改变。
-     * 规则出处：模块-基础设施层 §3（RecordStore 行字段）。
+     * 规则出处：09-infrastructure §9.4（RecordStore 行字段）。
      */
     private static RecordLineDto toLine(Record r) {
         RecordLineDto d = new RecordLineDto();

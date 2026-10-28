@@ -20,7 +20,7 @@ import java.util.Optional;
 
 /**
  * reports/<reportId>.json：**只新建、不覆盖**；需要知道 plan/session 才能定位。
- * 规则出处：模块-基础设施层 §3（只新建）。
+ * 规则出处：09-infrastructure §9.4（只新建）。
  */
 public final class FileReportRepository implements VerificationReportRepository {
 

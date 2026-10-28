@@ -37,11 +37,11 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * TUI 主循环：输入线程独占 stdin（D05 约束 1），主循环按顺序驱动用例。
+ * TUI 主循环：输入线程独占 stdin，主循环按顺序驱动用例。
  * <p>
  * 输入线程有三种状态，切换由主循环控制：**等待提示符** / **轮次进行中（不读）** / **等一个答案**。
  * 轮次进行中不读输入，是为了让流式输出独占终端——否则每个增量都要经 `printAbove`
- * 把提示符重画一遍（D20-2、D20-8）。
+ * 把提示符重画一遍。
  */
 public final class TuiApp implements QuestionBroker.Answerer {
 
@@ -166,7 +166,7 @@ public final class TuiApp implements QuestionBroker.Answerer {
         thread.start();
     }
 
-    /** 非 TTY：没有行编辑，输出侧是否着色由外壳判定（D20-7）。 */
+    /** 非 TTY：没有行编辑，输出侧是否着色由外壳判定。 */
     private void startDumbInput(final InputStream input) {
         Thread thread = new Thread(new Runnable() {
             @Override
@@ -373,7 +373,7 @@ public final class TuiApp implements QuestionBroker.Answerer {
     }
 
     /**
-     * 轮次进行中关掉回显：终端不在 readLine 里，敲键会被 TTY 直接回显到正文中间（D20-9）。
+     * 轮次进行中关掉回显：终端不在 readLine 里，敲键会被 TTY 直接回显到正文中间。
      * ISIG 不动，Ctrl-C 仍然能到达信号处理器。
      */
     private org.jline.terminal.Attributes withoutEcho() {
@@ -408,7 +408,7 @@ public final class TuiApp implements QuestionBroker.Answerer {
         }
     }
 
-    /** Ctrl-C 在轮次中：取消本轮；连按两次退出（D20-5）。 */
+    /** Ctrl-C 在轮次中：取消本轮；连按两次退出。 */
     private void onInterrupt() {
         cancelPendingQuestion();
         if (interruptions.incrementAndGet() >= 2) {
@@ -418,7 +418,7 @@ public final class TuiApp implements QuestionBroker.Answerer {
         token.cancel();
     }
 
-    /** Ctrl-C 在提示符处：清行继续，两秒内第二次退出（D20-5）。 */
+    /** Ctrl-C 在提示符处：清行继续，两秒内第二次退出。 */
     private void onPromptInterrupt() {
         if (draft.isContinuing()) {
             draft.clear();
@@ -558,7 +558,7 @@ public final class TuiApp implements QuestionBroker.Answerer {
         return line.length() > limit ? line.substring(0, limit) + "…" : line;
     }
 
-    /** 会话列表只来自存在的目录（D22：没有状态字段，存在即可用）。 */
+    /** 会话列表只来自存在的目录。 */
     private void listSessions() {
         Result<java.util.List<io.github.zcd0831.jellyfish.application.perception.port.SessionSummary>> listed =
                 manageSession.list();
@@ -573,7 +573,7 @@ public final class TuiApp implements QuestionBroker.Answerer {
         }
     }
 
-    /** 目录只读浏览；增删改按 D12 走"编辑文件 + 重启"。 */
+    /** 目录只读浏览；增删改走"编辑文件 + 重启"。 */
     private void list(String what) {
         if ("/tools".equals(what)) {
             for (io.github.zcd0831.jellyfish.domain.action.tool.ToolDefinition tool : catalog.tools()) {
@@ -616,7 +616,7 @@ public final class TuiApp implements QuestionBroker.Answerer {
         }
     }
 
-    /** 文案在 shell；缺 key 回退显示 code（D11）。 */
+    /** 文案在 shell；缺 key 回退显示 code。 */
     private void printError(UseCaseError error) {
         renderer.error(Messages.text(error.error().code()));
     }

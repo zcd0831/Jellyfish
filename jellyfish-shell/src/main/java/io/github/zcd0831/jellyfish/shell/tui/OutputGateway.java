@@ -11,10 +11,10 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 
 /**
- * 输出单写者（D20-8）：所有线程只往队列里投字符串，真正写终端只有这一条线程。
+ * 输出单写者：所有线程只往队列里投字符串，真正写终端只有这一条线程。
  * <p>
  * 读取进行中必须交给 {@link LineReader#printAbove}，由 JLine 负责擦提示符、打印、再重绘；
- * 否则渲染器会和提示符抢同一行——那正是上一版显示错乱的根因（D20-2）。
+ * 否则渲染器会和提示符抢同一行——那正是上一版显示错乱的根因。
  */
 public final class OutputGateway {
 
@@ -96,7 +96,7 @@ public final class OutputGateway {
         }
     }
 
-    /** 读取期只能按整行提交；状态行（只含 \r）是"可丢的"，直接丢弃（D12.1）。 */
+    /** 读取期只能按整行提交；状态行（只含 \r）是"可丢的"，直接丢弃。 */
     private void printAbove(LineReader active, String batch) {
         for (String line : batch.split("\n")) {
             if (line.isEmpty() || line.indexOf('\r') >= 0) {

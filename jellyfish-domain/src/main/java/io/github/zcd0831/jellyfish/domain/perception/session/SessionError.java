@@ -2,7 +2,7 @@ package io.github.zcd0831.jellyfish.domain.perception.session;
 
 import io.github.zcd0831.jellyfish.domain.shared.DomainError;
 
-/** 会话上下文错误码。规则出处：技术决策 D11 code 前缀表（S_）。 */
+/** 会话上下文错误码。。 */
 public enum SessionError implements DomainError {
 
     NOT_FOUND("S_NOT_FOUND"),

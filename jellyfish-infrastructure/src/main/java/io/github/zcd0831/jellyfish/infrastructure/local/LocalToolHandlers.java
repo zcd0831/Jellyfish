@@ -23,7 +23,7 @@ import java.util.regex.Pattern;
 
 /**
  * 8 个本地能力的处理器：全部先过 {@link Workspace} 的边界校验，再动手。
- * 规则出处：模块-行动 §3.1 工具表、§7.1 规则 9（硬限制在同一处声明）。
+ * 规则出处：05-action §5.4.1 工具表、§5.8.1 规则 9（硬限制在同一处声明）。
  */
 public final class LocalToolHandlers {
 
@@ -267,7 +267,7 @@ public final class LocalToolHandlers {
                             + " 次（行 " + lineNumbers(content, oldText) + "），需要更精确的片段");
                 }
                 AtomicFiles.write(path, content.replace(oldText, newText));
-                // 出参是"改动的行数"（模块-行动 §3.1）：模型靠它确认改对了地方
+                // 出参是"改动的行数"（05-action §5.4.1）：模型靠它确认改对了地方
                 return "已修改第 " + lineNumbers(content, oldText) + " 行：" + workspace.relative(path);
             }
         };

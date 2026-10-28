@@ -16,7 +16,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * `SessionRepository` 的契约：任何实现都要满足。
- * 规则出处：模块-应用层 §6、技术决策 D13（全部 9 个仓储做契约测试）。
+ * 规则出处：08-application §8.7。
  */
 public abstract class SessionRepositoryContract {
 

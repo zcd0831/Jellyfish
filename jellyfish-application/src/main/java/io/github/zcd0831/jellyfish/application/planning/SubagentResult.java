@@ -3,7 +3,7 @@ package io.github.zcd0831.jellyfish.application.planning;
 import io.github.zcd0831.jellyfish.domain.shared.SessionId;
 
 /**
- * 子代理的结论：各自独立成败，不整体失败。规则出处：模块-行动 §8.1。
+ * 子代理的结论：各自独立成败，不整体失败。规则出处：05-action §5.9.1。
  */
 public final class SubagentResult {
 

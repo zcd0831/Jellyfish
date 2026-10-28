@@ -1,8 +1,8 @@
 package io.github.zcd0831.jellyfish.application.planning;
 
 /**
- * 一轮运行的结果。**取消不是错误**，所以它是正常值的一支（D11）。
- * 规则出处：模块-应用层 §8.1、技术决策 D11。
+ * 一轮运行的结果。**取消不是错误**，所以它是正常值的一支。
+ * 规则出处：08-application §8.9.1。
  */
 public final class RunSessionResult {
 

@@ -3,7 +3,7 @@ package io.github.zcd0831.jellyfish.application.shared;
 /**
  * 人工审批的判定：**先看否定再看肯定**——"不同意"里含着"同意"，
  * 直接 contains("同意") 会把拒绝当成放行。
- * 规则出处：模块-规划 §7.2 规则 5（人工层返回同意/不同意 + 原因）。
+ * 规则出处：06-planning §6.8.2 规则 5（人工层返回同意/不同意 + 原因）。
  */
 public final class Approvals {
 

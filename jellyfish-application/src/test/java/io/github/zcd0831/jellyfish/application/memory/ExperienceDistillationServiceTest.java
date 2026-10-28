@@ -21,7 +21,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /**
- * 经验写入的规则：**没有假模型**也能断言——这是把编排拆出去的收益（模块-记忆 §8.2）。
+ * 经验写入的规则：**没有假模型**也能断言——这是把编排拆出去的收益（07-memory §7.9.2）。
  */
 class ExperienceDistillationServiceTest {
 

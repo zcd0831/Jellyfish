@@ -26,14 +26,13 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * 插件装配：端口路由表 + PF4J 运行时 + 装配器。规则出处：模块-应用层 §5/§10、D24-6。
- *
+ * 插件装配：端口路由表 + PF4J 运行时 + 装配器。规则出处：08-application §8.6/§8.11。
  * <p>容器概念仍只在本模块：业务代码只认端口，路由表是 {@code di} 的装配状态。
  */
 @Module
 public final class PluginModule {
 
-    /** 可替换面：6 个端口 + 编排扩展点 + 工具处理器（D24-5）。 */
+    /** 可替换面：6 个端口 + 编排扩展点 + 工具处理器。 */
     static Map<String, Class<?>> capabilityTypes() {
         Map<String, Class<?>> types = new LinkedHashMap<String, Class<?>>();
         types.put("Clock", Clock.class);

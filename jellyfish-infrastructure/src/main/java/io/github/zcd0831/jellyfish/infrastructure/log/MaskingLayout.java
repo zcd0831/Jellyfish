@@ -15,7 +15,6 @@ import java.util.regex.Pattern;
 
 /**
  * 在适配器统一脱敏：key 命中敏感词的字段值一律替换为 `***`，不靠调用方自觉。
- * 规则出处：技术决策 D14-2 规则 3、D18-3。
  */
 @Plugin(name = "MaskingLayout", category = Node.CATEGORY, elementType = Layout.ELEMENT_TYPE,
         printObject = true)

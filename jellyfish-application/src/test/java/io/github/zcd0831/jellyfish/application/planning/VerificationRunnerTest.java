@@ -39,7 +39,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-/** 四层判定与短路。规则出处：模块-规划 §7.2、M16。 */
+/** 四层判定与短路。规则出处：06-planning §6.8.2。 */
 class VerificationRunnerTest {
 
     private final ModelInvocationPort model = mock(ModelInvocationPort.class);

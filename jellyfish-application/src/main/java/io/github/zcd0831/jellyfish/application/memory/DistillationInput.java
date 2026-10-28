@@ -10,7 +10,7 @@ import java.util.List;
 
 /**
  * 沉淀入参：由外循环组装，记忆**不遍历 Plan 聚合**；只给事实摘要与轨迹区间。
- * 规则出处：模块-记忆 §5、§8.2、M17。
+ * 规则出处：07-memory §7.6、§7.9.2。
  */
 public final class DistillationInput {
 

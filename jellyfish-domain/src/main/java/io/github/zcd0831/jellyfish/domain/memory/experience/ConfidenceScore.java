@@ -3,7 +3,7 @@ package io.github.zcd0831.jellyfish.domain.memory.experience;
 import io.github.zcd0831.jellyfish.domain.shared.DomainInvariantViolation;
 import lombok.Value;
 
-/** 置信度恒在 [0,1]。规则出处：模块-记忆 §3.1 规则 ⑤。 */
+/** 置信度恒在 [0,1]。规则出处：07-memory §7.4.1 规则 5。 */
 @Value
 public class ConfidenceScore {
 

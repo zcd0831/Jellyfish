@@ -26,7 +26,7 @@ import java.util.Map;
 
 /**
  * 工具执行的唯一入口：合法性 → 入参校验 → 放行审批 → 按来源分发 → 截断归档。
- * 规则出处：模块-行动 §8.1。
+ * 规则出处：05-action §5.9.1。
  */
 public final class ToolExecutor implements ToolInvoker {
 
@@ -39,12 +39,12 @@ public final class ToolExecutor implements ToolInvoker {
     private final HumanInteractionPort human;
     private final PolicyRepository policies;
     private final ProgressPort progress;
-    /** 首次同意后进本会话信任清单的三个工具（D25-4）。 */
+    /** 首次同意后进本会话信任清单的三个工具。 */
     private static final List<String> WRITES =
             java.util.Arrays.asList("edit_file", "write_file", "delete_file");
 
     /**
-     * 本会话已同意的写入：这是**运行期状态**，不落盘、进程退出即失效（D25-4）——
+     * 本会话已同意的写入：这是**运行期状态**，不落盘、进程退出即失效——
      * 持久信任一条写权限是用户自己该做的决定，不该由一次点击替他做。
      */
     private final java.util.Map<io.github.zcd0831.jellyfish.domain.shared.SessionId,
@@ -136,7 +136,7 @@ public final class ToolExecutor implements ToolInvoker {
 
     /**
      * `INTERNAL` / `NATIVE` / `PLUGIN` 共用同一张处理器注册表，只有 `REST` / `MCP` 才是出站调用。
-     * 规则出处：模块-行动 §5（ToolSource）、§8.1 分发图、§7.1 规则 3/4。
+     * 规则出处：05-action §5.6（ToolSource）、§5.9.1 分发图、§5.8.1 规则 3/4。
      */
     private String dispatch(Session session, ToolDefinition tool, Map<String, Object> args) {
         SourceType source = tool.source().getType();
@@ -157,7 +157,7 @@ public final class ToolExecutor implements ToolInvoker {
         try {
             return externalTools.invoke(tool, args);
         } catch (RuntimeException e) {
-            // 工具自身失败不是领域状态，只是一种结果（§7.1 规则 3）
+            // 工具自身失败不是领域状态，只是一种结果（05-action §5.8.1 规则 3）
             return "工具调用失败：" + e.getMessage();
         }
     }
@@ -208,7 +208,7 @@ public final class ToolExecutor implements ToolInvoker {
     }
 
     /**
-     * 规则 5 管一般工具；`run_command` 例外，改由绊线判定（§7.1 规则 10、D25-5）——
+     * 规则 5 管一般工具；`run_command` 例外，改由绊线判定——
      * 只有它执行的是 shell 字符串，其余本地工具的参数都是结构化路径。
      */
     private String approvalQuestion(Session session, ToolDefinition tool, Map<String, Object> args,

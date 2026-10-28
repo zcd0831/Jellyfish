@@ -18,8 +18,8 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verify;
 
 /**
- * 需要 mock 的场合才用 Mockito（M22）：这里只关心"保存有没有被调用"，
- * 不关心仓储怎么落盘。规则出处：技术决策 D13（测试策略）。
+ * 需要 mock 的场合才用 Mockito：这里只关心"保存有没有被调用"，
+ * 不关心仓储怎么落盘。。
  */
 class S5MockitoTest {
 

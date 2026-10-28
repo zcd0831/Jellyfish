@@ -33,7 +33,7 @@ import java.util.UUID;
 
 /**
  * 会话的唯一创建入口：解析 agent/model → 冻结快照 → 建台账 → 生成标题 → 一次提交。
- * 规则出处：模块-感知 §4、§8.1；模块-应用层 §8.2。
+ * 规则出处：04-perception §4.5、§4.9.1；08-application §8.9.2。
  */
 public final class StartSessionUseCase {
 
@@ -84,7 +84,7 @@ public final class StartSessionUseCase {
 
     /**
      * 子代理派遣：同一套快照冻结，但**不自建 Budget**（沿 parentSessionId 上溯到根）。
-     * 规则出处：模块-感知 §8.1、模块-行动 §7.5 规则 ⑤、技术决策 D05.1。
+     * 规则出处：04-perception §4.9.1、05-action §5.8.5 规则 5。
      */
     public Result<SessionId> startSubSession(SessionId parentSessionId, AgentId requestedAgent,
                                              ModelId requestedModel, String task) {
@@ -106,7 +106,7 @@ public final class StartSessionUseCase {
         Record userRecord = child.appendRecord(RecordRole.USER, task, null, clock.nowMillis());
         child.retitle(titleGenerator.generate(child, task));
 
-        // 先建出 sub/<child>/ 目录：追加流水的路径只能由会话头推导（D05.1 的嵌套布局）
+        // 先建出 sub/<child>/ 目录：追加流水的路径只能由会话头推导
         sessions.save(child);
         commitScope.stageAppend(childId, userRecord);
         commitScope.stageReplace(child);

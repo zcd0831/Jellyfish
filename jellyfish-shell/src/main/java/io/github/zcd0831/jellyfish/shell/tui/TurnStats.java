@@ -8,7 +8,7 @@ import java.util.regex.Pattern;
 /**
  * 一轮的用量与进度小结（界面用，不落盘）。
  * <p>
- * 事件只带 `message`（§6 约定），所以这里从 `USAGE` 文案里取数字：
+ * 事件只带 `message`（08-application §8.7），所以这里从 `USAGE` 文案里取数字：
  * `+150 / 累计 300 / 上限 1000000`。数字口径由应用层定义，外壳只负责汇总展示。
  */
 public final class TurnStats {

@@ -29,8 +29,8 @@ import java.io.PrintStream;
 import javax.inject.Singleton;
 
 /**
- * 外壳：终端的唯一持有者（D19）。人机交互与进度端口由这里实现；
- * 渲染、输入编排、输出单写者也都在这里（D20）。
+ * 外壳：终端的唯一持有者。人机交互与进度端口由这里实现；
+ * 渲染、输入编排、输出单写者也都在这里。
  */
 @Module
 public final class ShellModule {
@@ -47,12 +47,12 @@ public final class ShellModule {
         this.noColor = noColor;
     }
 
-    /** 终端归外壳所有（D19）；宽度与 TTY 能力都从它取，boot 不碰（D21-3）。 */
+    /** 终端归外壳所有；宽度与 TTY 能力都从它取，boot 不碰。 */
     @Provides
     @Singleton
     Terminal terminal() {
         try {
-            // 非 TTY 时 JLine 会退化成 dumb 终端并打一条 WARNING；那不是错误，静音它（D20-7）
+            // 非 TTY 时 JLine 会退化成 dumb 终端并打一条 WARNING；那不是错误，静音它
             java.util.logging.Logger.getLogger("org.jline").setLevel(java.util.logging.Level.SEVERE);
             return TerminalBuilder.builder().system(true).build();
         } catch (IOException e) {

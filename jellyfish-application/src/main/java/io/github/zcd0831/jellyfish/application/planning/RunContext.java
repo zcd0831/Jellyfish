@@ -13,7 +13,7 @@ import io.github.zcd0831.jellyfish.domain.perception.session.Session;
 /**
  * 交给 {@link SessionRunner} 的运行上下文：写一个自己的循环所需的全部手脚。
  * 只给"能力"，不给 `CatalogRepository`——工具/技能清单已冻结在会话快照里，
- * 再开一条"实时看世界"的通道会与"声明按会话冻结"打架（模块-规划 §4、D24-9）。
+ * 再开一条"实时看世界"的通道会与"声明按会话冻结"打架。
  */
 public final class RunContext {
 

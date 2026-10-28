@@ -8,7 +8,7 @@ import java.nio.file.Path;
 
 /**
  * planId → sessionId：报告落盘需要知道计划属于哪个会话，而报告里只存 planId。
- * 直接扫 plans/ 目录（深度 ≤ 2，D05.1），不额外维护索引文件。
+ * 直接扫 plans/ 目录，不额外维护索引文件。
  */
 final class PlanOwnerIndex {
 

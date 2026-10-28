@@ -10,7 +10,7 @@ import java.nio.file.Path;
 
 /**
  * 只做向前迁移；不自动改结构。
- * 规则出处：模块-基础设施层 §9。
+ * 规则出处：09-infrastructure §9.10。
  */
 public final class FileSchemaMigrator implements SchemaMigrator {
 

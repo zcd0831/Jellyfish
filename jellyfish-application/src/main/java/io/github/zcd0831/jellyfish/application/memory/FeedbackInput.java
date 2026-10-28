@@ -9,7 +9,7 @@ import java.util.List;
 
 /**
  * 反馈入参：该 step 本次分配到的经验集合。
- * 分配就是注入，注入就是"被应用"——只有一个集合（模块-记忆 §7.1 规则 ⑦⑧）。
+ * 分配就是注入，注入就是"被应用"——只有一个集合（07-memory §7.8.1 规则 7⑧）。
  */
 public final class FeedbackInput {
 

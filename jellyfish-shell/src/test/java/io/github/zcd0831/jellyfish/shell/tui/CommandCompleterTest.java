@@ -12,7 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-/** 只补全 `/` 命令，且候选来自固定表（D20-4）。 */
+/** 只补全 `/` 命令，且候选来自固定表。 */
 class CommandCompleterTest {
 
     private static ParsedLine word(String value) {

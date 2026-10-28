@@ -4,7 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 技术事件出口：应用层只声明"发生了什么"，落盘由基础设施实现（D14）。
+ * 技术事件出口：应用层只声明"发生了什么"，落盘由基础设施实现。
  * 测试可注入收集器断言"该打的点打了"。
  */
 public final class TechnicalLog {

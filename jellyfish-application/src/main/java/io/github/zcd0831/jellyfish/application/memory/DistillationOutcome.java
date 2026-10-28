@@ -9,7 +9,7 @@ import java.util.List;
 /**
  * 一次归纳的产物：经验与技能**至多一边非空**（同一件事只进一边）。
  * 技能侧允许 0..N 条：本次用过的技能可能各自需要改进。
- * 规则出处：模块-记忆 §5、§8.6。
+ * 规则出处：07-memory §7.6、§7.9.6。
  */
 public final class DistillationOutcome {
 

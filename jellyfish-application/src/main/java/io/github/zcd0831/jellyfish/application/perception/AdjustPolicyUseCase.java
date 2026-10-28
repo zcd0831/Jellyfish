@@ -13,7 +13,7 @@ import java.util.Map;
 
 /**
  * 策略调整：校验失败即拒绝且不改，成功立即生效（改文件 + 重启同样生效）。
- * 规则出处：模块-应用层 §8.5、模块-感知 §7.2。
+ * 规则出处：08-application §8.9.5、04-perception §4.8.2。
  */
 public final class AdjustPolicyUseCase {
 
@@ -44,7 +44,7 @@ public final class AdjustPolicyUseCase {
         return Result.ok(adjusted);
     }
 
-    /** 策略变更事件：其它模块据此刷新读取缓存。规则出处：模块-感知 §6。 */
+    /** 策略变更事件：其它模块据此刷新读取缓存。规则出处：04-perception §4.7。 */
     private static final class PolicyAdjusted implements io.github.zcd0831.jellyfish.domain.shared.DomainEvent {
         @Override
         public String name() {

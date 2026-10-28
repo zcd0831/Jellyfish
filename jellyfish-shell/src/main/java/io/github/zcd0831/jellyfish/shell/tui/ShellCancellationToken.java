@@ -6,7 +6,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 外壳持有的唯一取消令牌（§8.4.1）：Ctrl-C 与 `/cancel` 都走 {@link #cancel()}。
+ * 外壳持有的唯一取消令牌（08-application §8.9.4.1）：Ctrl-C 与 `/cancel` 都走 {@link #cancel()}。
  * 每轮开始 {@link #reset()}，避免上一轮的取消影响下一轮。
  */
 public final class ShellCancellationToken implements CancellationToken {

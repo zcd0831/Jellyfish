@@ -6,7 +6,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 应用层要读模型给的 `arguments`（一段 JSON 字符串），但不能引 JSON 库（D02 的模块边界）：
+ * 应用层要读模型给的 `arguments`（一段 JSON 字符串），但不能引 JSON 库：
  * 只解析"对象/数组/标量"这四种结构，足够工具入参使用。
  */
 public final class Json {

@@ -30,7 +30,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-/** 技能写入：CREATE / MERGE / 容量 / 不可变守护（模块-记忆 §8.5）。 */
+/** 技能写入：CREATE / MERGE / 容量 / 不可变守护（07-memory §7.9.5）。 */
 class SkillDistillationServiceTest {
 
     private final FakeCatalog catalog = new FakeCatalog();

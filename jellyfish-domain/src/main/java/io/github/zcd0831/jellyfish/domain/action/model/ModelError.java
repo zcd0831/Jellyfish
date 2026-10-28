@@ -2,7 +2,7 @@ package io.github.zcd0831.jellyfish.domain.action.model;
 
 import io.github.zcd0831.jellyfish.domain.shared.DomainError;
 
-/** 模型上下文错误码。规则出处：技术决策 D11 code 前缀表、D10 错误分流。 */
+/** 模型上下文错误码。。 */
 public enum ModelError implements DomainError {
 
     UNAVAILABLE("M_UNAVAILABLE"),

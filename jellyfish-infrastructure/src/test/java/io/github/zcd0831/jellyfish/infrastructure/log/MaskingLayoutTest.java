@@ -5,7 +5,7 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** 脱敏在适配器统一处理。规则出处：技术决策 D14-2 规则 3、D18-3。 */
+/** 脱敏在适配器统一处理。。 */
 class MaskingLayoutTest {
 
     @Test

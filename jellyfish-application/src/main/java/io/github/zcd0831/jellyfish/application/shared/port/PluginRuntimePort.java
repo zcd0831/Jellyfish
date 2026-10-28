@@ -6,8 +6,8 @@ import io.github.zcd0831.jellyfish.domain.shared.PluginId;
 import java.util.List;
 
 /**
- * 插件的发现与装载（PF4J）。装/启/停/卸都是运行期动作；同 id 升级要求重启（D24-3、D24-2）。
- * 规则出处：模块-应用层 §6、模块-基础设施层 §11。
+ * 插件的发现与装载（PF4J）。装/启/停/卸都是运行期动作；同 id 升级要求重启。
+ * 规则出处：08-application §8.7、09-infrastructure §9.12。
  */
 public interface PluginRuntimePort {
 

@@ -20,8 +20,8 @@ import java.util.List;
 
 /**
  * experience/<id>.json：全局资产，只新建；合并 = 改内容 + 提置信度；归档保留供审计。
- * 容量淘汰由应用层按 `createdAt` 升序 + `appliedCount` 升序执行（§7.1 规则 ⑥），本层只提供数据。
- * 规则出处：模块-基础设施层 §3、§4。
+ * 容量淘汰由应用层按 `createdAt` 升序 + `appliedCount` 升序执行（07-memory §7.8.1 规则 6），本层只提供数据。
+ * 规则出处：09-infrastructure §9.4、§9.5。
  */
 public final class FileExperienceRepository implements ExperienceRepository {
 

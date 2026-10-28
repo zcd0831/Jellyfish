@@ -11,7 +11,7 @@ import java.util.Set;
 
 /**
  * 纯规则：按固定链序过滤声明层，短路执行与三态合并。
- * 规则出处：模块-规划 §4、§7.2 规则 2/3。
+ * 规则出处：06-planning §6.5、§6.8.2 规则 2/3。
  */
 public final class VerificationChain {
 

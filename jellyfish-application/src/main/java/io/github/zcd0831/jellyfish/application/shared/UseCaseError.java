@@ -4,7 +4,6 @@ import io.github.zcd0831.jellyfish.domain.shared.DomainError;
 
 /**
  * 用例失败的统一出口：上下文自己的错误 + 只进日志的细节。
- * 规则出处：技术决策 D11。
  */
 public final class UseCaseError {
 

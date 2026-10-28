@@ -21,7 +21,7 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * 把会话族内任意位置的消耗归集到根台账。规则出处：模块-行动 §4、§8.3。
+ * 把会话族内任意位置的消耗归集到根台账。规则出处：05-action §5.5、§5.9.4。
  */
 public final class BudgetService {
 
@@ -44,7 +44,7 @@ public final class BudgetService {
 
     /**
      * 返回 true 表示本次越过阈值、调用方应询问用户是否继续（不中断）。
-     * 顺手记下本轮请求的输入用量，界面提示符据此显示"实际 / 上限"（模块-行动 §8.3）。
+     * 顺手记下本轮请求的输入用量，界面提示符据此显示"实际 / 上限"（05-action §5.9.4）。
      */
     public boolean recordUsage(Session session, ModelUsage usage) {
         SessionId rootId = rootOf(session);
@@ -72,7 +72,7 @@ public final class BudgetService {
 
     /**
      * 子会话结束后一次性归集：子会话不写自己的台账，避免并发写同一聚合。
-     * 规则出处：模块-行动 §7.5 规则 ⑤、§8.1。
+     * 规则出处：05-action §5.8.5 规则 5、§5.9.1。
      */
     public void settleFromSubSession(SessionId subSessionId, long tokens) {
         Session sub = sessions.load(subSessionId);
@@ -93,7 +93,7 @@ public final class BudgetService {
     /**
      * 主循环的请求：记账之外再记"本轮实际注入量"。
      * 辅助调用（生成标题、检索经验、反思、摘要…）不走这里——它们的小请求会覆盖真实窗口的数字。
-     * 规则出处：模块-行动 §3.4。
+     * 规则出处：05-action §5.4.4。
      */
     public boolean recordTurnUsage(Session session, ModelUsage usage) {
         boolean warned = recordUsage(session, usage);
@@ -119,7 +119,7 @@ public final class BudgetService {
         return budgets.load(rootOf(session));
     }
 
-    /** 折叠后清掉观测：旧数值不再描述当前窗口（模块-行动 §8.3）。 */
+    /** 折叠后清掉观测：旧数值不再描述当前窗口（05-action §5.9.4）。 */
     public void forgetPromptObservation(Session session) {
         SessionId rootId = rootOf(session);
         Budget budget = budgets.load(rootId);
@@ -131,7 +131,7 @@ public final class BudgetService {
         commitScope.commit();
     }
 
-    /** 子会话不自建台账：沿 parentSessionId 上溯到族根（模块-行动 §7.5 规则 ⑤）。 */
+    /** 子会话不自建台账：沿 parentSessionId 上溯到族根（05-action §5.8.5 规则 5）。 */
     private SessionId rootOf(Session session) {
         SessionId current = session.id();
         SessionId parent = session.parentSessionId();

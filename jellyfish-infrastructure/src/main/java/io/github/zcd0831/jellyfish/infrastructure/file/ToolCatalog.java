@@ -19,7 +19,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
-/** tools/<id>.json：jar 内置 + 磁盘用户资产（M04）。 */
+/** tools/<id>.json：jar 内置 + 磁盘用户资产。 */
 final class ToolCatalog {
 
     private static final String BUILTIN_PREFIX = "builtin.";

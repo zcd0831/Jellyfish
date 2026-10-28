@@ -6,7 +6,7 @@ import io.github.zcd0831.jellyfish.domain.shared.SessionId;
 import java.util.List;
 
 /**
- * 计划聚合。规则出处：模块-基础设施层 §3。
+ * 计划聚合。规则出处：09-infrastructure §9.4。
  */
 public interface PlanRepository {
 

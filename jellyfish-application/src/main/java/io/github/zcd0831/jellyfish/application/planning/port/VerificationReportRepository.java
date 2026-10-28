@@ -8,7 +8,7 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * 不可变报告，只新建不覆盖。规则出处：模块-基础设施层 §3。
+ * 不可变报告，只新建不覆盖。规则出处：09-infrastructure §9.4。
  */
 public interface VerificationReportRepository {
 

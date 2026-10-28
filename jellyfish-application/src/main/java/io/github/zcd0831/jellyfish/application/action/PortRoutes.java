@@ -6,9 +6,8 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * 端口路由表：**共享可变状态**，插件启停时原子替换（模块-应用层 §10）。
- * 为什么不是 final 引用：插件实现必须实时生效（D24-9，丙）。
- * 规则出处：D24-6。
+ * 端口路由表：**共享可变状态**，插件启停时原子替换（08-application §8.11）。
+ * 为什么不是 final 引用：插件实现必须实时生效。
  */
 public final class PortRoutes {
 

@@ -49,7 +49,7 @@ import java.util.concurrent.ExecutorService;
 
 import javax.inject.Singleton;
 
-/** 规划：内循环与外循环。规则出处：模块-规划 §4。 */
+/** 规划：内循环与外循环。规则出处：06-planning §6.5。 */
 @Module
 public final class PlanningModule {
 
@@ -142,7 +142,7 @@ public final class PlanningModule {
                 experienceFeedback, planCompletionCurator, reflections, experiences);
     }
 
-    /** 零插件时就是默认编排；插件装上后由路由接管（D24-6，见 PluginModule）。 */
+    /** 零插件时就是默认编排；插件装上后由路由接管。 */
     @Provides
     @Singleton
     SessionRunner sessionRunner(ExecutionLoop executionLoop, PortRoutes routes) {

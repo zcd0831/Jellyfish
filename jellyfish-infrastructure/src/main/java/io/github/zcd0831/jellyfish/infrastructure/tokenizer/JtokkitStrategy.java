@@ -9,7 +9,6 @@ import java.util.List;
 
 /**
  * 本地分词器：对 OpenAI 系是精确值，对其它是近似，偏差由校准吸收。
- * 规则出处：技术决策 D08 第 2 节（jtokkit 优先）。
  */
 public final class JtokkitStrategy {
 
@@ -30,7 +29,7 @@ public final class JtokkitStrategy {
                 text.append('\n').append(message.toolCallId());
             }
             if (message.reasoning() != null) {
-                // reasoning 随请求发出，同样占输入 token（模块-感知 §7.1 规则 15）
+                // reasoning 随请求发出，同样占输入 token（04-perception §4.8.1 规则 15）
                 text.append('\n').append(message.reasoning());
             }
         }

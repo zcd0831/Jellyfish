@@ -20,7 +20,7 @@ import io.github.zcd0831.jellyfish.application.shared.port.ProgressPort;
 
 import javax.inject.Singleton;
 
-/** 行动：工具执行与记账。规则出处：模块-行动 §4。 */
+/** 行动：工具执行与记账。规则出处：05-action §5.5。 */
 @Module
 public final class ActionModule {
 
@@ -45,7 +45,7 @@ public final class ActionModule {
         return new ToolExecutor(catalog, externalTools, artifacts, human, policies, handlers, progress);
     }
 
-    /** 工具闸门的扩展点视图：插件换掉循环后仍走同一条路（D24-5）。 */
+    /** 工具闸门的扩展点视图：插件换掉循环后仍走同一条路。 */
     @Provides
     ToolInvoker toolInvoker(ToolExecutor executor) {
         return executor;

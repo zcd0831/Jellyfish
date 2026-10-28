@@ -17,7 +17,7 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** 本地能力：边界、硬限制、以及"失败也是结果"（模块-行动 §7.1 规则 9）。 */
+/** 本地能力：边界、硬限制、以及"失败也是结果"（05-action §5.8.1 规则 9）。 */
 class LocalToolHandlersTest {
 
     @TempDir

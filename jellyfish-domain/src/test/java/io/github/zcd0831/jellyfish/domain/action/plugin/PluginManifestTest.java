@@ -14,7 +14,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** 插件授权意图：granted ⊆ declared、信任只读（模块-行动 §7.6）。 */
+/** 插件授权意图：granted ⊆ declared、信任只读（05-action §5.8.6）。 */
 class PluginManifestTest {
 
     @Test

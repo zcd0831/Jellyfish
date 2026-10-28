@@ -37,7 +37,7 @@ import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-/** 工具执行的合法性 / 审批 / 分发 / 截断分支。规则出处：模块-行动 §8.1。 */
+/** 工具执行的合法性 / 审批 / 分发 / 截断分支。规则出处：05-action §5.9.1。 */
 class ToolExecutorTest {
 
     private final io.github.zcd0831.jellyfish.application.shared.port.ProgressPort progress =

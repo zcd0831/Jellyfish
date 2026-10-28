@@ -12,7 +12,7 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** 规则出处：模块-感知 §8.3、M09。 */
+/** 规则出处：04-perception §4.9.3。 */
 class SystemPromptAssemblerTest {
 
     @Test

@@ -8,7 +8,7 @@ import java.util.List;
 
 /**
  * 一条对话消息；role 复用流水角色，保证"窗口 → 请求"是一次搬家而不是翻译。
- * 规则出处：模块-行动 §5、§8.2 第 2 条、§8.2 第 6 条（reasoning 原样回传）。
+ * 规则出处：05-action §5.6、§5.9.2 第 2 条、§5.9.2 第 6 条（reasoning 原样回传）。
  */
 public final class ChatMessage {
 

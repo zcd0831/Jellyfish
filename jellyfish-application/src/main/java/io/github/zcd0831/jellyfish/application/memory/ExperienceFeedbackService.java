@@ -16,7 +16,7 @@ import java.util.Set;
 
 /**
  * 成功与失败作用于同一份"本次分配的经验"：成功奖励、失败惩罚（宁可错杀）。
- * 规则出处：模块-记忆 §4、§7.1 规则 ⑦⑧、§8.3。
+ * 规则出处：07-memory §7.5、§7.8.1 规则 7⑧、§7.9.3。
  */
 public final class ExperienceFeedbackService {
 

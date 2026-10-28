@@ -63,7 +63,7 @@ import java.util.UUID;
 
 /**
  * 外循环：算上下文 → 取 step → 跑一次内循环 → 验证 → 按三条出口推进。
- * 唯一有权推进计划状态机的地方。规则出处：模块-应用层 §8.1、模型图 §5.1、模块-规划 §8.1。
+ * 唯一有权推进计划状态机的地方。规则出处：08-application §8.9.1、模型图 §8.6.1、06-planning §6.9.1。
  */
 public final class ExecutionLoop implements SessionRunner {
 
@@ -117,7 +117,7 @@ public final class ExecutionLoop implements SessionRunner {
 
     /**
      * `context` 只服务外部实现：默认循环的依赖由构造器注入，因此这里不读它
-     * （模块-规划 §4：`RunContext` 是给插件实现的扶手）。
+     * （06-planning §6.5：`RunContext` 是给插件实现的扶手）。
      */
     @Override
     public RunOutcome run(Session session, ChunkSink sink, CancellationToken token, RunContext context) {
@@ -125,7 +125,7 @@ public final class ExecutionLoop implements SessionRunner {
         boolean planAnnounced = false;
 
         while (true) {
-            // 每一轮开始先看取消：流式/工具刚被打断时，不再进入下一轮（§8.4.1）
+            // 每一轮开始先看取消：流式/工具刚被打断时，不再进入下一轮（08-application §8.9.4.1）
             token.throwIfCancelled();
             // 计划可能在循环中途由 generate_plan 产生：每轮重读，播报一次
             Plan plan = runningPlan(session);
@@ -152,12 +152,12 @@ public final class ExecutionLoop implements SessionRunner {
             try {
                 iteration = reActLoop.runIteration(session, step, sink);
             } catch (RuntimeException failure) {
-                // 中止事实也属于本次 attempt 的轨迹，先延伸区间再决定怎么处理（模块-规划 §7.1 规则 10）
+                // 中止事实也属于本次 attempt 的轨迹，先延伸区间再决定怎么处理（06-planning §6.8.1 规则 10）
                 extendAttemptRange(session, plan, step, attempt, firstRecordIndex);
                 if (failure instanceof ModelInvocationException
                         && ((ModelInvocationException) failure).error() == ModelError.CONTEXT_EXCEEDED
                         && !collapsedOnce) {
-                    // 请求超限：强制折叠一次后重试，不消耗重试名额（模块-应用层 §9）
+                    // 请求超限：强制折叠一次后重试，不消耗重试名额（08-application §8.10）
                     contextWindow.forceCollapse(session);
                     collapsedOnce = true;
                     continue;
@@ -185,7 +185,7 @@ public final class ExecutionLoop implements SessionRunner {
             }
 
             if (step == null) {
-                // generate_plan 成功不打断内循环：本轮收敛后下一轮转入计划执行（模型图 §5.1）
+                // generate_plan 成功不打断内循环：本轮收敛后下一轮转入计划执行（03-overview §3.7）
                 Plan created = runningPlan(session);
                 if (created != null && created.getCurrentStep() != null) {
                     plan = created;
@@ -238,7 +238,7 @@ public final class ExecutionLoop implements SessionRunner {
             }
 
             if (plan.status() == PlanStatus.COMPLETED) {
-                // 计划完结后再跑一轮自由内循环，由模型产出结论（模型图 §5.1）
+                // 计划完结后再跑一轮自由内循环，由模型产出结论（03-overview §3.7）
                 publish(plan.pullEvents());
                 curate(session, plan);
                 plan = null;
@@ -248,7 +248,7 @@ public final class ExecutionLoop implements SessionRunner {
 
     /**
      * 失败后的推进：先重试，重试次数用尽则重划，重划次数用尽则终止。
-     * 「还能不能重试 / 该不该重划」由这里判定，聚合只执行迁移（§7.1 原则）。
+     * 「还能不能重试 / 该不该重划」由这里判定，聚合只执行迁移（06-planning §6.8.1）。
      */
     private boolean advanceAfterFailure(Session session, Plan plan, PlanStep step, String reason) {
         RuntimePolicy policy = policies.load();
@@ -316,7 +316,7 @@ public final class ExecutionLoop implements SessionRunner {
 
     /**
      * 步骤启动前把该步分配到的经验注入上下文（一条 SYSTEM 记录，首行带 step 标记用于去重）。
-     * 规则出处：模块-感知 §7.1 规则 9 ①（经验注入）、规则 10（不参与淘汰）、§7.3 规则 ③、M24。
+     * 规则出处：04-perception §4.8.1 规则 9 ①（经验注入）、规则 10（不参与淘汰）、§7.3 规则 3。
      */
     private void injectExperiences(Session session, PlanStep step) {
         List<ExperienceId> ids = step.assignedExperienceIds();
@@ -349,7 +349,7 @@ public final class ExecutionLoop implements SessionRunner {
         commitScope.commit();
     }
 
-    /** 去重靠流水本身：标记是"可推导状态"，不落库（§7.1 规则 11、M24）。 */
+    /** 去重靠流水本身：标记是"可推导状态"，不落库。 */
     private static boolean alreadyInjected(Session session, PlanStep step) {
         String marker = "[经验注入 step=" + step.id().getValue() + "]";
         for (Record record : session.records()) {
@@ -376,7 +376,7 @@ public final class ExecutionLoop implements SessionRunner {
 
     /**
      * 达反思阈值时跑内置反思子代理（按文档是子代理，不是进程内调用），结论落 Reflection 并回注。
-     * 规则出处：模块-记忆 §7.2、§8.1 回注。
+     * 规则出处：07-memory §7.8.2、§7.9.1 回注。
      */
     private void reflectIfNeeded(Session session, Plan plan, PlanStep step, String failureReason) {
         int failed = failedAttempts(step);
@@ -437,7 +437,7 @@ public final class ExecutionLoop implements SessionRunner {
 
     /**
      * 技能使用痕迹落在 attempt 上：改进判定要"这次用过的技能"，而内循环只认识 PlanStep。
-     * 规则出处：模块-规划 §5、模块-记忆 §8.6。
+     * 规则出处：06-planning §6.6、07-memory §7.9.6。
      */
     private void recordSkillUsage(Plan plan, PlanStep step, Attempt attempt, IterationResult iteration) {
         if (plan == null || step == null || attempt == null || iteration.usedSkillIds().isEmpty()) {
@@ -451,7 +451,7 @@ public final class ExecutionLoop implements SessionRunner {
 
     /**
      * 把本段 ReAct 新增的记录区间延伸进当前 attempt：挂起、环境故障都保留已发生的轨迹。
-     * 规则出处：模块-规划 §7.1 规则 10、§5.2。
+     * 规则出处：06-planning §6.8.1 规则 10、§5.2。
      */
     private void extendAttemptRange(Session session, Plan plan, PlanStep step, Attempt attempt, int firstRecordIndex) {
         if (plan == null || step == null || attempt == null) {
@@ -508,7 +508,7 @@ public final class ExecutionLoop implements SessionRunner {
         if (running.isEmpty()) {
             return null;
         }
-        // 同一会话同时只有一个可执行计划（§7.1 规则 2 的会话侧投影）
+        // 同一会话同时只有一个可执行计划（06-planning §6.8.1 规则 2 的会话侧投影）
         Plan plan = running.get(0);
         return plan.status() == PlanStatus.EXECUTING ? plan : null;
     }

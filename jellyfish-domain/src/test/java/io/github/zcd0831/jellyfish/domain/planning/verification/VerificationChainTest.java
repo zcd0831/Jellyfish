@@ -12,7 +12,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
-/** 固定链序 + 过滤 + 三态。规则出处：模块-规划 §7.2。 */
+/** 固定链序 + 过滤 + 三态。规则出处：06-planning §6.8.2。 */
 class VerificationChainTest {
 
     private final VerificationChain chain = new VerificationChain();

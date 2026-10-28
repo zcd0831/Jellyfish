@@ -26,7 +26,7 @@ import java.util.concurrent.TimeoutException;
 /**
  * 并行发起子会话：各自独立超时（从实际开始计时）、join-all、预算归集到族根。
  * `sub/` 目录与流水由 `StartSessionUseCase` 负责；本类只调度。
- * 规则出处：模块-行动 §8.1（spawn_subagents 展开）、技术决策 D05。
+ * 规则出处：05-action §5.9.1（spawn_subagents 展开）。
  */
 public final class SubagentLauncher {
 

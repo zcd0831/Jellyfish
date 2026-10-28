@@ -20,7 +20,7 @@ import java.util.Set;
 
 /**
  * 插件的安装 / 授权 / 停用：**"安装"与"授权"分开**——装只落自己的 plugin.json，
- * 插件此时还没有任何效果；授权才让它进入世界（模块-应用层 §8.6，D24）。
+ * 插件此时还没有任何效果；授权才让它进入世界（08-application §8.9.6）。
  */
 public final class ManagePluginsUseCase {
 
@@ -104,7 +104,7 @@ public final class ManagePluginsUseCase {
     }
 
     /**
-     * 卸载 = 摘掉运行期（停 + 卸 jar）；**目录由用户自己删**（§7.6 规则 1，
+     * 卸载 = 摘掉运行期（停 + 卸 jar）；**目录由用户自己删**（05-action §5.8.6 规则 1，
      * 与"删 skills/ 目录即淘汰"同构）。
      */
     public Result<Void> uninstall(PluginId pluginId) {

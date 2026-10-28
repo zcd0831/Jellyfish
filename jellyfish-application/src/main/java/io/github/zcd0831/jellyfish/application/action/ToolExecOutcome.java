@@ -2,7 +2,7 @@ package io.github.zcd0831.jellyfish.application.action;
 
 /**
  * 工具执行结果：**没有 isSuccess**——失败也是一种结果，回灌模型继续。
- * 规则出处：模块-行动 §5（ToolExecOutcome）、§7.1 规则 3。
+ * 规则出处：05-action §5.6（ToolExecOutcome）、§5.8.1 规则 3。
  */
 public final class ToolExecOutcome {
 

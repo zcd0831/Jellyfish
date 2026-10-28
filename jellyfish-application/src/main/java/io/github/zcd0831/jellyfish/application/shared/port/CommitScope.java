@@ -4,7 +4,7 @@ import io.github.zcd0831.jellyfish.domain.perception.session.Record;
 import io.github.zcd0831.jellyfish.domain.shared.SessionId;
 
 /**
- * 一次状态转移的写入作用域；实现固定按「事实 → 追加 → 替换」执行并 fsync。规则出处：模块-应用层 §8.8。
+ * 一次状态转移的写入作用域；实现固定按「事实 → 追加 → 替换」执行并 fsync。规则出处：08-application §8.8。
  */
 public interface CommitScope {
 
@@ -20,7 +20,7 @@ public interface CommitScope {
     /**
      * 全局资产写段（skills/、experience/）：并行子会话会同时沉淀，
      * 容量"读—判—写"必须在同一段内完成，否则两次 CREATE 会一起越过上限。
-     * 规则出处：模块-应用层 §7.2、模块-基础设施层 §5。
+     * 规则出处：08-application §8.8.2、09-infrastructure §9.6。
      */
     void globalWrite(Runnable work);
 

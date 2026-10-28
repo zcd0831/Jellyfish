@@ -17,7 +17,7 @@ import java.util.List;
 
 /**
  * sessions/<id>/plans/<planId>.json；`findRunning` 扫目录（对账用）。
- * 规则出处：模块-基础设施层 §3、§4。
+ * 规则出处：09-infrastructure §9.4、§9.5。
  */
 public final class FilePlanRepository implements PlanRepository {
 

@@ -9,7 +9,7 @@ import java.util.Arrays;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** 策略链对外只暴露一个数：正整数、且随内容增长。规则出处：技术决策 D08。 */
+/** 策略链对外只暴露一个数：正整数、且随内容增长。。 */
 class CompositeTokenCounterTest {
 
     private final CompositeTokenCounter counter = new CompositeTokenCounter();

@@ -6,7 +6,7 @@ import io.github.zcd0831.jellyfish.domain.shared.SessionId;
 import java.util.List;
 
 /**
- * 流水追加与读取；区间基于 seq。规则出处：模块-基础设施层 §3。
+ * 流水追加与读取；区间基于 seq。规则出处：09-infrastructure §9.4。
  */
 public interface RecordStore {
 

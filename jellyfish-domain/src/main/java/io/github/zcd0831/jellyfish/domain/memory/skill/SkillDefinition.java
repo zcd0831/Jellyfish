@@ -9,7 +9,7 @@ import java.util.List;
 
 /**
  * 程序性知识（SOP）：人写与机学同构，唯一差别是 {@code mutable}（谁有权改写正文）。
- * 规则出处：模块-记忆 §3.3、§7.3。
+ * 规则出处：07-memory §7.4.3、§7.8.3。
  */
 public class SkillDefinition {
 
@@ -45,8 +45,8 @@ public class SkillDefinition {
     }
 
     /**
-     * 改进：整篇覆盖，不留版本链（§7.3 规则 ⑤）。
-     * 不可变技能必须在这里挡住——可变性由聚合守护，不能靠调用方自觉（§7.3 规则 ③）。
+     * 改进：整篇覆盖，不留版本链（07-memory §7.8.3 规则 5）。
+     * 不可变技能必须在这里挡住——可变性由聚合守护，不能靠调用方自觉（07-memory §7.8.3 规则 3）。
      */
     public void revise(String name, String description, String triggerCondition, String rawMarkdown) {
         if (!mutable) {

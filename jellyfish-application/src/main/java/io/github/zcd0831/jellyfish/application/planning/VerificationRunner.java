@@ -30,7 +30,7 @@ import java.util.UUID;
 
 /**
  * 按 `VerificationChain` 给出的链序逐层执行，短路，产出不可变报告。
- * 规则出处：模块-规划 §4、§7.2、§8.3；四层口径见 M16。
+ * 规则出处：06-planning §6.8.2（四层判定口径）、§6.9.3。
  */
 public final class VerificationRunner {
 
@@ -84,7 +84,7 @@ public final class VerificationRunner {
         }
     }
 
-    /** 第一层：非空 + 结构（形似 JSON 必须可解析）。规则出处：M16。 */
+    /** 第一层：非空 + 结构（形似 JSON 必须可解析）。 */
     private LayerResult deterministic(String summary) {
         if (summary == null || summary.trim().isEmpty()) {
             return LayerResult.failed("提交摘要为空，无法验收");
@@ -113,7 +113,6 @@ public final class VerificationRunner {
 
     /**
      * 第三层：裁判只吃"目标 / 期望 / 标准 / 结果"，拿不到执行者的推理链（父子包庇对策）。
-     * 规则出处：M16。
      */
     private LayerResult judge(Session session, PlanStep step, String summary) {
         AgentDefinition judgeAgent = judgeAgent();
@@ -159,7 +158,7 @@ public final class VerificationRunner {
         return LayerResult.undetermined(reason == null ? "裁判无法判定" : reason);
     }
 
-    /** 第四层：高危操作或模型无法判定的节点交人。规则出处：M16。 */
+    /** 第四层：高危操作或模型无法判定的节点交人。 */
     private LayerResult humanApproval(PlanStep step, String summary) {
         Answer answer = human.ask(new Question(Question.Source.VERIFICATION,
                 "步骤「" + step.description() + "」提交验收，同意吗？（理由可选）", null));

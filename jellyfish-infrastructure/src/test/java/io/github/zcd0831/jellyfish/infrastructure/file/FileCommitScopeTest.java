@@ -18,7 +18,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * 一次状态转移：追加流水 + 替换聚合，提交后落盘。
- * 规则出处：模块-应用层 §8.8、技术决策 D07。
+ * 规则出处：08-application §8.8。
  */
 class FileCommitScopeTest {
 

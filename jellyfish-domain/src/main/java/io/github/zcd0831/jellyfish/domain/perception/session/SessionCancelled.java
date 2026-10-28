@@ -2,7 +2,7 @@ package io.github.zcd0831.jellyfish.domain.perception.session;
 
 import io.github.zcd0831.jellyfish.domain.shared.DomainEvent;
 
-/** 规则出处：模块-感知 §6。 */
+/** 规则出处：04-perception §4.7。 */
 public final class SessionCancelled implements DomainEvent {
 
     @Override

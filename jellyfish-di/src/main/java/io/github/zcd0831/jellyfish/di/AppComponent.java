@@ -65,10 +65,10 @@ public interface AppComponent {
 
     TokenCounter tokenCounter();
 
-    /** 供 boot 的关闭钩子停止子代理池（D05-3）。 */
+    /** 供 boot 的关闭钩子停止子代理池。 */
     ExecutorService subagentPool();
 
-    /** 供 boot 的关闭钩子取消在途请求（M14）。 */
+    /** 供 boot 的关闭钩子取消在途请求。 */
     HttpJsonClient httpJsonClient();
 
     SystemPromptAssembler systemPromptAssembler();
@@ -87,6 +87,6 @@ public interface AppComponent {
 
     ManageCatalogUseCase manageCatalogUseCase();
 
-    /** 外壳入口：单栏流式 TUI（D12.1 / D20）。 */
+    /** 外壳入口：单栏流式 TUI。 */
     TuiApp tuiApp();
 }

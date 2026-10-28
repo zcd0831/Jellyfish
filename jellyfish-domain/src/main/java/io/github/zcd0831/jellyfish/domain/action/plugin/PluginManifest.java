@@ -11,8 +11,8 @@ import java.util.Set;
 
 /**
  * 一个插件的**授权意图**——唯一落盘的东西。
- * "已加载 / 加载失败"是进程内事实，不进这里（与 D22 同理：没人负责擦除的持久状态必然变脏）。
- * 规则出处：模块-行动 §3、§7.6，D24。
+ * "已加载 / 加载失败"是进程内事实，不进这里。
+ * 规则出处：05-action §5.4、§5.8.6。
  */
 public class PluginManifest {
 
@@ -59,7 +59,7 @@ public class PluginManifest {
         grantedCapabilities.remove(capability);
     }
 
-    /** 安装时一次同意；不再有逐次审批（§7.1 规则 5、D24-8）。 */
+    /** 安装时一次同意；不再有逐次审批。 */
     public boolean isTrusted() {
         return trusted;
     }

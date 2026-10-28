@@ -26,7 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** 安装与授权分开、四种拒绝（模块-应用层 §8.6，D24）。 */
+/** 安装与授权分开、四种拒绝。 */
 class ManagePluginsUseCaseTest {
 
     private static final PluginId PLUGIN = PluginId.of("demo.echo");

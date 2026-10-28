@@ -59,7 +59,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-/** 三条出口 + 重试 / 重划 / 终止 / 请求超限补折 / 反思。规则出处：模块-应用层 §8.1、§9。 */
+/** 三条出口 + 重试 / 重划 / 终止 / 请求超限补折 / 反思。规则出处：08-application §8.9.1、§8.10。 */
 class ExecutionLoopTest {
 
     private final ContextWindowService contextWindow = mock(ContextWindowService.class);

@@ -19,7 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * 计划状态机：严格串行、SUCCEEDED 固化、重划只换尾部、终态不可再推。
- * 规则出处：模块-规划 §7.1、§3.1。
+ * 规则出处：06-planning §6.8.1、§6.4.1。
  */
 class PlanTest {
 

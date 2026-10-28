@@ -14,7 +14,7 @@ import java.util.Map;
 
 /**
  * REST 工具的出站调用：把参数原样 POST 到 `source.endpointOrIdentifier`，超时用工具自带的。
- * 规则出处：模块-行动 §7.1 规则 4（超时由工具自带）、模块-基础设施层 §3。
+ * 规则出处：05-action §5.8.1 规则 4（超时由工具自带）、09-infrastructure §9.4。
  */
 public final class HttpToolAdapter implements ExternalToolPort {
 

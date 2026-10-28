@@ -59,7 +59,7 @@ import java.util.concurrent.Executors;
 import javax.inject.Singleton;
 
 /**
- * 端口 → 适配器。DI 注解只允许出现在本模块（技术决策 D04）。
+ * 端口 → 适配器。DI 注解只允许出现在本模块。
  */
 @Module
 public final class InfrastructureModule {
@@ -173,7 +173,7 @@ public final class InfrastructureModule {
         return new FileSchemaMigrator(dir);
     }
 
-    /** 工作区根 = 启动目录，启动求一次（模块-行动 §7.1 规则 9）。 */
+    /** 工作区根 = 启动目录，启动求一次（05-action §5.8.1 规则 9）。 */
     @Provides
     @Singleton
     Workspace workspace() {
@@ -216,7 +216,7 @@ public final class InfrastructureModule {
         return routes.resolve("ExternalToolPort", (ExternalToolPort) new HttpToolAdapter());
     }
 
-    /** 子代理用有界池，不用 ForkJoinPool.commonPool（D05-3）。 */
+    /** 子代理用有界池，不用 ForkJoinPool.commonPool。 */
     @Provides
     @Singleton
     ExecutorService subagentPool() {

@@ -5,7 +5,7 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** 绊线：默认放行、命中即问、看不懂就问（模块-行动 §7.1 规则 10）。 */
+/** 绊线：默认放行、命中即问、看不懂就问（05-action §5.8.1 规则 10）。 */
 class CommandRulesTest {
 
     @Test

@@ -8,7 +8,7 @@ import io.github.zcd0831.jellyfish.domain.memory.skill.SkillDefinition;
 import java.util.List;
 
 /**
- * 工具 / 代理 / 供应商 / 模型 / 技能的统一目录。规则出处：模块-基础设施层 §3。
+ * 工具 / 代理 / 供应商 / 模型 / 技能的统一目录。规则出处：09-infrastructure §9.4。
  */
 public interface CatalogRepository {
 
@@ -32,6 +32,6 @@ public interface CatalogRepository {
 
     void saveSkill(SkillDefinition skill);
 
-    /** ACTIVE 技能总数（含人写、不含 jar 内置），供技能容量判定。规则出处：模块-记忆 §8.5。 */
+    /** ACTIVE 技能总数（含人写、不含 jar 内置），供技能容量判定。规则出处：07-memory §7.9.5。 */
     int countActiveSkills();
 }

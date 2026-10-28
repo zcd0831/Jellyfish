@@ -19,8 +19,7 @@ import java.util.ArrayList;
 
 /**
  * 用户在会话内显式切换模型（含跨厂商）。
- * 规则出处：模块-感知 §7.1 规则 2、模块-行动 §7.3 规则 ⑥、模块-应用层 §4。
- *
+ * 规则出处：04-perception §4.8.1 规则 2、05-action §5.8.3 规则 6、08-application §8.5。
  * <p>唯一硬闸：**工具轮必须已闭合**。模型私有状态（DeepSeek 的 reasoning、Anthropic 的签名
  * thinking、Gemini 的 thoughtSignature）无法跨模型续接，轮中间切换会让下一轮请求不合法。
  * 切换本身只改会话头与派发事件，不动流水；旧 reasoning 由 `producerModelId` 在回放时自动失效。

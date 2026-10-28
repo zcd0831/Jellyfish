@@ -9,7 +9,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-/** 一个 step 的执行事实摘要，带轨迹区间供内置归纳代理读原始对话。规则出处：模块-记忆 §5。 */
+/** 一个 step 的执行事实摘要，带轨迹区间供内置归纳代理读原始对话。规则出处：07-memory §7.6。 */
 public final class StepTrace {
 
     private final StepId stepId;

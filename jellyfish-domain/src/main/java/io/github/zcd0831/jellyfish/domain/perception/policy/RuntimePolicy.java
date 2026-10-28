@@ -8,7 +8,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
-/** 运行环境策略单例，只有用户能改。规则出处：模块-感知 §3.2、§7.2。 */
+/** 运行环境策略单例，只有用户能改。规则出处：04-perception §4.4.2、§4.8.2。 */
 public class RuntimePolicy {
 
     private final int maxRetries;
@@ -65,7 +65,7 @@ public class RuntimePolicy {
                 trustedToolIds == null ? Collections.<ToolId>emptyList() : trustedToolIds));
     }
 
-    /** 平台初始化写入的默认值；规则出处：模块-感知 §7.2、D08/D10 的常量口径。 */
+    /** 平台初始化写入的默认值；规则出处：04-perception §4.8.2。 */
     public static RuntimePolicy defaults() {
         return new RuntimePolicy(3, 2, 2, 20, 100000, 10000, 20, 4000, 60000,
                 200, 5, 1, 0.5, 0.1, 0.2, 30, 0.8, 1000000L,
@@ -74,12 +74,12 @@ public class RuntimePolicy {
 
     /**
      * 策略调整：逐项校验后返回**新实例**（调用方负责提交）。
-     * 规则出处：模块-感知 §7.2 规则 1/3/4/5/6、模块-应用层 §8.5、技术决策 D11（C_INVALID_VALUE）。
+     * 规则出处：04-perception §4.8.2 规则 1/3/4/5/6、08-application §8.9.5。
      */
     public RuntimePolicy adjust(java.util.Map<String, Object> changes) {
         int retries = positiveInt(changes, "maxRetries", maxRetries);
         int reflection = positiveInt(changes, "reflectionThreshold", reflectionThreshold);
-        // 0 表示"永不重划"，是合法配置（§7.1 规则 5：还能不能重划由外循环判定）
+        // 0 表示"永不重划"，是合法配置（04-perception §4.8.1 规则 5：还能不能重划由外循环判定）
         int replan = nonNegativeInt(changes, "maxReplanGeneration", maxReplanGeneration);
         int rounds = positiveInt(changes, "maxReActRounds", maxReActRounds);
         int summarization = positiveInt(changes, "summarizationTokenThreshold", summarizationTokenThreshold);
@@ -205,12 +205,12 @@ public class RuntimePolicy {
         return ids;
     }
 
-    /** 规则出处：模块-感知 §7.2 规则 5（信任清单 = 免审批）。 */
+    /** 规则出处：04-perception §4.8.2 规则 5（信任清单 = 免审批）。 */
     public boolean isToolTrusted(ToolId toolId) {
         return trustedToolIds.contains(toolId);
     }
 
-    /** 规则出处：模块-感知 §7.2 规则 3（阈值独立配置，超过 maxRetries 即永不反思）。 */
+    /** 规则出处：04-perception §4.8.2 规则 3（阈值独立配置，超过 maxRetries 即永不反思）。 */
     public boolean needsReflection(int failedAttempts) {
         return reflectionThreshold <= maxRetries && failedAttempts >= reflectionThreshold;
     }
@@ -279,7 +279,7 @@ public class RuntimePolicy {
         return experienceRetireThreshold;
     }
 
-    /** ACTIVE 技能总数上限（含人写、不含 jar 内置）。规则出处：模块-记忆 §8.5、D23-3。 */
+    /** ACTIVE 技能总数上限（含人写、不含 jar 内置）。规则出处：07-memory §7.9.5。 */
     public int skillCapacity() {
         return skillCapacity;
     }
@@ -288,7 +288,7 @@ public class RuntimePolicy {
         return budgetWarnRatio;
     }
 
-    /** 会话族总额度（token）：预警比例的**分母**。规则出处：模块-行动 §3.4、§7.5 规则 ③。 */
+    /** 会话族总额度（token）：预警比例的**分母**。规则出处：05-action §5.4.4、§5.8.5 规则 3。 */
     public long budgetLimitTokens() {
         return budgetLimitTokens;
     }

@@ -12,8 +12,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 /**
- * 台账只在会话族根上有（D05.1）；高频小文件，用原子替换。
- * 规则出处：模块-基础设施层 §3。
+ * 台账只在会话族根上有；高频小文件，用原子替换。
+ * 规则出处：09-infrastructure §9.4。
  */
 public final class FileBudgetRepository implements BudgetRepository {
 

@@ -7,7 +7,7 @@ import java.util.Collections;
 
 /**
  * `load_skill` 的 SOP 读取：按名字找 ACTIVE 技能并渲染正文；找不到返回"不可用"。
- * 规则出处：模块-记忆 §8.4、模块-基础设施层 §3。
+ * 规则出处：07-memory §7.9.4、09-infrastructure §9.4。
  */
 public final class FileSkillSopProvider implements SkillSopProvider {
 

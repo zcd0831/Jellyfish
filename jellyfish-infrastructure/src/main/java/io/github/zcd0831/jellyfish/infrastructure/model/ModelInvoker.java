@@ -29,7 +29,7 @@ import java.util.Random;
 
 /**
  * 模型调用的唯一出口：选模型 → 硬校验 → 调用 → 同模型重试 → 备用链降级。
- * 只返回 usage，不记账（模块-行动 §8.2、模块-基础设施层 §10）。
+ * 只返回 usage，不记账（05-action §5.9.2、09-infrastructure §9.11）。
  */
 public final class ModelInvoker implements ModelInvocationPort {
 
@@ -98,8 +98,8 @@ public final class ModelInvoker implements ModelInvocationPort {
     }
 
     /**
-     * 目标模型失败后按 `modelFallbackChain` 逐个降级，每个模型重新做硬校验（D10、基础设施 §10）。
-     * 「请求超限」不降级：交应用层折叠后重试（模块-应用层 §9）。
+     * 目标模型失败后按 `modelFallbackChain` 逐个降级，每个模型重新做硬校验。
+     * 「请求超限」不降级：交应用层折叠后重试（08-application §8.10）。
      */
     private ModelInvocationResult invokeChain(ModelInvocationRequest request, ChunkSink sink) {
         List<ModelId> chain = new ArrayList<>();
@@ -146,7 +146,7 @@ public final class ModelInvoker implements ModelInvocationPort {
                 : new ModelInvocationException(ModelError.UNAVAILABLE, "没有可调用的模型：" + request.targetModelId().getValue());
     }
 
-    /** 调用侧硬校验：输入与输出是两个独立上限，这里只看输入（模块-行动 §7.3 规则 ②）。 */
+    /** 调用侧硬校验：输入与输出是两个独立上限，这里只看输入（05-action §5.8.3 规则 2）。 */
     private void hardCheck(int estimatedPromptTokens, Model model) {
         int maxInput = model.contextLimit().getMaxInputTokens();
         if (estimatedPromptTokens > maxInput) {
@@ -216,7 +216,7 @@ public final class ModelInvoker implements ModelInvocationPort {
                     ModelInvocationResult result = adapter.parseResponse(response.body(), model.id());
                     return withUsageFallback(request, model, result);
                 } catch (ModelResponseFormatException broken) {
-                    // 响应体不是协议约定的 JSON：属于端点行为异常，映射成上下文错误码（D11）
+                    // 响应体不是协议约定的 JSON：属于端点行为异常，映射成上下文错误码
                     throw new ModelInvocationException(ModelError.UNAVAILABLE,
                             "模型响应无法解析（" + model.id().getValue() + "）", broken);
                 }
@@ -251,7 +251,7 @@ public final class ModelInvoker implements ModelInvocationPort {
         return withUsageFallback(request, model, accumulator.result(model.id()));
     }
 
-    /** 厂商不给 usage 时回退到本地计数（D06-3）。 */
+    /** 厂商不给 usage 时回退到本地计数。 */
     private ModelInvocationResult withUsageFallback(ModelInvocationRequest request, Model model,
                                                      ModelInvocationResult result) {
         if (result.usage() != null) {
@@ -353,7 +353,7 @@ public final class ModelInvoker implements ModelInvocationPort {
         return null;
     }
 
-    /** 可重试的失败：外层据此退避重试，重试用尽再交给备用链。规则出处：D10 分流表。 */
+    /** 可重试的失败：外层据此退避重试，重试用尽再交给备用链。 */
     private static final class RetryableFailure extends RuntimeException {
 
         private final Long retryAfterMillis;

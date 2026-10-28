@@ -12,7 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** 会话取消与窗口推导的边界分支。规则出处：模块-感知 §7.1（会话没有状态，D22）。 */
+/** 会话取消与窗口推导的边界分支。规则出处：04-perception §4.8.1。 */
 class SessionBranchesTest {
 
     private static Session session() {

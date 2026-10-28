@@ -10,7 +10,7 @@ import java.util.List;
 
 /**
  * 模型调用入参：用量随请求下行，执行器不回查会话。
- * 规则出处：模块-行动 §5、§8.2、技术决策 D06/D16/M12。
+ * 规则出处：05-action §5.6、§5.9.2。
  */
 public final class ModelInvocationRequest {
 
@@ -41,7 +41,7 @@ public final class ModelInvocationRequest {
         return targetModelId;
     }
 
-    /** 系统提示词独立于 messages；落协议时由适配器决定放哪个字段（D16）。 */
+    /** 系统提示词独立于 messages；落协议时由适配器决定放哪个字段。 */
     public String systemPrompt() {
         return systemPrompt;
     }
@@ -50,7 +50,7 @@ public final class ModelInvocationRequest {
         return messages;
     }
 
-    /** 会话开启时冻结的工具 schema 快照；执行器不得现查目录（M12）。 */
+    /** 会话开启时冻结的工具 schema 快照；执行器不得现查目录。 */
     public List<ToolSchemaSnapshot> tools() {
         return tools;
     }

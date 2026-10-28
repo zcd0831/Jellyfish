@@ -28,7 +28,7 @@ import java.util.Set;
 /**
  * 计划完结时的唯一归纳入口：**一次**内置代理调用、**一个**判定——用过技能就判改进，没用过才判沉淀。
  * 经验与技能互斥（同一件事只进一边），所以必须一次判定，不能拆成两次。
- * 规则出处：模块-记忆 §8.6。
+ * 规则出处：07-memory §7.9.6。
  */
 public final class PlanCompletionCurator {
 
@@ -119,7 +119,7 @@ public final class PlanCompletionCurator {
 
     /**
      * 轨迹结构化：每轮一行"工具名(参数摘要) → 结果摘要"，而不是原文拼接。
-     * 只读 `content`——`reasoning` 是回放用事实，永不进沉淀（模块-记忆 §8.6 要点 2）。
+     * 只读 `content`——`reasoning` 是回放用事实，永不进沉淀（07-memory §7.9.6）。
      */
     private String traceOf(Session session, StepTrace trace) {
         if (trace.recordRange() == null) {
@@ -192,7 +192,7 @@ public final class PlanCompletionCurator {
             }
             return result.text();
         } catch (RuntimeException unavailable) {
-            // 沉淀只是"这次没学到"，不影响会话继续（§8.6 要点 6）
+            // 沉淀只是"这次没学到"，不影响会话继续（07-memory §7.9.6）
             return null;
         }
     }

@@ -18,7 +18,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * S0 验收：建会话 → 写 meta.json → 重启（新实例）能读回。
- * 规则出处：技术决策 D15（S0 验收标准）。
  */
 class FileSessionRepositoryTest {
 
@@ -72,7 +71,7 @@ class FileSessionRepositoryTest {
 
         repo().archive(SessionId.of("s9"));
 
-        assertTrue(tmp.resolve("archive/s9.zip").toFile().exists(), "归档 = 压缩成包（D22）");
+        assertTrue(tmp.resolve("archive/s9.zip").toFile().exists(), "归档 = 压缩成包");
         assertTrue(!tmp.resolve("sessions/s9").toFile().exists());
         assertTrue(!tmp.resolve("archive/s9.zip.tmp").toFile().exists(), "不应留下半截包");
     }

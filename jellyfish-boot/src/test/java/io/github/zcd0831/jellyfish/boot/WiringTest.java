@@ -14,7 +14,7 @@ import java.nio.file.Path;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 /**
- * 装配自检：S1 暴露的每个端口/用例都能从组件拿到实现（D04）。
+ * 装配自检：S1 暴露的每个端口/用例都能从组件拿到实现。
  */
 class WiringTest {
 

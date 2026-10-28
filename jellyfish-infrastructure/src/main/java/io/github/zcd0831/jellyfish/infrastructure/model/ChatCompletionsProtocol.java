@@ -19,8 +19,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * OpenAI 兼容的 `/chat/completions` 映射（D16）。只做 JSON ↔ 值对象，不发请求。
- * 规则出处：技术决策 D16 第 2/3/4 条、M12。
+ * OpenAI 兼容的 `/chat/completions` 映射。只做 JSON ↔ 值对象，不发请求。
  */
 public final class ChatCompletionsProtocol implements ChatProtocolAdapter {
 
@@ -84,7 +83,7 @@ public final class ChatCompletionsProtocol implements ChatProtocolAdapter {
                 function.put("arguments", call.argumentsJson());
             }
         }
-        // 思维模式：带 tool_calls 的 assistant 消息必须原样带回 reasoning_content（模块-行动 §8.2 第 6 条）
+        // 思维模式：带 tool_calls 的 assistant 消息必须原样带回 reasoning_content（05-action §5.9.2 第 6 条）
         if (message.reasoning() != null) {
             node.put("reasoning_content", message.reasoning());
         }
@@ -174,7 +173,7 @@ public final class ChatCompletionsProtocol implements ChatProtocolAdapter {
         return new StreamAccumulator();
     }
 
-    /** 流式增量累加：文本片段与按 index 归属的 tool_calls 片段。规则出处：D06、D16-3。 */
+    /** 流式增量累加：文本片段与按 index 归属的 tool_calls 片段。 */
     public final class StreamAccumulator implements ChatProtocolAdapter.StreamAccumulator {
 
         private final StringBuilder text = new StringBuilder();

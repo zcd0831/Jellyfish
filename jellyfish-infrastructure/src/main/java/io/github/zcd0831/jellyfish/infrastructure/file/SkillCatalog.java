@@ -16,7 +16,7 @@ import java.util.List;
 
 /**
  * skills/&lt;skillId&gt;/SKILL.md：技能没有单独的状态文件，status / mutable 都在 front-matter 里。
- * 规则出处：模块-基础设施层 §4（人写 + 机写混合）、D23。
+ * 规则出处：09-infrastructure §9.5（人写 + 机写混合）。
  */
 final class SkillCatalog {
 
@@ -36,7 +36,7 @@ final class SkillCatalog {
         return out;
     }
 
-    /** 技能写入的唯一落点（模块-应用层 §6）：front-matter + 正文一起原子重写。 */
+    /** 技能写入的唯一落点（08-application §8.7）：front-matter + 正文一起原子重写。 */
     void save(SkillDefinition skill) {
         StringBuilder text = new StringBuilder();
         text.append("---\n");

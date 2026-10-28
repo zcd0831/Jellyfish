@@ -11,7 +11,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
-/** 计划中的一步。规则出处：模块-规划 §5、§7.1。 */
+/** 计划中的一步。规则出处：06-planning §6.6、§6.8.1。 */
 public class PlanStep {
 
     private final StepId id;
@@ -111,17 +111,17 @@ public class PlanStep {
         return description;
     }
 
-    /** LLM 裁判要吃"原定目标"（M16）。 */
+    /** LLM 裁判要吃"原定目标"。 */
     public String goal() {
         return goal;
     }
 
-    /** LLM 裁判要吃"结果期望"（M16）。 */
+    /** LLM 裁判要吃"结果期望"。 */
     public String expectedOutcome() {
         return expectedOutcome;
     }
 
-    /** LLM 裁判要吃"验证标准"（M16）。 */
+    /** LLM 裁判要吃"验证标准"。 */
     public String verificationCriteria() {
         return verificationCriteria;
     }

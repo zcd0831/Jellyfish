@@ -17,7 +17,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 纯映射：不联网、不打桩 HTTP。规则出处：D16 第 2/3/4 条、M12。
+ * 纯映射：不联网、不打桩 HTTP。
  */
 class ChatCompletionsProtocolTest {
 

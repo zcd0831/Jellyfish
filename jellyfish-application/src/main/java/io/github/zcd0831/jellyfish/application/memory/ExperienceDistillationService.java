@@ -19,7 +19,7 @@ import java.util.UUID;
 /**
  * 经验写入：与库内经验去重（合并 + 提置信度）或新建。
  * 素材与子代理调用在 {@link PlanCompletionCurator}——本服务零 LLM 依赖，规则可独立断言。
- * 规则出处：模块-记忆 §7.1、§8.2。
+ * 规则出处：07-memory §7.8.1、§7.9.2。
  */
 public final class ExperienceDistillationService {
 

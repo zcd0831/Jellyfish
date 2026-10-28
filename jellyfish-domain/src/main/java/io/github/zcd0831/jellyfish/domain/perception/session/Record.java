@@ -2,7 +2,7 @@ package io.github.zcd0831.jellyfish.domain.perception.session;
 
 import io.github.zcd0831.jellyfish.domain.shared.RecordId;
 
-/** 上下文流水的一条。规则出处：模块-感知 §7.1 规则 5（只追加）、规则 14/15/17。 */
+/** 上下文流水的一条。规则出处：04-perception §4.8.1 规则 5（只追加）、规则 14/15/17。 */
 public class Record {
 
     private RecordId id;

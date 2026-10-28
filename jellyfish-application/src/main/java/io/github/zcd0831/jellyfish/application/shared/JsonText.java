@@ -1,7 +1,7 @@
 package io.github.zcd0831.jellyfish.application.shared;
 
 /**
- * 应用层需要把工具调用落成一行文本（Record 只存字符串），但不能引 Jackson（D02）。
+ * 应用层需要把工具调用落成一行文本（Record 只存字符串），但不能引 Jackson。
  * 只做 JSON 字符串转义这一件事。
  */
 public final class JsonText {

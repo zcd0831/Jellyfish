@@ -15,7 +15,7 @@ import java.util.UUID;
 
 /**
  * 把 `generate_plan` 的草案变成合法计划；校验失败即工具失败（回灌模型，不消耗重试）。
- * 规则出处：模块-规划 §7.1 规则 1、§8.4。
+ * 规则出处：06-planning §6.8.1 规则 1、§6.9.4。
  */
 public final class PlanFactory {
 
@@ -80,7 +80,7 @@ public final class PlanFactory {
         return value == null ? null : String.valueOf(value);
     }
 
-    /** 裁判要吃三要素：声明 LLM_JUDGE 就必须给全（M16）。 */
+    /** 裁判要吃三要素：声明 LLM_JUDGE 就必须给全。 */
     private static void requireJudgeInputs(Map<String, Object> raw, int index) {
         requireText(raw, "goal", index, "LLM_JUDGE");
         requireText(raw, "expectedOutcome", index, "LLM_JUDGE");

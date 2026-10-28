@@ -11,7 +11,7 @@ import java.util.regex.Pattern;
 
 /**
  * 基础提示词模板：占位符固定 `${name}`；未提供的变量保留原样，让缺口可见。
- * 规则出处：模块-行动 §5（PromptTemplate）、技术决策 M08。
+ * 规则出处：05-action §5.6（PromptTemplate）。
  */
 @Value
 public class PromptTemplate {

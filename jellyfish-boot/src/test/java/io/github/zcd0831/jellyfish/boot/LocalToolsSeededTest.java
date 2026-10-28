@@ -18,7 +18,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** 13 份工具声明随 jar 走，主代理绑定全部 13 个（模块-行动 §3.1、D25-1）。 */
+/** 13 份工具声明随 jar 走，主代理绑定全部 13 个。 */
 class LocalToolsSeededTest {
 
     @TempDir

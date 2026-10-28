@@ -69,7 +69,6 @@ public final class ReActLoop {
 
     /**
      * 内循环的唯一出口：模型不再调工具。`submit_step` 由内循环识别，不当作普通工具执行。
-     *
      * <p>消息形态：**一次模型响应 = 一条 assistant 消息**（content + 全部 tool_calls），
      * 其工具结果按调用顺序紧随其后；同一次响应落盘的记录共享 `turnId`。
      * 规则出处：06-planning §6.8.1 规则 11、04-perception §4.8.1 规则 9/14/17。
@@ -228,7 +227,7 @@ public final class ReActLoop {
                         turnId, producer, null, System.currentTimeMillis());
                 commitAppend(session, aborted);
             } catch (RuntimeException cannotRecord) {
-                // 收尾失败不掩盖原始异常：流水残留在下次启动对账里处理（模块-应用层 §9）
+                // 收尾失败不掩盖原始异常：流水残留在下次启动对账里处理（08-application §8.10）
                 return;
             }
         }

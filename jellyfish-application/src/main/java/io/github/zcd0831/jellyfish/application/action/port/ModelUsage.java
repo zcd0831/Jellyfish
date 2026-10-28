@@ -2,7 +2,7 @@ package io.github.zcd0831.jellyfish.application.action.port;
 
 /**
  * 一次调用的用量：厂商给了就是精确值，没给时回退本地估算并由 {@link #estimated()} 标出。
- * 规则出处：模块-行动 §8.3（用量展示口径）。
+ * 规则出处：05-action §5.9.4（用量展示口径）。
  */
 public final class ModelUsage {
 

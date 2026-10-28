@@ -2,7 +2,7 @@ package io.github.zcd0831.jellyfish.domain.planning.plan;
 
 import io.github.zcd0831.jellyfish.domain.shared.DomainEvent;
 
-/** 规则出处：模块-规划 §6。 */
+/** 规则出处：06-planning §6.7。 */
 public final class PlanCreated implements DomainEvent {
 
     @Override

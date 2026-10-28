@@ -4,7 +4,7 @@ import io.github.zcd0831.jellyfish.domain.action.tool.ToolDefinition;
 import java.util.Map;
 
 /**
- * REST / MCP / NATIVE 出站调用。规则出处：模块-应用层 §6。
+ * REST / MCP / NATIVE 出站调用。规则出处：08-application §8.7。
  */
 public interface ExternalToolPort {
 

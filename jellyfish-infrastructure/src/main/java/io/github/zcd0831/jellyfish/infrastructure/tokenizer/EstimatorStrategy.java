@@ -8,7 +8,6 @@ import java.util.List;
 /**
  * 兜底估算：CJK 按 1 token/字，其它按 4 字符/token，每条消息 +4。
  * **宁可高估**——高估只是多折叠一次，低估会撞 API 400。
- * 规则出处：技术决策 D08 第 2 节。
  */
 public final class EstimatorStrategy implements TokenEstimator {
 

@@ -5,7 +5,7 @@ import io.github.zcd0831.jellyfish.application.shared.Question;
 
 /**
  * 提问端口的适配：把阻塞提问转给外壳主循环（同一个 LineReader 读答案）。
- * 用"装配时绑定"打断构造环：用例需要端口，外壳需要用例（D20-8）。
+ * 用"装配时绑定"打断构造环：用例需要端口，外壳需要用例。
  */
 public final class QuestionBroker {
 

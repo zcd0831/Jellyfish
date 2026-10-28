@@ -8,7 +8,6 @@ import java.util.List;
 
 /**
  * 策略链：jtokkit 优先 → 估算兜底；任一策略异常即降级到下一个。
- * 规则出处：技术决策 D08 第 2 节。
  */
 public final class CompositeTokenCounter implements TokenCounter {
 

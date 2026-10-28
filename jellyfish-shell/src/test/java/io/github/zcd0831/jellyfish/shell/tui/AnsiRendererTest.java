@@ -9,7 +9,7 @@ import java.io.UnsupportedEncodingException;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** 渲染的可测部分：CJK 宽度与折行、状态行用 \r 覆盖。规则出处：D20、D13（不测渲染本身）。 */
+/** 渲染的可测部分：CJK 宽度与折行、状态行用 \r 覆盖。 */
 class AnsiRendererTest {
 
     @Test
@@ -40,7 +40,7 @@ class AnsiRendererTest {
 
         String text = bytes.toString("UTF-8");
         assertTrue(text.contains("\r\u001B[2K"), "状态行应以 \\r + 清行覆盖");
-        assertTrue(!text.contains("\u001B[2J"), "不得整屏清空（D20-2）");
+        assertTrue(!text.contains("\u001B[2J"), "不得整屏清空");
     }
 
     @Test

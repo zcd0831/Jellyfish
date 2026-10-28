@@ -3,7 +3,7 @@ package io.github.zcd0831.jellyfish.application.perception.port;
 import io.github.zcd0831.jellyfish.domain.shared.ModelId;
 import io.github.zcd0831.jellyfish.domain.shared.SessionId;
 
-/** 会话列表里的一行：只够"让人挑一个"，不载入记录流水（D22）。 */
+/** 会话列表里的一行：只够"让人挑一个"，不载入记录流水。 */
 public final class SessionSummary {
 
     private final SessionId id;

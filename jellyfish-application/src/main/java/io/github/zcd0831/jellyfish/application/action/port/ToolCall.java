@@ -2,7 +2,7 @@ package io.github.zcd0831.jellyfish.application.action.port;
 
 /**
  * 模型请求的一次工具调用：callId 用于把结果回灌到同一调用上。
- * 规则出处：模块-行动 §5、技术决策 D16 第 3 条。
+ * 规则出处：05-action §5.6。
  */
 public final class ToolCall {
 

@@ -59,7 +59,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * S1 验收（D15）：一句话 → 一次工具（ask_user）→ 最终答复落 ASSISTANT；
+ * S1 验收：一句话 → 一次工具（ask_user）→ 最终答复落 ASSISTANT；
  * token 进台账；无计划收敛即结束。用脚本化假模型，不联网。
  */
 class S1AcceptanceTest {
@@ -158,7 +158,7 @@ class S1AcceptanceTest {
         assertEquals("你好，张三", records.get(3).content());
 
         Session session = new FileSessionRepository(dir, codec).load(sessionId);
-        assertEquals("测试标题", session.title(), "会话头仍可读回（会话没有状态，D22）");
+        assertEquals("测试标题", session.title(), "会话头仍可读回（会话没有状态）");
 
         assertTrue(dir.sessionDir(sessionId.getValue()).resolve("budget.json").toFile().exists());
         assertTrue(new FileBudgetRepository(dir, codec).load(sessionId).consumedTokens() > 0);
@@ -175,7 +175,7 @@ class S1AcceptanceTest {
         runSession.run(sessionId, null, ChunkSink.NOOP);
 
         ModelInvocationRequest request = model.requests.get(model.requests.size() - 1);
-        // 断言的是"请求用的是冻结快照"，不是提示词措辞——措辞属于内置资产，可以改（模块-感知 §8.3）
+        // 断言的是"请求用的是冻结快照"，不是提示词措辞——措辞属于内置资产，可以改（04-perception §4.9.3）
         Session frozen = new FileSessionRepository(dir, codec).load(sessionId);
         assertEquals(frozen.systemPromptSnapshot().getRenderedPrompt(), request.systemPrompt());
         assertFalse(request.systemPrompt().isEmpty(), "系统提示词不能为空");

@@ -10,7 +10,7 @@ import java.util.List;
 
 /**
  * 工作区根：本地能力只能在这一个目录里动手。
- * 规则出处：模块-行动 §7.1 规则 9（根 = 进程启动时的工作目录，判定基于 real path）。
+ * 规则出处：05-action §5.8.1 规则 9（根 = 进程启动时的工作目录，判定基于 real path）。
  */
 public final class Workspace {
 

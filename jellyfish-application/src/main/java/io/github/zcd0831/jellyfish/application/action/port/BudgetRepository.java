@@ -4,7 +4,7 @@ import io.github.zcd0831.jellyfish.domain.action.budget.Budget;
 import io.github.zcd0831.jellyfish.domain.shared.SessionId;
 
 /**
- * 会话族台账。规则出处：模块-基础设施层 §3。
+ * 会话族台账。规则出处：09-infrastructure §9.4。
  */
 public interface BudgetRepository {
 

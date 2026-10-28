@@ -10,7 +10,7 @@ import java.nio.file.StandardOpenOption;
 
 /**
  * 原子写：临时文件同目录生成 → fsync → rename → fsync 目录。
- * 规则出处：模块-基础设施层 §5。
+ * 规则出处：09-infrastructure §9.6。
  */
 public final class AtomicFiles {
 

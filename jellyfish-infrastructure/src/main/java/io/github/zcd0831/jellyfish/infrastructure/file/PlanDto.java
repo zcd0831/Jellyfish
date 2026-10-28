@@ -22,7 +22,7 @@ import java.util.EnumSet;
 import java.util.List;
 import java.util.Set;
 
-/** plans/<planId>.json 的形状。规则出处：模块-基础设施层 §4、技术决策 D07。 */
+/** plans/<planId>.json 的形状。规则出处：09-infrastructure §9.5。 */
 public class PlanDto {
 
     public String id;

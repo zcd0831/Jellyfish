@@ -12,7 +12,7 @@ import io.github.zcd0831.jellyfish.domain.memory.skill.SkillDefinition;
 
 /**
  * 目录维护：内置资产不可改、`builtin.` 前缀保留给内置。
- * 规则出处：模块-应用层 §4（ManageCatalogUseCase）、技术决策 M04。
+ * 规则出处：08-application §8.5（ManageCatalogUseCase）。
  */
 public final class ManageCatalogUseCase {
 

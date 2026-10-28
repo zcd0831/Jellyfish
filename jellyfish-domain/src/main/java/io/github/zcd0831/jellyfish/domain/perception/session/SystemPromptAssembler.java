@@ -5,7 +5,7 @@ import java.util.List;
 
 /**
  * 纯组装：不查任何定义，内容由调用方取好传入。
- * 规则出处：模块-感知 §4、§8.3。
+ * 规则出处：04-perception §4.5、§4.9.3。
  */
 public final class SystemPromptAssembler {
 
@@ -17,7 +17,7 @@ public final class SystemPromptAssembler {
     }
 
     /**
-     * SOP 引用了未被绑定的工具：提示词一致性问题，**告警不阻断**（§8.3）。
+     * SOP 引用了未被绑定的工具：提示词一致性问题，**告警不阻断**（04-perception §4.9.3）。
      * 领域不持有 IO，所以只给出清单，由调用方决定怎么展示。
      */
     public List<String> unboundToolReferences(AgentSnapshotInput input) {

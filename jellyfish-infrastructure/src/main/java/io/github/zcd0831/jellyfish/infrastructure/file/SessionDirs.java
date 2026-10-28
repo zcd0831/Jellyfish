@@ -8,8 +8,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 /**
- * sessionId → 目录。子会话嵌套在 sub/ 下，深度 ≤ 2（D05.1），所以扫两层即可，不需要索引。
- * 规则出处：模块-基础设施层 §4、技术决策 D05.1。
+ * sessionId → 目录。子会话嵌套在 sub/ 下，深度 ≤ 2，所以扫两层即可，不需要索引。
+ * 规则出处：09-infrastructure §9.5。
  */
 final class SessionDirs {
 

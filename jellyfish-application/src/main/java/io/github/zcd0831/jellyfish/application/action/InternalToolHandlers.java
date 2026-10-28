@@ -5,11 +5,11 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 内置工具处理器注册表（按工具 id 索引）。规则出处：模块-行动 §8.1 的"处理器注册表"。
+ * 内置工具处理器注册表（按工具 id 索引）。规则出处：05-action §5.9.1 的"处理器注册表"。
  */
 public final class InternalToolHandlers {
 
-    /** 插件启停会增删处理器 ⇒ 必须并发安全且可写（M42）。 */
+    /** 插件启停会增删处理器 ⇒ 必须并发安全且可写。 */
     private final Map<String, InternalToolHandler> byName =
             new java.util.concurrent.ConcurrentHashMap<String, InternalToolHandler>();
 
@@ -23,7 +23,7 @@ public final class InternalToolHandlers {
         return new InternalToolHandlers(java.util.Collections.<NamedHandler>emptyList());
     }
 
-    /** 插件装/卸时增删：`PLUGIN` 来源的工具与内置工具共用这张表（模块-行动 §8.1）。 */
+    /** 插件装/卸时增删：`PLUGIN` 来源的工具与内置工具共用这张表（05-action §5.9.1）。 */
     public void register(String toolName, InternalToolHandler handler) {
         byName.put(toolName, handler);
     }

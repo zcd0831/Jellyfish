@@ -7,7 +7,7 @@ import io.github.zcd0831.jellyfish.application.shared.ChunkSink;
 import io.github.zcd0831.jellyfish.domain.shared.ModelId;
 
 /**
- * 模型调用的唯一出口。规则出处：模块-应用层 §6、技术决策 D06。
+ * 模型调用的唯一出口。规则出处：08-application §8.7。
  */
 public interface ModelInvocationPort {
 

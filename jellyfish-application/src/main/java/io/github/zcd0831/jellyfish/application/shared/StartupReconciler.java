@@ -28,7 +28,7 @@ import java.util.UUID;
 
 /**
  * 启动对账：崩溃残留的业务补齐（5 条）。只管业务语义，文件级残留在基础设施层。
- * 规则出处：模块-应用层 §9（StartupReconciler 的 5 条规则）。
+ * 规则出处：08-application §8.10（StartupReconciler 的 5 条规则）。
  */
 public final class StartupReconciler {
 
@@ -65,7 +65,7 @@ public final class StartupReconciler {
         reconcileHalfToolCall(session);
     }
 
-    /** 规则 ④：归档中间态对账——包完整则补删原目录，半截包直接丢弃（D22）。 */
+    /** 规则 4：归档中间态对账——包完整则补删原目录，半截包直接丢弃。 */
     private void reconcileArchiveResidue() {
         sessions.cleanupArchiveResidue();
     }

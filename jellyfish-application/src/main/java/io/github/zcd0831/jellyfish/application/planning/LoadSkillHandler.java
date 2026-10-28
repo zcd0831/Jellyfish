@@ -9,7 +9,7 @@ import java.util.Map;
 
 /**
  * `load_skill`：取 SOP 文本；**注入成 SYSTEM 记录是内循环的职责**（记忆模块不写别人的会话）。
- * 规则出处：模块-记忆 §8.4 要点、模块-行动 §3.1。
+ * 规则出处：07-memory §7.9.4 要点、05-action §5.4.1。
  */
 public final class LoadSkillHandler implements InternalToolHandler {
 

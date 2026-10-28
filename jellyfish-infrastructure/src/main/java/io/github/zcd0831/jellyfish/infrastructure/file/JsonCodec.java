@@ -7,7 +7,6 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 
 /**
  * 文件即数据库，JSON 就是存储格式。
- * 规则出处：技术决策 D07（camelCase、不写 null、忽略未知字段、epoch 毫秒）。
  */
 public final class JsonCodec {
 

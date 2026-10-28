@@ -11,7 +11,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * 只累加，不预留、不中断；越过 budgetLimitTokens × budgetWarnRatio 只报一次。
- * 规则出处：模块-行动 §7.5 规则 ②③④、§8.3。
+ * 规则出处：05-action §5.8.5 规则 2③④、§5.9.4。
  */
 class BudgetTest {
 

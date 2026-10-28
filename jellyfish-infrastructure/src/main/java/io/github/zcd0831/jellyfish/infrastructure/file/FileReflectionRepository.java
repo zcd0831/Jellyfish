@@ -16,7 +16,7 @@ import java.util.Optional;
 
 /**
  * sessions/<id>/reflections/<id>.json：只新建，不覆盖（反思不可变）。
- * 规则出处：模块-基础设施层 §3、模块-记忆 §7.2 规则 ④。
+ * 规则出处：09-infrastructure §9.4、07-memory §7.8.2 规则 4。
  */
 public final class FileReflectionRepository implements ReflectionRepository {
 

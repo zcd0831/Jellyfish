@@ -23,7 +23,7 @@ import java.util.UUID;
 
 /**
  * `generate_plan`：草案校验通过才建计划；失败当作工具失败结果回灌模型，不消耗重试。
- * 规则出处：模块-行动 §3.1、模块-规划 §8.4。
+ * 规则出处：05-action §5.4.1、06-planning §6.9.4。
  */
 public final class GeneratePlanHandler implements InternalToolHandler {
 

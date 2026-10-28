@@ -45,7 +45,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-/** 编排者：一次调用、一个判定、互斥分派（模块-记忆 §8.6）。 */
+/** 编排者：一次调用、一个判定、互斥分派（07-memory §7.9.6）。 */
 class PlanCompletionCuratorTest {
 
     private final RecordStore records = mock(RecordStore.class);

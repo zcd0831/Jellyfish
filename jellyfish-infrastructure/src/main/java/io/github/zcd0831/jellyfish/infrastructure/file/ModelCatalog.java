@@ -16,7 +16,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
-/** models/<id>.json。规则出处：模块-基础设施层 §4。 */
+/** models/<id>.json。规则出处：09-infrastructure §9.5。 */
 final class ModelCatalog {
 
     private final DataDirectory dataDirectory;

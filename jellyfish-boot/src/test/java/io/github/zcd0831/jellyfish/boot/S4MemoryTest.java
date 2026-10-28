@@ -57,7 +57,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * S4 记忆闭环：检索分配、奖惩不对称、沉淀（含每 Plan 上限）。
- * 规则出处：模块-记忆 §8.1、§8.3、§7.1 规则 ③⑦⑧。
+ * 规则出处：07-memory §7.9.1、§7.9.3、§7.8.1 规则 3⑦⑧。
  */
 class S4MemoryTest {
 

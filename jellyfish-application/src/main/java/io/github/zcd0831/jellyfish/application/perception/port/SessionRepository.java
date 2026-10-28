@@ -6,10 +6,10 @@ import io.github.zcd0831.jellyfish.domain.shared.SessionId;
 import java.util.List;
 
 /**
- * 会话头与存放策略（模块-基础设施层 §3）。
+ * 会话头与存放策略（09-infrastructure §9.4）。
  * <p>
  * 会话**没有状态**：{@code sessions/<id>/} 存在即可用，不存在即不可用（含已归档）。
- * 归档是存放策略——压成包移走，此后应用不再认识它（D22）。
+ * 归档是存放策略——压成包移走，此后应用不再认识它。
  */
 public interface SessionRepository {
 

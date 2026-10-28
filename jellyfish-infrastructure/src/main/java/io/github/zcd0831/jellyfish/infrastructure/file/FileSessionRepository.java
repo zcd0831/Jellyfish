@@ -22,7 +22,7 @@ import java.util.zip.ZipOutputStream;
 
 /**
  * 会话头与状态；子会话落在 {@code sessions/<root>/sub/<child>/}。
- * 规则出处：模块-基础设施层 §3、§4，技术决策 D05.1。
+ * 规则出处：09-infrastructure §9.4、§9.5。
  */
 public final class FileSessionRepository implements SessionRepository {
 
@@ -57,7 +57,7 @@ public final class FileSessionRepository implements SessionRepository {
         AtomicFiles.write(metaFile(session), codec.write(dto));
     }
 
-    /** 子会话落在主会话的 sub/ 下，深度恒为 1（D05.1）。 */
+    /** 子会话落在主会话的 sub/ 下，深度恒为 1。 */
     private Path metaFile(Session session) {
         if (session.parentSessionId() == null) {
             return dir.sessionDir(session.id().getValue()).resolve("meta.json");
@@ -83,7 +83,7 @@ public final class FileSessionRepository implements SessionRepository {
     }
 
     /**
-     * 归档 = 压成 {@code archive/<id>.zip} 再删原目录（D22）：先写 `.tmp`、改名、最后删，
+     * 归档 = 压成 {@code archive/<id>.zip} 再删原目录：先写 `.tmp`、改名、最后删，
      * 顺序保证"包没写完就不会丢数据"，翻车时由 {@link #cleanupArchiveResidue()} 收尾。
      */
     @Override

@@ -8,7 +8,7 @@ import java.util.List;
 /**
  * 插件授权意图的仓储：`plugins/<id>/plugin.json`。
  * 卸载 = 删目录（与"删 skills/ 目录即淘汰"同构），所以没有 delete。
- * 规则出处：模块-应用层 §6、模块-行动 §7.6。
+ * 规则出处：08-application §8.7、05-action §5.8.6。
  */
 public interface PluginRepository {
 

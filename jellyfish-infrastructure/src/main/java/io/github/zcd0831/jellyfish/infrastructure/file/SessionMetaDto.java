@@ -9,7 +9,7 @@ import java.util.List;
 
 /**
  * meta.json 的形状；与领域聚合分开，避免存储结构渗进模型。
- * 规则出处：模块-基础设施层 §4、技术决策 D07。
+ * 规则出处：09-infrastructure §9.5。
  */
 public class SessionMetaDto {
 

@@ -25,7 +25,7 @@ import io.github.zcd0831.jellyfish.domain.shared.TokenEstimator;
 
 import javax.inject.Singleton;
 
-/** 感知：窗口推导、标题、会话开启。规则出处：模块-感知 §4。 */
+/** 感知：窗口推导、标题、会话开启。规则出处：04-perception §4.5。 */
 @Module
 public final class PerceptionModule {
 

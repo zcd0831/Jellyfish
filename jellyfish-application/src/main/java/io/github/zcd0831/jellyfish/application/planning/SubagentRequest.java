@@ -4,7 +4,7 @@ import io.github.zcd0831.jellyfish.domain.shared.AgentId;
 import io.github.zcd0831.jellyfish.domain.shared.ModelId;
 
 /**
- * `spawn_subagents` 的一项请求。规则出处：模块-行动 §3.1（内置工具表）。
+ * `spawn_subagents` 的一项请求。规则出处：05-action §5.4.1（内置工具表）。
  */
 public final class SubagentRequest {
 

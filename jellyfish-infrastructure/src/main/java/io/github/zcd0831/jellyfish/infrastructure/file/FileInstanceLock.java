@@ -12,7 +12,6 @@ import java.nio.file.Files;
 
 /**
  * 进程级单写者锁；进程退出由 OS 释放。
- * 规则出处：技术决策 D05（FileChannel.tryLock 替代 PID 探测）。
  */
 public final class FileInstanceLock implements InstanceLock {
 

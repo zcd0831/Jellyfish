@@ -14,8 +14,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * settings.json 是策略的唯一来源；不存在时写默认值（D12）。
- * 规则出处：模块-基础设施层 §3、技术决策 D12。
+ * settings.json 是策略的唯一来源；不存在时写默认值。
+ * 规则出处：09-infrastructure §9.4。
  */
 public final class FilePolicyRepository implements PolicyRepository {
 
@@ -50,7 +50,7 @@ public final class FilePolicyRepository implements PolicyRepository {
         AtomicFiles.write(dataDirectory.settingsFile(), codec.write(PolicyDto.from(policy)));
     }
 
-    /** 纯 JSON 配置形态（D07：2 空格美化由 mapper 决定，字段名 camelCase）。 */
+    /** 纯 JSON 配置形态。 */
     public static class PolicyDto {
 
         public int maxRetries;

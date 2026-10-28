@@ -7,7 +7,6 @@ import org.apache.logging.log4j.ThreadContext;
 
 /**
  * 把应用层声明的技术事件落到 Log4j 的 key=value 行（脱敏由 Layout 统一做）。
- * 规则出处：技术决策 D14、D18。
  */
 public final class Log4jTechnicalLog implements TechnicalLog.Sink {
 

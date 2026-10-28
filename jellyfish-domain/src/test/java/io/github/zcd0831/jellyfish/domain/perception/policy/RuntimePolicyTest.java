@@ -12,7 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** 逐项校验：正数 / 非负 / 比例 0~1 / 列表。规则出处：模块-感知 §7.2、§8.5。 */
+/** 逐项校验：正数 / 非负 / 比例 0~1 / 列表。规则出处：04-perception §4.8.2、§4.9.5。 */
 class RuntimePolicyTest {
 
     private static Map<String, Object> one(String key, Object value) {

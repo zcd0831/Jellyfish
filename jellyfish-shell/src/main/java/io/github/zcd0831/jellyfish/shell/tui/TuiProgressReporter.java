@@ -4,7 +4,7 @@ import io.github.zcd0831.jellyfish.application.shared.ProgressEvent;
 import io.github.zcd0831.jellyfish.application.shared.port.ProgressPort;
 
 /**
- * 进度用状态行原地覆盖（\r），不整屏重绘；丢弃不影响业务（D12.1、D20-2）。
+ * 进度用状态行原地覆盖（\r），不整屏重绘；丢弃不影响业务。
  */
 public final class TuiProgressReporter implements ProgressPort {
 

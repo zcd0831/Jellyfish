@@ -20,7 +20,7 @@ import io.github.zcd0831.jellyfish.application.shared.port.ProgressPort;
 
 import javax.inject.Singleton;
 
-/** 记忆：经验检索 / 反馈 / 沉淀。规则出处：模块-记忆 §4。 */
+/** 记忆：经验检索 / 反馈 / 沉淀。规则出处：07-memory §7.5。 */
 @Module
 public final class MemoryModule {
 

@@ -10,7 +10,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * 同一数据目录只允许一个写者。
- * 规则出处：技术决策 D05（FileChannel.tryLock）。
  */
 class FileInstanceLockTest {
 

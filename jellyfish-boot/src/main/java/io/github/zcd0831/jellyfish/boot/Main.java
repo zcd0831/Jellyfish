@@ -6,14 +6,14 @@ import io.github.zcd0831.jellyfish.di.InfrastructureModule;
 import io.github.zcd0831.jellyfish.infrastructure.file.DataDirectory;
 
 /**
- * 只做三件事：解析配置 → 创建组件 → 启动外壳（技术决策 D04-4）。
- * Ctrl-C 的处理：关闭钩子取消在途模型请求，并等主线程把取消结果提交完（M14、D05-4）。
+ * 只做三件事：解析配置 → 创建组件 → 启动外壳。
+ * Ctrl-C 的处理：关闭钩子取消在途模型请求，并等主线程把取消结果提交完。
  */
 public final class Main {
 
     private static final long SHUTDOWN_GRACE_MILLIS = 2000L;
 
-    /** 凭据只从环境变量读；缺失的供应商提示一条，不阻塞启动（D09-4）。 */
+    /** 凭据只从环境变量读；缺失的供应商提示一条，不阻塞启动。 */
     private static void warnMissingCredentials(AppComponent component) {
         for (io.github.zcd0831.jellyfish.domain.action.model.Provider provider
                 : component.catalogRepository().providers()) {
@@ -28,7 +28,7 @@ public final class Main {
         BootOptions options = BootOptions.parse(args);
         DataDirectory dir = DataDirectory.of(options.dataDir());
 
-        // 日志目录与级别必须先于任何 logger 初始化（D18-4）
+        // 日志目录与级别必须先于任何 logger 初始化
         System.setProperty("jellyfish.log.dir", dir.logs().toString());
         System.setProperty("jellyfish.log.level", options.logLevel());
         io.github.zcd0831.jellyfish.application.shared.TechnicalLog.use(
@@ -55,7 +55,7 @@ public final class Main {
         component.instanceLock().acquire();
         try {
             component.schemaMigrator().migrate();
-            // 启动打印生效值，一条日志解决"我改的怎么没生效"（D12-3）
+            // 启动打印生效值，一条日志解决"我改的怎么没生效"
             System.out.println("data-dir=" + dir.root()
                     + "  log-level=" + options.logLevel()
                     + "  maxReActRounds=" + component.policyRepository().load().maxReActRounds()

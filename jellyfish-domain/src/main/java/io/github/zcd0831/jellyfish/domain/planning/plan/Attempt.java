@@ -10,7 +10,7 @@ import java.util.List;
 
 /**
  * 一个 step 的一次完整执行周期：可跨多段 ReAct、被多次用户输入切分，但不切分 attempt。
- * 规则出处：模块-规划 §5、§5.2。
+ * 规则出处：06-planning §6.6、§5.2。
  */
 public class Attempt {
 
@@ -36,7 +36,7 @@ public class Attempt {
         }
     }
 
-    /** 技能使用的唯一来源：改进判定的证据（模块-规划 §5、§8.1）。 */
+    /** 技能使用的唯一来源：改进判定的证据（06-planning §6.6、§6.9.1）。 */
     public void recordSkillUsage(SkillId skillId) {
         if (!usedSkillIds.contains(skillId)) {
             usedSkillIds.add(skillId);

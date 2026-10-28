@@ -4,7 +4,7 @@ import java.io.PrintStream;
 
 /**
  * 单栏流式渲染：流式打字机、就地暂停、状态行覆盖。
- * 只写 ANSI，不接管屏幕（D20）：不清屏、不 alternate screen，历史留在终端回滚区。
+ * 只写 ANSI，不接管屏幕：不清屏、不 alternate screen，历史留在终端回滚区。
  */
 public final class AnsiRenderer {
 
@@ -20,7 +20,7 @@ public final class AnsiRenderer {
     private int column;
     private final boolean color;
     private final MarkdownStream markdown;
-    /** 状态行是否占着当前行：占着就不能在它上面打正文（D20-10）。 */
+    /** 状态行是否占着当前行：占着就不能在它上面打正文。 */
     private boolean statusActive;
 
     public AnsiRenderer(PrintStream out, int width) {
@@ -124,7 +124,7 @@ public final class AnsiRenderer {
     }
 
     /**
-     * 状态行：`\r` 原地覆盖；光标在正文行中间时先另起一行，避免擦掉正文（D20-10）。
+     * 状态行：`\r` 原地覆盖；光标在正文行中间时先另起一行，避免擦掉正文。
      * 传空串即清除。
      */
     public synchronized void status(String text) {

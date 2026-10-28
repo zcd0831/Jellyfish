@@ -31,14 +31,14 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
 /**
- * PF4J 3.16.0（Java 8 字节码）。装/启/停/卸都是运行期动作；同 id 升级要重启（D24-2/3）。
- * 规则出处：模块-基础设施层 §11。
+ * PF4J 3.16.0（Java 8 字节码）。装/启/停/卸都是运行期动作；同 id 升级要重启。
+ * 规则出处：09-infrastructure §9.12。
  */
 public final class Pf4jPluginRuntime implements PluginRuntimePort {
 
     static final String TOOLS_PREFIX = "META-INF/jellyfish/tools/";
 
-    /** 宿主已提供的依赖：插件再打一份就会在类加载器里打架（D24-8.1）。 */
+    /** 宿主已提供的依赖：插件再打一份就会在类加载器里打架。 */
     private static final String[] HOST_PACKAGES = {
             "org/apache/logging/log4j/", "com/fasterxml/jackson/", "okhttp3/", "okio/",
             "com/networknt/", "org/pf4j/", "com/knuddels/jtokkit/", "org/slf4j/"};
@@ -116,7 +116,7 @@ public final class Pf4jPluginRuntime implements PluginRuntimePort {
 
     /**
      * 自己扫 `plugins/<id>/*.jar` 再逐个交给 PF4J：布局由我们定义，PF4J 只负责解析与装载。
-     * 每次取用前重扫 ⇒ 装上新 jar 后无需重启就能被发现（D24-3）。
+     * 每次取用前重扫 ⇒ 装上新 jar 后无需重启就能被发现。
      */
     private void sync() {
         try {
@@ -215,7 +215,7 @@ public final class Pf4jPluginRuntime implements PluginRuntimePort {
         }
     }
 
-    /** `source.type` 一律 PLUGIN；端点写成 `<pluginId>/<handlerId>`（模块-行动 §5）。 */
+    /** `source.type` 一律 PLUGIN；端点写成 `<pluginId>/<handlerId>`（05-action §5.6）。 */
     private ToolDefinition toDomain(PluginId pluginId, String json) {
         ToolJson dto = codec.read(json, ToolJson.class);
         ToolSource source = new ToolSource(SourceType.PLUGIN,
@@ -250,7 +250,7 @@ public final class Pf4jPluginRuntime implements PluginRuntimePort {
     }
 
     /**
-     * 关掉 PF4J 自带的状态文件：否则它会另存一份启停状态，与 `plugin.json` 形成两份真相（D24-2）。
+     * 关掉 PF4J 自带的状态文件：否则它会另存一份启停状态，与 `plugin.json` 形成两份真相。
      */
     private static final class JellyfishPluginManager extends DefaultPluginManager {
 

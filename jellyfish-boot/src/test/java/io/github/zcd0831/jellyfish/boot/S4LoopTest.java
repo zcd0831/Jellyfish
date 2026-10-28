@@ -71,7 +71,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * S4 闭环接入外循环：计划诞生 → 检索分配 → step 成功 → 奖励（只奖被建议的）。
- * 规则出处：模块-记忆 §8.1、§8.3，模型图 §5.1。
+ * 规则出处：07-memory §7.9.1、§7.9.3，模型图 §5.1。
  */
 class S4LoopTest {
 

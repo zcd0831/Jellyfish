@@ -6,8 +6,7 @@ import org.apache.logging.log4j.ThreadContext;
 
 /**
  * 模型调用的技术事件落点：重试 / 降级 / 摘要 / 验证耗时都走这里。
- * 只记技术事件，不记对话正文（D14-2 规则 1）。
- * 规则出处：技术决策 D14、D18。
+ * 只记技术事件，不记对话正文。
  */
 public final class ModelCallLog {
 

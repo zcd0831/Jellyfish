@@ -8,7 +8,7 @@ import java.util.Map;
 
 /**
  * 人写资产的头部：`---` 包裹的 key: value。只支持本项目用到的极简子集，
- * 不引 YAML 库（规则出处：模块-基础设施层 §4 文件形态三分）。
+ * 不引 YAML 库（规则出处：09-infrastructure §9.5 文件形态三分）。
  */
 final class FrontMatter {
 

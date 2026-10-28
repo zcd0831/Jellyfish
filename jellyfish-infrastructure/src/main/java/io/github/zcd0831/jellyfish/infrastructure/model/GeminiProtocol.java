@@ -24,7 +24,7 @@ import java.util.UUID;
 /**
  * Google Gemini 映射：`/v1beta/models/{model}:generateContent`（流式 `:streamGenerateContent?alt=sse`），
  * `contents[]` 的 user/model 轮次、`functionCall` / `functionResponse` 报价按 name + 顺序配对。
- * 规则出处：模块-行动 §8.2 第 7 条、模块-基础设施层 §10。
+ * 规则出处：05-action §5.9.2 第 7 条、09-infrastructure §9.11。
  */
 public final class GeminiProtocol implements ChatProtocolAdapter {
 

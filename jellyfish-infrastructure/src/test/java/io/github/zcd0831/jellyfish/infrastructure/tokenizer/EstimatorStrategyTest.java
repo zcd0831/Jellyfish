@@ -11,7 +11,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * 估算必须偏大：CJK 按 1 token/字，其它按 4 字符/token，每条消息 +4。
- * 规则出处：技术决策 D08 第 2 节。
  */
 class EstimatorStrategyTest {
 

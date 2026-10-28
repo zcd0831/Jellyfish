@@ -74,7 +74,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * S3 验收（D15）：并行子代理、独立超时、禁止递归、子会话目录与流水、预算归集。
+ * S3 验收：并行子代理、独立超时、禁止递归、子会话目录与流水、预算归集。
  */
 class S3AcceptanceTest {
 

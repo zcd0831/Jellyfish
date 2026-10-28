@@ -5,8 +5,8 @@ import io.github.zcd0831.jellyfish.application.shared.Question;
 import io.github.zcd0831.jellyfish.application.shared.port.HumanInteractionPort;
 
 /**
- * 阻塞式提问：呈现与队列都由 shell 负责，终端只归外壳（D19）。
- * 单队列、串行呈现、标注来源（D05-2、D20-6）。
+ * 阻塞式提问：呈现与队列都由 shell 负责，终端只归外壳。
+ * 单队列、串行呈现、标注来源。
  */
 public final class TuiHumanInteraction implements HumanInteractionPort {
 

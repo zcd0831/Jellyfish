@@ -4,7 +4,7 @@ import io.github.zcd0831.jellyfish.domain.planning.plan.PlanStep;
 
 /**
  * 第二层（ENV_FEEDBACK）的钩子：校验外部系统调用后的实际返回。
- * 本期没有这类 step，因此默认实现返回"无法判定"——**不假装通过**（模块-规划 §7.2）。
+ * 本期没有这类 step，因此默认实现返回"无法判定"——**不假装通过**（06-planning §6.8.2）。
  */
 public interface EnvironmentFeedbackVerifier {
 

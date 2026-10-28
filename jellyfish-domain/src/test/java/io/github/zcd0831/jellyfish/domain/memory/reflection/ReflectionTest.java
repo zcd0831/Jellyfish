@@ -7,7 +7,7 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-/** 归属唯一 + 落库 raise。规则出处：模块-记忆 §7.2 规则 ⑤⑥、§6。 */
+/** 归属唯一 + 落库 raise。规则出处：07-memory §7.8.2 规则 5⑥、§7.7。 */
 class ReflectionTest {
 
     @Test

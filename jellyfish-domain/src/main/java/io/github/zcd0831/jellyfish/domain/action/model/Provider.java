@@ -2,7 +2,7 @@ package io.github.zcd0831.jellyfish.domain.action.model;
 
 import io.github.zcd0831.jellyfish.domain.shared.ProviderId;
 
-/** 规则出处：模块-行动 §3.2、§7.2。 */
+/** 规则出处：05-action §5.4.2、§5.8.2。 */
 public class Provider {
 
     private final ProviderId id;
@@ -35,7 +35,7 @@ public class Provider {
         this.status = ProviderStatus.DEPRECATED;
     }
 
-    /** 规则出处：模块-行动 §7.2 规则 ③（弃用的 Provider 不得选中）。 */
+    /** 规则出处：05-action §5.8.2 规则 3（弃用的 Provider 不得选中）。 */
     public boolean isActive() {
         return status == ProviderStatus.ACTIVE;
     }

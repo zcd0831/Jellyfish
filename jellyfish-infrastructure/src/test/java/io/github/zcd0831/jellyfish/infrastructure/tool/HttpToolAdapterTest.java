@@ -22,7 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** REST 工具出站调用的成功 / 失败 / 异常分支。规则出处：模块-行动 §7.1 规则 4。 */
+/** REST 工具出站调用的成功 / 失败 / 异常分支。规则出处：05-action §5.8.1 规则 4。 */
 class HttpToolAdapterTest {
 
     private MockWebServer server;

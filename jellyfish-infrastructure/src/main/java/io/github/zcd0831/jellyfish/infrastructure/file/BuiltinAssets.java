@@ -10,7 +10,7 @@ import java.util.List;
 
 /**
  * jar 内置资产：用 index.txt 列出相对路径，避免依赖"枚举 jar 目录"（不可移植）。
- * 规则出处：模块-基础设施层 §4（内置代理不落盘）、M04。
+ * 规则出处：09-infrastructure §9.5（内置代理不落盘）。
  */
 final class BuiltinAssets {
 

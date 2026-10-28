@@ -9,7 +9,7 @@ import java.util.Map;
 /**
  * 线协议接缝：应用层只产出厂商中立的 canonical 消息，形态差异全部由实现吸收
  * （一个响应一条 assistant 消息、续接同轮 tool_result、reasoning 私有状态等）。
- * 规则出处：模块-行动 §8.2 第 7/8 条、模块-基础设施层 §10 第 7 条。
+ * 规则出处：05-action §5.9.2 第 7/8 条、09-infrastructure §9.11 第 7 条。
  */
 public interface ChatProtocolAdapter {
 

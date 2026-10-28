@@ -11,7 +11,7 @@ import java.util.regex.Pattern;
 
 /**
  * `fetch_url` 的出站 GET：取回纯文本即可，不做浏览器那一套。
- * 规则出处：模块-行动 §7.1 规则 9（只 http/https、默认 8000 字符、失败当普通结果）。
+ * 规则出处：05-action §5.8.1 规则 9（只 http/https、默认 8000 字符、失败当普通结果）。
  */
 public final class UrlFetcher {
 
@@ -40,7 +40,7 @@ public final class UrlFetcher {
             }
             return toPlainText(text);
         } catch (IOException e) {
-            // 网络失败是"一种工具结果"，不是领域状态（§7.1 规则 3）
+            // 网络失败是"一种工具结果"，不是领域状态（05-action §5.8.1 规则 3）
             return "抓取失败：" + e.getMessage();
         }
     }

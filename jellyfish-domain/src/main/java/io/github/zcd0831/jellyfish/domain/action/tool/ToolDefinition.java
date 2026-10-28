@@ -13,7 +13,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/** 工具聚合根。规则出处：模块-行动 §3.1、§7.1。 */
+/** 工具聚合根。规则出处：05-action §5.4.1、§5.8.1。 */
 public class ToolDefinition {
 
     private static final JsonSchemaFactory SCHEMA_FACTORY =
@@ -50,7 +50,7 @@ public class ToolDefinition {
         this.inputSchema = inputSchema;
     }
 
-    /** 规则出处：模块-行动 §7.1 规则 ①（只有 ACTIVE 进入快照、可被调用）。 */
+    /** 规则出处：05-action §5.8.1 规则 1（只有 ACTIVE 进入快照、可被调用）。 */
     public void activate() {
         this.status = ToolStatus.ACTIVE;
     }
@@ -64,8 +64,8 @@ public class ToolDefinition {
     }
 
     /**
-     * 完整 JSON Schema 校验（draft-07，D17）；返回违反项，空 = 通过。
-     * 校验失败是预期内结果，所以返回清单而不是抛异常（§7.1 规则 8）。
+     * 完整 JSON Schema 校验；返回违反项，空 = 通过。
+     * 校验失败是预期内结果，所以返回清单而不是抛异常（05-action §5.8.1 规则 8）。
      */
     public List<String> validateArgs(Map<String, Object> args) {
         List<String> violations = new ArrayList<>();
@@ -90,7 +90,7 @@ public class ToolDefinition {
         return violations;
     }
 
-    /** 规则出处：模块-行动 §7.1 规则 ⑤（非只读且不在信任清单 ⇒ 执行前放行审批）。 */
+    /** 规则出处：05-action §5.8.1 规则 5（非只读且不在信任清单 ⇒ 执行前放行审批）。 */
     public SideEffectLevel sideEffect() {
         return sideEffect;
     }

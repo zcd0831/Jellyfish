@@ -15,9 +15,8 @@ import java.util.List;
 
 /**
  * 计划聚合根：严格串行推进，完成即固化。
- * 规则出处：模块-规划 §3.1、§7.1。
- *
- * <p>「还能不能重试 / 该不该重划」由外循环判断，聚合只保证状态机自身的合法迁移（§7.1 原则）。
+ * 规则出处：06-planning §6.4.1、§6.8.1。
+ * <p>「还能不能重试 / 该不该重划」由外循环判断，聚合只保证状态机自身的合法迁移（06-planning §6.8.1）。
  */
 public class Plan {
 
@@ -107,7 +106,7 @@ public class Plan {
 
     /**
      * 延伸 attempt 的执行区间：每段 ReAct 结束（收敛 / 挂起 / 环境故障）由外循环调用一次，多段合并成一条连续区间。
-     * 规则出处：模块-规划 §7.1 规则 10、§5.2（收敛但未提交时区间继续延伸）。
+     * 规则出处：06-planning §6.8.1 规则 10、§5.2（收敛但未提交时区间继续延伸）。
      */
     public void extendAttemptRange(StepId stepId, int attemptNo, RecordRange range) {
         if (range == null) {
@@ -123,7 +122,7 @@ public class Plan {
         throw new DomainInvariantViolation("计划里没有该尝试：" + stepId.getValue() + "#" + attemptNo);
     }
 
-    /** 撞轮次上限：只落 attempt 结局，重试/重划由外循环判定（M15）。 */
+    /** 撞轮次上限：只落 attempt 结局，重试/重划由外循环判定。 */
     public void markAttemptFailed(StepId stepId, int attemptNo) {
         PlanStep step = requireStep(stepId);
         for (Attempt attempt : step.attempts()) {
@@ -136,7 +135,7 @@ public class Plan {
         throw new DomainInvariantViolation("计划里没有该尝试：" + stepId.getValue() + "#" + attemptNo);
     }
 
-    /** 步骤重试：新建 Attempt，同一步回到 RUNNING（M15、§7.1 节点「步骤重试」）。 */
+    /** 步骤重试：新建 Attempt，同一步回到 RUNNING。 */
     public Attempt retryStep(StepId stepId) {
         requireExecuting();
         PlanStep step = requireStep(stepId);
@@ -144,7 +143,7 @@ public class Plan {
         return step.beginAttempt();
     }
 
-    /** 反思挂到指定 attempt：只写引用，不改结局、不消耗重试（M18、§7.2 规则 ⑥）。 */
+    /** 反思挂到指定 attempt：只写引用，不改结局、不消耗重试。 */
     public void recordReflection(StepId stepId, int attemptNo, io.github.zcd0831.jellyfish.domain.shared.ReflectionId reflectionId) {
         PlanStep step = requireStep(stepId);
         for (Attempt attempt : step.attempts()) {
@@ -156,7 +155,7 @@ public class Plan {
         throw new DomainInvariantViolation("计划里没有该尝试：" + stepId.getValue() + "#" + attemptNo);
     }
 
-    /** 技能使用痕迹：只写引用，供计划完结时判定"要不要改进"（模块-记忆 §8.6）。 */
+    /** 技能使用痕迹：只写引用，供计划完结时判定"要不要改进"（07-memory §7.9.6）。 */
     public void recordSkillUsage(StepId stepId, int attemptNo, SkillId skillId) {
         PlanStep step = requireStep(stepId);
         for (Attempt attempt : step.attempts()) {
@@ -190,7 +189,7 @@ public class Plan {
 
     /**
      * 重划：只替换未执行的尾部，被替换者置 SUPERSEDED 并保留，代次 +1。
-     * 规则出处：§7.1 规则 5。
+     * 规则出处：06-planning §6.8.1 规则 5。
      */
     public void applyReplan(List<PlanStep> newTail) {
         requireExecuting();

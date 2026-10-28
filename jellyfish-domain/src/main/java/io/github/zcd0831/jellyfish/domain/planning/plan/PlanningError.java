@@ -2,7 +2,7 @@ package io.github.zcd0831.jellyfish.domain.planning.plan;
 
 import io.github.zcd0831.jellyfish.domain.shared.DomainError;
 
-/** 规划上下文错误码。规则出处：技术决策 D11 code 前缀表（P_）。 */
+/** 规划上下文错误码。。 */
 public enum PlanningError implements DomainError {
 
     INVALID_PLAN("P_INVALID_PLAN"),

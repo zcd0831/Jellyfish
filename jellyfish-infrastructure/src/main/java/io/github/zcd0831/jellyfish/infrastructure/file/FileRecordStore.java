@@ -17,7 +17,7 @@ import java.util.List;
 
 /**
  * 流水：一行一条 JSON，超过 32 MiB 滚动到下一个分段；区间基于 seq。
- * 规则出处：模块-基础设施层 §4、§5，技术决策 D05.1。
+ * 规则出处：09-infrastructure §9.5、§9.6。
  */
 public final class FileRecordStore implements RecordStore {
 
@@ -67,7 +67,7 @@ public final class FileRecordStore implements RecordStore {
         if (Files.isDirectory(direct)) {
             return direct;
         }
-        // 子会话：沿 sessions/*/sub/<id> 找（深度 ≤ 2，技术决策 D05.1）
+        // 子会话：沿 sessions/*/sub/<id> 找
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(root)) {
             for (Path session : stream) {
                 Path child = session.resolve("sub").resolve(sessionId.getValue());

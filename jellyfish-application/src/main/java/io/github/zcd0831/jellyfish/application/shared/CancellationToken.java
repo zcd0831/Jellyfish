@@ -2,7 +2,6 @@ package io.github.zcd0831.jellyfish.application.shared;
 
 /**
  * 取消信号：阻塞点（ask / 退避 / 循环边界）必须能被它打断。
- * 规则出处：技术决策 D05（取消必须能打断阻塞）、D10（退避可取消）、§8.4.1。
  */
 public interface CancellationToken {
 

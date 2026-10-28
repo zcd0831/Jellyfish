@@ -4,7 +4,7 @@ import java.util.List;
 
 /**
  * 阻塞式提问。必须标注来源，否则用户不知道在跟谁说话。
- * 规则出处：模块-应用层 §6（HumanInteractionPort）。
+ * 规则出处：08-application §8.7（HumanInteractionPort）。
  */
 public final class Question {
 

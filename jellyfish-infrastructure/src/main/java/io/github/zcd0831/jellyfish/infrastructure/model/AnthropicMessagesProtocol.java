@@ -20,7 +20,7 @@ import java.util.Map;
 /**
  * Anthropic Messages API 映射：`/v1/messages`，顶层 `system`、content blocks、
  * `tool_use` / `tool_result` 必须同轮配对、要求 user/assistant 交替。
- * 规则出处：模块-行动 §8.2 第 7 条、模块-基础设施层 §10。
+ * 规则出处：05-action §5.9.2 第 7 条、09-infrastructure §9.11。
  */
 public final class AnthropicMessagesProtocol implements ChatProtocolAdapter {
 

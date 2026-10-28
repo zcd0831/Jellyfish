@@ -7,7 +7,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-/** 规则出处：模块-行动 §3.2、§7.3。 */
+/** 规则出处：05-action §5.4.2、§5.8.3。 */
 public class Model {
 
     private final ModelId id;
@@ -29,12 +29,12 @@ public class Model {
                 capabilities == null ? Collections.<ModelCapability>emptyList() : capabilities));
     }
 
-    /** 规则出处：模块-行动 §7.3 规则 ①（只有 ACTIVE 可调用）。 */
+    /** 规则出处：05-action §5.8.3 规则 1（只有 ACTIVE 可调用）。 */
     public boolean isCallable() {
         return status == ModelStatus.ACTIVE;
     }
 
-    /** 规则出处：模块-行动 §3.2（能力标签的唯一消费者是选模型的 LLM）。 */
+    /** 规则出处：05-action §5.4.2（能力标签的唯一消费者是选模型的 LLM）。 */
     public boolean hasCapability(ModelCapability capability) {
         return capabilities.contains(capability);
     }

@@ -13,7 +13,7 @@ import java.util.UUID;
 /**
  * 一次失败的反思结论：不可变，归属唯一 `(planId, stepId, attemptNo)`。
  * 双消费者：回注下一次 attempt 的失败原因 + 经验沉淀素材。
- * 规则出处：模块-记忆 §3.2、§7.2。
+ * 规则出处：07-memory §7.4.2、§7.8.2。
  */
 public final class Reflection {
 

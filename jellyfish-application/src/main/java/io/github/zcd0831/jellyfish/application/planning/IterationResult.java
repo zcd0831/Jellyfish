@@ -7,10 +7,9 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * 内循环一次迭代的输出。规则出处：模块-规划 §5（IterationResult）。
- *
+ * 内循环一次迭代的输出。规则出处：06-planning §6.6（IterationResult）。
  * <p>`usedSkillIds` 是"本次真的 load 了哪些技能"的唯一出口：内循环拿不到 Plan，
- * 由外循环把它写进 attempt（模块-记忆 §8.6 的改进判定靠它）。
+ * 由外循环把它写进 attempt（07-memory §7.9.6 的改进判定靠它）。
  */
 public final class IterationResult {
 

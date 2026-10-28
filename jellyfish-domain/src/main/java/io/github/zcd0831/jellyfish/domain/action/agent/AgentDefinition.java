@@ -8,7 +8,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-/** 代理身份与能力边界。规则出处：模块-行动 §3.3、§7.4。 */
+/** 代理身份与能力边界。规则出处：05-action §5.4.3、§5.8.4。 */
 public class AgentDefinition {
 
     private final AgentId id;
@@ -35,7 +35,7 @@ public class AgentDefinition {
         }
     }
 
-    /** 规则出处：模块-行动 §7.4 规则 ①（内置代理 prompt 不可编辑）。 */
+    /** 规则出处：05-action §5.8.4 规则 1（内置代理 prompt 不可编辑）。 */
     public void updatePrompt(PromptTemplate prompt) {
         if (source == AgentSource.BUILT_IN) {
             throw new io.github.zcd0831.jellyfish.domain.shared.DomainInvariantViolation(

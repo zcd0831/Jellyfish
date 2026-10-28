@@ -6,7 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** 只有两个启动参数（D12）：数据目录与日志级别。 */
+/** 只有两个启动参数：数据目录与日志级别。 */
 class BootOptionsTest {
 
     @Test

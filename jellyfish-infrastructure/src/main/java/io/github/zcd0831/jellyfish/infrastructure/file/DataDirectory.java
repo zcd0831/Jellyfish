@@ -5,7 +5,7 @@ import java.nio.file.Paths;
 
 /**
  * 数据目录布局；路径解析完全属于基础设施层。
- * 规则出处：模块-基础设施层 §4、技术决策 D05.1。
+ * 规则出处：09-infrastructure §9.5。
  */
 public final class DataDirectory {
 

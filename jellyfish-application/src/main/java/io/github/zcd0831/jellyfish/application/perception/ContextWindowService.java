@@ -85,7 +85,7 @@ public final class ContextWindowService {
     /**
      * 请求用量 / 模型输入上限：界面常驻展示用。
      * 数值取 Budget 里"最近一次请求"的观测（厂商精确值，估算加 ≈）；没有就显示 —（新会话、刚折叠）。
-     * 折叠判定仍用请求前的估算（window），两者不混用。规则出处：模块-应用层 §6。
+     * 折叠判定仍用请求前的估算（window），两者不混用。规则出处：08-application §8.7。
      */
     private void announceContextUsage(Session session) {
         progress.emit(ProgressEvent.of(ProgressEvent.Kind.CONTEXT_USAGE, contextLabel(session)));

@@ -10,7 +10,7 @@ import java.util.List;
 
 /**
  * 外循环对某次 attempt 的判定结论：只追加、不可变、只留失败层与原因。
- * 规则出处：模块-规划 §3.2、§7.2。
+ * 规则出处：06-planning §6.4.2、§6.8.2。
  */
 public final class VerificationReport {
 

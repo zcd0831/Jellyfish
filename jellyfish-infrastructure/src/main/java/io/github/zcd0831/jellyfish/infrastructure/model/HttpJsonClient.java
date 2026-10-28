@@ -14,8 +14,7 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 /**
- * OkHttp 承载的 HTTP：超时按 D10.1，取消按 D05-4（`Call.cancel()` 让阻塞读立刻失败）。
- * 规则出处：技术决策 D16-5、D10.1、M14。
+ * OkHttp 承载的 HTTP：超时与取消的口径见 05-action §5.9.3；取消靠 `Call.cancel()` 让阻塞读立刻失败。
  */
 public final class HttpJsonClient implements ChatTransport {
 
@@ -57,7 +56,7 @@ public final class HttpJsonClient implements ChatTransport {
     @Override
     public void postStreaming(String url, Map<String, String> headers, String body, LineSink sink) {
         cancelled = false;
-        // 流式把读超时当"空闲超时"：每收到一行都会重置，长回答不会被总时长误杀（D10.1）
+        // 流式把读超时当"空闲超时"：每收到一行都会重置，长回答不会被总时长误杀
         OkHttpClient streaming = client.newBuilder()
                 .readTimeout(STREAM_IDLE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
                 .build();

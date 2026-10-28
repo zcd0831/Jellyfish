@@ -6,7 +6,6 @@ import java.util.function.Function;
 
 /**
  * 用例的返回：预期内的失败是值，不是异常。
- * 规则出处：技术决策 D11（边界 Result + 内部异常）。
  */
 public final class Result<T> {
 

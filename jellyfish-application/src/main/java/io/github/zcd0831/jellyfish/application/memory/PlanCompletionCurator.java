@@ -63,16 +63,16 @@ public final class PlanCompletionCurator {
         List<SkillId> used = usedSkillIds(input);
         String answer = ask(session, agent, material(session, input, used));
         DistillationOutcome outcome = used.isEmpty() ? parseNewKnowledge(answer) : parseRevisions(answer, used);
-        dispatch(session, outcome);
+        dispatch(session, input, outcome);
         return outcome;
     }
 
-    private void dispatch(Session session, DistillationOutcome outcome) {
+    private void dispatch(Session session, DistillationInput input, DistillationOutcome outcome) {
         if (outcome.experience() != null) {
-            experienceDistillation.apply(outcome.experience(), session.id());
+            experienceDistillation.apply(outcome.experience(), session.id(), input.planId());
         }
         for (SkillDraft draft : outcome.skills()) {
-            skillDistillation.apply(draft, session.id());
+            skillDistillation.apply(draft, session.id(), input.planId());
         }
     }
 

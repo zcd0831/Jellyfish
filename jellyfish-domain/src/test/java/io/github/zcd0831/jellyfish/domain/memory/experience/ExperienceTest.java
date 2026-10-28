@@ -17,7 +17,7 @@ class ExperienceTest {
 
     private static Experience experience() {
         LessonLearned lesson = new LessonLearned("先读文件再改", "改动前确认原文");
-        return Experience.create(ExperienceId.of("e1"), "需要修改代码时", lesson, 0.5, 100L);
+        return Experience.create(ExperienceId.of("e1"), "需要修改代码时", lesson, 0.5, 100L, null);
     }
 
     @Test
@@ -65,7 +65,7 @@ class ExperienceTest {
     void 合并时累加使用次数并提置信度() {
         Experience mine = experience();
         Experience other = Experience.create(ExperienceId.of("e2"), "同类场景",
-                new LessonLearned("更清晰的表述", "期望"), 0.6, 200L);
+                new LessonLearned("更清晰的表述", "期望"), 0.6, 200L, null);
         other.reinforce(0.1);
 
         mine.mergeWith(other, 0.1);

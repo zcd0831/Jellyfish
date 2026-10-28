@@ -2,6 +2,7 @@ package io.github.zcd0831.jellyfish.domain.memory.experience;
 
 import io.github.zcd0831.jellyfish.domain.shared.DomainEvent;
 import io.github.zcd0831.jellyfish.domain.shared.ExperienceId;
+import io.github.zcd0831.jellyfish.domain.shared.PlanId;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -22,9 +23,12 @@ public class Experience {
     private ConfidenceScore confidence;
     private ExperienceStatus status;
     private int appliedCount;
+    /** 写入侧幂等键：这条经验由哪些计划沉淀而来，合并时累加（07-memory §7.8.1 规则 12）。 */
+    private final List<PlanId> sourcePlanIds;
 
     public Experience(ExperienceId id, String applicableScenario, LessonLearned lesson,
-                      ConfidenceScore confidence, ExperienceStatus status, int appliedCount, long createdAt) {
+                      ConfidenceScore confidence, ExperienceStatus status, int appliedCount, long createdAt,
+                      List<PlanId> sourcePlanIds) {
         this.id = id;
         this.applicableScenario = applicableScenario;
         this.lesson = lesson;
@@ -32,13 +36,16 @@ public class Experience {
         this.status = status;
         this.appliedCount = appliedCount;
         this.createdAt = createdAt;
+        this.sourcePlanIds = new ArrayList<PlanId>(
+                sourcePlanIds == null ? java.util.Collections.<PlanId>emptyList() : sourcePlanIds);
     }
 
     /** 规则出处：§7.1 规则 ⑤（初值由策略给定）。 */
     public static Experience create(ExperienceId id, String scenario, LessonLearned lesson,
-                                    double initialConfidence, long now) {
+                                    double initialConfidence, long now, PlanId sourcePlanId) {
         Experience experience = new Experience(id, scenario, lesson,
-                new ConfidenceScore(initialConfidence), ExperienceStatus.ACTIVE, 0, now);
+                new ConfidenceScore(initialConfidence), ExperienceStatus.ACTIVE, 0, now,
+                sourcePlanId == null ? null : java.util.Collections.singletonList(sourcePlanId));
         experience.pendingEvents.add(new ExperienceCreated());
         return experience;
     }
@@ -65,6 +72,11 @@ public class Experience {
             this.lesson = other.lesson;
         }
         this.appliedCount += other.appliedCount;
+        for (PlanId planId : other.sourcePlanIds) {
+            if (!this.sourcePlanIds.contains(planId)) {
+                this.sourcePlanIds.add(planId);
+            }
+        }
         // 合并只提置信度，不再额外计一次"被应用"——使用次数来自两条经验的实际累加
         this.confidence = new ConfidenceScore(Math.min(1.0, confidence.getValue() + step));
         pendingEvents.add(new ExperienceReinforced());
@@ -73,6 +85,15 @@ public class Experience {
     /** ARCHIVED 后不再参与检索，但保留供审计（§7.1）。 */
     public void archive() {
         this.status = ExperienceStatus.ARCHIVED;
+    }
+
+    /** 幂等：同一个计划重复沉淀时整段跳过（07-memory §7.8.1 规则 12）。 */
+    public boolean sourcedFrom(PlanId planId) {
+        return planId != null && sourcePlanIds.contains(planId);
+    }
+
+    public List<PlanId> sourcePlanIds() {
+        return java.util.Collections.unmodifiableList(sourcePlanIds);
     }
 
     public boolean isActive() {

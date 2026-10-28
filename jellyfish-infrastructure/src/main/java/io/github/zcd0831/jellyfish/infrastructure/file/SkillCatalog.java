@@ -45,15 +45,33 @@ final class SkillCatalog {
         text.append("triggerCondition: ").append(skill.triggerCondition()).append('\n');
         text.append("status: ").append(skill.status().name().toLowerCase()).append('\n');
         text.append("mutable: ").append(skill.isMutable()).append('\n');
+        text.append("sourcePlanIds: ").append(joinPlanIds(skill)).append('\n');
         text.append("---\n");
         text.append(skill.sopTemplate().getRawMarkdown());
         AtomicFiles.write(dataDirectory.skills().resolve(skill.id().getValue()).resolve("SKILL.md"), text.toString());
     }
 
     private static SkillDefinition toDomain(String id, FrontMatter frontMatter) {
+        java.util.List<io.github.zcd0831.jellyfish.domain.shared.PlanId> plans =
+                new java.util.ArrayList<io.github.zcd0831.jellyfish.domain.shared.PlanId>();
+        for (String planId : frontMatter.list("sourcePlanIds")) {
+            plans.add(io.github.zcd0831.jellyfish.domain.shared.PlanId.of(planId));
+        }
         return new SkillDefinition(SkillId.of(id), frontMatter.get("name"), frontMatter.get("description"),
                 frontMatter.get("triggerCondition"), new InstructionTemplate(frontMatter.body().trim()),
-                status(frontMatter.get("status")), mutable(frontMatter.get("mutable")));
+                status(frontMatter.get("status")), mutable(frontMatter.get("mutable")), plans);
+    }
+
+    /** 人写技能可以为空；机学的每次沉淀追加一个计划号。 */
+    private static String joinPlanIds(SkillDefinition skill) {
+        StringBuilder out = new StringBuilder();
+        for (io.github.zcd0831.jellyfish.domain.shared.PlanId planId : skill.sourcePlanIds()) {
+            if (out.length() > 0) {
+                out.append(", ");
+            }
+            out.append(planId.getValue());
+        }
+        return out.toString();
     }
 
     private static SkillStatus status(String raw) {

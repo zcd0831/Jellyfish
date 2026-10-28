@@ -2,6 +2,7 @@ package io.github.zcd0831.jellyfish.domain.memory.skill;
 
 import io.github.zcd0831.jellyfish.domain.shared.DomainEvent;
 import io.github.zcd0831.jellyfish.domain.shared.DomainInvariantViolation;
+import io.github.zcd0831.jellyfish.domain.shared.PlanId;
 import io.github.zcd0831.jellyfish.domain.shared.SkillId;
 
 import java.util.ArrayList;
@@ -22,9 +23,12 @@ public class SkillDefinition {
     private InstructionTemplate sopTemplate;
     private SkillStatus status;
     private boolean mutable;
+    /** 写入侧幂等键：这份正文由哪些计划改写而来（09-infrastructure §9.5 的 front-matter 字段）。 */
+    private final List<PlanId> sourcePlanIds;
 
     public SkillDefinition(SkillId id, String name, String description, String triggerCondition,
-                           InstructionTemplate sopTemplate, SkillStatus status, boolean mutable) {
+                           InstructionTemplate sopTemplate, SkillStatus status, boolean mutable,
+                           List<PlanId> sourcePlanIds) {
         this.id = id;
         this.name = name;
         this.description = description;
@@ -32,13 +36,16 @@ public class SkillDefinition {
         this.sopTemplate = sopTemplate;
         this.status = status;
         this.mutable = mutable;
+        this.sourcePlanIds = new ArrayList<PlanId>(
+                sourcePlanIds == null ? java.util.Collections.<PlanId>emptyList() : sourcePlanIds);
     }
 
     /** 机学沉淀：写出即 ACTIVE、即可用（§7.3 规则 ④）。 */
     public static SkillDefinition create(SkillId id, String name, String description, String triggerCondition,
-                                         String rawMarkdown) {
+                                         String rawMarkdown, PlanId sourcePlanId) {
         SkillDefinition skill = new SkillDefinition(id, name, description, triggerCondition,
-                new InstructionTemplate(rawMarkdown), SkillStatus.ACTIVE, true);
+                new InstructionTemplate(rawMarkdown), SkillStatus.ACTIVE, true,
+                sourcePlanId == null ? null : java.util.Collections.singletonList(sourcePlanId));
         skill.requireComplete();
         skill.pendingEvents.add(new SkillLearned());
         return skill;
@@ -48,7 +55,8 @@ public class SkillDefinition {
      * 改进：整篇覆盖，不留版本链（07-memory §7.8.3 规则 5）。
      * 不可变技能必须在这里挡住——可变性由聚合守护，不能靠调用方自觉（07-memory §7.8.3 规则 3）。
      */
-    public void revise(String name, String description, String triggerCondition, String rawMarkdown) {
+    public void revise(String name, String description, String triggerCondition, String rawMarkdown,
+                       PlanId sourcePlanId) {
         if (!mutable) {
             throw new DomainInvariantViolation("技能声明为不可变，系统无权改写：" + id.getValue());
         }
@@ -56,11 +64,23 @@ public class SkillDefinition {
         this.description = description;
         this.triggerCondition = triggerCondition;
         this.sopTemplate = new InstructionTemplate(rawMarkdown);
+        if (sourcePlanId != null && !sourcePlanIds.contains(sourcePlanId)) {
+            sourcePlanIds.add(sourcePlanId);
+        }
         requireComplete();
         pendingEvents.add(new SkillRevised());
     }
 
     /** 只有 ACTIVE 进入会话快照（§7.3 规则 ⑧）。 */
+    /** 幂等：同一个计划已经改写过就不重复改写（07-memory §7.8.1 规则 12）。 */
+    public boolean sourcedFrom(PlanId planId) {
+        return planId != null && sourcePlanIds.contains(planId);
+    }
+
+    public List<PlanId> sourcePlanIds() {
+        return java.util.Collections.unmodifiableList(sourcePlanIds);
+    }
+
     public boolean isActive() {
         return status == SkillStatus.ACTIVE;
     }

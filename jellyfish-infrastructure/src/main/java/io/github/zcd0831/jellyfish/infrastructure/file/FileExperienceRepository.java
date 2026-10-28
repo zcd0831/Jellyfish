@@ -132,6 +132,7 @@ public final class FileExperienceRepository implements ExperienceRepository {
         public String status;
         public int appliedCount;
         public long createdAt;
+        public java.util.List<String> sourcePlanIds = new java.util.ArrayList<String>();
 
         static ExperienceDto from(Experience experience) {
             ExperienceDto dto = new ExperienceDto();
@@ -143,13 +144,21 @@ public final class FileExperienceRepository implements ExperienceRepository {
             dto.status = experience.status().name();
             dto.appliedCount = experience.appliedCount();
             dto.createdAt = experience.createdAt();
+            for (io.github.zcd0831.jellyfish.domain.shared.PlanId planId : experience.sourcePlanIds()) {
+                dto.sourcePlanIds.add(planId.getValue());
+            }
             return dto;
         }
 
         Experience toDomain() {
+            java.util.List<io.github.zcd0831.jellyfish.domain.shared.PlanId> plans =
+                    new java.util.ArrayList<io.github.zcd0831.jellyfish.domain.shared.PlanId>();
+            for (String planId : sourcePlanIds) {
+                plans.add(io.github.zcd0831.jellyfish.domain.shared.PlanId.of(planId));
+            }
             return new Experience(ExperienceId.of(id), applicableScenario,
                     new LessonLearned(instruction, expectedOutcome), new ConfidenceScore(confidence),
-                    ExperienceStatus.valueOf(status), appliedCount, createdAt);
+                    ExperienceStatus.valueOf(status), appliedCount, createdAt, plans);
         }
     }
 }

@@ -40,20 +40,20 @@ public final class SkillDistillationService {
         this.progress = progress;
     }
 
-    public void apply(final SkillDraft draft, SessionId sessionId) {
-        if (draft == null || !draft.isComplete()) {
+    public void apply(final SkillDraft draft, SessionId sessionId, final io.github.zcd0831.jellyfish.domain.shared.PlanId planId) {
+        if (draft == null || !draft.isComplete() || alreadySourced(planId)) {
             return;   // 四件套不全：本次沉淀失败，不发事件、不占额度
         }
         // 容量"读—判—写"必须在全局写段内完成（07-memory §7.9.5）
         commitScope.globalWrite(new Runnable() {
             @Override
             public void run() {
-                applyLocked(draft);
+                applyLocked(draft, planId);
             }
         });
     }
 
-    private void applyLocked(SkillDraft draft) {
+    private void applyLocked(SkillDraft draft, io.github.zcd0831.jellyfish.domain.shared.PlanId planId) {
         SkillDefinition target = draft.isMerge() ? find(draft.targetSkillId()) : null;
         if (draft.isMerge() && target == null) {
             return;   // target 不存在/非法：子代理幻觉，整次作废，不奖励新建
@@ -62,7 +62,7 @@ public final class SkillDistillationService {
             target = null;   // 不可改或已下线：降级 CREATE（正常冲突，人写技能不许改）
         }
         if (target != null) {
-            target.revise(draft.name(), draft.description(), draft.triggerCondition(), draft.sopBody());
+            target.revise(draft.name(), draft.description(), draft.triggerCondition(), draft.sopBody(), planId);
             save(target);
             return;
         }
@@ -73,7 +73,20 @@ public final class SkillDistillationService {
             return;
         }
         save(SkillDefinition.create(newSkillId(draft), draft.name(), draft.description(),
-                draft.triggerCondition(), draft.sopBody()));
+                draft.triggerCondition(), draft.sopBody(), planId));
+    }
+
+    /** 幂等：同一个计划已经改写过技能就整段跳过（07-memory §7.8.1 规则 12）。 */
+    private boolean alreadySourced(io.github.zcd0831.jellyfish.domain.shared.PlanId planId) {
+        if (planId == null) {
+            return false;
+        }
+        for (SkillDefinition skill : catalog.skills()) {
+            if (skill.sourcedFrom(planId)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private SkillDefinition find(SkillId skillId) {

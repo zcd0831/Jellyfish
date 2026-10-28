@@ -58,9 +58,9 @@ class FileMemoryRepositoriesTest {
     void 经验仓储支持按id取与淘汰候选排序() {
         FileExperienceRepository experiences = new FileExperienceRepository(dir, codec);
         experiences.save(Experience.create(ExperienceId.of("e1"), "场景1",
-                new LessonLearned("教训1", "期望"), 0.5, 100L));
+                new LessonLearned("教训1", "期望"), 0.5, 100L, null));
         experiences.save(Experience.create(ExperienceId.of("e2"), "场景2",
-                new LessonLearned("教训2", "期望"), 0.5, 50L));
+                new LessonLearned("教训2", "期望"), 0.5, 50L, null));
 
         assertTrue(experiences.find(ExperienceId.of("e1")).isPresent());
         assertFalse(experiences.find(ExperienceId.of("nope")).isPresent());

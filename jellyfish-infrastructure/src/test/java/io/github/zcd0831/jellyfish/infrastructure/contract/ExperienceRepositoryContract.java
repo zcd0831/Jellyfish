@@ -18,7 +18,7 @@ public abstract class ExperienceRepositoryContract {
 
     private static Experience experience(String id, double confidence, long createdAt) {
         return Experience.create(ExperienceId.of(id), "场景" + id,
-                new LessonLearned("教训" + id, "期望"), confidence, createdAt);
+                new LessonLearned("教训" + id, "期望"), confidence, createdAt, null);
     }
 
     @Test

@@ -142,7 +142,7 @@ class S4LoopTest {
     @Test
     void 计划诞生分配经验且步骤成功后只奖励被建议的() {
         experiences.save(Experience.create(ExperienceId.of("e1"), "需要多步任务时",
-                new LessonLearned("先拆步骤再执行", "不遗漏子任务"), 0.5, 100L));
+                new LessonLearned("先拆步骤再执行", "不遗漏子任务"), 0.5, 100L, null));
         model.seed(text("标题"));
         SessionId sessionId = startSession.start(null, null, "做两件事").value();
         model.seed(toolCall("c1", "generate_plan",
@@ -183,7 +183,7 @@ class S4LoopTest {
     @Test
     void 同一步的第二次attempt不重复注入() {
         experiences.save(Experience.create(ExperienceId.of("e1"), "需要多步任务时",
-                new LessonLearned("先拆步骤再执行", "不遗漏子任务"), 0.5, 100L));
+                new LessonLearned("先拆步骤再执行", "不遗漏子任务"), 0.5, 100L, null));
         model.seed(text("标题"));
         SessionId sessionId = startSession.start(null, null, "做两件事").value();
         model.seed(toolCall("c1", "generate_plan",

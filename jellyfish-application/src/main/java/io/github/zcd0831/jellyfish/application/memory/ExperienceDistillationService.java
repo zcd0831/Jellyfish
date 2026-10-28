@@ -11,6 +11,7 @@ import io.github.zcd0831.jellyfish.domain.memory.experience.LessonLearned;
 import io.github.zcd0831.jellyfish.domain.perception.policy.RuntimePolicy;
 import io.github.zcd0831.jellyfish.domain.shared.DomainEvent;
 import io.github.zcd0831.jellyfish.domain.shared.ExperienceId;
+import io.github.zcd0831.jellyfish.domain.shared.PlanId;
 import io.github.zcd0831.jellyfish.domain.shared.SessionId;
 
 import java.util.ArrayList;
@@ -39,21 +40,21 @@ public final class ExperienceDistillationService {
         this.progress = progress;
     }
 
-    public void apply(ExperienceDraft draft, SessionId sessionId) {
-        if (draft == null) {
+    public void apply(ExperienceDraft draft, SessionId sessionId, PlanId planId) {
+        if (draft == null || alreadySourced(planId)) {
             return;
         }
         RuntimePolicy policy = policies.load();
         Experience duplicate = findDuplicate(draft);
         if (duplicate != null) {
-            duplicate.mergeWith(mergeSource(duplicate, draft), policy.experienceConfidenceStep());
+            duplicate.mergeWith(mergeSource(duplicate, draft, planId), policy.experienceConfidenceStep());
             commit(duplicate);
             return;
         }
         evictIfFull(policy);
         commit(Experience.create(ExperienceId.of(UUID.randomUUID().toString()), draft.applicableScenario(),
                 new LessonLearned(draft.instruction(), draft.expectedOutcome()),
-                policy.experienceInitialConfidence(), System.currentTimeMillis()));
+                policy.experienceInitialConfidence(), System.currentTimeMillis(), planId));
     }
 
     /** 容量满了先淘汰"最早且最少被使用"的那条：排序在应用层做，端口只提供数据（§7.1 规则 ⑥）。 */
@@ -85,11 +86,25 @@ public final class ExperienceDistillationService {
         return null;
     }
 
-    /** 合并来源：只承载候选教训，使用次数为 0，也不 raise 新建事件。 */
-    private static Experience mergeSource(Experience duplicate, ExperienceDraft draft) {
+    /** 合并来源：只承载候选教训与来源计划，使用次数为 0，也不 raise 新建事件。 */
+    private static Experience mergeSource(Experience duplicate, ExperienceDraft draft, PlanId planId) {
         return new Experience(duplicate.id(), draft.applicableScenario(),
                 new LessonLearned(draft.instruction(), draft.expectedOutcome()),
-                duplicate.confidence(), duplicate.status(), 0, duplicate.createdAt());
+                duplicate.confidence(), duplicate.status(), 0, duplicate.createdAt(),
+                planId == null ? null : java.util.Collections.singletonList(planId));
+    }
+
+    /** 幂等：同一个计划已经沉淀过就整段跳过（07-memory §7.8.1 规则 12）。 */
+    private boolean alreadySourced(PlanId planId) {
+        if (planId == null) {
+            return false;
+        }
+        for (Experience experience : experiences.findActive()) {
+            if (experience.sourcedFrom(planId)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void commit(Experience experience) {

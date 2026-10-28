@@ -103,7 +103,7 @@ class S4MemoryTest {
 
     private Experience saved(String id, double confidence) {
         Experience experience = Experience.create(ExperienceId.of(id), "场景" + id,
-                new LessonLearned("教训" + id, "期望"), confidence, 100L);
+                new LessonLearned("教训" + id, "期望"), confidence, 100L, null);
         experiences.save(experience);
         return experience;
     }

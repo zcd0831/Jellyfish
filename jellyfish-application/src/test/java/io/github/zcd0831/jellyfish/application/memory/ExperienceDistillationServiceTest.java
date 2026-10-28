@@ -40,7 +40,7 @@ class ExperienceDistillationServiceTest {
         when(experiences.findActive()).thenReturn(Collections.singletonList(existing));
 
         service(RuntimePolicy.defaults()).apply(
-                new ExperienceDraft("改代码时", "先读再改", "不返工"), SessionId.of("s1"));
+                new ExperienceDraft("改代码时", "先读再改", "不返工"), SessionId.of("s1"), null);
 
         assertTrue(existing.confidence().getValue() > 0.5, "合并应提置信度");
     }
@@ -53,7 +53,7 @@ class ExperienceDistillationServiceTest {
         when(experiences.findActive()).thenReturn(Collections.singletonList(old));
         when(experiences.count()).thenReturn(1);
 
-        service(tiny).apply(new ExperienceDraft("新场景", "新教训", null), SessionId.of("s1"));
+        service(tiny).apply(new ExperienceDraft("新场景", "新教训", null), SessionId.of("s1"), null);
 
         assertEquals(ExperienceStatus.ARCHIVED, old.status(), "容量满时淘汰最早的经验");
     }
@@ -63,13 +63,29 @@ class ExperienceDistillationServiceTest {
         when(experiences.findActive()).thenReturn(Collections.<Experience>emptyList());
         when(experiences.count()).thenReturn(0);
 
-        service(RuntimePolicy.defaults()).apply(new ExperienceDraft("新场景", "新教训", null), SessionId.of("s1"));
+        service(RuntimePolicy.defaults()).apply(new ExperienceDraft("新场景", "新教训", null), SessionId.of("s1"), null);
 
         org.mockito.Mockito.verify(commitScope).stageReplace(any(Experience.class));
     }
 
     private static Experience experience(String id, String scenario, double confidence) {
         return new Experience(ExperienceId.of(id), scenario, new LessonLearned("旧", "旧"),
-                new ConfidenceScore(confidence), ExperienceStatus.ACTIVE, 0, 1L);
+                new ConfidenceScore(confidence), ExperienceStatus.ACTIVE, 0, 1L, null);
+    }
+
+    @Test
+    void 同一个计划重复沉淀直接跳过() {
+        io.github.zcd0831.jellyfish.domain.shared.PlanId planId =
+                io.github.zcd0831.jellyfish.domain.shared.PlanId.of("p1");
+        Experience existing = new Experience(ExperienceId.of("e1"), "改代码时",
+                new LessonLearned("先读再改", "不返工"), new ConfidenceScore(0.5),
+                ExperienceStatus.ACTIVE, 0, 1L, Collections.singletonList(planId));
+        when(experiences.findActive()).thenReturn(Collections.singletonList(existing));
+
+        service(RuntimePolicy.defaults()).apply(
+                new ExperienceDraft("改代码时", "先读再改", "不返工"), SessionId.of("s1"), planId);
+
+        assertEquals(0.5, existing.confidence().getValue(), "幂等：置信度不该再提一次");
+        assertEquals(1, existing.sourcePlanIds().size());
     }
 }

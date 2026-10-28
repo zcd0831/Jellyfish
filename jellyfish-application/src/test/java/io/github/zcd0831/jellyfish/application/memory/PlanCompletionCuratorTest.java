@@ -110,8 +110,8 @@ class PlanCompletionCuratorTest {
 
         verify(model, times(1)).invoke(any(ModelInvocationRequest.class));
         assertEquals("改代码时", outcome.experience().applicableScenario());
-        verify(experienceWriter).apply(any(ExperienceDraft.class), any(SessionId.class));
-        verify(skillWriter, never()).apply(any(SkillDraft.class), any(SessionId.class));
+        verify(experienceWriter).apply(any(ExperienceDraft.class), any(SessionId.class), any());
+        verify(skillWriter, never()).apply(any(SkillDraft.class), any(SessionId.class), any());
     }
 
     @Test
@@ -126,8 +126,8 @@ class PlanCompletionCuratorTest {
 
         assertEquals(1, outcome.skills().size());
         assertEquals(SkillDraft.Action.CREATE, outcome.skills().get(0).action());
-        verify(skillWriter).apply(any(SkillDraft.class), any(SessionId.class));
-        verify(experienceWriter, never()).apply(any(ExperienceDraft.class), any(SessionId.class));
+        verify(skillWriter).apply(any(SkillDraft.class), any(SessionId.class), any());
+        verify(experienceWriter, never()).apply(any(ExperienceDraft.class), any(SessionId.class), any());
     }
 
     @Test
@@ -142,8 +142,8 @@ class PlanCompletionCuratorTest {
         DistillationOutcome outcome = curator().curate(session, input(traceWithoutSkill()));
 
         assertTrue(outcome.isEmpty());
-        verify(experienceWriter, never()).apply(any(ExperienceDraft.class), any(SessionId.class));
-        verify(skillWriter, never()).apply(any(SkillDraft.class), any(SessionId.class));
+        verify(experienceWriter, never()).apply(any(ExperienceDraft.class), any(SessionId.class), any());
+        verify(skillWriter, never()).apply(any(SkillDraft.class), any(SessionId.class), any());
     }
 
     @Test
@@ -158,7 +158,7 @@ class PlanCompletionCuratorTest {
 
         assertEquals(1, outcome.skills().size());
         assertEquals(SkillId.of("learned.a"), outcome.skills().get(0).targetSkillId());
-        verify(experienceWriter, never()).apply(any(ExperienceDraft.class), any(SessionId.class));
+        verify(experienceWriter, never()).apply(any(ExperienceDraft.class), any(SessionId.class), any());
     }
 
     @Test
@@ -234,11 +234,11 @@ class PlanCompletionCuratorTest {
         DistillationOutcome outcome = curator().curate(session, input(traceWithoutSkill()));
 
         assertTrue(outcome.isEmpty());
-        verify(experienceWriter, never()).apply(any(ExperienceDraft.class), any(SessionId.class));
+        verify(experienceWriter, never()).apply(any(ExperienceDraft.class), any(SessionId.class), any());
     }
 
     private static SkillDefinition skill(String id, boolean mutable) {
         return new SkillDefinition(SkillId.of(id), "名", "述", "触发", new InstructionTemplate("正文"),
-                SkillStatus.ACTIVE, mutable);
+                SkillStatus.ACTIVE, mutable, null);
     }
 }

@@ -52,14 +52,14 @@ class SkillDistillationServiceTest {
     @Test
     void 四件套不全时不写入() {
         service(RuntimePolicy.defaults()).apply(new SkillDraft(SkillDraft.Action.CREATE, null, "名",
-                null, "触发", "正文"), SessionId.of("s1"));
+                null, "触发", "正文"), SessionId.of("s1"), null);
 
         assertEquals(0, catalog.saved.size());
     }
 
     @Test
     void 新建时id带learned前缀() {
-        service(RuntimePolicy.defaults()).apply(create("依赖升级"), SessionId.of("s1"));
+        service(RuntimePolicy.defaults()).apply(create("依赖升级"), SessionId.of("s1"), null);
 
         assertEquals(1, catalog.saved.size());
         assertTrue(catalog.saved.get(0).id().getValue().startsWith("learned."));
@@ -72,7 +72,7 @@ class SkillDistillationServiceTest {
                 .adjust(Collections.<String, Object>singletonMap("skillCapacity", 1));
         catalog.existing.add(skill("learned.x", true));
 
-        service(tiny).apply(create("新技能"), SessionId.of("s1"));
+        service(tiny).apply(create("新技能"), SessionId.of("s1"), null);
 
         assertEquals(0, catalog.saved.size());
         verify(progress).emit(any());
@@ -82,7 +82,7 @@ class SkillDistillationServiceTest {
     void MERGE到不可变技能时降级新建() {
         catalog.existing.add(skill("builtin.locked", false));
 
-        service(RuntimePolicy.defaults()).apply(merge("builtin.locked", "新正文"), SessionId.of("s1"));
+        service(RuntimePolicy.defaults()).apply(merge("builtin.locked", "新正文"), SessionId.of("s1"), null);
 
         assertEquals(1, catalog.saved.size(), "不可变技能不许改，改走新建");
         assertFalse(SkillId.of("builtin.locked").equals(catalog.saved.get(0).id()));
@@ -90,7 +90,7 @@ class SkillDistillationServiceTest {
 
     @Test
     void MERGE目标不存在时整次作废() {
-        service(RuntimePolicy.defaults()).apply(merge("learned.ghost", "新正文"), SessionId.of("s1"));
+        service(RuntimePolicy.defaults()).apply(merge("learned.ghost", "新正文"), SessionId.of("s1"), null);
 
         assertEquals(0, catalog.saved.size(), "幻觉 id 不奖励新建");
     }
@@ -100,7 +100,7 @@ class SkillDistillationServiceTest {
         SkillDefinition existing = skill("learned.a", true);
         catalog.existing.add(existing);
 
-        service(RuntimePolicy.defaults()).apply(merge("learned.a", "新正文"), SessionId.of("s1"));
+        service(RuntimePolicy.defaults()).apply(merge("learned.a", "新正文"), SessionId.of("s1"), null);
 
         assertEquals(1, catalog.saved.size());
         assertEquals(SkillId.of("learned.a"), catalog.saved.get(0).id());
@@ -110,9 +110,9 @@ class SkillDistillationServiceTest {
 
     @Test
     void 新建与改进各发一个事件() {
-        service(RuntimePolicy.defaults()).apply(create("甲"), SessionId.of("s1"));
+        service(RuntimePolicy.defaults()).apply(create("甲"), SessionId.of("s1"), null);
         catalog.existing.add(skill("learned.b", true));
-        service(RuntimePolicy.defaults()).apply(merge("learned.b", "改"), SessionId.of("s1"));
+        service(RuntimePolicy.defaults()).apply(merge("learned.b", "改"), SessionId.of("s1"), null);
 
         verify(events, times(2)).publishAfterCommit(any());
     }
@@ -127,7 +127,7 @@ class SkillDistillationServiceTest {
 
     private static SkillDefinition skill(String id, boolean mutable) {
         return new SkillDefinition(SkillId.of(id), "名", "述", "触发", new InstructionTemplate("正文"),
-                SkillStatus.ACTIVE, mutable);
+                SkillStatus.ACTIVE, mutable, null);
     }
 
     /** 只实现技能部分：这是被测服务唯一用到的目录能力。 */
@@ -194,5 +194,19 @@ class SkillDistillationServiceTest {
         @Override
         public void saveModel(Model model) {
         }
+    }
+
+    @Test
+    void 同一个计划重复沉淀直接跳过() {
+        io.github.zcd0831.jellyfish.domain.shared.PlanId planId =
+                io.github.zcd0831.jellyfish.domain.shared.PlanId.of("p1");
+        SkillDefinition seeded = SkillDefinition.create(SkillId.of("learned.a"), "名", "述", "触发",
+                "旧正文", planId);
+        catalog.existing.add(seeded);
+
+        service(RuntimePolicy.defaults()).apply(merge("learned.a", "新正文"), SessionId.of("s1"), planId);
+
+        assertEquals("旧正文", seeded.sopTemplate().getRawMarkdown(), "幂等：正文不该被改写");
+        assertEquals(0, catalog.saved.size(), "幂等：不该再写一次");
     }
 }

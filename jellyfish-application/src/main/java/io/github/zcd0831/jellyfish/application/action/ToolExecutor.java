@@ -125,7 +125,8 @@ public final class ToolExecutor implements ToolInvoker {
         if (!tool.isActive()) {
             return ToolExecOutcome.plain("工具不可用（非 ACTIVE）：" + toolName);
         }
-        if (!isBoundToAgent(session, tool.id())) {
+        // 外循环显式授权（白名单）优先于“代理绑定”：重划这类内部工具不进代理的工具清单
+        if (!isBoundToAgent(session, tool.id()) && !scope.grants(session.id(), tool.id())) {
             return ToolExecOutcome.plain("该代理未绑定工具：" + toolName);
         }
         List<String> violations = tool.validateArgs(args);

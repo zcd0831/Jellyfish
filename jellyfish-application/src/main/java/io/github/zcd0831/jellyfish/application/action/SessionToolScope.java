@@ -33,6 +33,12 @@ public final class SessionToolScope {
         denials.remove(sessionId);
     }
 
+    /** 本会话是否被显式授权了这个工具（授权优先于“代理绑定”）。 */
+    public boolean grants(SessionId sessionId, ToolId toolId) {
+        Set<ToolId> scope = allowed.get(sessionId);
+        return scope != null && scope.contains(toolId);
+    }
+
     /** 没有声明就是“不限制”；一旦声明就 fail-closed。 */
     public boolean allows(SessionId sessionId, ToolId toolId) {
         Set<ToolId> scope = allowed.get(sessionId);

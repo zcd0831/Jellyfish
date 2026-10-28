@@ -286,4 +286,17 @@ class ToolExecutorTest {
         scope.recordDenial(session.id());
         assertTrue(scope.exceeded(session.id()), "连续越权到阈值就要结束会话");
     }
+
+    @Test
+    void 白名单显式授权的工具不受代理绑定限制() {
+        givenTool(tool("replan_plan", SideEffectLevel.READ_ONLY, SourceType.INTERNAL, ToolStatus.ACTIVE, "{}"));
+        when(catalog.agents()).thenReturn(Collections.<AgentDefinition>emptyList());
+        scope.restrict(session.id(), Collections.singleton(ToolId.of("replan_plan")));
+
+        String content = executor(InternalToolHandlers.empty()).execute(session, "replan_plan",
+                java.util.Collections.<String, Object>emptyMap(),
+                io.github.zcd0831.jellyfish.domain.shared.RecordId.of("r1")).content();
+
+        assertTrue(content.contains("尚未实现"), "过绑定这一关后才轮到处理器：" + content);
+    }
 }

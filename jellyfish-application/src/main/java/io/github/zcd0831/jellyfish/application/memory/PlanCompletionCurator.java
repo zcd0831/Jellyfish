@@ -6,7 +6,9 @@ import io.github.zcd0831.jellyfish.application.action.port.ChatMessage;
 import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationPort;
 import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationRequest;
 import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationResult;
+import io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner;
 import io.github.zcd0831.jellyfish.application.perception.port.PolicyRepository;
+import io.github.zcd0831.jellyfish.application.shared.port.CommitScope;
 import io.github.zcd0831.jellyfish.application.perception.port.RecordStore;
 import io.github.zcd0831.jellyfish.application.shared.Json;
 import io.github.zcd0831.jellyfish.domain.action.agent.AgentDefinition;
@@ -41,11 +43,14 @@ public final class PlanCompletionCurator {
     private final BudgetService budgetService;
     private final ExperienceDistillationService experienceDistillation;
     private final SkillDistillationService skillDistillation;
+    private final InternalSessionRunner forks;
+    private final CommitScope commitScope;
 
     public PlanCompletionCurator(RecordStore records, ModelInvocationPort model, CatalogRepository catalog,
                                  PolicyRepository policies, BudgetService budgetService,
                                  ExperienceDistillationService experienceDistillation,
-                                 SkillDistillationService skillDistillation) {
+                                 SkillDistillationService skillDistillation, InternalSessionRunner forks,
+                                 CommitScope commitScope) {
         this.records = records;
         this.model = model;
         this.catalog = catalog;
@@ -53,6 +58,8 @@ public final class PlanCompletionCurator {
         this.budgetService = budgetService;
         this.experienceDistillation = experienceDistillation;
         this.skillDistillation = skillDistillation;
+        this.forks = forks;
+        this.commitScope = commitScope;
     }
 
     public DistillationOutcome curate(Session session, DistillationInput input) {
@@ -60,11 +67,74 @@ public final class PlanCompletionCurator {
         if (agent == null) {
             return DistillationOutcome.empty();
         }
+        if (alreadyNotified(session, input)) {
+            return DistillationOutcome.empty();
+        }
         List<SkillId> used = usedSkillIds(input);
-        String answer = ask(session, agent, material(session, input, used));
+        String answer;
+        try {
+            answer = forks.run(session, instruction(agent, used));
+        } catch (RuntimeException unavailable) {
+            return DistillationOutcome.empty();   // 沉淀失败只是“这次没学到”，不影响会话继续
+        }
         DistillationOutcome outcome = used.isEmpty() ? parseNewKnowledge(answer) : parseRevisions(answer, used);
         dispatch(session, input, outcome);
+        notifyUser(session, input, outcome);
         return outcome;
+    }
+
+    /**
+     * 末尾指令：代理提示词 + 本次用到的技能 id（判改进要用）+ 输出形状。
+     * 轨迹与窗口都由 fork 带过去，这里不再拼素材（08-application §8.9.7）。
+     */
+    private String instruction(AgentDefinition agent, List<SkillId> used) {
+        StringBuilder out = new StringBuilder(agent.basePrompt().getTemplateText());
+        out.append("\n\n本次计划用到的技能：");
+        if (used.isEmpty()) {
+            out.append("（无，判是否值得沉淀）");
+        } else {
+            for (SkillId skillId : used) {
+                out.append(skillId.getValue()).append(' ');
+            }
+        }
+        out.append("\n只输出 JSON：{\"experience\":{\"applicableScenario\":…,\"instruction\":…,"
+                + "\"expectedOutcome\":…}} 或 {\"skills\":[{action,name,description,triggerCondition,"
+                + "sopBody,targetSkillId?}]}；两者只能有一个，都没有就输出 {}。");
+        return out.toString();
+    }
+
+    /** 告知记录：有界摘要 + planId 标记，供“结论交付”轮由模型播报（08-application §8.9.7 T17）。 */
+    private void notifyUser(Session session, DistillationInput input, DistillationOutcome outcome) {
+        String digest = digestOf(outcome);
+        if (digest == null) {
+            return;
+        }
+        Record notice = session.appendRecord(RecordRole.SYSTEM,
+                "[沉淀告知 plan=" + input.planId().getValue() + "] " + digest, null, System.currentTimeMillis());
+        commitScope.stageAppend(session.id(), notice);
+        commitScope.commit();
+    }
+
+    private static String digestOf(DistillationOutcome outcome) {
+        if (outcome.experience() != null) {
+            return "已将「" + outcome.experience().applicableScenario() + "」沉淀为经验";
+        }
+        if (!outcome.skills().isEmpty()) {
+            SkillDraft draft = outcome.skills().get(0);
+            return (draft.isMerge() ? "已改进技能「" : "已生成技能「") + draft.name() + "」";
+        }
+        return null;
+    }
+
+    private static boolean alreadyNotified(Session session, DistillationInput input) {
+        String marker = "[沉淀告知 plan=" + input.planId().getValue() + "]";
+        for (Record record : session.records()) {
+            if (record.role() == RecordRole.SYSTEM && record.content() != null
+                    && record.content().startsWith(marker)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void dispatch(Session session, DistillationInput input, DistillationOutcome outcome) {
@@ -83,118 +153,6 @@ public final class PlanCompletionCurator {
             used.addAll(trace.usedSkillIds());
         }
         return new ArrayList<SkillId>(used);
-    }
-
-    private String material(Session session, DistillationInput input, List<SkillId> used) {
-        StringBuilder out = new StringBuilder();
-        out.append("目标：").append(input.goal()).append("\n结局：").append(input.outcome()).append('\n');
-        if (used.isEmpty()) {
-            out.append("\n已有技能（若本次做法已被某条覆盖，就选 MERGE）：\n");
-            for (SkillDefinition skill : catalog.skills()) {
-                if (skill.isActive()) {
-                    out.append("- ").append(skill.id().getValue()).append(" | ").append(skill.name())
-                            .append(" | ").append(skill.description()).append('\n');
-                }
-            }
-        } else {
-            out.append("\n本次用到的技能（现有正文）：\n");
-            for (SkillId skillId : used) {
-                SkillDefinition skill = find(skillId);
-                out.append("\n[").append(skillId.getValue()).append("]\n")
-                        .append(skill == null ? "（已不可用）" : skill.sopTemplate().getRawMarkdown()).append('\n');
-            }
-        }
-        for (StepTrace trace : input.stepTraces()) {
-            out.append("\n步骤：").append(trace.description()).append("（").append(trace.outcome()).append("）\n");
-            if (trace.failureReason() != null) {
-                out.append("失败原因：").append(trace.failureReason()).append('\n');
-            }
-            if (trace.reflectionConclusion() != null) {
-                out.append("反思结论：").append(trace.reflectionConclusion()).append('\n');
-            }
-            out.append("轨迹：").append(traceOf(session, trace)).append('\n');
-        }
-        return out.toString();
-    }
-
-    /**
-     * 轨迹结构化：每轮一行"工具名(参数摘要) → 结果摘要"，而不是原文拼接。
-     * 只读 `content`——`reasoning` 是回放用事实，永不进沉淀（07-memory §7.9.6）。
-     */
-    private String traceOf(Session session, StepTrace trace) {
-        if (trace.recordRange() == null) {
-            return "（无轨迹区间）";
-        }
-        try {
-            List<Record> range = records.range(session.id(), trace.recordRange().getStartRecordId(),
-                    trace.recordRange().getEndRecordId());
-            StringBuilder out = new StringBuilder();
-            int budget = policies.load().toolResultTruncateLength();
-            int round = 0;
-            for (Record record : range) {
-                if (record.role() == RecordRole.SYSTEM || record.role() == RecordRole.SUMMARY) {
-                    continue;
-                }
-                if (out.length() >= budget) {
-                    out.append("…");
-                    break;
-                }
-                switch (record.role()) {
-                    case ASSISTANT:
-                        out.append("第 ").append(++round).append(" 轮：")
-                                .append(oneLine(record.content(), 160)).append('\n');
-                        break;
-                    case USER:
-                        out.append("用户：").append(oneLine(record.content(), 160)).append('\n');
-                        break;
-                    case TOOL_REQUEST:
-                        out.append("第 ").append(Math.max(round, 1)).append(" 轮：")
-                                .append(describeCall(record.content())).append(" → ");
-                        break;
-                    case TOOL_RESULT:
-                        out.append("结果：").append(oneLine(record.content(), 200)).append('\n');
-                        break;
-                    default:
-                        break;
-                }
-            }
-            return out.toString();
-        } catch (RuntimeException missing) {
-            return "（轨迹不可读）";
-        }
-    }
-
-    /** 工具请求在流水里是单行 JSON：取工具名与参数，压成一行人读。 */
-    private static String describeCall(String content) {
-        Map<String, Object> fields = Json.parseObject(content);
-        Object name = fields.get("name");
-        Object arguments = fields.get("arguments");
-        return (name == null ? "（未知工具）" : String.valueOf(name))
-                + "(" + oneLine(arguments == null ? "" : String.valueOf(arguments), 120) + ")";
-    }
-
-    private static String oneLine(String text, int limit) {
-        if (text == null) {
-            return "";
-        }
-        String flat = text.replace('\n', ' ').replace('\r', ' ').trim();
-        return flat.length() <= limit ? flat : flat.substring(0, limit) + "…";
-    }
-
-    private String ask(Session session, AgentDefinition agent, String material) {
-        try {
-            ModelInvocationResult result = model.invoke(new ModelInvocationRequest(session.activeModelId(),
-                    agent.basePrompt().getTemplateText(),
-                    Collections.singletonList(ChatMessage.of(RecordRole.USER, material)),
-                    Collections.emptyList(), 0, null));
-            if (result.usage() != null) {
-                budgetService.recordUsage(session, result.usage());
-            }
-            return result.text();
-        } catch (RuntimeException unavailable) {
-            // 沉淀只是"这次没学到"，不影响会话继续（07-memory §7.9.6）
-            return null;
-        }
     }
 
     /** 没用过技能：经验与技能二选一（模型给两个就当本次不产出）。 */

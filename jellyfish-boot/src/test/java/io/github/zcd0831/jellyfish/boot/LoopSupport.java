@@ -50,21 +50,26 @@ final class LoopSupport {
         ExperienceRepository experiences = new FileExperienceRepository(dir, codec);
         ReflectionRepository reflections = new FileReflectionRepository(dir, codec);
         ExperienceRetriever retriever = new ExperienceRetriever(experiences, model, catalog, policies,
-                budgetService);
+                budgetService, text -> text == null ? 0 : text.length());
         ExperienceFeedbackService feedback = new ExperienceFeedbackService(experiences, policies,
                 new FileCommitScope(dir, codec), publisher);
         ExperienceDistillationService distillation = new ExperienceDistillationService(experiences, policies,
                 new FileCommitScope(dir, codec), publisher, progress);
         SkillDistillationService skills = new SkillDistillationService(catalog, policies,
                 new FileCommitScope(dir, codec), publisher, progress);
+        io.github.zcd0831.jellyfish.application.action.SessionToolScope scope =
+                new io.github.zcd0831.jellyfish.application.action.SessionToolScope();
+        io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner forks =
+                new io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner(startSession, sessions,
+                        reActLoop, scope, new FileCommitScope(dir, codec),
+                        () -> System.currentTimeMillis());
         PlanCompletionCurator curator = new PlanCompletionCurator(records, model, catalog, policies,
-                budgetService, distillation, skills);
+                budgetService, distillation, skills, forks, new FileCommitScope(dir, codec));
         ExecutorService pool = Executors.newFixedThreadPool(2);
         SubagentLauncher launcher = new SubagentLauncher(startSession, runSession, sessions, records,
                 budgetService, policies, progress, pool);
         return new ExecutionLoop(contextWindow, reActLoop, verificationRunner, plans, new PlanFactory(), catalog,
                 policies, new FileCommitScope(dir, codec), publisher, progress, model, budgetService, retriever,
-                feedback, curator, reflections, experiences,
-                new io.github.zcd0831.jellyfish.application.action.SessionToolScope());
+                feedback, curator, reflections, experiences, scope, forks);
     }
 }

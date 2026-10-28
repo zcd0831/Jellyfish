@@ -13,6 +13,7 @@ import io.github.zcd0831.jellyfish.application.memory.SkillDistillationService;
 import io.github.zcd0831.jellyfish.application.memory.port.ExperienceRepository;
 import io.github.zcd0831.jellyfish.application.memory.port.ReflectionRepository;
 import io.github.zcd0831.jellyfish.application.perception.port.PolicyRepository;
+import io.github.zcd0831.jellyfish.domain.shared.TokenEstimator;
 import io.github.zcd0831.jellyfish.application.perception.port.RecordStore;
 import io.github.zcd0831.jellyfish.application.shared.port.CommitScope;
 import io.github.zcd0831.jellyfish.application.shared.port.DomainEventPublisher;
@@ -28,8 +29,8 @@ public final class MemoryModule {
     @Singleton
     ExperienceRetriever experienceRetriever(ExperienceRepository experiences, ModelInvocationPort model,
                                             CatalogRepository catalog, PolicyRepository policies,
-                                            BudgetService budgetService) {
-        return new ExperienceRetriever(experiences, model, catalog, policies, budgetService);
+                                            BudgetService budgetService, TokenEstimator estimator) {
+        return new ExperienceRetriever(experiences, model, catalog, policies, budgetService, estimator);
     }
 
     @Provides
@@ -62,10 +63,11 @@ public final class MemoryModule {
     @Singleton
     PlanCompletionCurator planCompletionCurator(RecordStore records, ModelInvocationPort model,
                                                 CatalogRepository catalog, PolicyRepository policies,
-                                                BudgetService budgetService,
+                                                BudgetService budgetService, CommitScope commitScope,
+                                                io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner forks,
                                                 ExperienceDistillationService experienceDistillation,
                                                 SkillDistillationService skillDistillation) {
         return new PlanCompletionCurator(records, model, catalog, policies, budgetService,
-                experienceDistillation, skillDistillation);
+                experienceDistillation, skillDistillation, forks, commitScope);
     }
 }

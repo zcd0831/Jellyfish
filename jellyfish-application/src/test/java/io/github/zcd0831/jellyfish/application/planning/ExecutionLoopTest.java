@@ -77,6 +77,8 @@ class ExecutionLoopTest {
     private final PlanCompletionCurator curator = mock(PlanCompletionCurator.class);
     private final ReflectionRepository reflections = mock(ReflectionRepository.class);
     private final ExperienceRepository experiences = mock(ExperienceRepository.class);
+    private final io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner forks =
+            mock(io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner.class);
 
     private final Session session = Session.create(SessionId.of("s1"), null, AgentId.of("a"),
             ModelId.of("m1"), 1L, null);
@@ -106,7 +108,7 @@ class ExecutionLoopTest {
                         : Collections.singletonList(planScript.peek()));
         return new ExecutionLoop(contextWindow, reActLoop, verificationRunner, plans, new io.github.zcd0831.jellyfish.domain.planning.plan.PlanFactory(),
                 catalog, policies, commitScope, events -> { }, progressEvents::add, model, budget, retriever,
-                feedback, curator, reflections, experiences, scope);
+                feedback, curator, reflections, experiences, scope, forks);
     }
 
     /** 默认实现不读上下文（依赖由构造器注入），所以这里给空值即可。 */
@@ -398,13 +400,12 @@ class ExecutionLoopTest {
                 .thenReturn(failed())
                 .thenReturn(passed());
         when(catalog.agents()).thenReturn(Collections.singletonList(reflectAgent()));
-        when(model.invoke(any(ModelInvocationRequest.class))).thenReturn(new ModelInvocationResult(
-                "下次先读文件", Collections.emptyList(), new ModelUsage(1, 1), ModelId.of("m1")));
+        when(forks.run(any(Session.class), any())).thenReturn("下次先读文件");
 
         loop().run(session, ChunkSink.NOOP, NO_TOKEN, NO_CONTEXT);
 
         verify(commitScope, times(1)).stageFact(any(io.github.zcd0831.jellyfish.domain.memory.reflection.Reflection.class));
-        verify(budget).recordUsage(any(Session.class), org.mockito.ArgumentMatchers.any());
+        verify(forks).run(any(Session.class), org.mockito.ArgumentMatchers.contains("失败原因"));
     }
 
     private static io.github.zcd0831.jellyfish.domain.action.agent.AgentDefinition reflectAgent() {

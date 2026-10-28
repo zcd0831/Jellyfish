@@ -88,13 +88,25 @@ class S4MemoryTest {
                 new FileCommitScope(dir, codec), publisher, event -> { });
         feedback = new ExperienceFeedbackService(experiences, policies, new FileCommitScope(dir, codec),
                 publisher);
-        retriever = new ExperienceRetriever(experiences, model, catalog, policies, budgetService);
+        retriever = new ExperienceRetriever(experiences, model, catalog, policies, budgetService,
+                text -> text == null ? 0 : text.length());
         ExperienceDistillationService distillation = new ExperienceDistillationService(experiences, policies,
                 new FileCommitScope(dir, codec), publisher, event -> { });
         SkillDistillationService skills = new SkillDistillationService(catalog, policies,
                 new FileCommitScope(dir, codec), publisher, event -> { });
+        io.github.zcd0831.jellyfish.application.action.SessionToolScope scope =
+                new io.github.zcd0831.jellyfish.application.action.SessionToolScope();
+        io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner forks =
+                new io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner(
+                        null, null, null, scope, new FileCommitScope(dir, codec),
+                        () -> System.currentTimeMillis()) {
+                    @Override
+                    public String run(Session parent, String instruction) {
+                        return model.reply;
+                    }
+                };
         curator = new PlanCompletionCurator(records, model, catalog, policies, budgetService, distillation,
-                skills);
+                skills, forks, new FileCommitScope(dir, codec));
 
         session = Session.create(SessionId.of("s1"), null, AgentId.of("builtin.main"), ModelId.of("m1"),
                 1L, null);

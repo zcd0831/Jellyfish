@@ -9,6 +9,8 @@ import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationResult
 import io.github.zcd0831.jellyfish.application.memory.port.ExperienceRepository;
 import io.github.zcd0831.jellyfish.application.perception.port.PolicyRepository;
 import io.github.zcd0831.jellyfish.application.shared.Json;
+import io.github.zcd0831.jellyfish.application.shared.TechnicalLog;
+import io.github.zcd0831.jellyfish.domain.shared.TokenEstimator;
 import io.github.zcd0831.jellyfish.domain.action.agent.AgentDefinition;
 import io.github.zcd0831.jellyfish.domain.memory.experience.Experience;
 import io.github.zcd0831.jellyfish.domain.perception.session.RecordRole;
@@ -37,15 +39,17 @@ public final class ExperienceRetriever {
     private final CatalogRepository catalog;
     private final PolicyRepository policies;
     private final BudgetService budgetService;
+    private final TokenEstimator estimator;
 
     public ExperienceRetriever(ExperienceRepository experiences, ModelInvocationPort model,
                                CatalogRepository catalog, PolicyRepository policies,
-                               BudgetService budgetService) {
+                               BudgetService budgetService, TokenEstimator estimator) {
         this.experiences = experiences;
         this.model = model;
         this.catalog = catalog;
         this.policies = policies;
         this.budgetService = budgetService;
+        this.estimator = estimator;
     }
 
     public Map<StepId, List<ExperienceId>> retrieveAndAssign(Session session, RetrievalInput input) {
@@ -57,7 +61,11 @@ public final class ExperienceRetriever {
         if (agent == null) {
             return Collections.emptyMap();
         }
-        String material = material(active, input);
+        List<Experience> candidates = trimmed(active, input, agent, session);
+        if (candidates == null) {
+            return Collections.emptyMap();   // 素材丢完仍超限：放弃本次检索
+        }
+        String material = material(candidates, input);
         try {
             ModelInvocationResult result = model.invoke(new ModelInvocationRequest(session.activeModelId(),
                     agent.basePrompt().getTemplateText(),
@@ -66,11 +74,53 @@ public final class ExperienceRetriever {
             if (result.usage() != null) {
                 budgetService.recordUsage(session, result.usage());
             }
-            return parse(result.text(), input);
+            return parse(result.text(), input, active);
         } catch (RuntimeException unavailable) {
             // 检索失败只是"这次没有经验可用"，不阻断计划执行
             return Collections.emptyMap();
         }
+    }
+
+    /**
+     * 素材超限就按置信度升序整条丢经验；丢完还超（或已无可丢）⇒ 放弃本次检索。
+     * 裁剪只影响本次素材，不动聚合状态（07-memory §7.9.1）。
+     */
+    private List<Experience> trimmed(List<Experience> active, RetrievalInput input, AgentDefinition agent,
+                                     Session session) {
+        List<Experience> candidates = new ArrayList<Experience>(active);
+        sortByConfidence(candidates);
+        int budget = budgetFor(agent, session);
+        while (!candidates.isEmpty() && estimate(material(candidates, input)) > budget) {
+            candidates.remove(0);
+        }
+        if (candidates.isEmpty() || estimate(material(candidates, input)) > budget) {
+            TechnicalLog.retrievalSkipped("over_limit");
+            return null;
+        }
+        return candidates;
+    }
+
+    /** 辅助调用的输入上限：与主窗口同口径，扣掉代理提示词（07-memory §7.9.1）。 */
+    private int budgetFor(AgentDefinition agent, Session session) {
+        io.github.zcd0831.jellyfish.domain.perception.policy.RuntimePolicy policy = policies.load();
+        int ceiling = Math.min(policy.summarizationTokenThreshold(),
+                model.describe(session.activeModelId()).maxInputTokens() - policy.inputSafetyMargin());
+        return ceiling - estimate(agent.basePrompt().getTemplateText());
+    }
+
+    private int estimate(String text) {
+        return estimator.estimate(text);
+    }
+
+    /** 置信度升序；同分按 createdAt 升序，保证裁剪结果确定（07-memory §7.9.1）。 */
+    private static void sortByConfidence(List<Experience> list) {
+        java.util.Collections.sort(list, new java.util.Comparator<Experience>() {
+            @Override
+            public int compare(Experience left, Experience right) {
+                int byConfidence = Double.compare(left.confidence().getValue(), right.confidence().getValue());
+                return byConfidence != 0 ? byConfidence : Long.compare(left.createdAt(), right.createdAt());
+            }
+        });
     }
 
     /** 整库 + 各步描述一起交给子代理：不做关键词预筛（§8.1 要点 1）。 */
@@ -91,7 +141,11 @@ public final class ExperienceRetriever {
         return out.toString();
     }
 
-    private Map<StepId, List<ExperienceId>> parse(String text, RetrievalInput input) {
+    private Map<StepId, List<ExperienceId>> parse(String text, RetrievalInput input, List<Experience> active) {
+        java.util.Set<String> known = new java.util.HashSet<String>();
+        for (Experience experience : active) {
+            known.add(experience.id().getValue());
+        }
         Map<StepId, List<ExperienceId>> assignment = new LinkedHashMap<StepId, List<ExperienceId>>();
         Map<String, Object> parsed;
         try {
@@ -120,7 +174,10 @@ public final class ExperienceRetriever {
                     if (ids.size() >= topN) {
                         break;
                     }
-                    ids.add(ExperienceId.of(String.valueOf(id)));
+                    String value = String.valueOf(id);
+                    if (known.contains(value)) {
+                        ids.add(ExperienceId.of(value));
+                    }
                 }
             }
             assignment.put(stepId, ids);

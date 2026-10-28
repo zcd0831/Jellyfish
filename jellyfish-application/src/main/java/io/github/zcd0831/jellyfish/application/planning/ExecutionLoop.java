@@ -89,6 +89,7 @@ public final class ExecutionLoop implements SessionRunner {
     private final ReflectionRepository reflections;
     private final io.github.zcd0831.jellyfish.application.memory.port.ExperienceRepository experiences;
     private final SessionToolScope scope;
+    private final io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner forks;
 
     public ExecutionLoop(ContextWindowService contextWindow, ReActLoop reActLoop,
                          VerificationRunner verificationRunner, PlanRepository plans, PlanFactory planFactory,
@@ -99,7 +100,8 @@ public final class ExecutionLoop implements SessionRunner {
                          PlanCompletionCurator planCompletionCurator,
                          ReflectionRepository reflections,
                          io.github.zcd0831.jellyfish.application.memory.port.ExperienceRepository experiences,
-                         SessionToolScope scope) {
+                         SessionToolScope scope,
+                         io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner forks) {
         this.contextWindow = contextWindow;
         this.reActLoop = reActLoop;
         this.verificationRunner = verificationRunner;
@@ -118,6 +120,7 @@ public final class ExecutionLoop implements SessionRunner {
         this.reflections = reflections;
         this.experiences = experiences;
         this.scope = scope;
+        this.forks = forks;
     }
 
     /**
@@ -413,25 +416,21 @@ public final class ExecutionLoop implements SessionRunner {
     }
 
     /**
-     * 反思是"一段文本进、一段结论出"，直连端口即可（与检索、沉淀、裁判一致）。
+     * 反思 = fork 当前生效窗口 + 末尾“反思指令 + 失败原因”：轨迹从窗口里来，不再单独拼素材。
      * 代理缺失或调用失败 ⇒ 本次不反思：把错误文案存成反思结论比不反思更糟。
+     * 规则出处：07-memory §7.8.2、08-application §8.9.7。
      */
     private String reflect(Session session, PlanStep step, String failureReason) {
         AgentDefinition agent = agentOf(REFLECT_AGENT);
         if (agent == null) {
             return null;
         }
-        String task = "原定目标：" + step.description() + "\n失败原因：" + failureReason
+        String instruction = agent.basePrompt().getTemplateText()
+                + "\n\n原定目标：" + step.description() + "\n失败原因：" + failureReason
                 + "\n请给出下一次该改什么。";
         try {
-            ModelInvocationResult result = model.invoke(new ModelInvocationRequest(session.activeModelId(),
-                    agent.basePrompt().getTemplateText(),
-                    Collections.singletonList(ChatMessage.of(RecordRole.USER, task)),
-                    Collections.emptyList(), 0, null));
-            if (result.usage() != null) {
-                budgetService.recordUsage(session, result.usage());
-            }
-            return result.text() == null || result.text().trim().isEmpty() ? null : result.text();
+            String conclusion = forks.run(session, instruction);
+            return conclusion == null || conclusion.trim().isEmpty() ? null : conclusion;
         } catch (RuntimeException unavailable) {
             return null;
         }

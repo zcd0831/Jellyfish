@@ -38,6 +38,7 @@ import io.github.zcd0831.jellyfish.application.planning.LoadSkillHandler;
 import io.github.zcd0831.jellyfish.application.planning.RunSessionProvider;
 import io.github.zcd0831.jellyfish.application.planning.SubagentLauncher;
 import io.github.zcd0831.jellyfish.application.planning.port.PlanRepository;
+import io.github.zcd0831.jellyfish.application.shared.port.Clock;
 import io.github.zcd0831.jellyfish.application.shared.port.CommitScope;
 import io.github.zcd0831.jellyfish.application.shared.port.DomainEventPublisher;
 import io.github.zcd0831.jellyfish.application.action.port.CatalogRepository;
@@ -67,6 +68,16 @@ public final class PlanningModule {
                                             CatalogRepository catalog, CommitScope commitScope,
                                             DomainEventPublisher publisher) {
         return new GeneratePlanHandler(planFactory, plans, catalog, commitScope, publisher);
+    }
+
+    @Provides
+    @Singleton
+    io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner internalSessionRunner(
+            io.github.zcd0831.jellyfish.application.perception.StartSessionUseCase startSession,
+            io.github.zcd0831.jellyfish.application.perception.port.SessionRepository sessions,
+            ReActLoop reActLoop, SessionToolScope scope, CommitScope commitScope, Clock clock) {
+        return new io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner(
+                startSession, sessions, reActLoop, scope, commitScope, clock);
     }
 
     @Provides
@@ -148,10 +159,11 @@ public final class PlanningModule {
                                 ExperienceFeedbackService experienceFeedback,
                                 PlanCompletionCurator planCompletionCurator,
                                 ReflectionRepository reflections, ExperienceRepository experiences,
-                                SessionToolScope scope) {
+                                SessionToolScope scope,
+                                io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner forks) {
         return new ExecutionLoop(contextWindow, reActLoop, verificationRunner, plans, planFactory, catalog,
                 policies, commitScope, publisher, progress, model, budgetService, experienceRetriever,
-                experienceFeedback, planCompletionCurator, reflections, experiences, scope);
+                experienceFeedback, planCompletionCurator, reflections, experiences, scope, forks);
     }
 
     /** 零插件时就是默认编排；插件装上后由路由接管。 */

@@ -114,6 +114,25 @@ public final class StartSessionUseCase {
         return Result.ok(childId);
     }
 
+    /**
+     * 内部子会话（fork 型调用）：沿用父会话的冻结快照与模型，**不生成标题、不自建 Budget**；
+     * 它落在 <code>sub/</code> 下，因此天然不进会话列表（08-application §8.9.7）。
+     */
+    public Result<SessionId> forkInternal(SessionId parentSessionId) {
+        Session parent = sessions.load(parentSessionId);
+        if (parent == null) {
+            return Result.fail(UseCaseError.of(SessionError.NOT_FOUND, "父会话不存在", parentSessionId));
+        }
+        SessionId childId = SessionId.of(UUID.randomUUID().toString());
+        Session child = Session.create(childId, parentSessionId, parent.agentId(), parent.activeModelId(),
+                clock.nowMillis(), parent.systemPromptSnapshot());
+        child.retitle(parent.title());
+        sessions.save(child);
+        commitScope.stageReplace(child);
+        commitScope.commit();
+        return Result.ok(childId);
+    }
+
     /** 快照冻结：只收 ACTIVE 且被该代理绑定的工具与技能（§7.1 规则 4、§8.3）。 */
     private SystemPromptSnapshot freeze(AgentDefinition agent) {
         List<ToolSchemaSnapshot> tools = new ArrayList<ToolSchemaSnapshot>();

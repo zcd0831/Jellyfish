@@ -40,6 +40,11 @@ public final class TechnicalLog {
         event("verification.done", durationMillis, "plan=" + planId, "step=" + stepId, "code=" + outcome);
     }
 
+    /** 检索被放弃：只留技术痕迹，不打扰用户（07-memory §7.9.1）。 */
+    public static void retrievalSkipped(String reason) {
+        event("retrieval_skipped", 0L, "reason=" + reason);
+    }
+
     public static void collected() {
         event("technical-log.collect", 0L);
     }

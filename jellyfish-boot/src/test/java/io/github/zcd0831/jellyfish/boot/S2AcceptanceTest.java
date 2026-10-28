@@ -124,7 +124,7 @@ class S2AcceptanceTest {
                 new io.github.zcd0831.jellyfish.infrastructure.file.FileReflectionRepository(dir, codec);
         io.github.zcd0831.jellyfish.application.memory.ExperienceRetriever retriever =
                 new io.github.zcd0831.jellyfish.application.memory.ExperienceRetriever(experiences, model,
-                        catalog, policies, budgetService);
+                        catalog, policies, budgetService, text -> text == null ? 0 : text.length());
         io.github.zcd0831.jellyfish.application.memory.ExperienceFeedbackService feedback =
                 new io.github.zcd0831.jellyfish.application.memory.ExperienceFeedbackService(experiences,
                         policies, new FileCommitScope(dir, codec), publisher);
@@ -135,11 +135,18 @@ class S2AcceptanceTest {
                 new io.github.zcd0831.jellyfish.application.memory.PlanCompletionCurator(records, model,
                         catalog, policies, budgetService, distillation,
                         new io.github.zcd0831.jellyfish.application.memory.SkillDistillationService(catalog,
-                                policies, new FileCommitScope(dir, codec), publisher, event -> { }));
+                                policies, new FileCommitScope(dir, codec), publisher, event -> { }),
+                        new io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner(
+                                startSession, sessions, reActLoop, new SessionToolScope(),
+                                new FileCommitScope(dir, codec), () -> System.currentTimeMillis()),
+                        new FileCommitScope(dir, codec));
         ExecutionLoop executionLoop = new ExecutionLoop(contextWindow, reActLoop, verificationRunner, plans,
                 planFactory, catalog, policies, new FileCommitScope(dir, codec), publisher, event -> { }, model,
                 budgetService, retriever, feedback, curator, reflections, experiences,
-                new SessionToolScope());
+                new SessionToolScope(),
+                new io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner(
+                        startSession, sessions, reActLoop, new SessionToolScope(),
+                        new FileCommitScope(dir, codec), () -> System.currentTimeMillis()));
         runSession = new RunSessionUseCase(sessions, records, new FileCommitScope(dir, codec), publisher,
                 executionLoop, model, toolExecutor, human, event -> { }, plans, contextWindow);
         runSessionHolder[0] = runSession;

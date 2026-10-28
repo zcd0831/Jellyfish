@@ -446,4 +446,35 @@ class ExecutionLoopTest {
         assertEquals(assistantId.get(), range.getStartRecordId(), "起点跳过 SUMMARY");
         assertEquals(resultId.get(), range.getEndRecordId());
     }
+
+    @Test
+    void 一次run里串行两个计划要各播报一次() {
+        Plan first = plan();
+        Plan second = Plan.create(PlanId.of("p2"), SessionId.of("s1"), "第二个目标", Collections.singletonList(
+                PlanSteps.draft(StepId.of("step9"), 1, "第二步", "g", "o", "c",
+                        Collections.<VerificationType>emptySet())));
+        planScript.add(first);
+        java.util.concurrent.atomic.AtomicInteger nullStepCalls = new java.util.concurrent.atomic.AtomicInteger();
+        when(reActLoop.runIteration(any(Session.class), any(), any(ChunkSink.class))).thenAnswer(call -> {
+            if (call.getArgument(1) != null) {
+                return submitted("完成");
+            }
+            // 结论交付轮里再生成一个计划（模拟 generate_plan 成功）
+            if (nullStepCalls.incrementAndGet() == 1) {
+                when(plans.findRunning(SessionId.of("s1"))).thenReturn(Collections.singletonList(second));
+            }
+            return converged();
+        });
+
+        loop().run(session, ChunkSink.NOOP, NO_TOKEN, NO_CONTEXT);
+
+        long created = progressEvents.stream()
+                .filter(e -> e.kind() == io.github.zcd0831.jellyfish.application.shared.ProgressEvent.Kind.PLAN_CREATED)
+                .count();
+        assertTrue(created >= 1, "至少播报第一个计划：" + progressEvents);
+        assertTrue(progressEvents.stream().anyMatch(e ->
+                        e.kind() == io.github.zcd0831.jellyfish.application.shared.ProgressEvent.Kind.PLAN_CREATED
+                                && e.message().contains("第二个目标")),
+                "新 planId 要重新播报：" + progressEvents);
+    }
 }

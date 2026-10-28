@@ -59,7 +59,9 @@ import io.github.zcd0831.jellyfish.domain.shared.ToolId;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -130,17 +132,17 @@ public final class ExecutionLoop implements SessionRunner {
     @Override
     public RunOutcome run(Session session, ChunkSink sink, CancellationToken token, RunContext context) {
         boolean collapsedOnce = false;
-        boolean planAnnounced = false;
+        // 播报按 planId 去重：一次 run 里可以串行产生多个计划（08-application §8.7）
+        Set<PlanId> announcedPlans = new HashSet<PlanId>();
 
         while (true) {
             // 每一轮开始先看取消：流式/工具刚被打断时，不再进入下一轮（08-application §8.9.4.1）
             token.throwIfCancelled();
-            // 计划可能在循环中途由 generate_plan 产生：每轮重读，播报一次（重划另有 PLAN_REPLAN）
+            // 计划可能在循环中途由 generate_plan 产生：每轮重读；重划不改 planId，另有 PLAN_REPLAN
             Plan plan = runningPlan(session);
-            if (!planAnnounced && plan != null && plan.hasExecutablePlan()) {
+            if (plan != null && plan.hasExecutablePlan() && announcedPlans.add(plan.id())) {
                 progress.emit(ProgressEvent.of(ProgressEvent.Kind.PLAN_CREATED,
                         "计划：" + plan.goal() + "（" + pendingSteps(plan) + " 步）"));
-                planAnnounced = true;
             }
             PlanStep step = plan != null && plan.hasExecutablePlan() ? plan.getCurrentStep() : null;
             Attempt attempt = null;

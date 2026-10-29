@@ -167,18 +167,6 @@ public class Plan {
         throw new DomainInvariantViolation("计划里没有该尝试：" + stepId.getValue() + "#" + attemptNo);
     }
 
-    /** 中断不消耗重试：只落 attempt 结局。规则出处：§5.2。 */
-    public void markAttemptInterrupted(StepId stepId, int attemptNo) {
-        PlanStep step = requireStep(stepId);
-        for (Attempt attempt : step.attempts()) {
-            if (attempt.attemptNo() == attemptNo) {
-                attempt.finish(AttemptOutcome.INTERRUPTED);
-                step.markRunning();
-                return;
-            }
-        }
-    }
-
     public void markStepVerifying(StepId stepId) {
         requireStep(stepId).markVerifying();
     }

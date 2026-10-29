@@ -6,6 +6,5 @@ public enum StepStatus {
     VERIFYING,
     SUCCEEDED,
     FAILED,
-    SUPERSEDED,
-    CANCELLED
+    SUPERSEDED
 }

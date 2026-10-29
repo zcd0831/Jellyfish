@@ -171,14 +171,13 @@ class PlanTest {
     }
 
     @Test
-    void 中断只落attempt结局且不改变步骤状态_candidates() {
+    void 没做完的尝试不落结局且步骤保持运行() {
         Plan plan = plan(1);
         Attempt attempt = plan.beginCurrentStep();
 
-        plan.markAttemptInterrupted(StepId.of("step1"), attempt.attemptNo());
-
-        assertEquals(AttemptOutcome.INTERRUPTED, attempt.outcome());
+        // 终止/挂起都不写结局：AttemptOutcome 只有 SUCCEEDED/FAILED 两个值（§8.9.4.1）
+        assertNull(attempt.outcome(), "没做完的尝试没有结局");
         assertEquals(StepStatus.RUNNING, plan.steps().get(0).status());
-        assertNotNull(plan.getCurrentStep(), "挂起：下次输入继续同一步");
+        assertNotNull(plan.getCurrentStep(), "续跑：下次输入继续同一步");
     }
 }

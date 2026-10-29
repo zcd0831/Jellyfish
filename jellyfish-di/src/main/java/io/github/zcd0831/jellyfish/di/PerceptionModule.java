@@ -2,6 +2,7 @@ package io.github.zcd0831.jellyfish.di;
 
 import dagger.Module;
 import dagger.Provides;
+import io.github.zcd0831.jellyfish.application.planning.SessionCancellations;
 import io.github.zcd0831.jellyfish.application.action.BudgetService;
 import io.github.zcd0831.jellyfish.application.action.port.CatalogRepository;
 import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationPort;
@@ -77,8 +78,8 @@ public final class PerceptionModule {
     StartSessionUseCase startSessionUseCase(CatalogRepository catalog, SessionRepository sessions,
                                             BudgetRepository budgets, SessionTitleGenerator titleGenerator,
                                             SystemPromptAssembler assembler, CommitScope commitScope,
-                                            Clock clock) {
+                                            Clock clock, SessionCancellations cancellations) {
         return new StartSessionUseCase(catalog, sessions, budgets, titleGenerator, assembler, commitScope,
-                clock);
+                clock, cancellations);
     }
 }

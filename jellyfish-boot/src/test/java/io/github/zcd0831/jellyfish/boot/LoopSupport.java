@@ -67,7 +67,8 @@ final class LoopSupport {
                 new FileCommitScope(dir, codec));
         ExecutorService pool = Executors.newFixedThreadPool(2);
         SubagentLauncher launcher = new SubagentLauncher(startSession, runSession, sessions, records,
-                budgetService, policies, progress, pool);
+                budgetService, policies, progress, pool,
+                new io.github.zcd0831.jellyfish.application.planning.SessionCancellations());
         return new ExecutionLoop(contextWindow, reActLoop, verificationRunner, plans, new PlanFactory(), catalog,
                 policies, new FileCommitScope(dir, codec), publisher, progress, model, budgetService, retriever,
                 feedback, curator, reflections, experiences, scope, forks);

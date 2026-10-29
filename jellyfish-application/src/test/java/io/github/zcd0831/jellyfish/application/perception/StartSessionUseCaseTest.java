@@ -58,7 +58,8 @@ class StartSessionUseCaseTest {
         when(clock.nowMillis()).thenReturn(1000L);
         when(titles.generate(any(Session.class), anyString())).thenReturn("标题");
         return new StartSessionUseCase(catalog, sessions, budgets, titles, new SystemPromptAssembler(),
-                commitScope, clock);
+                commitScope, clock,
+                new io.github.zcd0831.jellyfish.application.planning.SessionCancellations());
     }
 
     private static AgentDefinition agent(String id, AgentStatus status) {

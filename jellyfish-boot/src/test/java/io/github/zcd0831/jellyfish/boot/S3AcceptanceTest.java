@@ -25,6 +25,7 @@ import io.github.zcd0831.jellyfish.application.planning.RunSessionProvider;
 import io.github.zcd0831.jellyfish.application.planning.RunSessionResult;
 import io.github.zcd0831.jellyfish.application.planning.RunSessionUseCase;
 import io.github.zcd0831.jellyfish.application.planning.SessionCancellations;
+import io.github.zcd0831.jellyfish.application.shared.CancellationToken;
 import io.github.zcd0831.jellyfish.application.planning.SpawnSubagentsHandler;
 import io.github.zcd0831.jellyfish.application.planning.SubagentLauncher;
 import io.github.zcd0831.jellyfish.application.planning.VerificationRunner;
@@ -114,10 +115,11 @@ class S3AcceptanceTest {
                 + "\"status\":\"ACTIVE\",\"contextLimit\":{\"maxInputTokens\":8000,\"maxOutputTokens\":4096},"
                 + "\"capabilities\":[]}");
 
-        model = new FakeModel();
         sessions = new FileSessionRepository(dir, codec);
         records = new FileRecordStore(dir, codec);
         final FilePolicyRepository filePolicies = new FilePolicyRepository(dir, codec);
+        cancellations = new SessionCancellations();
+        model = new FakeModel();
         policies = new PolicyRepository() {
             @Override
             public RuntimePolicy load() {
@@ -153,13 +155,13 @@ class S3AcceptanceTest {
                         return runSessionHolder[0];
                     }
                 });
-        SessionCancellations cancellations = new SessionCancellations();
         runSession = new RunSessionUseCase(sessions, records, new FileCommitScope(dir, codec), publisher,
                 executionLoop, model, toolExecutor, human, event -> { }, plans, contextWindow,
                 cancellations);
         runSessionHolder[0] = runSession;
         startSession = new StartSessionUseCase(catalog, sessions, budgets, titleGenerator,
-                new SystemPromptAssembler(), new FileCommitScope(dir, codec), new SystemClock());
+                new SystemPromptAssembler(), new FileCommitScope(dir, codec), new SystemClock(),
+                cancellations);
 
         pool = Executors.newFixedThreadPool(3);
         final RunSessionUseCase run = runSession;
@@ -168,7 +170,7 @@ class S3AcceptanceTest {
             public RunSessionUseCase get() {
                 return run;
             }
-        }, sessions, records, budgetService, policies, event -> { }, pool);
+        }, sessions, records, budgetService, policies, event -> { }, pool, cancellations);
 
         // 主会话可用的工具：spawn_subagents + 计划工具都不需要，这里只测 spawn
         ToolExecutor spawnExecutor = new ToolExecutor(catalog, new HttpToolAdapter(),
@@ -184,6 +186,7 @@ class S3AcceptanceTest {
     }
 
     private ToolExecutor toolExecutorHolder;
+    private SessionCancellations cancellations;
 
     @Test
     void 并行子代理各自完成且落sub目录() {
@@ -210,7 +213,60 @@ class S3AcceptanceTest {
                 io.github.zcd0831.jellyfish.domain.shared.RecordId.of("r1"));
         Path sd = tmp.resolve("sessions").resolve("main").resolve("sub");
         assertTrue(outcome.content().contains("结论A"), outcome.content());
-        assertTrue(outcome.content().contains("超时未完成"), outcome.content());
+        assertTrue(outcome.content().contains("已终止（超时）"), outcome.content());
+    }
+
+    @Test
+    void 超时终止后子代理不再落流水() throws Exception {
+        subagentTimeoutMillis = 800;
+        String content = spawn("慢任务");
+        assertTrue(content.contains("已终止（超时）"), content);
+
+        Path subDir = tmp.resolve("sessions").resolve("main").resolve("sub");
+        int before = countFiles(subDir);
+        Thread.sleep(600);
+        int after = countFiles(subDir);
+
+        assertEquals(before, after, "被判超时之后，子代理不得再往盘上写任何流水");
+    }
+
+    private static int countFiles(Path dir) throws IOException {
+        if (!Files.isDirectory(dir)) {
+            return 0;
+        }
+        int count = 0;
+        try (java.util.stream.Stream<Path> walk = Files.walk(dir)) {
+            count = (int) walk.filter(Files::isRegularFile).count();
+        }
+        return count;
+    }
+
+    @Test
+    void 并行超时按各自开始计时而不是排队累加() {
+        subagentTimeoutMillis = 800;
+        long started = System.currentTimeMillis();
+
+        spawn("慢任务", "慢任务", "慢任务");
+
+        long elapsed = System.currentTimeMillis() - started;
+        // 顺序等待会是 3×800ms；从各自实际开始计时则应 ≈ 800ms + 抖动
+        assertTrue(elapsed < 2000, "并行超时不得按提交顺序累加，实际 " + elapsed + "ms");
+    }
+
+    private String spawn(String... tasks) {
+        List<Map<String, Object>> requests = new java.util.ArrayList<Map<String, Object>>();
+        for (String task : tasks) {
+            requests.add(request(task));
+        }
+        return toolExecutorHolder.execute(main, "spawn_subagents", spawnArgs(requests.toArray(new Map[0])),
+                io.github.zcd0831.jellyfish.domain.shared.RecordId.of("r1")).content();
+    }
+
+    private static String firstSessionId(String json) {
+        java.util.regex.Matcher matcher = java.util.regex.Pattern
+                .compile("\"sessionId\":\"([^\"]+)\"").matcher(json);
+        assertTrue(matcher.find(), json);
+        return matcher.group(1);
     }
 
     @Test
@@ -254,18 +310,29 @@ class S3AcceptanceTest {
         Files.write(file, content.getBytes(StandardCharsets.UTF_8));
     }
 
-    /** 子任务里带"慢"字就睡 3 秒，其余按任务名回结论。 */
-    private static final class FakeModel implements ModelInvocationPort {
+    /**
+     * 子任务里带"慢"字就阻塞 3 秒，其余按任务名回结论。
+     * <strong>阻塞期间只认终止令牌</strong>（不看线程中断）：这样测试才能证明终止靠的是令牌，
+     * 而不是靠 future.cancel(true) 撞大运（08-application §8.9.4.1）。
+     */
+    private final class FakeModel implements ModelInvocationPort {
 
         @Override
         public ModelInvocationResult invoke(ModelInvocationRequest request) {
             String task = request.messages().isEmpty() ? "" : String.valueOf(request.messages().get(0).content());
             if (task.contains("慢")) {
-                try {
-                    Thread.sleep(3000);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    throw new java.util.concurrent.CancellationException("被取消");
+                CancellationToken token = cancellations.forSession(request.sessionId());
+                long until = System.currentTimeMillis() + 3000;
+                while (!token.isCancelled() && System.currentTimeMillis() < until) {
+                    try {
+                        Thread.sleep(20);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                }
+                if (token.isCancelled()) {
+                    throw new java.util.concurrent.CancellationException("被终止");
                 }
             }
             String name = task.replaceAll(".*任务([A-C]).*", "$1");

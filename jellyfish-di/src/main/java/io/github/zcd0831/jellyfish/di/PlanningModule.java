@@ -111,7 +111,8 @@ public final class PlanningModule {
                                       final Provider<RunSessionUseCase> runSession,
                                       SessionRepository sessions, RecordStore records,
                                       BudgetService budgetService, PolicyRepository policies,
-                                      ProgressPort progress, ExecutorService pool) {
+                                      ProgressPort progress, ExecutorService pool,
+                                      SessionCancellations cancellations) {
         RunSessionProvider lazyRunSession = new RunSessionProvider() {
             @Override
             public RunSessionUseCase get() {
@@ -119,7 +120,7 @@ public final class PlanningModule {
             }
         };
         return new SubagentLauncher(startSession, lazyRunSession, sessions, records, budgetService, policies,
-                progress, pool);
+                progress, pool, cancellations);
     }
 
     @Provides

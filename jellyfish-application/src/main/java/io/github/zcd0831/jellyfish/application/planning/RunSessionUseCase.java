@@ -74,7 +74,7 @@ public final class RunSessionUseCase {
         }
         // 终止信号按会话登记：外部令牌（外壳）只是同一信号的另一个触发器，
         // 这样模型调用与工具执行都能按 sessionId 取到它（08-application §8.9.4.1）
-        final CancellationToken termination = cancellations.register(sessionId, session.parentSessionId());
+        final CancellationToken termination = cancellations.registerIfAbsent(sessionId, session.parentSessionId());
         if (token != null && token != termination) {
             token.onCancel(new Runnable() {
                 @Override

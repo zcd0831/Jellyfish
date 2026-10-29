@@ -128,7 +128,8 @@ class S1AcceptanceTest {
         runSessionProviderHolder[0] = runSession;
         startSession = new StartSessionUseCase(catalog, sessions, budgets,
                 new SessionTitleGenerator(model, budgetService), new SystemPromptAssembler(),
-                new FileCommitScope(dir, codec), clock);
+                new FileCommitScope(dir, codec), clock,
+                new io.github.zcd0831.jellyfish.application.planning.SessionCancellations());
     }
 
     @Test

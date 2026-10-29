@@ -155,7 +155,7 @@ class S2AcceptanceTest {
         runSessionHolder[0] = runSession;
         startSession = new StartSessionUseCase(catalog, sessions, budgets,
                 new SessionTitleGenerator(model, budgetService), new SystemPromptAssembler(),
-                new FileCommitScope(dir, codec), new SystemClock());
+                new FileCommitScope(dir, codec), new SystemClock(), cancellations);
     }
 
     @Test

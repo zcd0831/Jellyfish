@@ -3,6 +3,8 @@ package io.github.zcd0831.jellyfish.application.perception;
 import io.github.zcd0831.jellyfish.application.action.port.CatalogRepository;
 import io.github.zcd0831.jellyfish.application.action.port.BudgetRepository;
 import io.github.zcd0831.jellyfish.application.perception.port.SessionRepository;
+import io.github.zcd0831.jellyfish.application.planning.SessionCancellations;
+import io.github.zcd0831.jellyfish.application.shared.CancellationToken;
 import io.github.zcd0831.jellyfish.application.shared.Result;
 import io.github.zcd0831.jellyfish.application.shared.UseCaseError;
 import io.github.zcd0831.jellyfish.application.shared.port.CommitScope;
@@ -46,10 +48,11 @@ public final class StartSessionUseCase {
     private final SystemPromptAssembler assembler;
     private final CommitScope commitScope;
     private final Clock clock;
+    private final SessionCancellations cancellations;
 
     public StartSessionUseCase(CatalogRepository catalog, SessionRepository sessions, BudgetRepository budgets,
                                SessionTitleGenerator titleGenerator, SystemPromptAssembler assembler,
-                               CommitScope commitScope, Clock clock) {
+                               CommitScope commitScope, Clock clock, SessionCancellations cancellations) {
         this.catalog = catalog;
         this.sessions = sessions;
         this.budgets = budgets;
@@ -57,6 +60,7 @@ public final class StartSessionUseCase {
         this.assembler = assembler;
         this.commitScope = commitScope;
         this.clock = clock;
+        this.cancellations = cancellations;
     }
 
     public Result<SessionId> start(AgentId requestedAgent, ModelId requestedModel, String firstInput) {
@@ -88,6 +92,16 @@ public final class StartSessionUseCase {
      */
     public Result<SessionId> startSubSession(SessionId parentSessionId, AgentId requestedAgent,
                                              ModelId requestedModel, String task) {
+        return startSubSession(parentSessionId, requestedAgent, requestedModel, task, null);
+    }
+
+    /**
+     * 带预先建好的终止信号：子代理的令牌必须先于会话存在（超时可能落在会话创建阶段）。
+     * 规则出处：08-application §8.9.4.1。
+     */
+    public Result<SessionId> startSubSession(SessionId parentSessionId, AgentId requestedAgent,
+                                             ModelId requestedModel, String task,
+                                             CancellationToken signal) {
         Session parent = sessions.load(parentSessionId);
         if (parent == null) {
             return Result.fail(UseCaseError.of(SessionError.NOT_FOUND, "父会话不存在", parentSessionId));
@@ -103,8 +117,20 @@ public final class StartSessionUseCase {
         SessionId childId = SessionId.of(UUID.randomUUID().toString());
         Session child = Session.create(childId, parentSessionId, agent.id(), model.id(), clock.nowMillis(),
                 freeze(agent));
+        // 开启即登记终止令牌：起标题、写流水这些“运行前”的动作也必须可被终止（08-application §8.9.4.1）
+        if (signal == null) {
+            cancellations.registerIfAbsent(childId, parentSessionId);
+        } else {
+            cancellations.attach(childId, parentSessionId, signal);
+        }
         Record userRecord = child.appendRecord(RecordRole.USER, task, null, clock.nowMillis());
         child.retitle(titleGenerator.generate(child, task));
+        // 起标题期间可能已经超时：会话还没落盘就终止，宁可不建，也不留一个“建到一半”的子会话
+        // （终止后不得再产生副作用，08-application §8.9.4.1）
+        if (signal != null && signal.isCancelled()) {
+            cancellations.unregister(childId);
+            return Result.fail(UseCaseError.of(SessionError.NOT_FOUND, "子会话被终止，未创建", childId));
+        }
 
         // 先建出 sub/<child>/ 目录：追加流水的路径只能由会话头推导
         sessions.save(child);

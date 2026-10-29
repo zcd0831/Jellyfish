@@ -36,10 +36,10 @@ class CommandCompleterTest {
     @Test
     void 斜杠前缀给出匹配命令() {
         List<Candidate> candidates = new ArrayList<Candidate>();
-        new CommandCompleter().complete(null, word("/ca"), candidates);
+        new CommandCompleter().complete(null, word("/ar"), candidates);
 
         assertEquals(1, candidates.size());
-        assertEquals("/cancel", candidates.get(0).value());
+        assertEquals("/archive", candidates.get(0).value());
     }
 
     @Test

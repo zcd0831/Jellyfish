@@ -74,6 +74,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -251,6 +252,31 @@ class S3AcceptanceTest {
         long elapsed = System.currentTimeMillis() - started;
         // 顺序等待会是 3×800ms；从各自实际开始计时则应 ≈ 800ms + 抖动
         assertTrue(elapsed < 2000, "并行超时不得按提交顺序累加，实际 " + elapsed + "ms");
+    }
+
+    @Test
+    void 终止父会话时在跑的子代理一起收手() throws Exception {
+        subagentTimeoutMillis = 30000;
+        cancellations.register(main.id(), null);
+        final java.util.concurrent.atomic.AtomicReference<String> spawned =
+                new java.util.concurrent.atomic.AtomicReference<String>();
+        Thread spawner = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                spawned.set(spawn("慢任务"));
+            }
+        }, "spawner");
+        spawner.start();
+        Thread.sleep(400);   // 让子代理起来并挂到父会话名下
+        int before = countFiles(tmp.resolve("sessions").resolve("main").resolve("sub"));
+
+        cancellations.cancel(main.id());   // 等价于按一次 Esc
+        spawner.join(3000);
+        Thread.sleep(400);
+
+        assertFalse(spawner.isAlive(), "父会话被终止后，spawn 必须马上返回");
+        assertEquals(before, countFiles(tmp.resolve("sessions").resolve("main").resolve("sub")),
+                "级联终止后子代理不得再落流水");
     }
 
     private String spawn(String... tasks) {

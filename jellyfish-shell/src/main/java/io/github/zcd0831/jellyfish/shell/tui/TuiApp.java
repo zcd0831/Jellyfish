@@ -45,7 +45,6 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public final class TuiApp implements QuestionBroker.Answerer {
 
-    private static final long DOUBLE_INTERRUPT_MILLIS = 2000L;
     /** 回放条数：约 30 轮对话，再多也没人看。 */
     private static final int REPLAY_RECORDS = 100;
 
@@ -67,8 +66,6 @@ public final class TuiApp implements QuestionBroker.Answerer {
     private final ShellCancellationToken token;
 
     private final BlockingQueue<String> commands = new LinkedBlockingQueue<String>();
-    private final AtomicInteger interruptions = new AtomicInteger();
-    private final AtomicLong lastPromptInterrupt = new AtomicLong();
     private final Object inputLock = new Object();
 
     private InputMode mode = InputMode.PAUSED;
@@ -99,7 +96,7 @@ public final class TuiApp implements QuestionBroker.Answerer {
     }
 
     public void run() {
-        renderer.divider("Jellyfish 1.0.0-alpha　/help 查看命令，exit 退出");
+        renderer.divider("Jellyfish 1.0.0-alpha　/help 查看命令，Esc 终止本轮，exit 退出");
         if (Terminal.TYPE_DUMB.equals(terminal.getType())) {
             renderer.info("（当前不是终端：无行编辑、无颜色；输入按行读取）");
             startDumbInput(System.in);
@@ -109,8 +106,9 @@ public final class TuiApp implements QuestionBroker.Answerer {
                     .completer(new CommandCompleter(new TuiParameterCandidates(manageSession, catalog)))
                     .option(LineReader.Option.DISABLE_EVENT_EXPANSION, true)
                     .build();
-            terminal.handle(Terminal.Signal.INT, signal -> onInterrupt());
+            terminal.handle(Terminal.Signal.INT, signal -> hintTerminate());
             bindInsertNewline();
+            bindTerminate();
             startInputThread();
         }
         resumePrompt();
@@ -128,6 +126,32 @@ public final class TuiApp implements QuestionBroker.Answerer {
         }
     }
 
+    /**
+     * `Esc` = 终止本轮（08-application §8.9.4.1）。与 `Alt+Enter`（`ESC CR`）同前缀，
+     * JLine 按转义序列判别，最长 100ms 才认定是「单独一个 Esc」。
+     */
+    private void bindTerminate() {
+        try {
+            reader.getWidgets().put("jellyfish-terminate", new TerminateWidget(this));
+            reader.getKeyMaps().get(LineReader.MAIN)
+                    .bind(new org.jline.reader.Reference("jellyfish-terminate"), "\u001B");
+        } catch (RuntimeException unsupported) {
+            // 键位表不支持：仍然可以在提问里用输入放弃，exit 退出
+        }
+    }
+
+    /** Esc：终止本轮（在途模型调用与工具随之收手；子代理级联终止）。 */
+    void onTerminate() {
+        cancelPendingQuestion();
+        token.cancel();
+        renderer.info("（已终止本轮：可继续输入，exit 退出）");
+    }
+
+    /** Ctrl-C 不再承担终止/退出：只提示替代按键，避免用户以为程序卡住。 */
+    private void hintTerminate() {
+        renderer.info("（Ctrl-C 不再用于终止：按 Esc 终止本轮，exit 或 Ctrl-D 退出）");
+    }
+
     private void startInputThread() {
         Thread thread = new Thread(new Runnable() {
             @Override
@@ -138,7 +162,7 @@ public final class TuiApp implements QuestionBroker.Answerer {
                         while (mode == InputMode.PAUSED) {
                             waitOnLock();
                         }
-                        prompt = mode == InputMode.QUESTION ? "回答（/cancel 放弃）> " : prompt();
+                        prompt = mode == InputMode.QUESTION ? "回答（Esc 终止）> " : prompt();
                     }
                     String line;
                     gateway.reading(reader);
@@ -192,12 +216,6 @@ public final class TuiApp implements QuestionBroker.Answerer {
         String text = line == null ? "" : line.trim();
         synchronized (inputLock) {
             if (mode == InputMode.QUESTION && pending != null) {
-                if ("/cancel".equals(text)) {
-                    // 提问里也能放弃：等价于用户拒绝回答，答案按取消回给调用方
-                    pending.complete(Answer.cancelled());
-                    mode = InputMode.PAUSED;
-                    return;
-                }
                 if (isExit(text)) {
                     // 正在等答案时退出：先取消本轮，别让主循环卡在提问上
                     pending.complete(Answer.cancelled());
@@ -399,7 +417,7 @@ public final class TuiApp implements QuestionBroker.Answerer {
         }
     }
 
-    /** 取消时唤醒阻塞中的提问（`/cancel` 与 Ctrl-C 共用）。 */
+    /** 终止时唤醒阻塞中的提问（Esc 与 exit 共用）。 */
     private void cancelPendingQuestion() {
         synchronized (inputLock) {
             if (pending != null) {
@@ -408,29 +426,12 @@ public final class TuiApp implements QuestionBroker.Answerer {
         }
     }
 
-    /** Ctrl-C 在轮次中：取消本轮；连按两次退出。 */
-    private void onInterrupt() {
-        cancelPendingQuestion();
-        if (interruptions.incrementAndGet() >= 2) {
-            commands.offer("exit");
-            return;
-        }
-        token.cancel();
-    }
-
-    /** Ctrl-C 在提示符处：清行继续，两秒内第二次退出。 */
+    /** Ctrl-C 在提示符处：只清掉这段多行输入，不终止、不退出（Esc 终止，exit/Ctrl-D 退出）。 */
     private void onPromptInterrupt() {
         if (draft.isContinuing()) {
             draft.clear();
-            renderer.info("（已放弃这段多行输入）");
-            return;
         }
-        long now = System.currentTimeMillis();
-        if (now - lastPromptInterrupt.getAndSet(now) <= DOUBLE_INTERRUPT_MILLIS) {
-            commands.offer("exit");
-            return;
-        }
-        renderer.info("（已清空当前输入，再按一次 Ctrl-C 退出）");
+        hintTerminate();
     }
 
     private void command(String line) {
@@ -438,7 +439,7 @@ public final class TuiApp implements QuestionBroker.Answerer {
         String name = parts[0];
         boolean sessionFree = !Commands.needsSession(name);
         if ("/help".equals(name)) {
-            renderer.info("/sessions /open <id> /new /cancel /archive /delete /policy k=v /model <id> "
+            renderer.info("/sessions /open <id> /new /archive /delete /policy k=v /model <id> "
                     + "/tools /agents /models /providers /skills /plugins /exit");
             return;
         }
@@ -462,11 +463,6 @@ public final class TuiApp implements QuestionBroker.Answerer {
         } else if ("/delete".equals(name)) {
             print(manageSession.delete(currentSession));
             currentSession = null;
-        } else if ("/cancel".equals(name)) {
-            token.cancel();
-            cancelPendingQuestion();
-            print(manageSession.cancel(currentSession));
-            renderer.info("（已取消，可继续输入或 exit）");
         } else if ("/model".equals(name) && parts.length > 1) {
             print(switchModel.switchTo(currentSession,
                     io.github.zcd0831.jellyfish.domain.shared.ModelId.of(parts[1])));

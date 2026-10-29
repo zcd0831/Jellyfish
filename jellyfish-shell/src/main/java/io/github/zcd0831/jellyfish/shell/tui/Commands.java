@@ -11,14 +11,14 @@ final class Commands {
 
     /** 命令名（含前导 `/`），顺序即 `/help` 的展示顺序。 */
     static final List<String> NAMES = Collections.unmodifiableList(Arrays.asList(
-            "/sessions", "/open", "/new", "/cancel", "/archive", "/delete",
+            "/sessions", "/open", "/new", "/archive", "/delete",
             "/model", "/policy", "/plugins",
             "/tools", "/agents", "/models", "/providers", "/skills",
             "/help", "/exit"));
 
     /** 不带参数的会话命令：没有会话时不允许执行（`/sessions` 等目录命令例外）。 */
     static final List<String> NEEDS_SESSION = Collections.unmodifiableList(Arrays.asList(
-            "/cancel", "/archive", "/delete", "/model"));
+            "/archive", "/delete", "/model"));
 
     private Commands() {
     }

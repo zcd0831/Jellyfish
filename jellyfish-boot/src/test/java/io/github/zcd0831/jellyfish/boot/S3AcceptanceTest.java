@@ -188,6 +188,8 @@ class S3AcceptanceTest {
 
     private ToolExecutor toolExecutorHolder;
     private SessionCancellations cancellations;
+    /** "慢任务"阻塞多久：负向验证靠它把「终止之后会不会又写一笔」暴露出来。 */
+    private long slowMillis = 3000;
 
     @Test
     void 并行子代理各自完成且落sub目录() {
@@ -219,13 +221,15 @@ class S3AcceptanceTest {
 
     @Test
     void 超时终止后子代理不再落流水() throws Exception {
-        subagentTimeoutMillis = 800;
+        subagentTimeoutMillis = 400;
+        slowMillis = 1200;
         String content = spawn("慢任务");
         assertTrue(content.contains("已终止（超时）"), content);
 
         Path subDir = tmp.resolve("sessions").resolve("main").resolve("sub");
         int before = countFiles(subDir);
-        Thread.sleep(600);
+        // 等到"没有被终止时它一定会写出东西"的那一刻之后再看
+        Thread.sleep(1500);
         int after = countFiles(subDir);
 
         assertEquals(before, after, "被判超时之后，子代理不得再往盘上写任何流水");
@@ -348,7 +352,7 @@ class S3AcceptanceTest {
             String task = request.messages().isEmpty() ? "" : String.valueOf(request.messages().get(0).content());
             if (task.contains("慢")) {
                 CancellationToken token = cancellations.forSession(request.sessionId());
-                long until = System.currentTimeMillis() + 3000;
+                long until = System.currentTimeMillis() + slowMillis;
                 while (!token.isCancelled() && System.currentTimeMillis() < until) {
                     try {
                         Thread.sleep(20);

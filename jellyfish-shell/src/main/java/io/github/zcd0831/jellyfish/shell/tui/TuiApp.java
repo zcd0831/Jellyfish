@@ -107,36 +107,24 @@ public final class TuiApp implements QuestionBroker.Answerer {
                     .option(LineReader.Option.DISABLE_EVENT_EXPANSION, true)
                     .build();
             terminal.handle(Terminal.Signal.INT, signal -> hintTerminate());
-            bindInsertNewline();
-            bindTerminate();
+            bindKeys();
             startInputThread();
         }
         resumePrompt();
         loop();
     }
 
-    /** `Alt+Enter` 在缓冲区插入换行（C1 乙）；绑定失败不影响行尾 `\` 续行。 */
-    private void bindInsertNewline() {
+    /** `Esc` 终止、`Alt+Enter` 换行；绑定失败不影响行尾 `\` 续行。 */
+    private void bindKeys() {
         try {
-            reader.getWidgets().put("jellyfish-insert-newline", new InsertNewlineWidget(reader));
-            reader.getKeyMaps().get(LineReader.MAIN)
-                    .bind(new org.jline.reader.Reference("jellyfish-insert-newline"), "\u001B\r");
+            TerminateKey.bind(reader, new Runnable() {
+                @Override
+                public void run() {
+                    onTerminate();
+                }
+            });
         } catch (RuntimeException unsupported) {
             // 终端/键位表不支持就算了，行尾 `\` 仍可用
-        }
-    }
-
-    /**
-     * `Esc` = 终止本轮（08-application §8.9.4.1）。与 `Alt+Enter`（`ESC CR`）同前缀，
-     * JLine 按转义序列判别，最长 100ms 才认定是「单独一个 Esc」。
-     */
-    private void bindTerminate() {
-        try {
-            reader.getWidgets().put("jellyfish-terminate", new TerminateWidget(this));
-            reader.getKeyMaps().get(LineReader.MAIN)
-                    .bind(new org.jline.reader.Reference("jellyfish-terminate"), "\u001B");
-        } catch (RuntimeException unsupported) {
-            // 键位表不支持：仍然可以在提问里用输入放弃，exit 退出
         }
     }
 

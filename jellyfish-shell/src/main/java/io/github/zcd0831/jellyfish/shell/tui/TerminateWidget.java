@@ -8,15 +8,15 @@ import org.jline.reader.Widget;
  */
 final class TerminateWidget implements Widget {
 
-    private final TuiApp app;
+    private final Runnable onTerminate;
 
-    TerminateWidget(TuiApp app) {
-        this.app = app;
+    TerminateWidget(Runnable onTerminate) {
+        this.onTerminate = onTerminate;
     }
 
     @Override
     public boolean apply() {
-        app.onTerminate();
+        onTerminate.run();
         return true;
     }
 }

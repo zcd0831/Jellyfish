@@ -47,6 +47,15 @@ public final class TuiApp implements QuestionBroker.Answerer {
 
     /** 回放条数：约 30 轮对话，再多也没人看。 */
     private static final int REPLAY_RECORDS = 100;
+    /** 运行中监听按键的轮询步长：只影响"多久发现一次按键"，不影响终止延迟。 */
+    private static final long LISTEN_POLL_MILLIS = 100L;
+    /** `Esc` 后等后续字节的窗口：超时即认定「单按 Esc」。 */
+    private static final long ESC_WINDOW_MILLIS = 120L;
+    /** 转义序列最多还有这么多个字节（方向键 2 个、Alt+Enter 1 个，留足余量）。 */
+    private static final int ESC_SEQUENCE_MAX_BYTES = 8;
+    private static final int ESC = 0x1B;
+    /** JLine 非阻塞读取的 EOF（-2 是"等超时"，不算 EOF）。 */
+    private static final int EOF = -1;
 
     private enum InputMode {
         PROMPT, PAUSED, QUESTION
@@ -69,6 +78,10 @@ public final class TuiApp implements QuestionBroker.Answerer {
     private final Object inputLock = new Object();
 
     private InputMode mode = InputMode.PAUSED;
+    /** 只有主线程要过提示符（或要提问）时，输入线程才去读行：运行中没人读行，Esc 由监听器接。 */
+    private boolean promptWanted;
+    private volatile boolean listening;
+    private Thread keyListener;
     /** 多行草稿：只在输入线程里读写。 */
     private final DraftInput draft = new DraftInput();
     private CompletableFuture<Answer> pending;
@@ -135,6 +148,84 @@ public final class TuiApp implements QuestionBroker.Answerer {
         renderer.info("（已终止本轮：可继续输入，exit 退出）");
     }
 
+    /**
+     * 运行中的按键监听：这段时间没人读行，Esc 只能靠这里接（08-application §8.9.4.1）。
+     * <p>判别自己做：`Esc` 后 {@link #ESC_WINDOW_MILLIS}ms 内还有字节，就当作 Alt/转义序列、不终止；
+     * 等到超时才是「单按一次 Esc」。这正是 JLine 键位表做不到的事。
+     */
+    private void startKeyListener() {
+        listening = true;
+        keyListener = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                while (listening) {
+                    if (!listenOnce()) {
+                        return;
+                    }
+                }
+            }
+        }, "jellyfish-terminate-key");
+        keyListener.setDaemon(true);
+        keyListener.start();
+    }
+
+    private void stopKeyListener() {
+        listening = false;
+        Thread listener = keyListener;
+        keyListener = null;
+        if (listener != null) {
+            try {
+                listener.join(LISTEN_POLL_MILLIS * 4L);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+            }
+        }
+    }
+
+    /**
+     * 返回 false 表示终端已关闭，监听结束。
+     * <p>用 peek 而不是 read：<strong>不是 Esc 的按键一个都不消费</strong>，
+     * 于是运行中打好的字仍然留在终端缓冲里，下一个提示符照常收到（type-ahead 不丢）。
+     */
+    private boolean listenOnce() {
+        try {
+            int peeked = terminal.reader().peek(LISTEN_POLL_MILLIS);
+            if (peeked == EOF) {
+                return false;
+            }
+            if (peeked != ESC) {
+                return true;   // 不是 Esc：留给下一个提示符
+            }
+            terminal.reader().read();   // 消费掉这个 Esc，再做窗口判别
+            int next = terminal.reader().peek(ESC_WINDOW_MILLIS);
+            if (next == EOF) {
+                return false;
+            }
+            if (next < 0) {
+                onTerminate();          // 窗口内没有后续字节：这就是「单按一次 Esc」
+                return true;
+            }
+            drainEscapeSequence();      // Alt+X / 方向键：整串吃掉，别让它污染下一次输入
+            return true;
+        } catch (IOException closed) {
+            return false;
+        }
+    }
+
+    /** 转义序列的尾巴（`[A`、`CR` 之类）可能分几批到：持续吞到静默为止，最多一小段。 */
+    private void drainEscapeSequence() {
+        for (int i = 0; i < ESC_SEQUENCE_MAX_BYTES; i++) {
+            try {
+                int more = terminal.reader().read(ESC_WINDOW_MILLIS);
+                if (more < 0) {
+                    return;
+                }
+            } catch (IOException closed) {
+                return;
+            }
+        }
+    }
+
     /** Ctrl-C 不再承担终止/退出：只提示替代按键，避免用户以为程序卡住。 */
     private void hintTerminate() {
         renderer.info("（Ctrl-C 不再用于终止：按 Esc 终止本轮，exit 或 Ctrl-D 退出）");
@@ -147,9 +238,10 @@ public final class TuiApp implements QuestionBroker.Answerer {
                 while (true) {
                     String prompt;
                     synchronized (inputLock) {
-                        while (mode == InputMode.PAUSED) {
+                        while (!promptWanted) {
                             waitOnLock();
                         }
+                        promptWanted = false;
                         prompt = mode == InputMode.QUESTION ? "回答（Esc 终止）> " : prompt();
                     }
                     String line;
@@ -259,6 +351,7 @@ public final class TuiApp implements QuestionBroker.Answerer {
     private void resumePrompt() {
         synchronized (inputLock) {
             mode = InputMode.PROMPT;
+            promptWanted = true;
             inputLock.notifyAll();
         }
     }
@@ -266,6 +359,7 @@ public final class TuiApp implements QuestionBroker.Answerer {
     private void pauseInput() {
         synchronized (inputLock) {
             mode = InputMode.PAUSED;
+            promptWanted = false;
         }
     }
 
@@ -301,11 +395,13 @@ public final class TuiApp implements QuestionBroker.Answerer {
         stats.reset();
         renderer.status("思考中…");
         org.jline.terminal.Attributes original = withoutEcho();
+        startKeyListener();
         TurnOutput sink = new TurnOutput();
         Result<RunSessionResult> result;
         try {
             result = runSession.run(currentSession, text, sink, token);
         } finally {
+            stopKeyListener();
             restore(original);
         }
         renderer.endTurn();
@@ -361,6 +457,7 @@ public final class TuiApp implements QuestionBroker.Answerer {
             pending = future;
             renderer.question(sourceLabel(question.source()), question.prompt());
             mode = InputMode.QUESTION;
+            promptWanted = true;
             inputLock.notifyAll();
         }
         try {

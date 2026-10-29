@@ -141,6 +141,25 @@ class ExecutionLoopTest {
                 VerificationOutcome.FAILED, VerificationType.DETERMINISTIC, "不合格", 1L);
     }
 
+    /**
+     * 工具不响应终止（插件）时，收手点退化到下一次轮次边界：本轮结果照收，下一轮开头抛 CancellationException。
+     * 规则出处：08-application §8.9.4.1（插件工具尽力而为，未响应则退化为下一次轮次边界）。
+     */
+    @Test
+    void 不响应终止的在途工具退化到下一次轮次边界() {
+        planScript.add(plan());
+        final SessionCancellations cancellations = new SessionCancellations();
+        final CancellationToken token = cancellations.register(SessionId.of("s1"), null);
+        when(reActLoop.runIteration(any(Session.class), any(), any(ChunkSink.class))).thenAnswer(call -> {
+            cancellations.cancel(SessionId.of("s1"));   // 工具在跑的时候按了 Esc，但插件工具没响应
+            return submitted("做完了");
+        });
+
+        assertThrows(java.util.concurrent.CancellationException.class,
+                () -> loop().run(session, ChunkSink.NOOP, token, NO_CONTEXT));
+        verify(reActLoop, times(1)).runIteration(any(Session.class), any(), any(ChunkSink.class));
+    }
+
     @Test
     void 无计划且收敛即结束() {
         when(reActLoop.runIteration(any(Session.class), any(), any(ChunkSink.class))).thenReturn(converged());

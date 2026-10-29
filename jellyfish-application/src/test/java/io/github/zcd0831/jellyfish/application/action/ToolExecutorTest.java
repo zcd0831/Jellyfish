@@ -18,6 +18,7 @@ import io.github.zcd0831.jellyfish.domain.action.tool.ToolSchema;
 import io.github.zcd0831.jellyfish.domain.action.tool.ToolSource;
 import io.github.zcd0831.jellyfish.domain.action.tool.ToolStatus;
 import io.github.zcd0831.jellyfish.application.planning.SessionCancellations;
+import io.github.zcd0831.jellyfish.application.shared.CancellationToken;
 import io.github.zcd0831.jellyfish.domain.perception.policy.RuntimePolicy;
 import io.github.zcd0831.jellyfish.domain.perception.session.Session;
 import io.github.zcd0831.jellyfish.domain.shared.AgentId;
@@ -75,6 +76,12 @@ class ToolExecutorTest {
         when(catalog.agents()).thenReturn(Collections.singletonList(new AgentDefinition(AgentId.of("a"), "a",
                 AgentSource.USER_DEFINED, new PromptTemplate("p", Collections.<String>emptyList()),
                 AgentStatus.ACTIVE, Collections.singletonList(tool.id()), Collections.emptyList())));
+    }
+
+    private static AgentDefinition givenAgent(String toolName) {
+        return new AgentDefinition(AgentId.of("a"), "a", AgentSource.USER_DEFINED,
+                new PromptTemplate("p", Collections.<String>emptyList()), AgentStatus.ACTIVE,
+                Collections.singletonList(ToolId.of(toolName)), Collections.emptyList());
     }
 
     private static ToolDefinition tool(String name, SideEffectLevel sideEffect, SourceType type,
@@ -308,6 +315,28 @@ class ToolExecutorTest {
                 io.github.zcd0831.jellyfish.domain.shared.RecordId.of("r1")).content();
 
         assertTrue(content.contains("尚未实现"), "过绑定这一关后才轮到处理器：" + content);
+    }
+
+    @Test
+    void 不响应终止的插件工具仍返回结果_由轮次边界兜底() throws Exception {
+        SessionCancellations cancellations = new SessionCancellations();
+        final CancellationToken token = cancellations.register(session.id(), null);
+        InternalToolHandlers handlers = new InternalToolHandlers(Collections.singletonList(
+                new InternalToolHandlers.NamedHandler("t1", new InternalToolHandler() {
+                    @Override
+                    public ToolExecOutcome handle(Session ignored, Map<String, Object> args) {
+                        // 插件没覆写带信号的版本：终止打不断它，只能等它自己返回（§8.9.4.1 的兜底）
+                        cancellations.cancel(session.id());
+                        return ToolExecOutcome.plain("插件自己做完了");
+                    }
+                })));
+        givenTool(tool("t1", SideEffectLevel.READ_ONLY, SourceType.PLUGIN, ToolStatus.ACTIVE, "{}"));
+
+        ToolExecOutcome outcome = executor(handlers, cancellations).execute(session, "t1",
+                Collections.<String, Object>singletonMap("path", "/tmp/a"), RecordId.of("r1"));
+
+        assertTrue(token.isCancelled());
+        assertEquals("插件自己做完了", outcome.content(), "插件不响应终止时，结果照常回给内循环，由轮次边界收手");
     }
 
     @Test

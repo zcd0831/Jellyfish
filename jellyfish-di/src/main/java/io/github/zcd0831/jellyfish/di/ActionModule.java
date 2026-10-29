@@ -14,6 +14,7 @@ import io.github.zcd0831.jellyfish.application.action.port.ExternalToolPort;
 import io.github.zcd0831.jellyfish.application.perception.port.PolicyRepository;
 import io.github.zcd0831.jellyfish.application.perception.port.SessionRepository;
 import io.github.zcd0831.jellyfish.application.shared.port.ArtifactStore;
+import io.github.zcd0831.jellyfish.application.shared.port.CancellationRegistry;
 import io.github.zcd0831.jellyfish.application.shared.port.CommitScope;
 import io.github.zcd0831.jellyfish.application.shared.port.DomainEventPublisher;
 import io.github.zcd0831.jellyfish.application.shared.port.HumanInteractionPort;
@@ -49,8 +50,10 @@ public final class ActionModule {
     @Singleton
     ToolExecutor toolExecutor(CatalogRepository catalog, ExternalToolPort externalTools,
                               ArtifactStore artifacts, HumanInteractionPort human, PolicyRepository policies,
-                              InternalToolHandlers handlers, ProgressPort progress, SessionToolScope scope) {
-        return new ToolExecutor(catalog, externalTools, artifacts, human, policies, handlers, progress, scope);
+                              InternalToolHandlers handlers, ProgressPort progress, SessionToolScope scope,
+                              CancellationRegistry cancellations) {
+        return new ToolExecutor(catalog, externalTools, artifacts, human, policies, handlers, progress,
+                scope, cancellations);
     }
 
     /** 工具闸门的扩展点视图：插件换掉循环后仍走同一条路。 */

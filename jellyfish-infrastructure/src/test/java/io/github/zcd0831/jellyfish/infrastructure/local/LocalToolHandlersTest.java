@@ -15,6 +15,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** 本地能力：边界、硬限制、以及"失败也是结果"（05-action §5.8.1 规则 9）。 */
@@ -158,6 +159,36 @@ class LocalToolHandlersTest {
         String out = tools.get("run_command").handle(null, args).content();
 
         assertTrue(out.contains("超时"), out);
+    }
+
+    @Test
+    void 终止信号到达时立即杀掉进程树() throws Exception {
+        io.github.zcd0831.jellyfish.application.planning.SessionCancellations cancellations =
+                new io.github.zcd0831.jellyfish.application.planning.SessionCancellations();
+        final io.github.zcd0831.jellyfish.application.shared.CancellationToken token =
+                cancellations.register(io.github.zcd0831.jellyfish.domain.shared.SessionId.of("s1"), null);
+        Thread terminator = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    Thread.sleep(200);
+                } catch (InterruptedException ignored) {
+                    Thread.currentThread().interrupt();
+                }
+                cancellations.cancel(io.github.zcd0831.jellyfish.domain.shared.SessionId.of("s1"));
+            }
+        });
+        terminator.start();
+        long started = System.currentTimeMillis();
+
+        // 工具自带超时 30s，但终止信号应让它 1s 内就收手
+        Map<String, Object> args = map("command", "sleep 30", "timeoutMs", 30000);
+        assertThrows(java.util.concurrent.CancellationException.class,
+                () -> tools.get("run_command").handle(null, args, token));
+        terminator.join();
+        long elapsed = System.currentTimeMillis() - started;
+
+        assertTrue(elapsed < 3000, "终止应在 3s 内生效，实际 " + elapsed + "ms");
     }
 
     @Test

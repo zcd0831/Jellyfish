@@ -3,6 +3,7 @@ package io.github.zcd0831.jellyfish.infrastructure.local;
 import io.github.zcd0831.jellyfish.application.action.InternalToolHandler;
 import io.github.zcd0831.jellyfish.application.action.InternalToolHandlers;
 import io.github.zcd0831.jellyfish.application.action.ToolExecOutcome;
+import io.github.zcd0831.jellyfish.application.shared.CancellationToken;
 import io.github.zcd0831.jellyfish.domain.perception.session.Session;
 import io.github.zcd0831.jellyfish.infrastructure.file.AtomicFiles;
 
@@ -44,6 +45,8 @@ public final class LocalToolHandlers {
     static final long DEFAULT_TIMEOUT_MS = 120_000;
     static final long MAX_TIMEOUT_MS = 600_000;
     static final int TAIL_LINES = 200;
+    /** 等待子进程的分片：终止信号到达后最多这么久就杀进程树。 */
+    static final long KILL_POLL_MILLIS = 100;
 
     private static final List<String> IGNORED_DIRS =
             Arrays.asList(".git", "target", "node_modules", ".idea", ".mvn", "dist", "build");
@@ -75,8 +78,17 @@ public final class LocalToolHandlers {
         return new InternalToolHandler() {
             @Override
             public ToolExecOutcome handle(Session session, Map<String, Object> args) {
+                return handle(session, args, CancellationToken.never());
+            }
+
+            /** 终止信号要能到工具执行（08-application §8.9.4.1）。 */
+            @Override
+            public ToolExecOutcome handle(Session session, Map<String, Object> args, CancellationToken token) {
                 try {
-                    return ToolExecOutcome.plain(tool.run(args));
+                    return ToolExecOutcome.plain(tool.run(args, token));
+                } catch (java.util.concurrent.CancellationException terminated) {
+                    // 终止是控制信号，不是「一种工具结果」：必须上抛，未闭合的调用由内循环补中止（§8.9.4.1）
+                    throw terminated;
                 } catch (Workspace.OutsideWorkspace | IllegalArgumentException e) {
                     return ToolExecOutcome.plain("工具错误：" + e.getMessage());
                 } catch (Exception e) {
@@ -328,6 +340,12 @@ public final class LocalToolHandlers {
         return new LocalTool() {
             @Override
             public String run(Map<String, Object> args) throws IOException, InterruptedException {
+                return run(args, CancellationToken.never());
+            }
+
+            @Override
+            public String run(Map<String, Object> args, CancellationToken token)
+                    throws IOException, InterruptedException {
                 Path cwd = workspace.resolve(optional(args, "cwd", "."));
                 if (!Files.isDirectory(cwd)) {
                     throw new IllegalArgumentException("cwd 不是目录：" + workspace.relative(cwd));
@@ -340,7 +358,22 @@ public final class LocalToolHandlers {
                 Process process = builder.start();
                 StringBuilder output = new StringBuilder();
                 Thread reader = drain(process, output);
-                boolean finished = process.waitFor(timeout, TimeUnit.MILLISECONDS);
+                // 分片等待：令牌一响就杀进程树，不必等到工具自己的超时（§8.9.4.1）
+                long deadline = System.currentTimeMillis() + timeout;
+                boolean finished = false;
+                while (!finished) {
+                    if (token.isCancelled()) {
+                        kill(process);
+                        process.waitFor();
+                        reader.join(1_000);
+                        throw new java.util.concurrent.CancellationException("run_command 已被终止");
+                    }
+                    long remaining = deadline - System.currentTimeMillis();
+                    if (remaining <= 0) {
+                        break;
+                    }
+                    finished = process.waitFor(Math.min(remaining, KILL_POLL_MILLIS), TimeUnit.MILLISECONDS);
+                }
                 if (!finished) {
                     kill(process);
                     process.waitFor();
@@ -516,6 +549,11 @@ public final class LocalToolHandlers {
     private interface LocalTool {
 
         String run(Map<String, Object> args) throws Exception;
+
+        /** 默认不关心终止；会阻塞的工具（run_command）覆写它。 */
+        default String run(Map<String, Object> args, CancellationToken token) throws Exception {
+            return run(args);
+        }
     }
 
     private interface FileConsumer {

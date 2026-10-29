@@ -17,6 +17,7 @@ import io.github.zcd0831.jellyfish.domain.action.tool.ToolDefinition;
 import io.github.zcd0831.jellyfish.domain.action.tool.ToolSchema;
 import io.github.zcd0831.jellyfish.domain.action.tool.ToolSource;
 import io.github.zcd0831.jellyfish.domain.action.tool.ToolStatus;
+import io.github.zcd0831.jellyfish.application.planning.SessionCancellations;
 import io.github.zcd0831.jellyfish.domain.perception.policy.RuntimePolicy;
 import io.github.zcd0831.jellyfish.domain.perception.session.Session;
 import io.github.zcd0831.jellyfish.domain.shared.AgentId;
@@ -32,10 +33,13 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /** 工具执行的合法性 / 审批 / 分发 / 截断分支。规则出处：05-action §5.9.1。 */
@@ -58,6 +62,12 @@ class ToolExecutorTest {
     private ToolExecutor executor(InternalToolHandlers handlers) {
         when(policies.load()).thenReturn(RuntimePolicy.defaults());
         return new ToolExecutor(catalog, external, artifacts, human, policies, handlers, progress, scope);
+    }
+
+    private ToolExecutor executor(InternalToolHandlers handlers, SessionCancellations cancellations) {
+        when(policies.load()).thenReturn(RuntimePolicy.defaults());
+        return new ToolExecutor(catalog, external, artifacts, human, policies, handlers, progress, scope,
+                cancellations);
     }
 
     private void givenTool(ToolDefinition tool) {
@@ -298,5 +308,18 @@ class ToolExecutorTest {
                 io.github.zcd0831.jellyfish.domain.shared.RecordId.of("r1")).content();
 
         assertTrue(content.contains("尚未实现"), "过绑定这一关后才轮到处理器：" + content);
+    }
+
+    @Test
+    void 本轮已终止就不再执行工具() {
+        givenTool(tool("t1", SideEffectLevel.READ_ONLY, SourceType.REST, ToolStatus.ACTIVE, "{}"));
+        SessionCancellations cancellations = new SessionCancellations();
+        cancellations.register(session.id(), null);
+        cancellations.cancel(session.id());
+
+        assertThrows(java.util.concurrent.CancellationException.class, () -> executor(
+                InternalToolHandlers.empty(), cancellations).execute(session, "t1",
+                Collections.<String, Object>singletonMap("path", "/tmp/a"), RecordId.of("r1")));
+        verify(external, never()).invoke(any(), anyMap());
     }
 }

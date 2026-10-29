@@ -5,8 +5,10 @@ import io.github.zcd0831.jellyfish.application.action.port.CatalogRepository;
 import io.github.zcd0831.jellyfish.application.action.port.ExternalToolPort;
 import io.github.zcd0831.jellyfish.application.perception.port.PolicyRepository;
 import io.github.zcd0831.jellyfish.application.shared.Answer;
+import io.github.zcd0831.jellyfish.application.shared.CancellationToken;
 import io.github.zcd0831.jellyfish.application.shared.Question;
 import io.github.zcd0831.jellyfish.application.shared.port.ArtifactStore;
+import io.github.zcd0831.jellyfish.application.shared.port.CancellationRegistry;
 import io.github.zcd0831.jellyfish.application.shared.ProgressEvent;
 import io.github.zcd0831.jellyfish.application.shared.port.HumanInteractionPort;
 import io.github.zcd0831.jellyfish.application.shared.port.ProgressPort;
@@ -53,10 +55,20 @@ public final class ToolExecutor implements ToolInvoker {
                     java.util.Set<String>>();
     private final InternalToolHandlers handlers;
     private final SessionToolScope scope;
+    /** 按会话取终止信号：工具执行是终止生效边界之一（08-application §8.9.4.1）。 */
+    private final CancellationRegistry cancellations;
+
+    /** 没有登记表的实例（测试、插件自建）：终止信号一律「永不取消」。 */
+    private static final CancellationRegistry NO_CANCELLATIONS = new CancellationRegistry() {
+        @Override
+        public CancellationToken forSession(io.github.zcd0831.jellyfish.domain.shared.SessionId sessionId) {
+            return CancellationToken.never();
+        }
+    };
 
     public ToolExecutor(CatalogRepository catalog, ExternalToolPort externalTools, ArtifactStore artifacts,
                         HumanInteractionPort human, PolicyRepository policies, InternalToolHandlers handlers,
-                        ProgressPort progress, SessionToolScope scope) {
+                        ProgressPort progress, SessionToolScope scope, CancellationRegistry cancellations) {
         this.catalog = catalog;
         this.externalTools = externalTools;
         this.artifacts = artifacts;
@@ -65,6 +77,13 @@ public final class ToolExecutor implements ToolInvoker {
         this.progress = progress;
         this.handlers = handlers;
         this.scope = scope;
+        this.cancellations = cancellations;
+    }
+
+    public ToolExecutor(CatalogRepository catalog, ExternalToolPort externalTools, ArtifactStore artifacts,
+                        HumanInteractionPort human, PolicyRepository policies, InternalToolHandlers handlers,
+                        ProgressPort progress, SessionToolScope scope) {
+        this(catalog, externalTools, artifacts, human, policies, handlers, progress, scope, NO_CANCELLATIONS);
     }
 
     @Override
@@ -137,7 +156,10 @@ public final class ToolExecutor implements ToolInvoker {
         if (refusal != null) {
             return ToolExecOutcome.plain(refusal);
         }
-        String raw = dispatch(session, tool, args);
+        CancellationToken token = cancellations.forSession(session.id());
+        // 终止是终态：不再发起新工具。未闭合的 TOOL_REQUEST 由内循环补中止结果（§8.9.4.1）
+        token.throwIfCancelled();
+        String raw = dispatch(session, tool, args, token);
         return truncate(raw, session, recordId, policy);
     }
 
@@ -145,7 +167,8 @@ public final class ToolExecutor implements ToolInvoker {
      * `INTERNAL` / `NATIVE` / `PLUGIN` 共用同一张处理器注册表，只有 `REST` / `MCP` 才是出站调用。
      * 规则出处：05-action §5.6（ToolSource）、§5.9.1 分发图、§5.8.1 规则 3/4。
      */
-    private String dispatch(Session session, ToolDefinition tool, Map<String, Object> args) {
+    private String dispatch(Session session, ToolDefinition tool, Map<String, Object> args,
+                            CancellationToken token) {
         SourceType source = tool.source().getType();
         if (source == SourceType.INTERNAL || source == SourceType.NATIVE || source == SourceType.PLUGIN) {
             if (source == SourceType.INTERNAL
@@ -159,7 +182,7 @@ public final class ToolExecutor implements ToolInvoker {
             if (handler == null) {
                 return "工具尚未实现：" + tool.name();
             }
-            return handler.handle(session, args).content();
+            return handler.handle(session, args, token).content();
         }
         try {
             return externalTools.invoke(tool, args);

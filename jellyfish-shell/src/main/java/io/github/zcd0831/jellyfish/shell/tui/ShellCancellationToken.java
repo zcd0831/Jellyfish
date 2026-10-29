@@ -14,13 +14,22 @@ public final class ShellCancellationToken implements CancellationToken {
     private final List<Runnable> callbacks = new ArrayList<Runnable>();
     private volatile boolean cancelled;
 
-    public void onCancel(Runnable callback) {
+    /** Ctrl-C / `/cancel` 都调它的 `cancel()`；返回的注销句柄由注册方保存（长会话里回调不能只增不减）。 */
+    public Runnable onCancel(Runnable callback) {
         synchronized (callbacks) {
             callbacks.add(callback);
         }
         if (cancelled) {
             callback.run();
         }
+        return new Runnable() {
+            @Override
+            public void run() {
+                synchronized (callbacks) {
+                    callbacks.remove(callback);
+                }
+            }
+        };
     }
 
     /** 一次取消：先把标志置上，再让所有等待点（HTTP 读、ask）尽快退出。 */

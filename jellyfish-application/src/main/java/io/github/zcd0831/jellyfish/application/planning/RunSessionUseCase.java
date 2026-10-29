@@ -41,11 +41,13 @@ public final class RunSessionUseCase {
     private final ProgressPort progress;
     private final PlanRepository plans;
     private final ContextWindowService contextWindow;
+    private final SessionCancellations cancellations;
 
     public RunSessionUseCase(SessionRepository sessions, RecordStore records, CommitScope commitScope,
                              DomainEventPublisher eventPublisher, SessionRunner runner,
                              ModelInvocationPort model, ToolInvoker tools, HumanInteractionPort human,
-                             ProgressPort progress, PlanRepository plans, ContextWindowService contextWindow) {
+                             ProgressPort progress, PlanRepository plans, ContextWindowService contextWindow,
+                             SessionCancellations cancellations) {
         this.sessions = sessions;
         this.records = records;
         this.commitScope = commitScope;
@@ -57,6 +59,7 @@ public final class RunSessionUseCase {
         this.progress = progress;
         this.plans = plans;
         this.contextWindow = contextWindow;
+        this.cancellations = cancellations;
     }
 
     /** 没有令牌的调用（测试复跑、内部复用）按"永不取消"处理（§8.4.1）。 */
@@ -69,6 +72,26 @@ public final class RunSessionUseCase {
         if (session == null) {
             return Result.fail(UseCaseError.of(SessionError.NOT_FOUND, "会话不存在", sessionId));
         }
+        // 终止信号按会话登记：外部令牌（外壳）只是同一信号的另一个触发器，
+        // 这样模型调用与工具执行都能按 sessionId 取到它（08-application §8.9.4.1）
+        final CancellationToken termination = cancellations.register(sessionId, session.parentSessionId());
+        if (token != null && token != termination) {
+            token.onCancel(new Runnable() {
+                @Override
+                public void run() {
+                    cancellations.cancel(sessionId);
+                }
+            });
+        }
+        try {
+            return execute(session, sessionId, text, sink, termination);
+        } finally {
+            cancellations.unregister(sessionId);
+        }
+    }
+
+    private Result<RunSessionResult> execute(Session session, SessionId sessionId, String text, ChunkSink sink,
+                                             CancellationToken token) {
         session.hydrateRecords(records.last(sessionId, Integer.MAX_VALUE));
         if (text != null) {
             // 续跑（text == null）不追加用户消息：会话开启时首条输入已落盘（08-application §8.9.3）
@@ -83,7 +106,7 @@ public final class RunSessionUseCase {
             finish(session);
             return Result.ok(RunSessionResult.of(map(outcome)));
         } catch (java.util.concurrent.CancellationException cancelled) {
-            // 中断不是错误：会话回到可续跑，半截输出不落盘
+            // 终止不是错误：会话回到可续跑，半截输出不落盘（08-application §8.9.4.1）
             finish(session);
             return Result.ok(RunSessionResult.of(RunSessionResult.Outcome.CANCELLED));
         } catch (ModelInvocationException unavailable) {

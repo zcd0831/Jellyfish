@@ -144,7 +144,7 @@ public final class ReActLoop {
 
     private ModelInvocationResult invoke(Session session, ContextWindow window,
                                          List<ChatMessage> messages, ChunkSink sink) {
-        ModelInvocationRequest request = new ModelInvocationRequest(session.activeModelId(),
+        ModelInvocationRequest request = new ModelInvocationRequest(session.id(), session.activeModelId(),
                 systemPrompt(session), messages, tools(session),
                 window.getUsage().getUsedTokens(), null);
         return sink == null ? model.invoke(request) : model.invokeStreaming(request, sink);

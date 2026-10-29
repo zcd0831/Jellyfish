@@ -23,6 +23,7 @@ import io.github.zcd0831.jellyfish.application.planning.ReActLoop;
 import io.github.zcd0831.jellyfish.application.planning.RunSessionProvider;
 import io.github.zcd0831.jellyfish.application.planning.RunSessionResult;
 import io.github.zcd0831.jellyfish.application.planning.RunSessionUseCase;
+import io.github.zcd0831.jellyfish.application.planning.SessionCancellations;
 import io.github.zcd0831.jellyfish.application.planning.SubagentLauncher;
 import io.github.zcd0831.jellyfish.application.planning.VerificationRunner;
 import io.github.zcd0831.jellyfish.application.planning.port.PlanRepository;
@@ -134,8 +135,10 @@ class S4LoopTest {
                         return holder[0];
                     }
                 });
+        SessionCancellations cancellations = new SessionCancellations();
         runSession = new RunSessionUseCase(sessions, records, new FileCommitScope(dir, codec), publisher,
-                executionLoop, model, toolExecutor, human, event -> { }, plans, contextWindow);
+                executionLoop, model, toolExecutor, human, event -> { }, plans, contextWindow,
+                cancellations);
         holder[0] = runSession;
     }
 

@@ -53,7 +53,7 @@ class RunSessionUseCaseTest {
         when(sessions.load(SessionId.of("s1"))).thenReturn(session);
         when(records.last(any(SessionId.class), anyInt())).thenReturn(Collections.emptyList());
         return new RunSessionUseCase(sessions, records, commitScope, events -> { }, runner, model, tools, human,
-                progress, plans, contextWindow);
+                progress, plans, contextWindow, new SessionCancellations());
     }
 
     @Test

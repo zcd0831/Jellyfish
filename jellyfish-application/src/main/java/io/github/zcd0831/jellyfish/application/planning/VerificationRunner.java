@@ -124,7 +124,7 @@ public final class VerificationRunner {
                 + "\n验证标准：" + text(step.verificationCriteria())
                 + "\n执行结果：" + text(summary);
         try {
-            ModelInvocationResult result = model.invoke(new ModelInvocationRequest(session.activeModelId(),
+            ModelInvocationResult result = model.invoke(new ModelInvocationRequest(session.id(), session.activeModelId(),
                     judgeAgent.basePrompt().getTemplateText(),
                     Collections.singletonList(ChatMessage.of(RecordRole.USER, input)),
                     Collections.emptyList(), 0, null));

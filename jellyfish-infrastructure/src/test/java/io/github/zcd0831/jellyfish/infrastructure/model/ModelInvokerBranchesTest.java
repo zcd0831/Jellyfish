@@ -98,18 +98,14 @@ class ModelInvokerBranchesTest {
             this.failure = failure;
         }
 
-        public Response post(String url, Map<String, String> headers, String body) {
+        public Response post(String url, Map<String, String> headers, String body,
+                             io.github.zcd0831.jellyfish.application.shared.CancellationToken token) {
             if (failure != null) { throw failure; }
             return response;
         }
-        public void postStreaming(String url, Map<String, String> headers, String body, LineSink sink) { }
-        @Override
-        public boolean cancelledByUser() {
-            return false;
-        }
-
-        @Override
-        public void cancelActive() { }
+        public void postStreaming(String url, Map<String, String> headers, String body,
+                                  io.github.zcd0831.jellyfish.application.shared.CancellationToken token,
+                                  LineSink sink) { }
     }
 
     private static ModelInvocationRequest request() {
@@ -199,7 +195,8 @@ class ModelInvokerBranchesTest {
                 Collections.singletonList(provider(ProviderStatus.ACTIVE, ChatProtocol.ANTHROPIC_MESSAGES)));
         final String[] seen = new String[3];
         ChatTransport transport = new ChatTransport() {
-            public Response post(String url, Map<String, String> headers, String body) {
+            public Response post(String url, Map<String, String> headers, String body,
+                             io.github.zcd0831.jellyfish.application.shared.CancellationToken token) {
                 seen[0] = url;
                 seen[1] = headers.get("x-api-key");
                 seen[2] = body;
@@ -207,13 +204,9 @@ class ModelInvokerBranchesTest {
                         + "\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}", null);
             }
 
-            public void postStreaming(String url, Map<String, String> headers, String body, LineSink sink) { }
-
-            public void cancelActive() { }
-
-            public boolean cancelledByUser() {
-                return false;
-            }
+            public void postStreaming(String url, Map<String, String> headers, String body,
+                                  io.github.zcd0831.jellyfish.application.shared.CancellationToken token,
+                                  LineSink sink) { }
         };
 
         invoker(catalog, transport, "secret").invoke(request());
@@ -233,20 +226,17 @@ class ModelInvokerBranchesTest {
                         new ApiCredential("K"), ProviderStatus.ACTIVE)));
         final String[] seen = new String[2];
         ChatTransport transport = new ChatTransport() {
-            public Response post(String url, Map<String, String> headers, String body) {
+            public Response post(String url, Map<String, String> headers, String body,
+                             io.github.zcd0831.jellyfish.application.shared.CancellationToken token) {
                 seen[0] = url;
                 seen[1] = headers.get("x-goog-api-key");
                 return new Response(200, "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"hi\"}]}}],"
                         + "\"usageMetadata\":{\"promptTokenCount\":1,\"candidatesTokenCount\":1}}", null);
             }
 
-            public void postStreaming(String url, Map<String, String> headers, String body, LineSink sink) { }
-
-            public void cancelActive() { }
-
-            public boolean cancelledByUser() {
-                return false;
-            }
+            public void postStreaming(String url, Map<String, String> headers, String body,
+                                  io.github.zcd0831.jellyfish.application.shared.CancellationToken token,
+                                  LineSink sink) { }
         };
 
         invoker(catalog, transport, "secret").invoke(request());
@@ -261,19 +251,16 @@ class ModelInvokerBranchesTest {
                 Collections.singletonList(provider(ProviderStatus.ACTIVE)));
         final int[] attempts = {0};
         ChatTransport streaming = new ChatTransport() {
-            public Response post(String url, Map<String, String> headers, String body) {
+            public Response post(String url, Map<String, String> headers, String body,
+                             io.github.zcd0831.jellyfish.application.shared.CancellationToken token) {
                 throw new UnsupportedOperationException("流式用例不该走阻塞路径");
             }
 
-            public void postStreaming(String url, Map<String, String> headers, String body, LineSink sink) {
+            public void postStreaming(String url, Map<String, String> headers, String body,
+                                  io.github.zcd0831.jellyfish.application.shared.CancellationToken token,
+                                  LineSink sink) {
                 attempts[0]++;
                 throw new HttpStatusException(401, "{\"error\":\"bad key\"}", null);
-            }
-
-            public void cancelActive() { }
-
-            public boolean cancelledByUser() {
-                return false;
             }
         };
 
@@ -289,18 +276,15 @@ class ModelInvokerBranchesTest {
         Catalog catalog = new Catalog(Collections.singletonList(model("m1", ModelStatus.ACTIVE)),
                 Collections.singletonList(provider(ProviderStatus.ACTIVE)));
         ChatTransport streaming = new ChatTransport() {
-            public Response post(String url, Map<String, String> headers, String body) {
+            public Response post(String url, Map<String, String> headers, String body,
+                             io.github.zcd0831.jellyfish.application.shared.CancellationToken token) {
                 throw new UnsupportedOperationException();
             }
 
-            public void postStreaming(String url, Map<String, String> headers, String body, LineSink sink) {
+            public void postStreaming(String url, Map<String, String> headers, String body,
+                                  io.github.zcd0831.jellyfish.application.shared.CancellationToken token,
+                                  LineSink sink) {
                 throw new HttpStatusException(400, "{\"error\":\"maximum context length exceeded\"}", null);
-            }
-
-            public void cancelActive() { }
-
-            public boolean cancelledByUser() {
-                return false;
             }
         };
 

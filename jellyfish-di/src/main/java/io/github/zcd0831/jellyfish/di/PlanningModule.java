@@ -33,12 +33,14 @@ import io.github.zcd0831.jellyfish.application.planning.GeneratePlanHandler;
 import io.github.zcd0831.jellyfish.application.planning.ReplanPlanHandler;
 import io.github.zcd0831.jellyfish.application.planning.VerificationRunner;
 import io.github.zcd0831.jellyfish.application.planning.RunSessionUseCase;
+import io.github.zcd0831.jellyfish.application.planning.SessionCancellations;
 import io.github.zcd0831.jellyfish.application.planning.SpawnSubagentsHandler;
 import io.github.zcd0831.jellyfish.application.planning.LoadSkillHandler;
 import io.github.zcd0831.jellyfish.application.planning.RunSessionProvider;
 import io.github.zcd0831.jellyfish.application.planning.SubagentLauncher;
 import io.github.zcd0831.jellyfish.application.planning.port.PlanRepository;
 import io.github.zcd0831.jellyfish.application.shared.port.Clock;
+import io.github.zcd0831.jellyfish.application.shared.port.CancellationRegistry;
 import io.github.zcd0831.jellyfish.application.shared.port.CommitScope;
 import io.github.zcd0831.jellyfish.application.shared.port.DomainEventPublisher;
 import io.github.zcd0831.jellyfish.application.action.port.CatalogRepository;
@@ -173,13 +175,28 @@ public final class PlanningModule {
         return routes.resolve("SessionRunner", (SessionRunner) executionLoop);
     }
 
+    /** 在跑会话的终止信号登记表：全进程一份（08-application §8.9.4.1 的两张进程内表）。 */
+    @Provides
+    @Singleton
+    SessionCancellations sessionCancellations() {
+        return new SessionCancellations();
+    }
+
+    /** 基础设施（传输层、本地工具）只认端口，不认应用层的具体表。 */
+    @Provides
+    @Singleton
+    CancellationRegistry cancellationRegistry(SessionCancellations cancellations) {
+        return cancellations;
+    }
+
     @Provides
     RunSessionUseCase runSessionUseCase(SessionRepository sessions, RecordStore records,
                                         CommitScope commitScope, DomainEventPublisher publisher,
                                         SessionRunner runner, ModelInvocationPort model, ToolInvoker tools,
                                         HumanInteractionPort human, ProgressPort progress,
-                                        PlanRepository plans, ContextWindowService contextWindow) {
+                                        PlanRepository plans, ContextWindowService contextWindow,
+                                        SessionCancellations cancellations) {
         return new RunSessionUseCase(sessions, records, commitScope, publisher, runner, model, tools, human,
-                progress, plans, contextWindow);
+                progress, plans, contextWindow, cancellations);
     }
 }

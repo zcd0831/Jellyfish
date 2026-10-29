@@ -1,5 +1,8 @@
 package io.github.zcd0831.jellyfish.infrastructure.model;
 
+import io.github.zcd0831.jellyfish.application.planning.SessionCancellations;
+import io.github.zcd0831.jellyfish.application.shared.CancellationToken;
+import io.github.zcd0831.jellyfish.domain.shared.SessionId;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.mockwebserver.RecordedRequest;
@@ -8,25 +11,26 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 真跑 HTTP（MockWebServer），不联网。。
+ * 真跑 HTTP（MockWebServer），不联网。
+ * 规则出处：09-infrastructure §9.11 第 9 条（请求句柄按调用持有）。
  */
 class HttpJsonClientTest {
 
     private MockWebServer server;
     private final HttpJsonClient client = new HttpJsonClient();
+    private final CancellationToken never = CancellationToken.never();
 
     @BeforeEach
     void start() throws IOException {
@@ -44,7 +48,7 @@ class HttpJsonClientTest {
         server.enqueue(new MockResponse().setBody("{\"answer\":42}"));
 
         ChatTransport.Response response = client.post(server.url("/chat/completions").toString(),
-                Collections.singletonMap("Authorization", "Bearer k"), "{\"model\":\"m\"}");
+                Collections.singletonMap("Authorization", "Bearer k"), "{\"model\":\"m\"}", never);
 
         assertEquals(200, response.status());
         assertEquals("{\"answer\":42}", response.body());
@@ -59,7 +63,7 @@ class HttpJsonClientTest {
                 .setBody("{\"error\":\"slow down\"}"));
 
         ChatTransport.Response response = client.post(server.url("/chat/completions").toString(),
-                Collections.<String, String>emptyMap(), "{}");
+                Collections.<String, String>emptyMap(), "{}", never);
 
         assertEquals(429, response.status());
         assertEquals("30", response.retryAfter());
@@ -74,7 +78,7 @@ class HttpJsonClientTest {
         final List<String> received = new CopyOnWriteArrayList<>();
 
         client.postStreaming(server.url("/chat/completions").toString(),
-                Collections.<String, String>emptyMap(), "{}", new ChatTransport.LineSink() {
+                Collections.<String, String>emptyMap(), "{}", never, new ChatTransport.LineSink() {
                     @Override
                     public boolean onData(String data) {
                         received.add(data);
@@ -86,9 +90,12 @@ class HttpJsonClientTest {
     }
 
     @Test
-    void 取消在途请求立即失败() {
+    void 终止信号让在途请求立即失败() {
         server.enqueue(new MockResponse().setBody("{}").setBodyDelay(2, TimeUnit.SECONDS));
-        Thread canceller = new Thread(new Runnable() {
+        final SessionCancellations cancellations = new SessionCancellations();
+        SessionId session = SessionId.of("s1");
+        final CancellationToken token = cancellations.register(session, null);
+        Thread terminator = new Thread(new Runnable() {
             @Override
             public void run() {
                 try {
@@ -96,16 +103,45 @@ class HttpJsonClientTest {
                 } catch (InterruptedException ignored) {
                     Thread.currentThread().interrupt();
                 }
-                client.cancelActive();
+                cancellations.cancel(SessionId.of("s1"));
             }
         });
-        canceller.start();
+        terminator.start();
 
         long started = System.currentTimeMillis();
-        assertThrows(UncheckedIOException.class, () -> client.post(
-                server.url("/chat/completions").toString(), Collections.<String, String>emptyMap(), "{}"));
+        assertThrows(java.util.concurrent.CancellationException.class, () -> client.post(
+                server.url("/chat/completions").toString(), Collections.<String, String>emptyMap(), "{}", token));
         long elapsed = System.currentTimeMillis() - started;
 
-        assertTrue(elapsed < 3000, "取消应立刻生效，实际耗时 " + elapsed + "ms");
+        assertTrue(elapsed < 3000, "终止应立刻生效，实际耗时 " + elapsed + "ms");
+    }
+
+    @Test
+    void 一个会话的终止不波及另一个会话的在途请求() throws Exception {
+        server.enqueue(new MockResponse().setBody("{\"answer\":1}").setBodyDelay(1200, TimeUnit.MILLISECONDS));
+        final SessionCancellations cancellations = new SessionCancellations();
+        final CancellationToken doomed = cancellations.register(SessionId.of("a"), null);
+        final CancellationToken healthy = cancellations.register(SessionId.of("b"), null);
+
+        Thread terminator = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    Thread.sleep(200);
+                } catch (InterruptedException ignored) {
+                    Thread.currentThread().interrupt();
+                }
+                cancellations.cancel(SessionId.of("a"));
+            }
+        });
+        terminator.start();
+
+        ChatTransport.Response other = client.post(server.url("/chat/completions").toString(),
+                Collections.<String, String>emptyMap(), "{}", healthy);
+        terminator.join();
+
+        assertEquals(200, other.status(), "另一个会话的在途请求不得被终止");
+        assertTrue(doomed.isCancelled(), "被终止的只是发起方那个会话");
+        assertFalse(healthy.isCancelled());
     }
 }

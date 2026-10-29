@@ -22,6 +22,7 @@ import io.github.zcd0831.jellyfish.application.planning.GeneratePlanHandler;
 import io.github.zcd0831.jellyfish.application.planning.ReActLoop;
 import io.github.zcd0831.jellyfish.application.planning.RunSessionResult;
 import io.github.zcd0831.jellyfish.application.planning.RunSessionUseCase;
+import io.github.zcd0831.jellyfish.application.planning.SessionCancellations;
 import io.github.zcd0831.jellyfish.application.planning.VerificationRunner;
 import io.github.zcd0831.jellyfish.application.planning.port.PlanRepository;
 import io.github.zcd0831.jellyfish.application.shared.Answer;
@@ -147,8 +148,10 @@ class S2AcceptanceTest {
                 new io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner(
                         startSession, sessions, reActLoop, new SessionToolScope(),
                         new FileCommitScope(dir, codec), () -> System.currentTimeMillis()));
+        SessionCancellations cancellations = new SessionCancellations();
         runSession = new RunSessionUseCase(sessions, records, new FileCommitScope(dir, codec), publisher,
-                executionLoop, model, toolExecutor, human, event -> { }, plans, contextWindow);
+                executionLoop, model, toolExecutor, human, event -> { }, plans, contextWindow,
+                cancellations);
         runSessionHolder[0] = runSession;
         startSession = new StartSessionUseCase(catalog, sessions, budgets,
                 new SessionTitleGenerator(model, budgetService), new SystemPromptAssembler(),

@@ -1,5 +1,6 @@
 package io.github.zcd0831.jellyfish.infrastructure.model;
 
+import io.github.zcd0831.jellyfish.application.shared.CancellationToken;
 import okhttp3.Call;
 import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
@@ -14,7 +15,10 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 /**
- * OkHttp 承载的 HTTP：超时与取消的口径见 05-action §5.9.3；取消靠 `Call.cancel()` 让阻塞读立刻失败。
+ * OkHttp 承载的 HTTP。规则出处：09-infrastructure §9.11、08-application §8.9.4.1。
+ * <p><strong>请求句柄按调用持有</strong>：`Thread.interrupt` 对同步阻塞读无效，
+ * 唯一能打断它的是 `Call.cancel()`；所以每个调用各自拿自己的 Call，
+ * 不设“当前活跃请求”这种共享槽位（父会话与并行子代理共用一个实例）。
  */
 public final class HttpJsonClient implements ChatTransport {
 
@@ -25,9 +29,6 @@ public final class HttpJsonClient implements ChatTransport {
     private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
 
     private final OkHttpClient client;
-    private volatile Call active;
-    /** 只对当次调用有效：每次发请求开头清掉。 */
-    private volatile boolean cancelled;
 
     public HttpJsonClient() {
         this.client = new OkHttpClient.Builder()
@@ -37,31 +38,32 @@ public final class HttpJsonClient implements ChatTransport {
     }
 
     @Override
-    public Response post(String url, Map<String, String> headers, String body) {
-        cancelled = false;
-        Request request = build(url, headers, body);
-        Call call = client.newCall(request);
-        active = call;
+    public Response post(String url, Map<String, String> headers, String body, CancellationToken token) {
+        Call call = client.newCall(build(url, headers, body));
+        Runnable unsubscribe = token.onCancel(cancelOf(call));
         try (okhttp3.Response response = call.execute()) {
             ResponseBody responseBody = response.body();
             String text = responseBody == null ? "" : responseBody.string();
             return new Response(response.code(), text, response.header("Retry-After"));
         } catch (IOException e) {
+            if (token.isCancelled()) {
+                throw new java.util.concurrent.CancellationException("在途请求已被终止：" + url);
+            }
             throw new UncheckedIOException("模型端点不可达：" + url, e);
         } finally {
-            active = null;
+            unsubscribe.run();
         }
     }
 
     @Override
-    public void postStreaming(String url, Map<String, String> headers, String body, LineSink sink) {
-        cancelled = false;
+    public void postStreaming(String url, Map<String, String> headers, String body, CancellationToken token,
+                              LineSink sink) {
         // 流式把读超时当"空闲超时"：每收到一行都会重置，长回答不会被总时长误杀
         OkHttpClient streaming = client.newBuilder()
                 .readTimeout(STREAM_IDLE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
                 .build();
         Call call = streaming.newCall(build(url, headers, body));
-        active = call;
+        Runnable unsubscribe = token.onCancel(cancelOf(call));
         try (okhttp3.Response response = call.execute()) {
             if (response.code() >= 400) {
                 ResponseBody errorBody = response.body();
@@ -75,6 +77,9 @@ public final class HttpJsonClient implements ChatTransport {
             BufferedSource source = responseBody.source();
             String line;
             while ((line = source.readUtf8Line()) != null) {
+                if (token.isCancelled()) {
+                    throw new java.util.concurrent.CancellationException("在途流式读取已被终止：" + url);
+                }
                 if (line.startsWith("data:")) {
                     String data = line.substring("data:".length()).trim();
                     if (!sink.onData(data)) {
@@ -83,24 +88,22 @@ public final class HttpJsonClient implements ChatTransport {
                 }
             }
         } catch (IOException e) {
+            if (token.isCancelled()) {
+                throw new java.util.concurrent.CancellationException("在途流式读取已被终止：" + url);
+            }
             throw new UncheckedIOException("流式读取中断：" + url, e);
         } finally {
-            active = null;
+            unsubscribe.run();
         }
     }
 
-    @Override
-    public void cancelActive() {
-        cancelled = true;
-        Call call = active;
-        if (call != null) {
-            call.cancel();
-        }
-    }
-
-    @Override
-    public boolean cancelledByUser() {
-        return cancelled;
+    private static Runnable cancelOf(final Call call) {
+        return new Runnable() {
+            @Override
+            public void run() {
+                call.cancel();
+            }
+        };
     }
 
     private static Request build(String url, Map<String, String> headers, String body) {

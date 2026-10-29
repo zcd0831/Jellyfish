@@ -24,6 +24,7 @@ import io.github.zcd0831.jellyfish.application.planning.ReActLoop;
 import io.github.zcd0831.jellyfish.application.planning.RunSessionProvider;
 import io.github.zcd0831.jellyfish.application.planning.RunSessionResult;
 import io.github.zcd0831.jellyfish.application.planning.RunSessionUseCase;
+import io.github.zcd0831.jellyfish.application.planning.SessionCancellations;
 import io.github.zcd0831.jellyfish.application.planning.SpawnSubagentsHandler;
 import io.github.zcd0831.jellyfish.application.planning.SubagentLauncher;
 import io.github.zcd0831.jellyfish.application.planning.VerificationRunner;
@@ -152,8 +153,10 @@ class S3AcceptanceTest {
                         return runSessionHolder[0];
                     }
                 });
+        SessionCancellations cancellations = new SessionCancellations();
         runSession = new RunSessionUseCase(sessions, records, new FileCommitScope(dir, codec), publisher,
-                executionLoop, model, toolExecutor, human, event -> { }, plans, contextWindow);
+                executionLoop, model, toolExecutor, human, event -> { }, plans, contextWindow,
+                cancellations);
         runSessionHolder[0] = runSession;
         startSession = new StartSessionUseCase(catalog, sessions, budgets, titleGenerator,
                 new SystemPromptAssembler(), new FileCommitScope(dir, codec), new SystemClock());

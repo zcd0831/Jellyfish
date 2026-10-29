@@ -8,8 +8,10 @@ import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationResult
 import io.github.zcd0831.jellyfish.application.action.port.ModelProfile;
 import io.github.zcd0831.jellyfish.application.action.port.ModelUsage;
 import io.github.zcd0831.jellyfish.application.perception.port.PolicyRepository;
+import io.github.zcd0831.jellyfish.application.shared.CancellationToken;
 import io.github.zcd0831.jellyfish.application.shared.ChunkSink;
 import io.github.zcd0831.jellyfish.application.shared.ProgressEvent;
+import io.github.zcd0831.jellyfish.application.shared.port.CancellationRegistry;
 import io.github.zcd0831.jellyfish.application.shared.port.ProgressPort;
 import io.github.zcd0831.jellyfish.application.shared.port.TokenCounter;
 import io.github.zcd0831.jellyfish.domain.action.model.ApiCredential;
@@ -48,9 +50,18 @@ public final class ModelInvoker implements ModelInvocationPort {
     private final Random jitter = new Random();
     private final Sleeper sleeper;
     private final CredentialLookup credentials;
+    private final CancellationRegistry cancellations;
+
+    /** 没有登记表的调用（单测、插件自建实例）按「永不终止」处理。 */
+    private static final CancellationRegistry NO_CANCELLATIONS = new CancellationRegistry() {
+        @Override
+        public CancellationToken forSession(io.github.zcd0831.jellyfish.domain.shared.SessionId sessionId) {
+            return CancellationToken.never();
+        }
+    };
 
     public ModelInvoker(CatalogRepository catalog, PolicyRepository policyRepository, ChatTransport transport,
-                        ProgressPort progress, TokenCounter tokenCounter) {
+                        ProgressPort progress, TokenCounter tokenCounter, CancellationRegistry cancellations) {
         this(catalog, policyRepository, transport, progress, tokenCounter,
                 new Sleeper() {
                     @Override
@@ -63,12 +74,25 @@ public final class ModelInvoker implements ModelInvocationPort {
                     public String lookup(String envName) {
                         return System.getenv(envName);
                     }
-                });
+                },
+                cancellations);
+    }
+
+    /** 没有会话归属的实例（测试、插件自建）：终止信号一律「永不取消」。 */
+    public ModelInvoker(CatalogRepository catalog, PolicyRepository policyRepository, ChatTransport transport,
+                        ProgressPort progress, TokenCounter tokenCounter) {
+        this(catalog, policyRepository, transport, progress, tokenCounter, NO_CANCELLATIONS);
     }
 
     ModelInvoker(CatalogRepository catalog, PolicyRepository policyRepository, ChatTransport transport,
                  ProgressPort progress, TokenCounter tokenCounter, Sleeper sleeper,
                  CredentialLookup credentials) {
+        this(catalog, policyRepository, transport, progress, tokenCounter, sleeper, credentials, NO_CANCELLATIONS);
+    }
+
+    ModelInvoker(CatalogRepository catalog, PolicyRepository policyRepository, ChatTransport transport,
+                 ProgressPort progress, TokenCounter tokenCounter, Sleeper sleeper,
+                 CredentialLookup credentials, CancellationRegistry cancellations) {
         this.catalog = catalog;
         this.policyRepository = policyRepository;
         this.transport = transport;
@@ -76,6 +100,7 @@ public final class ModelInvoker implements ModelInvocationPort {
         this.tokenCounter = tokenCounter;
         this.sleeper = sleeper;
         this.credentials = credentials;
+        this.cancellations = cancellations;
     }
 
     @Override
@@ -109,9 +134,13 @@ public final class ModelInvoker implements ModelInvocationPort {
                 chain.add(fallback);
             }
         }
+        // 终止信号按会话取（不是线程中断、不是共享槽位）：08-application §8.9.4.1
+        CancellationToken token = request.sessionId() == null
+                ? CancellationToken.never() : cancellations.forSession(request.sessionId());
         ModelInvocationException lastFailure = null;
         boolean first = true;
         for (ModelId modelId : chain) {
+            token.throwIfCancelled();
             if (!first) {
                 ModelCallLog.switched(chain.get(0).getValue(), modelId.getValue());
             }
@@ -133,7 +162,7 @@ public final class ModelInvoker implements ModelInvocationPort {
             }
             hardCheck(request.estimatedPromptTokens(), model);
             try {
-                return callWithRetry(request, model, provider, adapter, sink);
+                return callWithRetry(request, model, provider, adapter, sink, token);
             } catch (ModelInvocationException e) {
                 if (e.error() == ModelError.CONTEXT_EXCEEDED) {
                     throw e;
@@ -170,14 +199,15 @@ public final class ModelInvoker implements ModelInvocationPort {
     }
 
     private ModelInvocationResult callWithRetry(ModelInvocationRequest request, Model model, Provider provider,
-                                                ChatProtocolAdapter adapter, ChunkSink sink) {
+                                                ChatProtocolAdapter adapter, ChunkSink sink, CancellationToken token) {
         int attempt = 0;
         while (true) {
+            token.throwIfCancelled();
             try {
-                return callOnce(request, model, provider, adapter, sink);
+                return callOnce(request, model, provider, adapter, sink, token);
             } catch (RetryableFailure e) {
-                if (transport.cancelledByUser()) {
-                    throw new java.util.concurrent.CancellationException("用户取消了本次模型调用");
+                if (token.isCancelled()) {
+                    throw new java.util.concurrent.CancellationException("本轮已被终止：不再重试、不降级");
                 }
                 if (attempt >= BACKOFF_MILLIS.length) {
                     throw new ModelInvocationException(ModelError.UNAVAILABLE,
@@ -198,7 +228,7 @@ public final class ModelInvoker implements ModelInvocationPort {
     }
 
     private ModelInvocationResult callOnce(ModelInvocationRequest request, Model model, Provider provider,
-                                           ChatProtocolAdapter adapter, ChunkSink sink) {
+                                           ChatProtocolAdapter adapter, ChunkSink sink, CancellationToken token) {
         String apiKey = credentials.lookup(credentialEnv(provider));
         if (apiKey == null || apiKey.trim().isEmpty()) {
             throw new ModelInvocationException(ModelError.AUTH_FAILED,
@@ -210,7 +240,7 @@ public final class ModelInvoker implements ModelInvocationPort {
                 model.contextLimit().getMaxOutputTokens(), sink != null);
 
         if (sink == null) {
-            ChatTransport.Response response = execute(url, headers, body);
+            ChatTransport.Response response = execute(url, headers, body, token);
             if (response.status() >= 200 && response.status() < 300) {
                 try {
                     ModelInvocationResult result = adapter.parseResponse(response.body(), model.id());
@@ -226,7 +256,7 @@ public final class ModelInvoker implements ModelInvocationPort {
 
         final ChatProtocolAdapter.StreamAccumulator accumulator = adapter.newStreamAccumulator();
         try {
-            transport.postStreaming(url, headers, body, new ChatTransport.LineSink() {
+            transport.postStreaming(url, headers, body, token, new ChatTransport.LineSink() {
                 @Override
                 public boolean onData(String data) {
                     boolean more = accumulator.accept(data);
@@ -243,8 +273,8 @@ public final class ModelInvoker implements ModelInvocationPort {
             // 4xx 是确定性错误：交给同一份失败映射，重试只会把同样的非法请求再发一遍
             throw mapFailure(new ChatTransport.Response(status.status(), status.body(), status.retryAfter()), model);
         } catch (RuntimeException e) {
-            if (transport.cancelledByUser()) {
-                throw new java.util.concurrent.CancellationException("用户取消了本次模型调用");
+            if (token.isCancelled()) {
+                throw new java.util.concurrent.CancellationException("本轮已被终止：不再重试、不降级");
             }
             throw new RetryableFailure("流式读取失败：" + e.getMessage(), null, e);
         }
@@ -262,12 +292,13 @@ public final class ModelInvoker implements ModelInvocationPort {
                 new ModelUsage(tokens, 0L, true), result.servedModelId());
     }
 
-    private ChatTransport.Response execute(String url, Map<String, String> headers, String body) {
+    private ChatTransport.Response execute(String url, Map<String, String> headers, String body,
+                                          CancellationToken token) {
         try {
-            return transport.post(url, headers, body);
+            return transport.post(url, headers, body, token);
         } catch (RuntimeException e) {
-            if (transport.cancelledByUser()) {
-                throw new java.util.concurrent.CancellationException("用户取消了本次模型调用");
+            if (token.isCancelled()) {
+                throw new java.util.concurrent.CancellationException("本轮已被终止：不再重试、不降级");
             }
             throw new RetryableFailure("网络错误：" + e.getMessage(), null, e);
         }

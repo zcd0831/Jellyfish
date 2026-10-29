@@ -3,6 +3,7 @@ package io.github.zcd0831.jellyfish.application.action.port;
 import io.github.zcd0831.jellyfish.domain.action.model.ModelCapability;
 import io.github.zcd0831.jellyfish.domain.perception.session.ToolSchemaSnapshot;
 import io.github.zcd0831.jellyfish.domain.shared.ModelId;
+import io.github.zcd0831.jellyfish.domain.shared.SessionId;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -14,6 +15,7 @@ import java.util.List;
  */
 public final class ModelInvocationRequest {
 
+    private final SessionId sessionId;
     private final ModelId targetModelId;
     private final String systemPrompt;
     private final List<ChatMessage> messages;
@@ -21,15 +23,28 @@ public final class ModelInvocationRequest {
     private final int estimatedPromptTokens;
     private final ModelCapability requiredCapability;
 
-    public ModelInvocationRequest(ModelId targetModelId, String systemPrompt, List<ChatMessage> messages,
-                                  List<ToolSchemaSnapshot> tools, int estimatedPromptTokens,
-                                  ModelCapability requiredCapability) {
+    public ModelInvocationRequest(SessionId sessionId, ModelId targetModelId, String systemPrompt,
+                                  List<ChatMessage> messages, List<ToolSchemaSnapshot> tools,
+                                  int estimatedPromptTokens, ModelCapability requiredCapability) {
+        this.sessionId = sessionId;
         this.targetModelId = targetModelId;
         this.systemPrompt = systemPrompt;
         this.messages = immutable(messages);
         this.tools = immutable(tools);
         this.estimatedPromptTokens = estimatedPromptTokens;
         this.requiredCapability = requiredCapability;
+    }
+
+    /** 没有会话归属的调用（测试、起标题这类轮次外短调用）：永远不参与终止。 */
+    public ModelInvocationRequest(ModelId targetModelId, String systemPrompt, List<ChatMessage> messages,
+                                  List<ToolSchemaSnapshot> tools, int estimatedPromptTokens,
+                                  ModelCapability requiredCapability) {
+        this(null, targetModelId, systemPrompt, messages, tools, estimatedPromptTokens, requiredCapability);
+    }
+
+    /** 会话归属：执行器据此取该会话的终止信号，不回头查 Session（§5.9.2 的口径）。 */
+    public SessionId sessionId() {
+        return sessionId;
     }
 
     private static <T> List<T> immutable(List<T> source) {

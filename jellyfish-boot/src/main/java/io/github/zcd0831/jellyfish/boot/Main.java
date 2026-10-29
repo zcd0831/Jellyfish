@@ -42,8 +42,8 @@ public final class Main {
         Runtime.getRuntime().addShutdownHook(new Thread(new Runnable() {
             @Override
             public void run() {
+                component.sessionCancellations().cancelAll();   // 尽力叫停所有在途调用
                 component.subagentPool().shutdownNow();
-                component.httpJsonClient().cancelActive();
                 try {
                     mainThread.join(SHUTDOWN_GRACE_MILLIS);
                 } catch (InterruptedException ignored) {

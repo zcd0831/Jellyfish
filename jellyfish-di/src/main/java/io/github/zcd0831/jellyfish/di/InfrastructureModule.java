@@ -24,6 +24,7 @@ import io.github.zcd0831.jellyfish.application.shared.port.Clock;
 import io.github.zcd0831.jellyfish.application.shared.port.CommitScope;
 import io.github.zcd0831.jellyfish.application.shared.port.DomainEventPublisher;
 import io.github.zcd0831.jellyfish.application.shared.port.InstanceLock;
+import io.github.zcd0831.jellyfish.application.shared.port.CancellationRegistry;
 import io.github.zcd0831.jellyfish.application.shared.port.ProgressPort;
 import io.github.zcd0831.jellyfish.application.shared.port.SchemaMigrator;
 import io.github.zcd0831.jellyfish.application.shared.port.TokenCounter;
@@ -234,9 +235,9 @@ public final class InfrastructureModule {
     @Singleton
     ModelInvocationPort modelInvocationPort(CatalogRepository catalog, PolicyRepository policies,
                                             HttpJsonClient http, ProgressPort progress, TokenCounter counter,
-                                            PortRoutes routes) {
+                                            CancellationRegistry cancellations, PortRoutes routes) {
         return routes.resolve("ModelInvocationPort",
-                (ModelInvocationPort) new ModelInvoker(catalog, policies, http, progress, counter));
+                (ModelInvocationPort) new ModelInvoker(catalog, policies, http, progress, counter, cancellations));
     }
 
     /** 每次注入一个新的写入作用域：一个事务一个实例。 */

@@ -81,7 +81,8 @@ class ModelInvokerTest {
         }
 
         @Override
-        public Response post(String url, Map<String, String> headers, String body) {
+        public Response post(String url, Map<String, String> headers, String body,
+                             io.github.zcd0831.jellyfish.application.shared.CancellationToken token) {
             calls++;
             this.urls.add(url);
             this.bodies.add(body);
@@ -93,19 +94,10 @@ class ModelInvokerTest {
             return (Response) next;
         }
 
-        private boolean cancelled;
-
         @Override
-        public boolean cancelledByUser() {
-            return cancelled;
-        }
-
-        @Override
-        public void cancelActive() {
-        }
-
-        @Override
-        public void postStreaming(String url, Map<String, String> headers, String body, LineSink sink) {
+        public void postStreaming(String url, Map<String, String> headers, String body,
+                                  io.github.zcd0831.jellyfish.application.shared.CancellationToken token,
+                                  LineSink sink) {
             calls++;
             this.urls.add(url);
             this.headers.add(headers);
@@ -210,6 +202,24 @@ class ModelInvokerTest {
     }
 
     private ModelInvoker invoker(FakeCatalog catalog, RuntimePolicy policy, String apiKey) {
+        return invoker(catalog, policy, apiKey, io.github.zcd0831.jellyfish.application.shared.CancellationToken.never());
+    }
+
+    /** 用「已终止的会话令牌」构造：终止现在按 sessionId 从登记表取（§8.9.4.1）。 */
+    private ModelInvoker invokerTerminated(FakeCatalog catalog, RuntimePolicy policy, String apiKey) {
+        return invoker(catalog, policy, apiKey, terminatedToken());
+    }
+
+    private static io.github.zcd0831.jellyfish.application.shared.CancellationToken terminatedToken() {
+        io.github.zcd0831.jellyfish.application.planning.SessionCancellations cancellations =
+                new io.github.zcd0831.jellyfish.application.planning.SessionCancellations();
+        cancellations.register(CANCELLED_SESSION, null);
+        cancellations.cancel(CANCELLED_SESSION);
+        return cancellations.forSession(CANCELLED_SESSION);
+    }
+
+    private ModelInvoker invoker(FakeCatalog catalog, RuntimePolicy policy, String apiKey,
+                                 final io.github.zcd0831.jellyfish.application.shared.CancellationToken token) {
         PolicyRepository policyRepository = new PolicyRepository() {
             @Override
             public RuntimePolicy load() {
@@ -238,7 +248,24 @@ class ModelInvokerTest {
                     public String lookup(String envName) {
                         return apiKey;
                     }
+                },
+                new io.github.zcd0831.jellyfish.application.shared.port.CancellationRegistry() {
+                    @Override
+                    public io.github.zcd0831.jellyfish.application.shared.CancellationToken forSession(
+                            io.github.zcd0831.jellyfish.domain.shared.SessionId sessionId) {
+                        return token;
+                    }
                 });
+    }
+
+    private static final io.github.zcd0831.jellyfish.domain.shared.SessionId CANCELLED_SESSION =
+            io.github.zcd0831.jellyfish.domain.shared.SessionId.of("cancelled-session");
+
+    private static ModelInvocationRequest request(io.github.zcd0831.jellyfish.domain.shared.SessionId sessionId,
+                                                  String modelId, int estimatedTokens) {
+        return new ModelInvocationRequest(sessionId, ModelId.of(modelId), "你是助手",
+                Arrays.asList(ChatMessage.of(RecordRole.USER, "你好")), Collections.emptyList(),
+                estimatedTokens, null);
     }
 
     private static ModelInvocationRequest request(String modelId, int estimatedTokens) {
@@ -331,15 +358,14 @@ class ModelInvokerTest {
         FakeCatalog catalog = new FakeCatalog();
         catalog.models.add(model("m1", 1000));
         catalog.providers.add(provider());
-        transport.cancelled = true;
         transport.streamFailsWith(new java.io.UncheckedIOException("canceled",
                 new java.io.IOException("canceled")));
 
         assertThrows(java.util.concurrent.CancellationException.class,
-                () -> invoker(catalog, policyWithFallback(), "sk-test")
-                        .invokeStreaming(request("m1", 10), ChunkSink.NOOP));
+                () -> invokerTerminated(catalog, policyWithFallback(), "sk-test")
+                        .invokeStreaming(request(CANCELLED_SESSION, "m1", 10), ChunkSink.NOOP));
 
-        assertEquals(1, transport.calls, "取消是终态：流式中断也不得重试");
+        assertEquals(0, transport.calls, "已终止的会话不再发请求：不重试、不降级");
     }
 
     @Test
@@ -347,13 +373,13 @@ class ModelInvokerTest {
         FakeCatalog catalog = new FakeCatalog();
         catalog.models.add(model("m1", 1000));
         catalog.providers.add(provider());
-        transport.cancelled = true;
         transport.failWith(new java.io.UncheckedIOException("canceled", new java.io.IOException("canceled")));
 
         assertThrows(java.util.concurrent.CancellationException.class,
-                () -> invoker(catalog, policyWithFallback(), "sk-test").invoke(request("m1", 10)));
+                () -> invokerTerminated(catalog, policyWithFallback(), "sk-test")
+                        .invoke(request(CANCELLED_SESSION, "m1", 10)));
 
-        assertEquals(1, transport.calls, "取消是终态：不得重试");
+        assertEquals(0, transport.calls, "已终止的会话不再发请求：不重试、不降级");
         assertTrue(sleeps.isEmpty(), "取消不应进入退避等待");
     }
 

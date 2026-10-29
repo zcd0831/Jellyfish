@@ -194,7 +194,7 @@ public final class ContextWindowService {
                 session.systemPromptSnapshot() == null
                         ? Collections.<io.github.zcd0831.jellyfish.domain.perception.session.ToolSchemaSnapshot>emptyList()
                         : session.systemPromptSnapshot().getToolList();
-        return new ModelInvocationRequest(session.activeModelId(), systemPrompt, messages, tools, 0, null);
+        return new ModelInvocationRequest(session.id(), session.activeModelId(), systemPrompt, messages, tools, 0, null);
     }
 
     /** 保留区从第几轮开始：从最后一轮往前累计条数，够 retainCount 即止（整轮对齐）。 */

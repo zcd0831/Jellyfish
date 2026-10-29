@@ -17,6 +17,7 @@ import io.github.zcd0831.jellyfish.application.planning.ExecutionLoop;
 import io.github.zcd0831.jellyfish.application.planning.ReActLoop;
 import io.github.zcd0831.jellyfish.application.planning.RunSessionResult;
 import io.github.zcd0831.jellyfish.application.planning.RunSessionUseCase;
+import io.github.zcd0831.jellyfish.application.planning.SessionCancellations;
 import io.github.zcd0831.jellyfish.application.shared.Answer;
 import io.github.zcd0831.jellyfish.application.shared.ChunkSink;
 import io.github.zcd0831.jellyfish.application.shared.Question;
@@ -120,8 +121,10 @@ class S1AcceptanceTest {
                         return runSessionProviderHolder[0];
                     }
                 });
+        SessionCancellations cancellations = new SessionCancellations();
         runSession = new RunSessionUseCase(sessions, records, new FileCommitScope(dir, codec), publisher,
-                executionLoop, model, toolExecutor, human, event -> { }, plans, contextWindow);
+                executionLoop, model, toolExecutor, human, event -> { }, plans, contextWindow,
+                cancellations);
         runSessionProviderHolder[0] = runSession;
         startSession = new StartSessionUseCase(catalog, sessions, budgets,
                 new SessionTitleGenerator(model, budgetService), new SystemPromptAssembler(),

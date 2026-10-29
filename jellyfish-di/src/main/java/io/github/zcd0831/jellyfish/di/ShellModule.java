@@ -12,7 +12,6 @@ import io.github.zcd0831.jellyfish.application.perception.SwitchModelUseCase;
 import io.github.zcd0831.jellyfish.application.planning.RunSessionUseCase;
 import io.github.zcd0831.jellyfish.application.shared.port.HumanInteractionPort;
 import io.github.zcd0831.jellyfish.application.shared.port.ProgressPort;
-import io.github.zcd0831.jellyfish.infrastructure.model.HttpJsonClient;
 import io.github.zcd0831.jellyfish.shell.tui.AnsiRenderer;
 import io.github.zcd0831.jellyfish.shell.tui.OutputGateway;
 import io.github.zcd0831.jellyfish.shell.tui.QuestionBroker;
@@ -98,18 +97,14 @@ public final class ShellModule {
         return routes.resolve("ProgressPort", (ProgressPort) new TuiProgressReporter(renderer, stats));
     }
 
-    /** 唯一取消令牌：Ctrl-C 与 `/cancel` 都走它；令牌回调负责让在途 HTTP 读立刻失败（§8.4.1）。 */
+    /**
+     * 外壳的终止令牌：Esc 与 `/cancel` 都走它；它只是「用户终止」这一个来源，
+     * 在途请求由 RunSessionUseCase 桥接到会话令牌后按调用取消（08-application §8.9.4.1）。
+     */
     @Provides
     @Singleton
-    ShellCancellationToken cancellationToken(final HttpJsonClient http) {
-        ShellCancellationToken token = new ShellCancellationToken();
-        token.onCancel(new Runnable() {
-            @Override
-            public void run() {
-                http.cancelActive();
-            }
-        });
-        return token;
+    ShellCancellationToken cancellationToken() {
+        return new ShellCancellationToken();
     }
 
     @Provides

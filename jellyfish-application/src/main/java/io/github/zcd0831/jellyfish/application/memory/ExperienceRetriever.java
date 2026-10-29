@@ -67,7 +67,7 @@ public final class ExperienceRetriever {
         }
         String material = material(candidates, input);
         try {
-            ModelInvocationResult result = model.invoke(new ModelInvocationRequest(session.activeModelId(),
+            ModelInvocationResult result = model.invoke(new ModelInvocationRequest(session.id(), session.activeModelId(),
                     agent.basePrompt().getTemplateText(),
                     Collections.singletonList(ChatMessage.of(RecordRole.USER, material)),
                     Collections.emptyList(), 0, null));

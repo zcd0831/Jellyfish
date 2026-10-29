@@ -12,6 +12,7 @@ import io.github.zcd0831.jellyfish.application.perception.port.PolicyRepository;
 import io.github.zcd0831.jellyfish.application.perception.port.RecordStore;
 import io.github.zcd0831.jellyfish.application.perception.port.SessionRepository;
 import io.github.zcd0831.jellyfish.application.planning.RunSessionUseCase;
+import io.github.zcd0831.jellyfish.application.planning.SessionCancellations;
 import io.github.zcd0831.jellyfish.application.shared.port.Clock;
 import io.github.zcd0831.jellyfish.application.shared.port.CommitScope;
 import io.github.zcd0831.jellyfish.application.shared.port.DomainEventPublisher;
@@ -70,6 +71,9 @@ public interface AppComponent {
 
     /** 供 boot 的关闭钩子取消在途请求。 */
     HttpJsonClient httpJsonClient();
+
+    /** 供 boot 的关闭钩子与外壳发起终止（08-application §8.9.4.1）。 */
+    SessionCancellations sessionCancellations();
 
     SystemPromptAssembler systemPromptAssembler();
 

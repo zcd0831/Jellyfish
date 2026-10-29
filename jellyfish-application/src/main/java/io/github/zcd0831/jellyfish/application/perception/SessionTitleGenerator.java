@@ -30,7 +30,7 @@ public final class SessionTitleGenerator {
 
     public String generate(Session session, String firstInput) {
         try {
-            ModelInvocationResult result = model.invoke(new ModelInvocationRequest(session.activeModelId(),
+            ModelInvocationResult result = model.invoke(new ModelInvocationRequest(session.id(), session.activeModelId(),
                     INSTRUCTION, Collections.singletonList(ChatMessage.of(RecordRole.USER, firstInput)),
                     Collections.emptyList(), 0, null));
             if (result.usage() != null) {

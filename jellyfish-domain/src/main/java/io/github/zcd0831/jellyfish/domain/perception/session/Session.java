@@ -95,9 +95,6 @@ public class Session {
     }
 
     /**
-     * 系统提示词不在这里：它来自冻结快照，由调用方单独传给模型（规则 13）。
-     */
-    /**
      * 两区窗口：最新 SUMMARY + 覆盖边界之后的**全部**记录（含 SYSTEM 运行期注入）。
      * 不读任何配置、不设条数上限——前沿由覆盖边界固定，后沿随对话持续下移。
      * 规则出处：04-perception §4.8.1 规则 9/10、§4.9.5。
@@ -167,12 +164,6 @@ public class Session {
         return null;
     }
 
-    /**
-     * 最近 n 条"对话"记录，但**按模型输出轮整轮对齐**、且只取摘要覆盖边界之后的记录。
-     * 规则出处：04-perception §4.8.1 规则 9 ③、规则 10、规则 14。
-     * <p>对齐是请求合法性的前提：`assistant(tool_calls)` 与它的 `tool` 结果必须同进同出，
-     * 否则模型端点会以 400 拒绝；这里不做"事后修补"，不变量违反直接抛。
-     */
     /** 覆盖边界之后的记录：含 SYSTEM 注入，SUMMARY 由窗口首条单独承载。 */
     private List<Record> afterBoundary(int coveredThroughSequence) {
         List<Record> out = new ArrayList<Record>();

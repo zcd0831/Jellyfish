@@ -78,8 +78,6 @@ public final class TuiApp implements QuestionBroker.Answerer {
     private final Object inputLock = new Object();
 
     private InputMode mode = InputMode.PAUSED;
-    /** 只有主线程要过提示符（或要提问）时，输入线程才去读行：运行中没人读行，Esc 由监听器接。 */
-    private boolean promptWanted;
     private volatile boolean listening;
     private Thread keyListener;
     /** 多行草稿：只在输入线程里读写。 */
@@ -238,10 +236,9 @@ public final class TuiApp implements QuestionBroker.Answerer {
                 while (true) {
                     String prompt;
                     synchronized (inputLock) {
-                        while (!promptWanted) {
+                        while (mode == InputMode.PAUSED) {
                             waitOnLock();
                         }
-                        promptWanted = false;
                         prompt = mode == InputMode.QUESTION ? "回答（Esc 终止）> " : prompt();
                     }
                     String line;
@@ -310,7 +307,7 @@ public final class TuiApp implements QuestionBroker.Answerer {
             }
         }
         if (draft.accept(line)) {
-            // 行尾 `\` 续行：保持 PROMPT，输入线程继续读下一行
+            // 行尾 `\` 续行：mode 仍是 PROMPT，输入线程继续读下一行
             return;
         }
         String complete = draft.take();
@@ -351,7 +348,6 @@ public final class TuiApp implements QuestionBroker.Answerer {
     private void resumePrompt() {
         synchronized (inputLock) {
             mode = InputMode.PROMPT;
-            promptWanted = true;
             inputLock.notifyAll();
         }
     }
@@ -359,7 +355,6 @@ public final class TuiApp implements QuestionBroker.Answerer {
     private void pauseInput() {
         synchronized (inputLock) {
             mode = InputMode.PAUSED;
-            promptWanted = false;
         }
     }
 
@@ -457,7 +452,6 @@ public final class TuiApp implements QuestionBroker.Answerer {
             pending = future;
             renderer.question(sourceLabel(question.source()), question.prompt());
             mode = InputMode.QUESTION;
-            promptWanted = true;
             inputLock.notifyAll();
         }
         try {

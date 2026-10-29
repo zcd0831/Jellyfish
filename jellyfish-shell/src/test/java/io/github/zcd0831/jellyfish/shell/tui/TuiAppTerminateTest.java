@@ -60,7 +60,7 @@ class TuiAppTerminateTest {
 
         verify(runSession, timeout(5000)).run(eq(SessionId.of("s1")), eq((String) null), any(), any());
         assertTrue(token.isCancelled(), "运行中按 Esc 必须真的把令牌置上");
-        assertTrue(screen().contains("已取消"), "界面要明确说这轮被终止了：" + screen());
+        assertTrue(screen().contains("已终止"), "界面要明确说这轮被终止了：" + screen());
     }
 
     @Test
@@ -80,7 +80,7 @@ class TuiAppTerminateTest {
         appWithTypedAhead(new long[]{0L, 200L, 400L}, new String[]{"你好\n", "\u001B\r", "exit\n"}).run();
 
         assertFalse(token.isCancelled(), "Esc 后面还有字节 = Alt/转义序列，不是终止");
-        assertFalse(screen().contains("已取消"), screen());
+        assertFalse(screen().contains("已终止"), screen());
     }
 
     private void givenSession() {

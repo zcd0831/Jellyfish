@@ -1,12 +1,13 @@
 package io.github.zcd0831.jellyfish.shell.tui;
 
 /**
- * 多行输入的两条路子（C1）：
+ * 多行输入的判定：
  * <ul>
  *   <li>行尾 `\` —— 不提交，拼到下一行（跨终端都靠得住）；</li>
- *   <li>`Alt+Enter` —— JLine 在缓冲区里插了换行，整段一次提交（粘贴多行同理）。</li>
+ *   <li>行内已带换行（粘贴多行）—— 按"整段提交"处理，不再看行尾反斜杠。</li>
  * </ul>
- * 只要行内已经带换行（粘贴/Alt+Enter），就按"整段提交"处理，不再看行尾反斜杠。
+ * `Alt+Enter` 不再绑定：`Esc` 已被占成终止键，而终端把 `Alt+X` 发成 `ESC X`，
+ * 两者在键位表里无法共存（见 TerminateKey）。
  */
 final class DraftInput {
 

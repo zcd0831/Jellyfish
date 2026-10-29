@@ -279,6 +279,8 @@ class S3AcceptanceTest {
         Thread.sleep(400);
 
         assertFalse(spawner.isAlive(), "父会话被终止后，spawn 必须马上返回");
+        assertTrue(spawned.get() != null && spawned.get().contains("已终止"),
+                "级联终止的子代理要如实说「已终止」，不能报创建失败：" + spawned.get());
         assertEquals(before, countFiles(tmp.resolve("sessions").resolve("main").resolve("sub")),
                 "级联终止后子代理不得再落流水");
     }

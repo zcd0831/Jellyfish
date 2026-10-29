@@ -297,7 +297,7 @@ public final class TuiApp implements QuestionBroker.Answerer {
         synchronized (inputLock) {
             if (mode == InputMode.QUESTION && pending != null) {
                 if (isExit(text)) {
-                    // 正在等答案时退出：先取消本轮，别让主循环卡在提问上
+                    // 正在等答案时退出：先终止本轮，别让主循环卡在提问上
                     pending.complete(Answer.cancelled());
                     mode = InputMode.PAUSED;
                     token.cancel();
@@ -413,8 +413,8 @@ public final class TuiApp implements QuestionBroker.Answerer {
         if (result.value().outcome() == RunSessionResult.Outcome.CANCELLED) {
             // 已流出的字留在屏幕上，但它们没有进历史（断流不落）——必须说清楚
             renderer.info(sink.rendered()
-                    ? "（已取消：上面的回答没有写进历史）"
-                    : "（已取消：还没开始回答）");
+                    ? "（已终止：上面的回答没有写进历史）"
+                    : "（已终止：还没开始回答）");
         }
         printSummary();
     }

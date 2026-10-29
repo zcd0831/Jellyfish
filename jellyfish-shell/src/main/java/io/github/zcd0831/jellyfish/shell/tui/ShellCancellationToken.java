@@ -6,7 +6,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 外壳持有的唯一取消令牌（08-application §8.9.4.1）：Ctrl-C 与 `/cancel` 都走 {@link #cancel()}。
+ * 外壳持有的终止令牌（08-application §8.9.4.1）：Esc 与 exit 路径都走 {@link #cancel()}。
+ * 它只是「用户终止」这一个来源，按会话登记后由 RunSessionUseCase 桥接。
  * 每轮开始 {@link #reset()}，避免上一轮的取消影响下一轮。
  */
 public final class ShellCancellationToken implements CancellationToken {
@@ -14,7 +15,7 @@ public final class ShellCancellationToken implements CancellationToken {
     private final List<Runnable> callbacks = new ArrayList<Runnable>();
     private volatile boolean cancelled;
 
-    /** Ctrl-C / `/cancel` 都调它的 `cancel()`；返回的注销句柄由注册方保存（长会话里回调不能只增不减）。 */
+    /** Esc 调它的 `cancel()`；返回的注销句柄由注册方保存（长会话里回调不能只增不减）。 */
     public Runnable onCancel(Runnable callback) {
         synchronized (callbacks) {
             callbacks.add(callback);

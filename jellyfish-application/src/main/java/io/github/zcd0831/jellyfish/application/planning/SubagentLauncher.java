@@ -180,6 +180,8 @@ public final class SubagentLauncher {
         }
     }
 
+    /** 父会话终止级联下来时，子代理的结论一律是这一句（不是“创建失败”、也不给半截结论）。 */
+    private static final String TERMINATED = "已终止";
     private static final String TIMED_OUT = "已终止（超时）";
 
     /** 一个子代理的任务：deadline 在真正开始运行的那一刻才确定。 */
@@ -245,12 +247,17 @@ public final class SubagentLauncher {
             Result<SessionId> started = startSession.startSubSession(parentSession.id(), request.agentId(),
                     request.modelId(), request.task(), signal);
             if (!started.isOk()) {
-                return SubagentResult.of(null, "子会话创建失败：" + started.error().error().code());
+                // 父会话终止与 spawn 撞车：模型口径是「未完成的按终止处理」，不是创建失败（05-action §5.9.1）
+                return SubagentResult.of(null, signal.isCancelled()
+                        ? TERMINATED : "子会话创建失败：" + started.error().error().code());
             }
             childId = started.value();
             // 子会话的消耗经 parentSessionId 直接记到族根台账（BudgetService.recordUsage），
             // 不再二次归集，避免同一笔消耗被计两次。
             Result<RunSessionResult> run = runSession.get().run(childId, null, ChunkSink.NOOP);
+            if (signal.isCancelled()) {
+                return SubagentResult.of(childId, TERMINATED);   // 半截结论不当结论
+            }
             String conclusion = lastAssistant(childId);
             if (!run.isOk()) {
                 return SubagentResult.of(childId, "运行失败：" + run.error().error().code()

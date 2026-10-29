@@ -4,6 +4,7 @@ import io.github.zcd0831.jellyfish.application.action.port.BudgetRepository;
 import io.github.zcd0831.jellyfish.application.perception.port.RecordStore;
 import io.github.zcd0831.jellyfish.application.perception.port.PolicyRepository;
 import io.github.zcd0831.jellyfish.application.perception.port.SessionRepository;
+import io.github.zcd0831.jellyfish.application.planning.SessionCancellations;
 import io.github.zcd0831.jellyfish.application.perception.port.SessionSummary;
 import io.github.zcd0831.jellyfish.application.shared.Result;
 import io.github.zcd0831.jellyfish.application.shared.UseCaseError;
@@ -34,11 +35,12 @@ public final class ManageSessionUseCase {
     private final ContextWindowService contextWindow;
     private final BudgetRepository budgets;
     private final PolicyRepository policies;
+    private final SessionCancellations cancellations;
 
     public ManageSessionUseCase(SessionRepository sessions, ArtifactStore artifacts, CommitScope commitScope,
                                 DomainEventPublisher eventPublisher, RecordStore records,
                                 ContextWindowService contextWindow, BudgetRepository budgets,
-                                PolicyRepository policies) {
+                                PolicyRepository policies, SessionCancellations cancellations) {
         this.sessions = sessions;
         this.artifacts = artifacts;
         this.commitScope = commitScope;
@@ -47,17 +49,20 @@ public final class ManageSessionUseCase {
         this.contextWindow = contextWindow;
         this.budgets = budgets;
         this.policies = policies;
+        this.cancellations = cancellations;
     }
 
     /**
-     * 取消：父取消级联子会话。运行中的循环由外壳另行打断（取消令牌），这里只落事实。
-     * 规则出处：04-perception §4.8.1 规则 6、08-application §8.9.4。
+     * 终止：先按会话发终止信号（在途模型调用与工具随之收手、子会话级联），再落事实。
+     * 幂等：不在跑的会话拿不到令牌，只落事件。
+     * 规则出处：04-perception §4.8.1 规则 6、08-application §8.9.4 / §8.9.4.1。
      */
     public Result<Void> cancel(SessionId sessionId) {
         Session session = sessions.load(sessionId);
         if (session == null) {
             return Result.fail(UseCaseError.of(SessionError.NOT_FOUND, "会话不存在", sessionId));
         }
+        cancellations.cancel(sessionId);
         session.cancel();
         commitScope.stageReplace(session);
         for (SessionId child : childSessionsOf(sessionId)) {

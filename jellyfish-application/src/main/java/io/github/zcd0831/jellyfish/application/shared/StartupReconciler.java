@@ -42,6 +42,10 @@ public final class StartupReconciler {
     private final DomainEventPublisher eventPublisher;
     private final ProgressPort progress;
 
+    /** 与内循环同一句中止事实：终止/崩溃都不算工具失败，只是没拿到结果。 */
+    private static final String ABORTED_TOOL_RESULT =
+            "（本轮中止：进程退出，工具结果未回灌）";
+
     public StartupReconciler(SessionRepository sessions, PlanRepository plans,
                              VerificationReportRepository reports, RecordStore records,
                              BudgetRepository budgets, ReflectionRepository reflections,
@@ -97,22 +101,21 @@ public final class StartupReconciler {
         flush(session, plan);
     }
 
-    /** 规则 ③：流水末尾有 TOOL_REQUEST 没有 TOOL_RESULT ⇒ 该 attempt 判失败（计一次重试）。 */
+    /**
+     * 规则 ③：流水末尾有 TOOL_REQUEST 没有 TOOL_RESULT ⇒ <strong>补一条中止结果</strong>。
+     * 崩溃/强杀不形成任何终态：attempt 保持开区间、不消耗重试名额，会话可以直接续跑
+     * （08-application §8.10 规则 3、§8.9.4.1）。
+     */
     private void reconcileHalfToolCall(Session session) {
         List<Record> recent = records.last(session.id(), 2);
         if (recent.size() < 1 || recent.get(recent.size() - 1).role() != RecordRole.TOOL_REQUEST) {
             return;
         }
-        for (Plan plan : plans.findRunning(session.id())) {
-            PlanStep step = plan.getCurrentStep();
-            if (step == null || step.attempts().isEmpty()) {
-                continue;
-            }
-            int attemptNo = step.attempts().get(step.attempts().size() - 1).attemptNo();
-            plan.markAttemptFailed(step.id(), attemptNo);
-            flush(session, plan);
-            announce("对账：半截工具调用判失败（" + step.id().getValue() + " #" + attemptNo + "）");
-        }
+        Record aborted = session.appendRecord(RecordRole.TOOL_RESULT, ABORTED_TOOL_RESULT, null,
+                System.currentTimeMillis());
+        commitScope.stageAppend(session.id(), aborted);
+        commitScope.commit();
+        announce("对账：半截工具调用补中止结果，会话可续跑");
     }
 
     /** 规则 ⑤：台账缺失或损坏 ⇒ 重建为 0 并告警（预算不精确可接受）。 */

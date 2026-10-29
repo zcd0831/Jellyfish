@@ -87,7 +87,8 @@ class S5UseCasesTest {
                         policies, commitScope, publisher, event -> { }, budgetService,
                         text -> text == null ? 0 : text.length() / 4);
         manageSession = new ManageSessionUseCase(sessions, new FileArtifactStore(dir),
-                commitScope, publisher, store(), window, budgets, policies);
+                commitScope, publisher, store(), window, budgets, policies,
+                new io.github.zcd0831.jellyfish.application.planning.SessionCancellations());
         adjustPolicy = new AdjustPolicyUseCase(policies, commitScope, publisher);
         manageCatalog = new ManageCatalogUseCase(FileCatalogRepository.standalone(dir, codec));
     }

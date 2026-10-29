@@ -56,9 +56,10 @@ public final class PerceptionModule {
     ManageSessionUseCase manageSessionUseCase(SessionRepository sessions, ArtifactStore artifacts,
                                               CommitScope commitScope, DomainEventPublisher publisher,
                                               RecordStore records, ContextWindowService contextWindow,
-                                              BudgetRepository budgets, PolicyRepository policies) {
+                                              BudgetRepository budgets, PolicyRepository policies,
+                                              SessionCancellations cancellations) {
         return new ManageSessionUseCase(sessions, artifacts, commitScope, publisher, records, contextWindow,
-                budgets, policies);
+                budgets, policies, cancellations);
     }
 
     @Provides

@@ -37,6 +37,7 @@ import java.util.EnumSet;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -110,8 +111,12 @@ class S4ReconcilerTest {
         assertEquals(StepStatus.FAILED, reloaded.steps().get(0).status());
     }
 
+    /**
+     * 崩溃/强杀不形成任何终态：补一条中止结果让流水可续跑，attempt 保持开区间、不耗重试。
+     * 规则出处：08-application §8.10 规则 3、§8.9.4.1。
+     */
     @Test
-    void 规则3_半截工具调用判attempt失败() {
+    void 规则3_半截工具调用补中止结果且attempt不结束() {
         planWithRunningStep();
         Session session = sessions.load(sessionId);
         Record request = session.appendRecord(RecordRole.TOOL_REQUEST, "{}", null, 5L);
@@ -120,7 +125,10 @@ class S4ReconcilerTest {
         reconciler.reconcile(session);
 
         Plan reloaded = plans.load(PlanId.of("p1"));
-        assertEquals(StepStatus.FAILED, reloaded.steps().get(0).status());
+        assertEquals(StepStatus.RUNNING, reloaded.steps().get(0).status(), "崩溃不算失败，步骤仍在跑");
+        assertNull(reloaded.steps().get(0).attempts().get(0).outcome(), "attempt 保持开区间");
+        List<Record> tail = records.last(sessionId, 1);
+        assertEquals(RecordRole.TOOL_RESULT, tail.get(tail.size() - 1).role(), "半截调用要补中止结果");
         assertTrue(announced.stream().anyMatch(e -> e.message().contains("半截工具调用")));
     }
 

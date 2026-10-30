@@ -41,6 +41,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /** 会话开启的解析分支：agent/model 缺省、显式指定、不存在、不可用。 */
@@ -55,13 +57,14 @@ class StartSessionUseCaseTest {
     private final Clock clock = mock(Clock.class);
     private final BudgetService budgetService = mock(BudgetService.class);
     private final DomainEventPublisher eventPublisher = mock(DomainEventPublisher.class);
+    private final io.github.zcd0831.jellyfish.application.planning.SessionCancellations cancellations =
+            new io.github.zcd0831.jellyfish.application.planning.SessionCancellations();
 
     private StartSessionUseCase useCase() {
         when(clock.nowMillis()).thenReturn(1000L);
         when(titles.generate(any(Session.class), anyString())).thenReturn("标题");
         return new StartSessionUseCase(catalog, sessions, budgets, titles, new SystemPromptAssembler(),
-                commitScope, clock,
-                new io.github.zcd0831.jellyfish.application.planning.SessionCancellations(), eventPublisher);
+                commitScope, clock, cancellations, eventPublisher);
     }
 
     private static AgentDefinition agent(String id, AgentStatus status) {
@@ -148,5 +151,35 @@ class StartSessionUseCaseTest {
         when(budgets.load(any(SessionId.class))).thenReturn((Budget) null);
 
         assertTrue(useCase().startSubSession(SessionId.of("main"), null, null, "任务").isOk());
+    }
+
+    /**
+     * 内部 fork 也是普通子会话：开启即登记令牌，父已终止则立即终止，子会话不落盘。
+     * 规则出处：08-application §8.9.4.1、§8.9.7。
+     */
+    @Test
+    void 父已终止时内部fork子会话不创建() {
+        cancellations.register(SessionId.of("main"), null);
+        cancellations.cancel(SessionId.of("main"));
+        when(sessions.load(SessionId.of("main"))).thenReturn(Session.create(SessionId.of("main"), null,
+                AgentId.of("builtin.main"), ModelId.of("m1"), 1L, null));
+
+        assertFalse(useCase().forkInternal(SessionId.of("main")).isOk());
+        verify(sessions, never()).save(any(Session.class));
+    }
+
+    /** 正常路径：登记后父终止能级联到内部 fork 子会话。规则出处：08-application §8.9.4.1。 */
+    @Test
+    void 内部fork子会话登记令牌并可被父级联() {
+        when(sessions.load(SessionId.of("main"))).thenReturn(Session.create(SessionId.of("main"), null,
+                AgentId.of("builtin.main"), ModelId.of("m1"), 1L, null));
+        cancellations.register(SessionId.of("main"), null);
+
+        Result<SessionId> forked = useCase().forkInternal(SessionId.of("main"));
+        assertTrue(forked.isOk(), "父未终止时照常创建");
+        verify(sessions).save(any(Session.class));
+
+        cancellations.cancel(SessionId.of("main"));
+        assertTrue(cancellations.forSession(forked.value()).isCancelled(), "父终止要级联到 fork 子会话");
     }
 }

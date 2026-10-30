@@ -77,9 +77,10 @@ public final class PlanningModule {
     io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner internalSessionRunner(
             io.github.zcd0831.jellyfish.application.perception.StartSessionUseCase startSession,
             io.github.zcd0831.jellyfish.application.perception.port.SessionRepository sessions,
-            ReActLoop reActLoop, SessionToolScope scope, CommitScope commitScope, Clock clock) {
+            ReActLoop reActLoop, SessionToolScope scope, CommitScope commitScope, Clock clock,
+            SessionCancellations cancellations) {
         return new io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner(
-                startSession, sessions, reActLoop, scope, commitScope, clock);
+                startSession, sessions, reActLoop, scope, commitScope, clock, cancellations);
     }
 
     @Provides

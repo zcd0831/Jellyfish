@@ -148,7 +148,7 @@ public final class StartSessionUseCase {
 
     /**
      * 内部子会话（fork 型调用）：沿用父会话的冻结快照与模型，**不生成标题、不自建 Budget**；
-     * 它落在 <code>sub/</code> 下，因此天然不进会话列表（08-application §8.9.7）。
+     * 它落在 <code>sub/</code> 下，因此天然不进会话列表，并**与子代理同路登记终止令牌**（08-application §8.9.7）。
      */
     public Result<SessionId> forkInternal(SessionId parentSessionId) {
         Session parent = sessions.load(parentSessionId);
@@ -159,6 +159,14 @@ public final class StartSessionUseCase {
         Session child = Session.create(childId, parentSessionId, parent.agentId(), parent.activeModelId(),
                 clock.nowMillis(), parent.systemPromptSnapshot());
         child.retitle(parent.title());
+        // 内部 fork 也是普通子会话：开启即登记令牌（先看父状态，父已终止则立即终止），
+        // 创建阶段就被终止就不落盘——宁可不建，也不留建到一半的子会话
+        // （08-application §8.9.4.1、§8.9.7）
+        CancellationToken signal = cancellations.registerIfAbsent(childId, parentSessionId);
+        if (signal.isCancelled()) {
+            cancellations.unregister(childId);
+            return Result.fail(UseCaseError.of(SessionError.NOT_FOUND, "子会话被终止，未创建", childId));
+        }
         sessions.save(child);
         commitScope.stageReplace(child);
         commitScope.commit();

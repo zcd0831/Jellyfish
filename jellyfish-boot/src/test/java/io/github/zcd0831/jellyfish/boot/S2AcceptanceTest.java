@@ -132,6 +132,7 @@ class S2AcceptanceTest {
         io.github.zcd0831.jellyfish.application.memory.ExperienceDistillationService distillation =
                 new io.github.zcd0831.jellyfish.application.memory.ExperienceDistillationService(experiences,
                         policies, new FileCommitScope(dir, codec), publisher, event -> { });
+        SessionCancellations cancellations = new SessionCancellations();
         io.github.zcd0831.jellyfish.application.memory.PlanCompletionCurator curator =
                 new io.github.zcd0831.jellyfish.application.memory.PlanCompletionCurator(
                         catalog, distillation,
@@ -139,16 +140,16 @@ class S2AcceptanceTest {
                                 policies, new FileCommitScope(dir, codec), publisher, event -> { }),
                         new io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner(
                                 startSession, sessions, reActLoop, new SessionToolScope(),
-                                new FileCommitScope(dir, codec), () -> System.currentTimeMillis()),
+                                new FileCommitScope(dir, codec), () -> System.currentTimeMillis(),
+                                cancellations),
                         new FileCommitScope(dir, codec));
-        SessionCancellations cancellations = new SessionCancellations();
         ExecutionLoop executionLoop = new ExecutionLoop(contextWindow, reActLoop, verificationRunner, plans,
                 planFactory, catalog, policies, new FileCommitScope(dir, codec), publisher, event -> { },
                 cancellations, model, budgetService, retriever, feedback, curator, reflections, experiences,
                 new SessionToolScope(),
                 new io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner(
                         startSession, sessions, reActLoop, new SessionToolScope(),
-                        new FileCommitScope(dir, codec), () -> System.currentTimeMillis()));
+                        new FileCommitScope(dir, codec), () -> System.currentTimeMillis(), cancellations));
         runSession = new RunSessionUseCase(sessions, records, new FileCommitScope(dir, codec), publisher,
                 executionLoop, model, toolExecutor, human, event -> { }, plans, contextWindow,
                 cancellations);

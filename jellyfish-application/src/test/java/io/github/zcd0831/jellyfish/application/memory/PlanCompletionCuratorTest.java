@@ -175,6 +175,24 @@ class PlanCompletionCuratorTest {
         verify(experienceWriter, never()).apply(any(ExperienceDraft.class), any(SessionId.class), any());
     }
 
+    /**
+     * fork 期间被终止：取消上抛（不当成“这次没学到”），且不写产物、不写告知记录。
+     * 规则出处：08-application §8.9.7（fork 期间被终止的语义）。
+     */
+    @Test
+    void 沉淀期间被终止则上抛且不写任何东西() {
+        when(catalog.agents()).thenReturn(Collections.singletonList(distillAgent()));
+        when(catalog.skills()).thenReturn(Collections.<SkillDefinition>emptyList());
+        when(forks.run(any(Session.class), any()))
+                .thenThrow(new java.util.concurrent.CancellationException("用户中断"));
+
+        org.junit.jupiter.api.Assertions.assertThrows(java.util.concurrent.CancellationException.class,
+                () -> curator().curate(session, input(traceWithoutSkill())));
+
+        verify(experienceWriter, never()).apply(any(ExperienceDraft.class), any(SessionId.class), any());
+        org.junit.jupiter.api.Assertions.assertTrue(session.records().isEmpty(), "不写告知记录");
+    }
+
     private static SkillDefinition skill(String id, boolean mutable) {
         return new SkillDefinition(SkillId.of(id), "名", "述", "触发", new InstructionTemplate("正文"),
                 SkillStatus.ACTIVE, mutable, null);

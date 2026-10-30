@@ -99,7 +99,8 @@ class S4MemoryTest {
         io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner forks =
                 new io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner(
                         null, null, null, scope, new FileCommitScope(dir, codec),
-                        () -> System.currentTimeMillis()) {
+                        () -> System.currentTimeMillis(),
+                        new io.github.zcd0831.jellyfish.application.planning.SessionCancellations()) {
                     @Override
                     public String run(Session parent, String instruction) {
                         return model.reply;

@@ -426,8 +426,36 @@ class ExecutionLoopTest {
         verify(forks).run(any(Session.class), org.mockito.ArgumentMatchers.contains("失败原因"));
     }
 
-    private static io.github.zcd0831.jellyfish.domain.action.agent.AgentDefinition reflectAgent() {
-        return new io.github.zcd0831.jellyfish.domain.action.agent.AgentDefinition(
+    /**
+     * 反思 fork 期间被终止：取消要上抛（不当成“本次不反思”），且取消之后不得再开新 Attempt / 重划 / 终止。
+     * 规则出处：08-application §8.9.4.1（终止不推进）、§8.9.7（fork 期间被终止的语义）。
+     */
+    @Test
+    void 反思期间被终止则上抛且不再推进状态() {
+        policy = policy.adjust(new java.util.LinkedHashMap<String, Object>() {{
+            put("maxRetries", 3);
+            put("reflectionThreshold", 1);
+        }});
+        Plan plan = plan(VerificationType.DETERMINISTIC);
+        planScript.add(plan);
+        when(reActLoop.runIteration(any(Session.class), any(), any(ChunkSink.class)))
+                .thenReturn(submitted("第一次"));
+        when(verificationRunner.verify(any(Session.class), any(Plan.class), any(), anyInt(), any()))
+                .thenReturn(failed());
+        when(catalog.agents()).thenReturn(Collections.singletonList(reflectAgent()));
+        when(forks.run(any(Session.class), any()))
+                .thenThrow(new java.util.concurrent.CancellationException("用户中断"));
+
+        assertThrows(java.util.concurrent.CancellationException.class,
+                () -> loop().run(session, ChunkSink.NOOP, NO_CONTEXT));
+
+        // 失败本身就是取消前已正常落盘的事实（markStepFailed），这里只断言取消之后没有再推进
+        assertEquals(1, plan.steps().get(0).attempts().size(), "终止不耗重试：不开新 Attempt");
+        assertEquals(0, plan.replanGeneration(), "终止不触发重划");
+        assertEquals(PlanStatus.EXECUTING, plan.status(), "终止不把计划判死");
+    }
+
+    private static io.github.zcd0831.jellyfish.domain.action.agent.AgentDefinition reflectAgent() {        return new io.github.zcd0831.jellyfish.domain.action.agent.AgentDefinition(
                 AgentId.of("builtin.reflect"), "反思代理",
                 io.github.zcd0831.jellyfish.domain.action.agent.AgentSource.BUILT_IN,
                 new io.github.zcd0831.jellyfish.domain.action.agent.PromptTemplate("你是复盘者", java.util.Collections.<String>emptyList()),

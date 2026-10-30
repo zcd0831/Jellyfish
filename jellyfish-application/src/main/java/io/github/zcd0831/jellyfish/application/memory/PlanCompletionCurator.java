@@ -65,6 +65,9 @@ public final class PlanCompletionCurator {
         String answer;
         try {
             answer = forks.run(session, instruction(agent, used));
+        } catch (java.util.concurrent.CancellationException terminated) {
+            // 终止是终态：不产出 Draft、不写告知记录，本轮按 CANCELLED 结束（08-application §8.9.7）
+            throw terminated;
         } catch (RuntimeException unavailable) {
             return DistillationOutcome.empty();   // 沉淀失败只是“这次没学到”，不影响会话继续
         }

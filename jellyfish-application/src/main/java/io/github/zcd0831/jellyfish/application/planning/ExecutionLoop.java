@@ -420,7 +420,8 @@ public final class ExecutionLoop implements SessionRunner {
 
     /**
      * 反思 = fork 当前生效窗口 + 末尾“反思指令 + 失败原因”：轨迹从窗口里来，不再单独拼素材。
-     * 代理缺失或调用失败 ⇒ 本次不反思：把错误文案存成反思结论比不反思更糟。
+     * 代理缺失或调用失败 ⇒ 本次不反思：把错误文案存成反思结论比不反思更糟；
+     * 但**终止要上抛**，否则取消被吞后仍会走重试/重划（08-application §8.9.4.1）。
      * 规则出处：07-memory §7.8.2、08-application §8.9.7。
      */
     private String reflect(Session session, PlanStep step, String failureReason) {
@@ -434,6 +435,9 @@ public final class ExecutionLoop implements SessionRunner {
         try {
             String conclusion = forks.run(session, instruction);
             return conclusion == null || conclusion.trim().isEmpty() ? null : conclusion;
+        } catch (java.util.concurrent.CancellationException terminated) {
+            // 终止是终态：不当成“本次不反思”，也不再推进状态（08-application §8.9.4.1、§8.9.7）
+            throw terminated;
         } catch (RuntimeException unavailable) {
             return null;
         }

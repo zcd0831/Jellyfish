@@ -3,7 +3,9 @@ package io.github.zcd0831.jellyfish.application.perception;
 import io.github.zcd0831.jellyfish.application.action.SessionToolScope;
 import io.github.zcd0831.jellyfish.application.perception.port.SessionRepository;
 import io.github.zcd0831.jellyfish.application.planning.ReActLoop;
+import io.github.zcd0831.jellyfish.application.planning.SessionCancellations;
 import io.github.zcd0831.jellyfish.application.shared.ChunkSink;
+import io.github.zcd0831.jellyfish.application.shared.Result;
 import io.github.zcd0831.jellyfish.application.shared.port.Clock;
 import io.github.zcd0831.jellyfish.application.shared.port.CommitScope;
 import io.github.zcd0831.jellyfish.domain.perception.session.Record;
@@ -26,26 +28,47 @@ public class InternalSessionRunner {
     private final SessionToolScope scope;
     private final CommitScope commitScope;
     private final Clock clock;
+    private final SessionCancellations cancellations;
 
     public InternalSessionRunner(StartSessionUseCase startSession, SessionRepository sessions, ReActLoop reActLoop,
-                                 SessionToolScope scope, CommitScope commitScope, Clock clock) {
+                                 SessionToolScope scope, CommitScope commitScope, Clock clock,
+                                 SessionCancellations cancellations) {
         this.startSession = startSession;
         this.sessions = sessions;
         this.reActLoop = reActLoop;
         this.scope = scope;
         this.commitScope = commitScope;
         this.clock = clock;
+        this.cancellations = cancellations;
     }
 
     /**
      * 返回子会话最后一条 assistant 文本；模型不可用/取消上抛，由调用方按环境故障处理。
+     * <p>终止与“没产出”分开：fork 没建起来时，父已被终止就抛 {@link java.util.concurrent.CancellationException}
+     * （终止是终态，§8.9.4.1），否则只是环境问题、本次不产出。
      * 非 final：装配级测试用它替换执行点（真跑一次内循环要拖进整套端口）。
+     * 规则出处：08-application §8.9.4.1、§8.9.7。
      */
     public String run(Session parent, String instruction) {
         if (parent == null) {
             return null;
         }
-        SessionId childId = startSession.forkInternal(parent.id()).value();
+        Result<SessionId> forked = startSession.forkInternal(parent.id());
+        if (!forked.isOk()) {
+            cancellations.forSession(parent.id()).throwIfCancelled();
+            return null;   // 父会话不在：本次不产出，不建子会话
+        }
+        SessionId childId = forked.value();
+        try {
+            return runInChild(parent, childId, instruction);
+        } finally {
+            // 一次性子会话：结束即注销，否则长会话里登记表只增不减（08-application §8.9.4.1）
+            scope.clear(childId);
+            cancellations.unregister(childId);
+        }
+    }
+
+    private String runInChild(Session parent, SessionId childId, String instruction) {
         Session child = sessions.load(childId);
         copyWindow(parent, child);
         Record instructionRecord = child.appendRecord(RecordRole.USER, instruction, null, clock.nowMillis());
@@ -53,11 +76,7 @@ public class InternalSessionRunner {
         commitScope.commit();
 
         scope.restrict(childId, Collections.<io.github.zcd0831.jellyfish.domain.shared.ToolId>emptySet());
-        try {
-            reActLoop.runIteration(child, null, ChunkSink.NOOP);
-        } finally {
-            scope.clear(childId);
-        }
+        reActLoop.runIteration(child, null, ChunkSink.NOOP);
         return lastAssistant(child);
     }
 

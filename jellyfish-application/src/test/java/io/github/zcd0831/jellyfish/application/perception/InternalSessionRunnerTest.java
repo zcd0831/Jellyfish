@@ -76,7 +76,11 @@ class InternalSessionRunnerTest {
     @Test
     void 子会话结束后注销令牌() {
         cancellations.register(PARENT, null);
-        when(startSession.forkInternal(PARENT)).thenReturn(Result.ok(CHILD));
+        // 与生产一致：forkInternal 里就登记了子令牌（父级联）
+        when(startSession.forkInternal(PARENT)).thenAnswer(call -> {
+            cancellations.registerIfAbsent(CHILD, PARENT);
+            return Result.ok(CHILD);
+        });
         when(sessions.load(CHILD)).thenReturn(child);
         when(reActLoop.runIteration(any(Session.class), any(), any(ChunkSink.class)))
                 .thenThrow(new CancellationException("用户中断"));

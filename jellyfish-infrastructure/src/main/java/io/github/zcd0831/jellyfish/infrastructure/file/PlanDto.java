@@ -6,12 +6,10 @@ import io.github.zcd0831.jellyfish.domain.planning.plan.Plan;
 import io.github.zcd0831.jellyfish.domain.planning.plan.PlanStatus;
 import io.github.zcd0831.jellyfish.domain.planning.plan.PlanStep;
 import io.github.zcd0831.jellyfish.domain.planning.plan.PlanSteps;
-import io.github.zcd0831.jellyfish.domain.planning.plan.RecordRange;
 import io.github.zcd0831.jellyfish.domain.planning.plan.StepStatus;
 import io.github.zcd0831.jellyfish.domain.planning.verification.VerificationType;
 import io.github.zcd0831.jellyfish.domain.shared.ExperienceId;
 import io.github.zcd0831.jellyfish.domain.shared.PlanId;
-import io.github.zcd0831.jellyfish.domain.shared.RecordId;
 import io.github.zcd0831.jellyfish.domain.shared.ReflectionId;
 import io.github.zcd0831.jellyfish.domain.shared.SessionId;
 import io.github.zcd0831.jellyfish.domain.shared.StepId;
@@ -118,8 +116,6 @@ public class PlanDto {
     public static class AttemptDto {
 
         public int attemptNo;
-        public String startRecordId;
-        public String endRecordId;
         public String verificationReportId;
         public String reflectionId;
         public String outcome;
@@ -127,10 +123,6 @@ public class PlanDto {
         static AttemptDto from(Attempt attempt) {
             AttemptDto dto = new AttemptDto();
             dto.attemptNo = attempt.attemptNo();
-            if (attempt.recordRange() != null) {
-                dto.startRecordId = attempt.recordRange().getStartRecordId().getValue();
-                dto.endRecordId = attempt.recordRange().getEndRecordId().getValue();
-            }
             dto.verificationReportId = attempt.verificationReportId() == null
                     ? null : attempt.verificationReportId().getValue();
             dto.reflectionId = attempt.reflectionId() == null ? null : attempt.reflectionId().getValue();
@@ -139,9 +131,7 @@ public class PlanDto {
         }
 
         Attempt toDomain() {
-            RecordRange range = startRecordId == null ? null
-                    : new RecordRange(RecordId.of(startRecordId), RecordId.of(endRecordId));
-            Attempt attempt = new Attempt(attemptNo, range);
+            Attempt attempt = new Attempt(attemptNo);
             if (verificationReportId != null) {
                 attempt.attachReport(VerificationReportId.of(verificationReportId));
             }

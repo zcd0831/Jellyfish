@@ -217,26 +217,7 @@ class ExecutionLoopTest {
     }
 
     @Test
-    void 每段ReAct结束都把新增记录区间写进attempt() {
-        Plan plan = plan();
-        planScript.add(plan);
-        when(reActLoop.runIteration(any(Session.class), any(), any(ChunkSink.class))).thenAnswer(invocation -> {
-            Session running = invocation.getArgument(0);
-            running.appendRecord(io.github.zcd0831.jellyfish.domain.perception.session.RecordRole.USER,
-                    "继续", null, 2L);
-            return converged();
-        });
-
-        loop().run(session, ChunkSink.NOOP, NO_TOKEN, NO_CONTEXT);
-
-        assertTrue(plan.steps().get(0).attempts().get(0).recordRange() != null,
-                "挂起也要把已发生的轨迹记进 attempt");
-        assertEquals(plan.steps().get(0).attempts().get(0).recordRange().getStartRecordId(),
-                plan.steps().get(0).attempts().get(0).recordRange().getEndRecordId(), "只有一条记录时区间退化为点");
-    }
-
-    @Test
-    void 环境故障也把中止记录记进区间且不判失败() {
+    void 环境故障补中止记录且不判失败() {
         Plan plan = plan();
         planScript.add(plan);
         when(reActLoop.runIteration(any(Session.class), any(), any(ChunkSink.class))).thenAnswer(invocation -> {
@@ -251,7 +232,7 @@ class ExecutionLoopTest {
         assertThrows(ModelInvocationException.class,
                 () -> loop().run(session, ChunkSink.NOOP, NO_TOKEN, NO_CONTEXT));
 
-        assertTrue(plan.steps().get(0).attempts().get(0).recordRange() != null);
+        assertTrue(plan.steps().get(0).attempts().get(0).usedSkillIds().isEmpty(), "环境故障不记录技能");
         assertEquals(StepStatus.RUNNING, plan.steps().get(0).status(), "环境故障不推进步骤状态");
         assertNull(plan.steps().get(0).attempts().get(0).outcome(), "attempt 不落终态");
     }
@@ -434,36 +415,6 @@ class ExecutionLoopTest {
                 new io.github.zcd0831.jellyfish.domain.action.agent.PromptTemplate("你是复盘者", java.util.Collections.<String>emptyList()),
                 io.github.zcd0831.jellyfish.domain.action.agent.AgentStatus.ACTIVE,
                 java.util.Collections.emptyList(), java.util.Collections.emptyList());
-    }
-
-    @Test
-    void 折叠产生的SUMMARY不算轨迹证据() {
-        Plan plan = plan();   // 无验证声明：提交即完成
-        planScript.add(plan);
-        java.util.concurrent.atomic.AtomicReference<io.github.zcd0831.jellyfish.domain.shared.RecordId> assistantId =
-                new java.util.concurrent.atomic.AtomicReference<io.github.zcd0831.jellyfish.domain.shared.RecordId>();
-        java.util.concurrent.atomic.AtomicReference<io.github.zcd0831.jellyfish.domain.shared.RecordId> resultId =
-                new java.util.concurrent.atomic.AtomicReference<io.github.zcd0831.jellyfish.domain.shared.RecordId>();
-        when(reActLoop.runIteration(any(Session.class), any(), any(ChunkSink.class))).thenAnswer(call -> {
-            if (call.getArgument(1) == null) {
-                return converged();
-            }
-            session.markSummarized("折叠发生在 attempt 中间", 0, 2L);
-            assistantId.set(session.appendRecord(io.github.zcd0831.jellyfish.domain.perception.session.RecordRole.ASSISTANT,
-                    "看一下", null, "t1", "m1", null, 3L).id());
-            session.appendRecord(io.github.zcd0831.jellyfish.domain.perception.session.RecordRole.TOOL_REQUEST,
-                    "{\"callId\":\"c1\",\"name\":\"read_file\",\"arguments\":\"{}\"}", null, "t1", "m1", null, 4L);
-            resultId.set(session.appendRecord(io.github.zcd0831.jellyfish.domain.perception.session.RecordRole.TOOL_RESULT,
-                    "内容", null, "t1", "m1", null, 5L).id());
-            return submitted("完成");
-        });
-
-        loop().run(session, ChunkSink.NOOP, NO_TOKEN, NO_CONTEXT);
-
-        io.github.zcd0831.jellyfish.domain.planning.plan.RecordRange range =
-                plan.steps().get(0).attempts().get(0).recordRange();
-        assertEquals(assistantId.get(), range.getStartRecordId(), "起点跳过 SUMMARY");
-        assertEquals(resultId.get(), range.getEndRecordId());
     }
 
     @Test

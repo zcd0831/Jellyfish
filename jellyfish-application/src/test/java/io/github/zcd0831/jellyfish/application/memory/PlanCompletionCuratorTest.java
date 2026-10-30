@@ -20,7 +20,6 @@ import io.github.zcd0831.jellyfish.domain.perception.session.Record;
 import io.github.zcd0831.jellyfish.domain.perception.session.RecordRole;
 import io.github.zcd0831.jellyfish.domain.perception.session.Session;
 import io.github.zcd0831.jellyfish.domain.planning.plan.PlanStatus;
-import io.github.zcd0831.jellyfish.domain.planning.plan.RecordRange;
 import io.github.zcd0831.jellyfish.domain.planning.plan.StepStatus;
 import io.github.zcd0831.jellyfish.domain.shared.AgentId;
 import io.github.zcd0831.jellyfish.domain.shared.ModelId;
@@ -80,11 +79,11 @@ class PlanCompletionCuratorTest {
     }
 
     private static StepTrace traceWithoutSkill() {
-        return new StepTrace(StepId.of("step1"), "做事", StepStatus.SUCCEEDED, null, null, null, null);
+        return new StepTrace(StepId.of("step1"), "做事", StepStatus.SUCCEEDED, null, null, null);
     }
 
     private static StepTrace traceWithSkill(String skillId) {
-        return new StepTrace(StepId.of("step1"), "做事", StepStatus.SUCCEEDED, null,
+        return new StepTrace(StepId.of("step1"), "做事", StepStatus.SUCCEEDED,
                 Collections.singletonList(SkillId.of(skillId)), null, null);
     }
 

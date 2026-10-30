@@ -42,7 +42,6 @@ import io.github.zcd0831.jellyfish.domain.planning.plan.PlanStatus;
 import io.github.zcd0831.jellyfish.domain.planning.plan.PlanStep;
 import io.github.zcd0831.jellyfish.domain.memory.reflection.Reflection;
 import io.github.zcd0831.jellyfish.domain.planning.plan.PlanStep;
-import io.github.zcd0831.jellyfish.domain.planning.plan.RecordRange;
 import io.github.zcd0831.jellyfish.domain.planning.plan.StepStatus;
 import io.github.zcd0831.jellyfish.domain.planning.verification.VerificationOutcome;
 import io.github.zcd0831.jellyfish.domain.planning.verification.VerificationReport;
@@ -156,13 +155,11 @@ public final class ExecutionLoop implements SessionRunner {
                 attempt = step.attempts().get(step.attempts().size() - 1);
             }
 
-            int firstRecordIndex = session.records().size();
             IterationResult iteration;
             try {
                 iteration = reActLoop.runIteration(session, step, sink);
             } catch (RuntimeException failure) {
-                // 中止事实也属于本次 attempt 的轨迹，先延伸区间再决定怎么处理（06-planning §6.8.1 规则 10）
-                extendAttemptRange(session, plan, step, attempt, firstRecordIndex);
+                // 中止事实由内循环补成 TOOL_RESULT 落进流水（06-planning §6.8.1 规则 11），这里只决定怎么处理
                 if (failure instanceof ModelInvocationException
                         && ((ModelInvocationException) failure).error() == ModelError.CONTEXT_EXCEEDED
                         && !collapsedOnce) {
@@ -173,8 +170,6 @@ public final class ExecutionLoop implements SessionRunner {
                 }
                 throw failure;   // 模型不可用/取消：不推进状态
             }
-            extendAttemptRange(session, plan, step, attempt, firstRecordIndex);
-
             recordSkillUsage(plan, step, attempt, iteration);
 
             if (!iteration.isConverged()) {
@@ -465,34 +460,6 @@ public final class ExecutionLoop implements SessionRunner {
         commitPlan(plan);
     }
 
-    /**
-     * 把本段 ReAct 新增的记录区间延伸进当前 attempt：挂起、环境故障都保留已发生的轨迹。
-     * SUMMARY 不算证据：内循环折叠会在 attempt 中间追加它，拿它当边界等于把摘要当轨迹
-     * （04-perception §4.8.1 规则 23、06-planning §6.8.1 规则 10）。
-     */
-    private void extendAttemptRange(Session session, Plan plan, PlanStep step, Attempt attempt, int firstRecordIndex) {
-        if (plan == null || step == null || attempt == null) {
-            return;
-        }
-        Record first = null;
-        Record last = null;
-        List<Record> records = session.records();
-        for (int i = firstRecordIndex; i < records.size(); i++) {
-            if (records.get(i).role() == RecordRole.SUMMARY) {
-                continue;
-            }
-            if (first == null) {
-                first = records.get(i);
-            }
-            last = records.get(i);
-        }
-        if (first == null) {
-            return;
-        }
-        plan.extendAttemptRange(step.id(), attempt.attemptNo(), new RecordRange(first.id(), last.id()));
-        commitPlan(plan);
-    }
-
     /** 计划完结（含终局失败）：组装事实摘要交给编排者，记忆不遍历 Plan。 */
     private void curate(Session session, Plan plan) {
         List<StepTrace> traces = new ArrayList<StepTrace>();
@@ -500,7 +467,6 @@ public final class ExecutionLoop implements SessionRunner {
             Attempt latest = step.attempts().isEmpty() ? null
                     : step.attempts().get(step.attempts().size() - 1);
             traces.add(new StepTrace(step.id(), step.description(), step.status(),
-                    latest == null ? null : latest.recordRange(),
                     latest == null ? Collections.<SkillId>emptyList() : latest.usedSkillIds(),
                     latest == null || latest.outcome() == AttemptOutcome.SUCCEEDED ? null
                             : plan.terminationReason(),

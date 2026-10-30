@@ -113,15 +113,16 @@ class S1AcceptanceTest {
                         io.github.zcd0831.jellyfish.application.planning.EnvironmentFeedbackVerifier.NOT_CONFIGURED);
         final io.github.zcd0831.jellyfish.application.perception.StartSessionUseCase startSessionRef =
                 startSession;
+        SessionCancellations cancellations = new SessionCancellations();
         ExecutionLoop executionLoop = LoopSupport.build(dir, codec, model, policies, catalog, budgetService,
                 contextWindow, reActLoop, verificationRunner, plans, publisher, event -> { }, startSessionRef,
-                sessions, records, new io.github.zcd0831.jellyfish.application.planning.RunSessionProvider() {
+                sessions, records, cancellations,
+                new io.github.zcd0831.jellyfish.application.planning.RunSessionProvider() {
                     @Override
                     public io.github.zcd0831.jellyfish.application.planning.RunSessionUseCase get() {
                         return runSessionProviderHolder[0];
                     }
                 });
-        SessionCancellations cancellations = new SessionCancellations();
         runSession = new RunSessionUseCase(sessions, records, new FileCommitScope(dir, codec), publisher,
                 executionLoop, model, toolExecutor, human, event -> { }, plans, contextWindow,
                 cancellations);

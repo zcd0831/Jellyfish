@@ -46,7 +46,9 @@ final class LoopSupport {
                                ReActLoop reActLoop, VerificationRunner verificationRunner, PlanRepository plans,
                                DomainEventPublisher publisher, ProgressPort progress,
                                StartSessionUseCase startSession, SessionRepository sessions,
-                               RecordStore records, RunSessionProvider runSession) {
+                               RecordStore records,
+                               io.github.zcd0831.jellyfish.application.planning.SessionCancellations cancellations,
+                               RunSessionProvider runSession) {
         ExperienceRepository experiences = new FileExperienceRepository(dir, codec);
         ReflectionRepository reflections = new FileReflectionRepository(dir, codec);
         ExperienceRetriever retriever = new ExperienceRetriever(experiences, model, catalog, policies,
@@ -67,10 +69,9 @@ final class LoopSupport {
                 new FileCommitScope(dir, codec));
         ExecutorService pool = Executors.newFixedThreadPool(2);
         SubagentLauncher launcher = new SubagentLauncher(startSession, runSession, sessions, records,
-                budgetService, policies, progress, pool,
-                new io.github.zcd0831.jellyfish.application.planning.SessionCancellations());
+                budgetService, policies, progress, pool, cancellations);
         return new ExecutionLoop(contextWindow, reActLoop, verificationRunner, plans, new PlanFactory(), catalog,
-                policies, new FileCommitScope(dir, codec), publisher, progress, model, budgetService, retriever,
-                feedback, curator, reflections, experiences, scope, forks);
+                policies, new FileCommitScope(dir, codec), publisher, progress, cancellations, model, budgetService,
+                retriever, feedback, curator, reflections, experiences, scope, forks);
     }
 }

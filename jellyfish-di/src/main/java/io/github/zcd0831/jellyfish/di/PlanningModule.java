@@ -163,10 +163,12 @@ public final class PlanningModule {
                                 PlanCompletionCurator planCompletionCurator,
                                 ReflectionRepository reflections, ExperienceRepository experiences,
                                 SessionToolScope scope,
+                                CancellationRegistry cancellationRegistry,
                                 io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner forks) {
         return new ExecutionLoop(contextWindow, reActLoop, verificationRunner, plans, planFactory, catalog,
-                policies, commitScope, publisher, progress, model, budgetService, experienceRetriever,
-                experienceFeedback, planCompletionCurator, reflections, experiences, scope, forks);
+                policies, commitScope, publisher, progress, cancellationRegistry, model, budgetService,
+                experienceRetriever, experienceFeedback, planCompletionCurator, reflections, experiences,
+                scope, forks);
     }
 
     /** 零插件时就是默认编排；插件装上后由路由接管。 */

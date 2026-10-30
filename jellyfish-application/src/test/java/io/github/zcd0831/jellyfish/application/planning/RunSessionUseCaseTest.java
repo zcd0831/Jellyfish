@@ -66,7 +66,7 @@ class RunSessionUseCaseTest {
 
     @Test
     void 续跑只发应用事件SessionResumed且不追用户消息() {
-        when(runner.run(any(Session.class), any(ChunkSink.class), any(), any(RunContext.class)))
+        when(runner.run(any(Session.class), any(ChunkSink.class), any(RunContext.class)))
                 .thenReturn(RunOutcome.CONVERGED);
 
         Result<RunSessionResult> result = useCase().run(SessionId.of("s1"), null, ChunkSink.NOOP);
@@ -82,23 +82,23 @@ class RunSessionUseCaseTest {
 
     @Test
     void 收敛后把本轮事实落盘() {
-        when(runner.run(any(Session.class), any(ChunkSink.class), any(), any(RunContext.class))).thenReturn(RunOutcome.CONVERGED);
+        when(runner.run(any(Session.class), any(ChunkSink.class), any(RunContext.class))).thenReturn(RunOutcome.CONVERGED);
 
         Result<RunSessionResult> result = useCase().run(SessionId.of("s1"), "hi", ChunkSink.NOOP);
 
         assertTrue(result.isOk());
         assertEquals(RunSessionResult.Outcome.CONVERGED, result.value().outcome());
-        verify(runner).run(any(Session.class), any(ChunkSink.class), any(), any(RunContext.class));
+        verify(runner).run(any(Session.class), any(ChunkSink.class), any(RunContext.class));
     }
 
     @Test
     void 挂起与轮次用尽如实映射() {
-        when(runner.run(any(Session.class), any(ChunkSink.class), any(), any(RunContext.class)))
+        when(runner.run(any(Session.class), any(ChunkSink.class), any(RunContext.class)))
                 .thenReturn(RunOutcome.SUSPENDED);
         assertEquals(RunSessionResult.Outcome.SUSPENDED,
                 useCase().run(SessionId.of("s1"), "hi", ChunkSink.NOOP).value().outcome());
 
-        when(runner.run(any(Session.class), any(ChunkSink.class), any(), any(RunContext.class)))
+        when(runner.run(any(Session.class), any(ChunkSink.class), any(RunContext.class)))
                 .thenReturn(RunOutcome.ROUNDS_EXHAUSTED);
         assertEquals(RunSessionResult.Outcome.ROUNDS_EXHAUSTED,
                 useCase().run(SessionId.of("s1"), "hi", ChunkSink.NOOP).value().outcome());
@@ -106,7 +106,7 @@ class RunSessionUseCaseTest {
 
     @Test
     void 取消是正常结果不是错误() {
-        when(runner.run(any(Session.class), any(ChunkSink.class), any(), any(RunContext.class)))
+        when(runner.run(any(Session.class), any(ChunkSink.class), any(RunContext.class)))
                 .thenThrow(new CancellationException("用户中断"));
 
         Result<RunSessionResult> result = useCase().run(SessionId.of("s1"), "hi", ChunkSink.NOOP);
@@ -117,7 +117,7 @@ class RunSessionUseCaseTest {
 
     @Test
     void 模型不可用不改状态() {
-        when(runner.run(any(Session.class), any(ChunkSink.class), any(), any(RunContext.class)))
+        when(runner.run(any(Session.class), any(ChunkSink.class), any(RunContext.class)))
                 .thenThrow(new ModelInvocationException(ModelError.UNAVAILABLE, "全挂"));
         Session fresh = Session.create(SessionId.of("s1"), null, AgentId.of("a"), ModelId.of("m1"), 1L, null);
         when(sessions.load(SessionId.of("s1"))).thenReturn(fresh);
@@ -126,6 +126,6 @@ class RunSessionUseCaseTest {
 
         assertFalse(result.isOk());
         assertEquals("M_UNAVAILABLE", result.error().error().code());
-        verify(runner).run(any(Session.class), any(ChunkSink.class), any(), any(RunContext.class));
+        verify(runner).run(any(Session.class), any(ChunkSink.class), any(RunContext.class));
     }
 }

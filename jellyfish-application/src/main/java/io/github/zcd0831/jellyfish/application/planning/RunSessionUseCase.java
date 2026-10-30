@@ -106,7 +106,7 @@ public final class RunSessionUseCase {
         commitScope.commit();
 
         try {
-            RunOutcome outcome = runner.run(session, sink, token, context(session, sink, token));
+            RunOutcome outcome = runner.run(session, sink, context(session, sink, token));
             finish(session);
             return Result.ok(RunSessionResult.of(map(outcome)));
         } catch (java.util.concurrent.CancellationException cancelled) {

@@ -20,10 +20,10 @@ import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationResult
 import io.github.zcd0831.jellyfish.application.perception.ContextWindowService;
 import io.github.zcd0831.jellyfish.application.perception.port.PolicyRepository;
 import io.github.zcd0831.jellyfish.application.planning.port.PlanRepository;
-import io.github.zcd0831.jellyfish.application.shared.CancellationToken;
 import io.github.zcd0831.jellyfish.application.shared.ChunkSink;
 import io.github.zcd0831.jellyfish.application.shared.Json;
 import io.github.zcd0831.jellyfish.application.shared.ProgressEvent;
+import io.github.zcd0831.jellyfish.application.shared.port.CancellationRegistry;
 import io.github.zcd0831.jellyfish.application.shared.port.CommitScope;
 import io.github.zcd0831.jellyfish.application.shared.port.DomainEventPublisher;
 import io.github.zcd0831.jellyfish.application.shared.port.ProgressPort;
@@ -82,6 +82,7 @@ public final class ExecutionLoop implements SessionRunner {
     private final CommitScope commitScope;
     private final DomainEventPublisher eventPublisher;
     private final ProgressPort progress;
+    private final CancellationRegistry cancellations;
     private final ModelInvocationPort model;
     private final BudgetService budgetService;
     private final ExperienceRetriever experienceRetriever;
@@ -95,7 +96,8 @@ public final class ExecutionLoop implements SessionRunner {
     public ExecutionLoop(ContextWindowService contextWindow, ReActLoop reActLoop,
                          VerificationRunner verificationRunner, PlanRepository plans, PlanFactory planFactory,
                          CatalogRepository catalog, PolicyRepository policies, CommitScope commitScope,
-                         DomainEventPublisher eventPublisher, ProgressPort progress, ModelInvocationPort model,
+                         DomainEventPublisher eventPublisher, ProgressPort progress, CancellationRegistry cancellations,
+                         ModelInvocationPort model,
                          BudgetService budgetService, ExperienceRetriever experienceRetriever,
                          ExperienceFeedbackService experienceFeedback,
                          PlanCompletionCurator planCompletionCurator,
@@ -113,6 +115,7 @@ public final class ExecutionLoop implements SessionRunner {
         this.commitScope = commitScope;
         this.eventPublisher = eventPublisher;
         this.progress = progress;
+        this.cancellations = cancellations;
         this.model = model;
         this.budgetService = budgetService;
         this.experienceRetriever = experienceRetriever;
@@ -127,16 +130,18 @@ public final class ExecutionLoop implements SessionRunner {
     /**
      * `context` 只服务外部实现：默认循环的依赖由构造器注入，因此这里不读它
      * （06-planning §6.5：`RunContext` 是给插件实现的扶手）。
+     * <p>令牌不走形参：一个会话一个令牌，轮次边界只认登记表（08-application §8.9.4.1）。
      */
     @Override
-    public RunOutcome run(Session session, ChunkSink sink, CancellationToken token, RunContext context) {
+    public RunOutcome run(Session session, ChunkSink sink, RunContext context) {
         boolean collapsedOnce = false;
         // 播报按 planId 去重：一次 run 里可以串行产生多个计划（08-application §8.7）
         Set<PlanId> announcedPlans = new HashSet<PlanId>();
 
         while (true) {
-            // 每一轮开始先看取消：流式/工具刚被打断时，不再进入下一轮（08-application §8.9.4.1）
-            token.throwIfCancelled();
+            // 每一轮开始先看取消：流式/工具刚被打断时，不再进入下一轮
+            // 令牌只从登记表取（一个会话一个令牌），不接受外部传入的形参（08-application §8.9.4.1）
+            cancellations.forSession(session.id()).throwIfCancelled();
             // 计划可能在循环中途由 generate_plan 产生：每轮重读；重划不改 planId，另有 PLAN_REPLAN
             Plan plan = runningPlan(session);
             if (plan != null && plan.hasExecutablePlan() && announcedPlans.add(plan.id())) {
@@ -157,6 +162,8 @@ public final class ExecutionLoop implements SessionRunner {
 
             IterationResult iteration;
             try {
+                // 内循环的阻塞点（模型调用 / 工具 / ask）各自按会话 id 从登记表取同一令牌
+                // （08-application §8.9.4.1「生效边界」），因此这里不传令牌
                 iteration = reActLoop.runIteration(session, step, sink);
             } catch (RuntimeException failure) {
                 // 中止事实由内循环补成 TOOL_RESULT 落进流水（06-planning §6.8.1 规则 11），这里只决定怎么处理

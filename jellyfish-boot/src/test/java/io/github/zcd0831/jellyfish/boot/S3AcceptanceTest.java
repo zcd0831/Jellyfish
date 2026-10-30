@@ -150,7 +150,7 @@ class S3AcceptanceTest {
                 EnvironmentFeedbackVerifier.NOT_CONFIGURED);
         ExecutionLoop executionLoop = LoopSupport.build(dir, codec, model, policies, catalog, budgetService,
                 contextWindow, reActLoop, verificationRunner, plans, publisher, event -> { }, startSession,
-                sessions, records, new RunSessionProvider() {
+                sessions, records, cancellations, new RunSessionProvider() {
                     @Override
                     public RunSessionUseCase get() {
                         return runSessionHolder[0];

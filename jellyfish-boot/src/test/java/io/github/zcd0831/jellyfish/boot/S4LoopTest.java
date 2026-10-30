@@ -124,19 +124,18 @@ class S4LoopTest {
                 new FileCommitScope(dir, codec), human);
         VerificationRunner verificationRunner = new VerificationRunner(model, catalog, human, budgetService,
                 EnvironmentFeedbackVerifier.NOT_CONFIGURED);
+        SessionCancellations cancellations = new SessionCancellations();
         startSession = new StartSessionUseCase(catalog, sessions, budgets,
                 new SessionTitleGenerator(model, budgetService), new SystemPromptAssembler(),
-                new FileCommitScope(dir, codec), new SystemClock(),
-                new io.github.zcd0831.jellyfish.application.planning.SessionCancellations(), publisher);
+                new FileCommitScope(dir, codec), new SystemClock(), cancellations, publisher);
         ExecutionLoop executionLoop = LoopSupport.build(dir, codec, model, policies, catalog, budgetService,
                 contextWindow, reActLoop, verificationRunner, plans, publisher, announced::add, startSession,
-                sessions, records, new RunSessionProvider() {
+                sessions, records, cancellations, new RunSessionProvider() {
                     @Override
                     public RunSessionUseCase get() {
                         return holder[0];
                     }
                 });
-        SessionCancellations cancellations = new SessionCancellations();
         runSession = new RunSessionUseCase(sessions, records, new FileCommitScope(dir, codec), publisher,
                 executionLoop, model, toolExecutor, human, event -> { }, plans, contextWindow,
                 cancellations);

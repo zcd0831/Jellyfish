@@ -83,6 +83,9 @@ class ExecutionLoopTest {
     private final Session session = Session.create(SessionId.of("s1"), null, AgentId.of("a"),
             ModelId.of("m1"), 1L, null);
 
+    /** 轮次边界的令牌真源：一个会话一个令牌（08-application §8.9.4.1）。 */
+    private final SessionCancellations cancellations = new SessionCancellations();
+
     private RuntimePolicy policy;
     private final Deque<Plan> planScript = new ArrayDeque<Plan>();
 
@@ -107,8 +110,8 @@ class ExecutionLoopTest {
                 invocation -> planScript.isEmpty() ? Collections.<Plan>emptyList()
                         : Collections.singletonList(planScript.peek()));
         return new ExecutionLoop(contextWindow, reActLoop, verificationRunner, plans, new io.github.zcd0831.jellyfish.domain.planning.plan.PlanFactory(),
-                catalog, policies, commitScope, events -> { }, progressEvents::add, model, budget, retriever,
-                feedback, curator, reflections, experiences, scope, forks);
+                catalog, policies, commitScope, events -> { }, progressEvents::add, cancellations, model, budget,
+                retriever, feedback, curator, reflections, experiences, scope, forks);
     }
 
     /** 默认实现不读上下文（依赖由构造器注入），所以这里给空值即可。 */
@@ -148,23 +151,38 @@ class ExecutionLoopTest {
     @Test
     void 不响应终止的在途工具退化到下一次轮次边界() {
         planScript.add(plan());
-        final SessionCancellations cancellations = new SessionCancellations();
-        final CancellationToken token = cancellations.register(SessionId.of("s1"), null);
+        cancellations.register(SessionId.of("s1"), null);
         when(reActLoop.runIteration(any(Session.class), any(), any(ChunkSink.class))).thenAnswer(call -> {
             cancellations.cancel(SessionId.of("s1"));   // 工具在跑的时候按了 Esc，但插件工具没响应
             return submitted("做完了");
         });
 
         assertThrows(java.util.concurrent.CancellationException.class,
-                () -> loop().run(session, ChunkSink.NOOP, token, NO_CONTEXT));
+                () -> loop().run(session, ChunkSink.NOOP, NO_CONTEXT));
         verify(reActLoop, times(1)).runIteration(any(Session.class), any(), any(ChunkSink.class));
+    }
+
+    /**
+     * 轮次边界只认登记表：本会话未登记（不在跑）就不该被别的会话的终止牵连，
+     * 取不到令牌时一律是 <code>never()</code>。
+     * 规则出处：08-application §8.9.4.1（轮次外的调用拿不到令牌，用 never()）。
+     */
+    @Test
+    void 本会话未登记时别的会话终止不影响轮次边界() {
+        cancellations.register(SessionId.of("other"), null);
+        when(reActLoop.runIteration(any(Session.class), any(), any(ChunkSink.class))).thenAnswer(call -> {
+            cancellations.cancel(SessionId.of("other"));   // 另一个在跑会话被终止
+            return converged();
+        });
+
+        assertEquals(RunOutcome.CONVERGED, loop().run(session, ChunkSink.NOOP, NO_CONTEXT));
     }
 
     @Test
     void 无计划且收敛即结束() {
         when(reActLoop.runIteration(any(Session.class), any(), any(ChunkSink.class))).thenReturn(converged());
 
-        assertEquals(RunOutcome.CONVERGED, loop().run(session, ChunkSink.NOOP, NO_TOKEN, NO_CONTEXT));
+        assertEquals(RunOutcome.CONVERGED, loop().run(session, ChunkSink.NOOP, NO_CONTEXT));
     }
 
     @Test
@@ -172,7 +190,7 @@ class ExecutionLoopTest {
         when(reActLoop.runIteration(any(Session.class), any(), any(ChunkSink.class)))
                 .thenReturn(IterationResult.notConverged(20, java.util.Collections.emptyList()));
 
-        assertEquals(RunOutcome.ROUNDS_EXHAUSTED, loop().run(session, ChunkSink.NOOP, NO_TOKEN, NO_CONTEXT));
+        assertEquals(RunOutcome.ROUNDS_EXHAUSTED, loop().run(session, ChunkSink.NOOP, NO_CONTEXT));
     }
 
     @Test
@@ -185,7 +203,7 @@ class ExecutionLoopTest {
                 .thenReturn(IterationResult.notConverged(20, java.util.Collections.emptyList()))
                 .thenReturn(converged());
 
-        loop().run(session, ChunkSink.NOOP, NO_TOKEN, NO_CONTEXT);
+        loop().run(session, ChunkSink.NOOP, NO_CONTEXT);
 
         assertEquals(AttemptOutcome.FAILED, plan.steps().get(0).attempts().get(0).outcome(),
                 "撞轮次上限要落到当前 attempt 上（轮次号 20 与 attempt 号无关）");
@@ -197,7 +215,7 @@ class ExecutionLoopTest {
         planScript.add(plan());
         when(reActLoop.runIteration(any(Session.class), any(), any(ChunkSink.class))).thenReturn(converged());
 
-        assertEquals(RunOutcome.SUSPENDED, loop().run(session, ChunkSink.NOOP, NO_TOKEN, NO_CONTEXT));
+        assertEquals(RunOutcome.SUSPENDED, loop().run(session, ChunkSink.NOOP, NO_CONTEXT));
     }
 
     @Test
@@ -208,7 +226,7 @@ class ExecutionLoopTest {
                 .thenReturn(submitted("做完了"))
                 .thenReturn(converged());
 
-        RunOutcome outcome = loop().run(session, ChunkSink.NOOP, NO_TOKEN, NO_CONTEXT);
+        RunOutcome outcome = loop().run(session, ChunkSink.NOOP, NO_CONTEXT);
 
         assertEquals(RunOutcome.CONVERGED, outcome);
         assertEquals(PlanStatus.COMPLETED, plan.status());
@@ -230,7 +248,7 @@ class ExecutionLoopTest {
         });
 
         assertThrows(ModelInvocationException.class,
-                () -> loop().run(session, ChunkSink.NOOP, NO_TOKEN, NO_CONTEXT));
+                () -> loop().run(session, ChunkSink.NOOP, NO_CONTEXT));
 
         assertTrue(plan.steps().get(0).attempts().get(0).usedSkillIds().isEmpty(), "环境故障不记录技能");
         assertEquals(StepStatus.RUNNING, plan.steps().get(0).status(), "环境故障不推进步骤状态");
@@ -247,7 +265,7 @@ class ExecutionLoopTest {
         when(verificationRunner.verify(any(Session.class), any(Plan.class), any(), anyInt(), any()))
                 .thenReturn(passed());
 
-        loop().run(session, ChunkSink.NOOP, NO_TOKEN, NO_CONTEXT);
+        loop().run(session, ChunkSink.NOOP, NO_CONTEXT);
 
         assertEquals(PlanStatus.COMPLETED, plan.status());
         verify(commitScope).stageFact(any(VerificationReport.class));
@@ -266,7 +284,7 @@ class ExecutionLoopTest {
                 .thenReturn(failed())
                 .thenReturn(passed());
 
-        loop().run(session, ChunkSink.NOOP, NO_TOKEN, NO_CONTEXT);
+        loop().run(session, ChunkSink.NOOP, NO_CONTEXT);
 
         assertEquals(PlanStatus.COMPLETED, plan.status());
         assertEquals(2, plan.steps().get(0).attempts().size(), "失败后应重试同一步");
@@ -299,7 +317,7 @@ class ExecutionLoopTest {
                 .thenReturn(failed())
                 .thenReturn(passed());
 
-        loop().run(session, ChunkSink.NOOP, NO_TOKEN, NO_CONTEXT);
+        loop().run(session, ChunkSink.NOOP, NO_CONTEXT);
 
         assertEquals(1, plan.replanGeneration(), "应发生一次重划");
         assertTrue(progressEvents.stream().anyMatch(e ->
@@ -334,7 +352,7 @@ class ExecutionLoopTest {
         when(verificationRunner.verify(any(Session.class), any(Plan.class), any(), anyInt(), any()))
                 .thenReturn(failed());
 
-        loop().run(session, ChunkSink.NOOP, NO_TOKEN, NO_CONTEXT);
+        loop().run(session, ChunkSink.NOOP, NO_CONTEXT);
 
         assertEquals(PlanStatus.FAILED, plan.status());
         assertEquals(0, plan.replanGeneration(), "没换成新尾部就不该推进代次");
@@ -358,7 +376,7 @@ class ExecutionLoopTest {
                 .thenReturn(failed())
                 .thenReturn(failed());
 
-        RunOutcome outcome = loop().run(session, ChunkSink.NOOP, NO_TOKEN, NO_CONTEXT);
+        RunOutcome outcome = loop().run(session, ChunkSink.NOOP, NO_CONTEXT);
 
         assertEquals(RunOutcome.CONVERGED, outcome);
         assertEquals(PlanStatus.FAILED, plan.status());
@@ -371,7 +389,7 @@ class ExecutionLoopTest {
                 .thenThrow(new ModelInvocationException(ModelError.CONTEXT_EXCEEDED, "超限"))
                 .thenReturn(converged());
 
-        assertEquals(RunOutcome.CONVERGED, loop().run(session, ChunkSink.NOOP, NO_TOKEN, NO_CONTEXT));
+        assertEquals(RunOutcome.CONVERGED, loop().run(session, ChunkSink.NOOP, NO_CONTEXT));
         verify(contextWindow).forceCollapse(session);
     }
 
@@ -380,7 +398,7 @@ class ExecutionLoopTest {
         when(reActLoop.runIteration(any(Session.class), any(), any(ChunkSink.class)))
                 .thenThrow(new ModelInvocationException(ModelError.UNAVAILABLE, "全挂"));
 
-        assertThrows(ModelInvocationException.class, () -> loop().run(session, ChunkSink.NOOP, NO_TOKEN, NO_CONTEXT));
+        assertThrows(ModelInvocationException.class, () -> loop().run(session, ChunkSink.NOOP, NO_CONTEXT));
         verify(commitScope, never()).stageReplace(any());
     }
 
@@ -402,7 +420,7 @@ class ExecutionLoopTest {
         when(catalog.agents()).thenReturn(Collections.singletonList(reflectAgent()));
         when(forks.run(any(Session.class), any())).thenReturn("下次先读文件");
 
-        loop().run(session, ChunkSink.NOOP, NO_TOKEN, NO_CONTEXT);
+        loop().run(session, ChunkSink.NOOP, NO_CONTEXT);
 
         verify(commitScope, times(1)).stageFact(any(io.github.zcd0831.jellyfish.domain.memory.reflection.Reflection.class));
         verify(forks).run(any(Session.class), org.mockito.ArgumentMatchers.contains("失败原因"));
@@ -436,7 +454,7 @@ class ExecutionLoopTest {
             return converged();
         });
 
-        loop().run(session, ChunkSink.NOOP, NO_TOKEN, NO_CONTEXT);
+        loop().run(session, ChunkSink.NOOP, NO_CONTEXT);
 
         long created = progressEvents.stream()
                 .filter(e -> e.kind() == io.github.zcd0831.jellyfish.application.shared.ProgressEvent.Kind.PLAN_CREATED)

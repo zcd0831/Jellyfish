@@ -1,6 +1,5 @@
 package io.github.zcd0831.jellyfish.application.planning;
 
-import io.github.zcd0831.jellyfish.application.shared.CancellationToken;
 import io.github.zcd0831.jellyfish.application.shared.ChunkSink;
 import io.github.zcd0831.jellyfish.domain.perception.session.Session;
 
@@ -11,5 +10,5 @@ import io.github.zcd0831.jellyfish.domain.perception.session.Session;
  */
 public interface SessionRunner {
 
-    RunOutcome run(Session session, ChunkSink sink, CancellationToken cancellation, RunContext context);
+    RunOutcome run(Session session, ChunkSink sink, RunContext context);
 }

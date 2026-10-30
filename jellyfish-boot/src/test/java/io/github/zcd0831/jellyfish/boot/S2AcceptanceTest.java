@@ -141,14 +141,14 @@ class S2AcceptanceTest {
                                 startSession, sessions, reActLoop, new SessionToolScope(),
                                 new FileCommitScope(dir, codec), () -> System.currentTimeMillis()),
                         new FileCommitScope(dir, codec));
+        SessionCancellations cancellations = new SessionCancellations();
         ExecutionLoop executionLoop = new ExecutionLoop(contextWindow, reActLoop, verificationRunner, plans,
-                planFactory, catalog, policies, new FileCommitScope(dir, codec), publisher, event -> { }, model,
-                budgetService, retriever, feedback, curator, reflections, experiences,
+                planFactory, catalog, policies, new FileCommitScope(dir, codec), publisher, event -> { },
+                cancellations, model, budgetService, retriever, feedback, curator, reflections, experiences,
                 new SessionToolScope(),
                 new io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner(
                         startSession, sessions, reActLoop, new SessionToolScope(),
                         new FileCommitScope(dir, codec), () -> System.currentTimeMillis()));
-        SessionCancellations cancellations = new SessionCancellations();
         runSession = new RunSessionUseCase(sessions, records, new FileCommitScope(dir, codec), publisher,
                 executionLoop, model, toolExecutor, human, event -> { }, plans, contextWindow,
                 cancellations);

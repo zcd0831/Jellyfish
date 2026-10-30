@@ -26,9 +26,12 @@ class SessionTest {
         }
     };
 
+    /** 创建本身会 raise SessionStarted（04-perception §4.7）：各用例从“创建后”起算事件。 */
     private static Session newSession() {
-        return Session.create(SessionId.of("s1"), null, AgentId.of("builtin.main"),
+        Session session = Session.create(SessionId.of("s1"), null, AgentId.of("builtin.main"),
                 ModelId.of("m1"), 1000L, null);
+        session.pullEvents();
+        return session;
     }
 
     private static String call(String callId, String name) {
@@ -190,6 +193,19 @@ class SessionTest {
         session.switchModel(ModelId.of("m2"));
         assertEquals(ModelId.of("m2"), session.activeModelId());
         assertEquals(1, session.pullEvents().size());
+    }
+
+    @Test
+    void 创建即raiseSessionStarted而重建不重发() {
+        Session created = Session.create(SessionId.of("s1"), null, AgentId.of("builtin.main"),
+                ModelId.of("m1"), 1000L, null);
+        List<io.github.zcd0831.jellyfish.domain.shared.DomainEvent> events = created.pullEvents();
+        assertEquals(1, events.size());
+        assertEquals("session.started", events.get(0).name());
+
+        Session rehydrated = Session.rehydrate(SessionId.of("s1"), null, AgentId.of("builtin.main"),
+                ModelId.of("m1"), "标题", 1000L, java.util.Collections.<Record>emptyList(), null);
+        assertTrue(rehydrated.pullEvents().isEmpty(), "续跑不重发 SessionStarted（§4.8.1 规则 7）");
     }
 
     @Test

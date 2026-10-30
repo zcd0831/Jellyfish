@@ -43,11 +43,15 @@ public class Session {
     /** 会话开启 / 子代理派遣的唯一创建路径（应用层调用）。规则出处：04-perception §4.5、§4.8.1 规则 1。 */
     public static Session create(SessionId id, SessionId parentSessionId, AgentId agentId, ModelId modelId,
                                  long now, SystemPromptSnapshot snapshot) {
-        return new Session(id, parentSessionId, agentId, modelId, null, now,
+        Session session = new Session(id, parentSessionId, agentId, modelId, null, now,
                 new ArrayList<Record>(), snapshot);
+        // 创建即事实：会话开启与子代理派遣同一路径（04-perception §4.7）
+        session.pendingEvents.add(new SessionStarted());
+        return session;
     }
 
-    /** 会话续跑：从持久化形态重建，不重新派发事件。规则出处：04-perception §4.8.1 规则 11。 */
+    /** 会话续跑：从持久化形态重建，**不重发 SessionStarted**（续跑不是状态迁移）。
+     * 规则出处：04-perception §4.8.1 规则 7、§4.7。 */
     public static Session rehydrate(SessionId id, SessionId parentSessionId, AgentId agentId, ModelId modelId,
                                     String title, long createdDate,
                                     List<Record> records, SystemPromptSnapshot snapshot) {

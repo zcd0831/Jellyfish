@@ -16,7 +16,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class SessionBranchesTest {
 
     private static Session session() {
-        return Session.create(SessionId.of("s1"), null, AgentId.of("a"), ModelId.of("m1"), 1L, null);
+        Session created = Session.create(SessionId.of("s1"), null, AgentId.of("a"), ModelId.of("m1"), 1L, null);
+        created.pullEvents();  // 创建时已 raise SessionStarted（04-perception §4.7）
+        return created;
     }
 
     @Test

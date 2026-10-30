@@ -51,7 +51,6 @@ class PlanTest {
 
         assertEquals(StepStatus.RUNNING, plan.getCurrentStep().status());
         assertEquals(1, attempt.attemptNo());
-        assertNull(attempt.recordRange(), "开区间：区间由外循环随后延伸");
         long running = plan.steps().stream().filter(s -> s.status() == StepStatus.RUNNING).count();
         assertEquals(1, running);
     }
@@ -126,22 +125,6 @@ class PlanTest {
         assertEquals(2, retried.attemptNo());
         assertEquals(StepId.of("step1"), plan.getCurrentStep().id(), "重试回到同一步");
         assertEquals(PlanStatus.EXECUTING, plan.status());
-    }
-
-    @Test
-    void 记录区间多段合并成一条连续区间() {
-        Plan plan = plan(1);
-        Attempt attempt = plan.beginCurrentStep();
-
-        plan.extendAttemptRange(StepId.of("step1"), attempt.attemptNo(),
-                new RecordRange(io.github.zcd0831.jellyfish.domain.shared.RecordId.of("r1"),
-                        io.github.zcd0831.jellyfish.domain.shared.RecordId.of("r2")));
-        plan.extendAttemptRange(StepId.of("step1"), attempt.attemptNo(),
-                new RecordRange(io.github.zcd0831.jellyfish.domain.shared.RecordId.of("r3"),
-                        io.github.zcd0831.jellyfish.domain.shared.RecordId.of("r4")));
-
-        assertEquals("r1", attempt.recordRange().getStartRecordId().getValue());
-        assertEquals("r4", attempt.recordRange().getEndRecordId().getValue());
     }
 
     @Test

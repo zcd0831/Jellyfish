@@ -104,24 +104,6 @@ public class Plan {
         pendingEvents.add(new StepFailed());
     }
 
-    /**
-     * 延伸 attempt 的执行区间：每段 ReAct 结束（收敛 / 挂起 / 环境故障）由外循环调用一次，多段合并成一条连续区间。
-     * 规则出处：06-planning §6.8.1 规则 10、§5.2（收敛但未提交时区间继续延伸）。
-     */
-    public void extendAttemptRange(StepId stepId, int attemptNo, RecordRange range) {
-        if (range == null) {
-            return;
-        }
-        PlanStep step = requireStep(stepId);
-        for (Attempt attempt : step.attempts()) {
-            if (attempt.attemptNo() == attemptNo) {
-                attempt.extendRange(range);
-                return;
-            }
-        }
-        throw new DomainInvariantViolation("计划里没有该尝试：" + stepId.getValue() + "#" + attemptNo);
-    }
-
     /** 撞轮次上限：只落 attempt 结局，重试/重划由外循环判定。 */
     public void markAttemptFailed(StepId stepId, int attemptNo) {
         PlanStep step = requireStep(stepId);

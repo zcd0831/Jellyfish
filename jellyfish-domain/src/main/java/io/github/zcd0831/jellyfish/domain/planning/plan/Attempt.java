@@ -17,23 +17,12 @@ public class Attempt {
     private final int attemptNo;
     private final List<SkillId> usedSkillIds = new ArrayList<SkillId>();
 
-    private RecordRange recordRange;
     private VerificationReportId verificationReportId;
     private ReflectionId reflectionId;
     private AttemptOutcome outcome;
 
-    public Attempt(int attemptNo, RecordRange recordRange) {
+    public Attempt(int attemptNo) {
         this.attemptNo = attemptNo;
-        this.recordRange = recordRange;
-    }
-
-    /** 规则出处：§5.2（收敛但未提交不结束，记录区间继续延伸）。 */
-    public void extendRange(RecordRange range) {
-        if (recordRange == null) {
-            this.recordRange = range;
-        } else {
-            this.recordRange = new RecordRange(recordRange.getStartRecordId(), range.getEndRecordId());
-        }
     }
 
     /** 技能使用的唯一来源：改进判定的证据（06-planning §6.6、§6.9.1）。 */
@@ -57,10 +46,6 @@ public class Attempt {
 
     public int attemptNo() {
         return attemptNo;
-    }
-
-    public RecordRange recordRange() {
-        return recordRange;
     }
 
     public List<SkillId> usedSkillIds() {

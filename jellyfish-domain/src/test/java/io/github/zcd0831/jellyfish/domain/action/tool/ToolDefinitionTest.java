@@ -30,6 +30,24 @@ class ToolDefinitionTest {
     }
 
     @Test
+    void 元数据更新与状态变更才raise事件() {
+        ToolDefinition tool = tool(SCHEMA);
+
+        tool.activate();
+        assertTrue(tool.pullEvents().isEmpty(), "状态没变就不发");
+
+        tool.deprecate();
+        assertEquals("tool.definition-updated", tool.pullEvents().get(0).name());
+        assertTrue(tool.pullEvents().isEmpty(), "取走即清空");
+
+        tool.activate();
+        assertEquals(1, tool.pullEvents().size());
+
+        tool.updateMetadata("新说明", new ToolSchema(SCHEMA));
+        assertEquals("tool.definition-updated", tool.pullEvents().get(0).name());
+    }
+
+    @Test
     void 合法入参返回空清单() {
         Map<String, Object> args = new HashMap<>();
         args.put("path", "/tmp/a");

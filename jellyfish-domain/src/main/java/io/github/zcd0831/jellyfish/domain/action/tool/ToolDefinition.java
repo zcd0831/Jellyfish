@@ -6,6 +6,7 @@ import com.networknt.schema.JsonSchema;
 import com.networknt.schema.JsonSchemaFactory;
 import com.networknt.schema.SpecVersion;
 import com.networknt.schema.ValidationMessage;
+import io.github.zcd0831.jellyfish.domain.shared.DomainEvent;
 import io.github.zcd0831.jellyfish.domain.shared.ToolId;
 
 import java.util.ArrayList;
@@ -31,6 +32,9 @@ public class ToolDefinition {
     private SideEffectLevel sideEffect;
     private ToolStatus status;
 
+    /** 待派发事件：元数据 / 状态变更后 raise（05-action §5.4 不变量③）。 */
+    private final List<DomainEvent> pendingEvents = new ArrayList<>();
+
     public ToolDefinition(ToolId id, String name, String description, ToolSchema inputSchema,
                           ToolSchema outputSchema, ToolSource source, SideEffectLevel sideEffect,
                           int timeoutMillis, ToolStatus status) {
@@ -45,18 +49,34 @@ public class ToolDefinition {
         this.status = status;
     }
 
+    /** 元数据或 schema 更新后 raise（05-action §5.4 不变量③、§5.7）。 */
     public void updateMetadata(String description, ToolSchema inputSchema) {
         this.description = description;
         this.inputSchema = inputSchema;
+        pendingEvents.add(new ToolDefinitionUpdatedEvent());
     }
 
     /** 规则出处：05-action §5.8.1 规则 1（只有 ACTIVE 进入快照、可被调用）。 */
     public void activate() {
+        if (status == ToolStatus.ACTIVE) {
+            return;
+        }
         this.status = ToolStatus.ACTIVE;
+        pendingEvents.add(new ToolDefinitionUpdatedEvent());
     }
 
     public void deprecate() {
+        if (status == ToolStatus.DEPRECATED) {
+            return;
+        }
         this.status = ToolStatus.DEPRECATED;
+        pendingEvents.add(new ToolDefinitionUpdatedEvent());
+    }
+
+    public List<DomainEvent> pullEvents() {
+        List<DomainEvent> events = new ArrayList<>(pendingEvents);
+        pendingEvents.clear();
+        return events;
     }
 
     public boolean isActive() {

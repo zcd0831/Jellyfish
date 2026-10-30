@@ -41,7 +41,7 @@ public class PlanStep {
         this.status = status;
     }
 
-    /** 步骤启动：创建开区间 attempt（§8.1）。 */
+    /** 步骤启动：为当前步建 attempt（§8.1）。 */
     Attempt beginAttempt() {
         Attempt attempt = new Attempt(attempts.size() + 1);
         attempts.add(attempt);

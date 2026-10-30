@@ -74,7 +74,7 @@ public class Plan {
         return status == PlanStatus.EXECUTING && getCurrentStep() != null;
     }
 
-    /** 步骤启动：为当前步建 attempt（开区间）。 */
+    /** 步骤启动：为当前步建 attempt。 */
     public Attempt beginCurrentStep() {
         requireExecuting();
         PlanStep step = getCurrentStep();

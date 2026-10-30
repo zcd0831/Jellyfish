@@ -11,6 +11,7 @@ import io.github.zcd0831.jellyfish.application.shared.port.ProgressPort;
 import io.github.zcd0831.jellyfish.application.perception.port.SessionRepository;
 import io.github.zcd0831.jellyfish.application.shared.CancellationToken;
 import io.github.zcd0831.jellyfish.application.shared.ChunkSink;
+import io.github.zcd0831.jellyfish.application.shared.ProgressEvent;
 import io.github.zcd0831.jellyfish.application.shared.Result;
 import io.github.zcd0831.jellyfish.application.shared.UseCaseError;
 import io.github.zcd0831.jellyfish.application.shared.port.CommitScope;
@@ -97,6 +98,9 @@ public final class RunSessionUseCase {
             // 续跑（text == null）不追加用户消息：会话开启时首条输入已落盘（08-application §8.9.3）
             Record userRecord = session.appendRecord(RecordRole.USER, text, null, System.currentTimeMillis());
             commitScope.stageAppend(sessionId, userRecord);
+        } else {
+            // 应用事件 SessionResumed：续跑无状态转换，只给界面看（04-perception §4.7、08-application §8.9.3）
+            progress.emit(ProgressEvent.of(ProgressEvent.Kind.SESSION_RESUMED, "续跑：" + sessionId));
         }
         commitScope.stageReplace(session);
         commitScope.commit();

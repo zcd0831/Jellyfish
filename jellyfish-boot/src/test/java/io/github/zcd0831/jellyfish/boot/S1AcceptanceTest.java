@@ -129,7 +129,7 @@ class S1AcceptanceTest {
         startSession = new StartSessionUseCase(catalog, sessions, budgets,
                 new SessionTitleGenerator(model, budgetService), new SystemPromptAssembler(),
                 new FileCommitScope(dir, codec), clock,
-                new io.github.zcd0831.jellyfish.application.planning.SessionCancellations());
+                new io.github.zcd0831.jellyfish.application.planning.SessionCancellations(), publisher);
     }
 
     @Test

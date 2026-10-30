@@ -65,6 +65,22 @@ class RunSessionUseCaseTest {
     }
 
     @Test
+    void 续跑只发应用事件SessionResumed且不追用户消息() {
+        when(runner.run(any(Session.class), any(ChunkSink.class), any(), any(RunContext.class)))
+                .thenReturn(RunOutcome.CONVERGED);
+
+        Result<RunSessionResult> result = useCase().run(SessionId.of("s1"), null, ChunkSink.NOOP);
+
+        assertTrue(result.isOk());
+        org.mockito.ArgumentCaptor<io.github.zcd0831.jellyfish.application.shared.ProgressEvent> captor =
+                org.mockito.ArgumentCaptor.forClass(io.github.zcd0831.jellyfish.application.shared.ProgressEvent.class);
+        verify(progress).emit(captor.capture());
+        assertEquals(io.github.zcd0831.jellyfish.application.shared.ProgressEvent.Kind.SESSION_RESUMED,
+                captor.getValue().kind());
+        assertTrue(session.records().isEmpty(), "续跑不追加 USER（08-application §8.9.3）");
+    }
+
+    @Test
     void 收敛后把本轮事实落盘() {
         when(runner.run(any(Session.class), any(ChunkSink.class), any(), any(RunContext.class))).thenReturn(RunOutcome.CONVERGED);
 

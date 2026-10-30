@@ -127,7 +127,7 @@ class S4LoopTest {
         startSession = new StartSessionUseCase(catalog, sessions, budgets,
                 new SessionTitleGenerator(model, budgetService), new SystemPromptAssembler(),
                 new FileCommitScope(dir, codec), new SystemClock(),
-                new io.github.zcd0831.jellyfish.application.planning.SessionCancellations());
+                new io.github.zcd0831.jellyfish.application.planning.SessionCancellations(), publisher);
         ExecutionLoop executionLoop = LoopSupport.build(dir, codec, model, policies, catalog, budgetService,
                 contextWindow, reActLoop, verificationRunner, plans, publisher, announced::add, startSession,
                 sessions, records, new RunSessionProvider() {

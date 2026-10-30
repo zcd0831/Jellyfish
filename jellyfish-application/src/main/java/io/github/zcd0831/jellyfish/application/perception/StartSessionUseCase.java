@@ -9,6 +9,7 @@ import io.github.zcd0831.jellyfish.application.shared.Result;
 import io.github.zcd0831.jellyfish.application.shared.UseCaseError;
 import io.github.zcd0831.jellyfish.application.shared.port.CommitScope;
 import io.github.zcd0831.jellyfish.application.shared.port.Clock;
+import io.github.zcd0831.jellyfish.application.shared.port.DomainEventPublisher;
 import io.github.zcd0831.jellyfish.domain.action.agent.AgentDefinition;
 import io.github.zcd0831.jellyfish.domain.action.budget.Budget;
 import io.github.zcd0831.jellyfish.domain.action.model.Model;
@@ -25,6 +26,7 @@ import io.github.zcd0831.jellyfish.domain.perception.session.SystemPromptSnapsho
 import io.github.zcd0831.jellyfish.domain.perception.session.ToolSchemaSnapshot;
 import io.github.zcd0831.jellyfish.domain.shared.AgentId;
 import io.github.zcd0831.jellyfish.domain.shared.BudgetId;
+import io.github.zcd0831.jellyfish.domain.shared.DomainEvent;
 import io.github.zcd0831.jellyfish.domain.shared.ModelId;
 import io.github.zcd0831.jellyfish.domain.shared.SessionId;
 import io.github.zcd0831.jellyfish.domain.shared.ToolId;
@@ -32,7 +34,6 @@ import io.github.zcd0831.jellyfish.domain.shared.ToolId;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
-
 /**
  * 会话的唯一创建入口：解析 agent/model → 冻结快照 → 建台账 → 生成标题 → 一次提交。
  * 规则出处：04-perception §4.5、§4.9.1；08-application §8.9.2。
@@ -49,10 +50,12 @@ public final class StartSessionUseCase {
     private final CommitScope commitScope;
     private final Clock clock;
     private final SessionCancellations cancellations;
+    private final DomainEventPublisher eventPublisher;
 
     public StartSessionUseCase(CatalogRepository catalog, SessionRepository sessions, BudgetRepository budgets,
                                SessionTitleGenerator titleGenerator, SystemPromptAssembler assembler,
-                               CommitScope commitScope, Clock clock, SessionCancellations cancellations) {
+                               CommitScope commitScope, Clock clock, SessionCancellations cancellations,
+                               DomainEventPublisher eventPublisher) {
         this.catalog = catalog;
         this.sessions = sessions;
         this.budgets = budgets;
@@ -61,6 +64,7 @@ public final class StartSessionUseCase {
         this.commitScope = commitScope;
         this.clock = clock;
         this.cancellations = cancellations;
+        this.eventPublisher = eventPublisher;
     }
 
     public Result<SessionId> start(AgentId requestedAgent, ModelId requestedModel, String firstInput) {
@@ -83,6 +87,7 @@ public final class StartSessionUseCase {
         commitScope.stageReplace(session);
         commitScope.stageReplace(budget);
         commitScope.commit();
+        publishStarted(session);
         return Result.ok(sessionId);
     }
 
@@ -137,6 +142,7 @@ public final class StartSessionUseCase {
         commitScope.stageAppend(childId, userRecord);
         commitScope.stageReplace(child);
         commitScope.commit();
+        publishStarted(child);
         return Result.ok(childId);
     }
 
@@ -156,7 +162,14 @@ public final class StartSessionUseCase {
         sessions.save(child);
         commitScope.stageReplace(child);
         commitScope.commit();
+        // 内部 fork 型子会话不发 SessionStarted：它不进会话列表（04-perception §4.7、08-application §8.9.7）
+        child.pullEvents();
         return Result.ok(childId);
+    }
+
+    /** 提交后派发创建事件：只供界面 / 审计，不驱动任何动作（04-perception §4.8.1 规则 1）。 */
+    private void publishStarted(Session session) {
+        eventPublisher.publishAfterCommit(new ArrayList<DomainEvent>(session.pullEvents()));
     }
 
     /** 快照冻结：只收 ACTIVE 且被该代理绑定的工具与技能（§7.1 规则 4、§8.3）。 */

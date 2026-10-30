@@ -12,7 +12,9 @@ public final class ProgressEvent {
     public enum Kind {
         SUMMARIZING, SUMMARY_DONE, STEP_STARTED, STEP_FINISHED,
         SUBAGENTS_RUNNING, MODEL_SWITCHED, RETRY_SCHEDULED,
-        PLAN_CREATED, PLAN_REPLAN, TOOL_STARTED, TOOL_FINISHED, USAGE, CONTEXT_USAGE
+        PLAN_CREATED, PLAN_REPLAN, TOOL_STARTED, TOOL_FINISHED, USAGE, CONTEXT_USAGE,
+        /** 续跑开始：与摘要中的 SummarizationStarted 同级，应用事件（无状态转换，04-perception §4.7）。 */
+        SESSION_RESUMED
     }
 
     private final Kind kind;

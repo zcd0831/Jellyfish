@@ -162,7 +162,7 @@ class S3AcceptanceTest {
         runSessionHolder[0] = runSession;
         startSession = new StartSessionUseCase(catalog, sessions, budgets, titleGenerator,
                 new SystemPromptAssembler(), new FileCommitScope(dir, codec), new SystemClock(),
-                cancellations);
+                cancellations, publisher);
 
         pool = Executors.newFixedThreadPool(3);
         final RunSessionUseCase run = runSession;

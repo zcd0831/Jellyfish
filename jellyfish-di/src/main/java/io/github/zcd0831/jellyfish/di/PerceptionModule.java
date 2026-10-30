@@ -79,8 +79,9 @@ public final class PerceptionModule {
     StartSessionUseCase startSessionUseCase(CatalogRepository catalog, SessionRepository sessions,
                                             BudgetRepository budgets, SessionTitleGenerator titleGenerator,
                                             SystemPromptAssembler assembler, CommitScope commitScope,
-                                            Clock clock, SessionCancellations cancellations) {
+                                            Clock clock, SessionCancellations cancellations,
+                                            DomainEventPublisher publisher) {
         return new StartSessionUseCase(catalog, sessions, budgets, titleGenerator, assembler, commitScope,
-                clock, cancellations);
+                clock, cancellations, publisher);
     }
 }

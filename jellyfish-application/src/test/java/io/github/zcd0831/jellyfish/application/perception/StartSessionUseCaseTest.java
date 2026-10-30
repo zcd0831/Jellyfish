@@ -6,6 +6,7 @@ import io.github.zcd0831.jellyfish.application.perception.port.SessionRepository
 import io.github.zcd0831.jellyfish.application.shared.Result;
 import io.github.zcd0831.jellyfish.application.shared.port.Clock;
 import io.github.zcd0831.jellyfish.application.shared.port.CommitScope;
+import io.github.zcd0831.jellyfish.application.shared.port.DomainEventPublisher;
 import io.github.zcd0831.jellyfish.domain.action.agent.AgentDefinition;
 import io.github.zcd0831.jellyfish.domain.action.agent.AgentSource;
 import io.github.zcd0831.jellyfish.domain.action.agent.AgentStatus;
@@ -53,13 +54,14 @@ class StartSessionUseCaseTest {
     private final CommitScope commitScope = mock(CommitScope.class);
     private final Clock clock = mock(Clock.class);
     private final BudgetService budgetService = mock(BudgetService.class);
+    private final DomainEventPublisher eventPublisher = mock(DomainEventPublisher.class);
 
     private StartSessionUseCase useCase() {
         when(clock.nowMillis()).thenReturn(1000L);
         when(titles.generate(any(Session.class), anyString())).thenReturn("标题");
         return new StartSessionUseCase(catalog, sessions, budgets, titles, new SystemPromptAssembler(),
                 commitScope, clock,
-                new io.github.zcd0831.jellyfish.application.planning.SessionCancellations());
+                new io.github.zcd0831.jellyfish.application.planning.SessionCancellations(), eventPublisher);
     }
 
     private static AgentDefinition agent(String id, AgentStatus status) {
@@ -89,6 +91,25 @@ class StartSessionUseCaseTest {
         Result<SessionId> result = useCase().start(null, null, "你好");
 
         assertTrue(result.isOk());
+    }
+
+    @Test
+    void 会话开启提交后派发SessionStarted() {
+        AgentDefinition main = agent("builtin.main", AgentStatus.ACTIVE);
+        when(catalog.agents()).thenReturn(Collections.singletonList(main));
+        when(catalog.models()).thenReturn(Collections.singletonList(model("m1", ModelStatus.ACTIVE)));
+        when(catalog.tools()).thenReturn(Collections.singletonList(tool(ToolStatus.ACTIVE)));
+        when(catalog.skills()).thenReturn(Collections.<SkillDefinition>emptyList());
+
+        Result<SessionId> result = useCase().start(null, null, "你好");
+
+        assertTrue(result.isOk());
+        org.mockito.ArgumentCaptor<java.util.List<?>> captor =
+                org.mockito.ArgumentCaptor.forClass(java.util.List.class);
+        org.mockito.Mockito.verify(eventPublisher).publishAfterCommit(captor.capture());
+        assertEquals(1, captor.getValue().size());
+        assertEquals("session.started",
+                ((io.github.zcd0831.jellyfish.domain.shared.DomainEvent) captor.getValue().get(0)).name());
     }
 
     @Test

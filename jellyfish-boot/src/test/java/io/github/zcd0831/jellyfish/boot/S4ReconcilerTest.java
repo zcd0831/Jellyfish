@@ -112,7 +112,7 @@ class S4ReconcilerTest {
     }
 
     /**
-     * 崩溃/强杀不形成任何终态：补一条中止结果让流水可续跑，attempt 保持开区间、不耗重试。
+     * 崩溃/强杀不形成任何终态：补一条中止结果让流水可续跑，attempt 不落终态、不耗重试。
      * 规则出处：08-application §8.10 规则 3、§8.9.4.1。
      */
     @Test
@@ -126,7 +126,7 @@ class S4ReconcilerTest {
 
         Plan reloaded = plans.load(PlanId.of("p1"));
         assertEquals(StepStatus.RUNNING, reloaded.steps().get(0).status(), "崩溃不算失败，步骤仍在跑");
-        assertNull(reloaded.steps().get(0).attempts().get(0).outcome(), "attempt 保持开区间");
+        assertNull(reloaded.steps().get(0).attempts().get(0).outcome(), "attempt 不落终态");
         List<Record> tail = records.last(sessionId, 1);
         assertEquals(RecordRole.TOOL_RESULT, tail.get(tail.size() - 1).role(), "半截调用要补中止结果");
         assertTrue(announced.stream().anyMatch(e -> e.message().contains("半截工具调用")));

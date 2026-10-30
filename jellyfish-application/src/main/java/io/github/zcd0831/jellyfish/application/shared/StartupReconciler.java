@@ -103,7 +103,7 @@ public final class StartupReconciler {
 
     /**
      * 规则 ③：流水末尾有 TOOL_REQUEST 没有 TOOL_RESULT ⇒ <strong>补一条中止结果</strong>。
-     * 崩溃/强杀不形成任何终态：attempt 保持开区间、不消耗重试名额，会话可以直接续跑
+     * 崩溃/强杀不形成任何终态：attempt 不落终态、不消耗重试名额，会话可以直接续跑
      * （08-application §8.10 规则 3、§8.9.4.1）。
      */
     private void reconcileHalfToolCall(Session session) {

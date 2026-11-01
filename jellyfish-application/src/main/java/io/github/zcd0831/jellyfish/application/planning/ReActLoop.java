@@ -4,6 +4,7 @@ import io.github.zcd0831.jellyfish.application.action.BudgetService;
 import io.github.zcd0831.jellyfish.application.action.ToolExecOutcome;
 import io.github.zcd0831.jellyfish.application.action.ToolExecutor;
 import io.github.zcd0831.jellyfish.application.action.port.ChatMessage;
+import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationException;
 import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationPort;
 import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationRequest;
 import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationResult;
@@ -27,6 +28,7 @@ import io.github.zcd0831.jellyfish.domain.perception.session.SystemPromptSnapsho
 import io.github.zcd0831.jellyfish.domain.perception.session.ToolResultPayload;
 import io.github.zcd0831.jellyfish.domain.perception.session.ToolSchemaSnapshot;
 import io.github.zcd0831.jellyfish.domain.planning.plan.PlanStep;
+import io.github.zcd0831.jellyfish.domain.action.model.ModelError;
 import io.github.zcd0831.jellyfish.domain.shared.ModelId;
 import io.github.zcd0831.jellyfish.domain.shared.SkillId;
 
@@ -88,7 +90,21 @@ public final class ReActLoop {
                 ContextWindow window = contextWindow.currentWindow(session);
                 List<ChatMessage> messages = ConversationMessages.of(window, session.activeModelId());
                 appendStepNote(step, messages);
-                ModelInvocationResult result = invoke(session, window, messages, sink);
+                ModelInvocationResult result;
+                try {
+                    result = invoke(session, window, messages, sink);
+                } catch (ModelInvocationException exceeded) {
+                    // 请求超限：在发起请求处强制折叠一次后重试这次请求（04-perception §4.9.2 规则 10）
+                    if (exceeded.error() != ModelError.CONTEXT_EXCEEDED) {
+                        throw exceeded;
+                    }
+                    contextWindow.forceCollapse(session);
+                    window = contextWindow.currentWindow(session);
+                    messages = ConversationMessages.of(window, session.activeModelId());
+                    appendStepNote(step, messages);
+                    // 同一轮只折一次：如仍然超限就上抛（04-perception §4.9.2 规则 10）
+                    result = invoke(session, window, messages, sink);
+                }
                 syncModel(session, result.servedModelId());
                 if (result.usage() != null && contextWindow.recordTurnUsage(session, result.usage())) {
                     askContinue();

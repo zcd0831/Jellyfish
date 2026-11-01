@@ -129,9 +129,8 @@ public final class RunSessionUseCase {
             case CONVERGED:
                 return RunSessionResult.Outcome.CONVERGED;
             case SUSPENDED:
-                return RunSessionResult.Outcome.SUSPENDED;
             default:
-                return RunSessionResult.Outcome.ROUNDS_EXHAUSTED;
+                return RunSessionResult.Outcome.SUSPENDED;
         }
     }
 

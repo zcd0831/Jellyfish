@@ -13,7 +13,6 @@ import io.github.zcd0831.jellyfish.application.memory.StepTrace;
 import io.github.zcd0831.jellyfish.application.memory.port.ReflectionRepository;
 import io.github.zcd0831.jellyfish.application.action.port.CatalogRepository;
 import io.github.zcd0831.jellyfish.application.action.port.ChatMessage;
-import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationException;
 import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationPort;
 import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationRequest;
 import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationResult;
@@ -28,7 +27,6 @@ import io.github.zcd0831.jellyfish.application.shared.port.CommitScope;
 import io.github.zcd0831.jellyfish.application.shared.port.DomainEventPublisher;
 import io.github.zcd0831.jellyfish.application.shared.port.ProgressPort;
 import io.github.zcd0831.jellyfish.domain.action.agent.AgentDefinition;
-import io.github.zcd0831.jellyfish.domain.action.model.ModelError;
 import io.github.zcd0831.jellyfish.domain.perception.policy.RuntimePolicy;
 import io.github.zcd0831.jellyfish.domain.perception.session.Record;
 import io.github.zcd0831.jellyfish.domain.perception.session.RecordRole;
@@ -49,7 +47,6 @@ import io.github.zcd0831.jellyfish.domain.shared.DomainEvent;
 import io.github.zcd0831.jellyfish.domain.shared.PlanId;
 import io.github.zcd0831.jellyfish.domain.shared.AgentId;
 import io.github.zcd0831.jellyfish.domain.shared.ExperienceId;
-import io.github.zcd0831.jellyfish.domain.shared.DomainInvariantViolation;
 import io.github.zcd0831.jellyfish.domain.shared.SessionId;
 import io.github.zcd0831.jellyfish.domain.shared.SkillId;
 import io.github.zcd0831.jellyfish.domain.shared.StepId;
@@ -61,7 +58,6 @@ import java.util.List;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
-import java.util.UUID;
 
 /**
  * 外循环：算上下文 → 取 step → 跑一次内循环 → 验证 → 按三条出口推进。
@@ -134,20 +130,32 @@ public final class ExecutionLoop implements SessionRunner {
      */
     @Override
     public RunOutcome run(Session session, ChunkSink sink, RunContext context) {
-        boolean collapsedOnce = false;
-        // 播报按 planId 去重：一次 run 里可以串行产生多个计划（08-application §8.7）
-        Set<PlanId> announcedPlans = new HashSet<PlanId>();
+        Plan plan = runningPlan(session);
+        int replanGeneration = plan == null ? 0 : plan.replanGeneration();
+        // 播报按 planId 去重：一次 run 里同一个计划只播报一次（08-application §8.7）
+        Set<PlanId> announcedPlans = new HashSet<>();
+        // 计划完结（含终局失败）后还要补一轮“结论交付”自由内循环：它是 do-while 退出条件的一部分
+        // 规则出处：06-planning §6.8.1 规则 7、§6.9.1
+        boolean deliveryPending = false;
 
-        while (true) {
+        do {
             // 每一轮开始先看取消：流式/工具刚被打断时，不再进入下一轮
             // 令牌只从登记表取（一个会话一个令牌），不接受外部传入的形参（08-application §8.9.4.1）
             cancellations.forSession(session.id()).throwIfCancelled();
-            // 计划可能在循环中途由 generate_plan 产生：每轮重读；重划不改 planId，另有 PLAN_REPLAN
-            Plan plan = runningPlan(session);
+
+            // 计划可能在上一轮的模型响应里才诞生（generate_plan）：每轮重读；重划不改 planId
+            Plan current = runningPlan(session);
+            if (current != null) {
+                plan = current;
+            }
+            boolean deliveryRound = deliveryPending && plan == null;
+            deliveryPending = false;
+
             if (plan != null && plan.hasExecutablePlan() && announcedPlans.add(plan.id())) {
                 progress.emit(ProgressEvent.of(ProgressEvent.Kind.PLAN_CREATED,
                         "计划：" + plan.goal() + "（" + pendingSteps(plan) + " 步）"));
             }
+
             PlanStep step = plan != null && plan.hasExecutablePlan() ? plan.getCurrentStep() : null;
             Attempt attempt = null;
             if (step != null && step.status() == StepStatus.PENDING) {
@@ -160,58 +168,81 @@ public final class ExecutionLoop implements SessionRunner {
                 attempt = step.attempts().get(step.attempts().size() - 1);
             }
 
+            if (deliveryRound) {
+                // 交付轮不挂任何工具：白名单置空，不改 tools 快照（06-planning §6.9.1）
+                scope.restrict(session.id(), Collections.<ToolId>emptySet());
+            }
             IterationResult iteration;
             try {
-                // 内循环的阻塞点（模型调用 / 工具 / ask）各自按会话 id 从登记表取同一令牌
-                // （08-application §8.9.4.1「生效边界」），因此这里不传令牌
                 iteration = reActLoop.runIteration(session, step, sink);
+            } catch (java.util.concurrent.CancellationException terminated) {
+                throw terminated;   // 终止是终态：交付轮也不吞（08-application §8.9.4.1）
             } catch (RuntimeException failure) {
-                // 中止事实由内循环补成 TOOL_RESULT 落进流水（06-planning §6.8.1 规则 11），这里只决定怎么处理
-                if (failure instanceof ModelInvocationException
-                        && ((ModelInvocationException) failure).error() == ModelError.CONTEXT_EXCEEDED
-                        && !collapsedOnce) {
-                    // 请求超限：强制折叠一次后重试，不消耗重试名额（08-application §8.10）
-                    contextWindow.forceCollapse(session);
-                    collapsedOnce = true;
-                    continue;
+                if (!deliveryRound) {
+                    throw failure;   // 模型不可用：不推进状态
                 }
-                throw failure;   // 模型不可用/取消：不推进状态
+                return RunOutcome.CONVERGED;   // 结局已定：交付轮失败静默收敛（08-application §8.10）
+            } finally {
+                if (deliveryRound) {
+                    scope.clear(session.id());
+                }
             }
+
+            // 重划由模型在内循环里调 replan_plan 发起：外循环只按“代次变化”重读实例、
+            // 重分配经验并播报。规则出处：06-planning §6.8.1 规则 6
+            // 重读是必须的：replan_plan 用的是另一个 Plan 实例，写回旧实例会把重划覆盖掉
+            Plan replanned = runningPlan(session);
+            if (replanned != null && replanned.replanGeneration() > replanGeneration) {
+                replanGeneration = replanned.replanGeneration();
+                plan = replanned;
+                assignExperiences(session, plan);
+                progress.emit(ProgressEvent.of(ProgressEvent.Kind.PLAN_REPLAN,
+                        "重划（第 " + plan.replanGeneration() + " 代）：" + plan.goal()
+                                + "（" + pendingSteps(plan) + " 步）"));
+                // applyReplan 只替换未执行的尾部：执行中的 step 仍在，按 id 重新解析到新实例上
+                if (step != null) {
+                    PlanStep reloaded = plan.getCurrentStep();
+                    if (reloaded != null) {
+                        step = reloaded;
+                    }
+                    if (!step.attempts().isEmpty()) {
+                        attempt = step.attempts().get(step.attempts().size() - 1);
+                    }
+                }
+            } else if (plan == null && replanned != null) {
+                plan = replanned;   // 自由内循环里 generate_plan 诞生了新计划（03-overview §3.7）
+                assignExperiences(session, plan);
+            }
+
+            // 技能使用痕迹落在 attempt 上：改进判定要“这次用过的技能”
             recordSkillUsage(plan, step, attempt, iteration);
 
             if (!iteration.isConverged()) {
-                if (step == null) {
-                    return RunOutcome.ROUNDS_EXHAUSTED;
-                }
-                if (attempt == null) {
-                    throw new DomainInvariantViolation("撞轮次上限时没有可判失败的 attempt");
-                }
-                // 判的是"当前这个 attempt"；iteration.round 是内循环轮次，两者不是一回事
-                plan.markAttemptFailed(step.id(), attempt.attemptNo());
-                commitPlan(plan);
-                if (advanceAfterFailure(session, plan, step, "撞 maxReActRounds", sink)) {
+                // 撞 maxReActRounds 不是业务失败：提示后挂起，不判失败、不消耗重试
+                // 规则出处：06-planning §6.8.1 约束表、§6.9.1 关键分支
+                if (deliveryRound) {
                     return RunOutcome.CONVERGED;
                 }
-                continue;
+                progress.emit(ProgressEvent.of(ProgressEvent.Kind.ROUNDS_EXHAUSTED,
+                        "已达轮次上限（" + iteration.round() + " 轮），等你再说一句"));
+                return RunOutcome.SUSPENDED;
+            }
+
+            if (deliveryRound) {
+                return RunOutcome.CONVERGED;   // 交付轮跑完即本轮交互结束（06-planning §6.9.1）
             }
 
             if (step == null) {
-                // generate_plan 成功不打断内循环：本轮收敛后下一轮转入计划执行（03-overview §3.7）
-                Plan created = runningPlan(session);
-                if (created != null && created.getCurrentStep() != null) {
-                    plan = created;
-                    assignExperiences(session, created);
+                // 无 step 的自由轮：generate_plan 成功后下一轮转入计划执行；否则本轮交互结束
+                if (plan != null && plan.hasExecutablePlan()) {
                     continue;
-                }
-                if (created != null) {
-                    // 计划还在执行态却没有任何可执行步骤：没有可推进的东西，按收敛退出，
-                    // 避免"step 为空 → 又捡回同一个计划"的死循环
-                    return RunOutcome.CONVERGED;
                 }
                 return RunOutcome.CONVERGED;
             }
+
+            // 这一步没有调 submit_step：step 还没结束，挂起把发言权还给用户
             if (!iteration.submitted()) {
-                return RunOutcome.SUSPENDED;   // 挂起：attempt 不落终态，等用户下次输入
+                return RunOutcome.SUSPENDED;
             }
 
             if (!stepNeedsVerification(step)) {
@@ -241,83 +272,85 @@ public final class ExecutionLoop implements SessionRunner {
                                     + " 步验收未通过：" + report.outcome()));
                     if (advanceAfterFailure(session, plan, step,
                             report.failureReason() == null ? String.valueOf(report.outcome())
-                                    : report.failureReason(), sink)) {
-                        return RunOutcome.CONVERGED;
+                                    : report.failureReason())) {
+                        plan = null;
+                        deliveryPending = true;   // 终局失败同构：沉淀后补一轮结论交付
                     }
                     continue;
                 }
             }
 
             if (plan.status() == PlanStatus.COMPLETED) {
-                // 计划完结后再跑一轮自由内循环，由模型产出结论（03-overview §3.7）
+                // 计划完结：先沉淀，再补一轮“结论交付”自由内循环（06-planning §6.9.1）
                 publish(plan.pullEvents());
                 curate(session, plan);
                 plan = null;
+                deliveryPending = true;
             }
-        }
+        } while (deliveryPending || (plan != null && plan.hasExecutablePlan()));
+
+        return RunOutcome.CONVERGED;
     }
 
     /**
-     * 失败后的推进：先重试，重试次数用尽则重划，重划次数用尽则终止。
+     * 失败后的推进：先重试；重试用尽则注入一条纠偏指令并给一次纠偏 attempt（不占 maxRetries），
+     * 重划由模型在该 attempt 内调 `replan_plan` 自愿发起；纠偏仍未成功则终止。
      * 「还能不能重试 / 该不该重划」由这里判定，聚合只执行迁移（06-planning §6.8.1）。
      */
-    private boolean advanceAfterFailure(Session session, Plan plan, PlanStep step, String reason,
-                                        ChunkSink sink) {
+    private boolean advanceAfterFailure(Session session, Plan plan, PlanStep step, String reason) {
         RuntimePolicy policy = policies.load();
         if (failedAttempts(step) < policy.maxRetries()) {
             plan.retryStep(step.id());
             commitPlan(plan);
             return false;
         }
-        if (plan.replanGeneration() < policy.maxReplanGeneration()) {
-            if (replan(session, plan, reason)) {
-                return false;
-            }
+        // 重试用尽：给一次纠偏机会（不占重试名额，上限由重划代次兜住）
+        // 规则出处：06-planning §6.8.1 规则 6、约束表
+        if (!alreadyCorrected(session, step) && plan.replanGeneration() < policy.maxReplanGeneration()) {
+            injectReplanDirective(session, step, reason);
+            plan.retryStep(step.id());
+            commitPlan(plan);
+            return false;
         }
         plan.terminate("重划用尽：" + reason);
         commitPlan(plan);
         publish(plan.pullEvents());
         curate(session, plan);
-        conclude(session, sink);
         return true;
     }
 
     /**
-     * 重划：外循环授权一次“无 step 的自由内循环”，工具白名单只有 `replan_plan`——
-     * 复用主请求，历史与工具清单天然都在（06-planning §6.8.1 规则 6）。
-     * 模型不可用/取消由 `runIteration` 上抛：那是环境故障，不推进任何状态。
+     * 纠偏指令：告诉模型这一步连续失败了几次，可以调 `replan_plan` 修正计划，或换一种做法重做。
+     * 注入形态与经验注入一致：一条 SYSTEM 记录，首行带 step 标记用于去重（标记不落库）。
+     * 规则出处：06-planning §6.8.1 规则 6。
      */
-    private boolean replan(Session session, Plan plan, String reason) {
-        int generation = plan.replanGeneration();
-        scope.restrict(session.id(), Collections.singleton(ToolId.of(REPLAN_TOOL)));
-        try {
-            reActLoop.runIteration(session, null, ChunkSink.NOOP);
-        } finally {
-            scope.clear(session.id());
-        }
-        if (plan.replanGeneration() <= generation) {
-            return false;   // 没调工具，或草案被拒：重划失败，不再重划
-        }
-        assignExperiences(session, plan);
-        progress.emit(ProgressEvent.of(ProgressEvent.Kind.PLAN_REPLAN,
-                "重划（第 " + plan.replanGeneration() + " 代）：" + plan.goal()
-                        + "（" + pendingSteps(plan) + " 步）"));
-        return true;
+    private void injectReplanDirective(Session session, PlanStep step, String reason) {
+        String text = correctionMarker(step)
+                + "\n该步已连续失败 " + failedAttempts(step) + " 次：" + reason
+                + "\n请调用 " + REPLAN_TOOL + " 修正剩余步骤；或换一种做法重做这一步。";
+        Record injected = session.appendRecord(RecordRole.SYSTEM, text, null, System.currentTimeMillis());
+        commitScope.stageAppend(session.id(), injected);
+        commitScope.commit();
     }
 
-    /** 外循环失败也补一轮“结论交付”：把失败原因与已沉淀内容讲清楚，工具白名单置空。 */
-    private void conclude(Session session, ChunkSink sink) {
-        scope.restrict(session.id(), Collections.<ToolId>emptySet());
-        try {
-            reActLoop.runIteration(session, null, sink);
-        } catch (RuntimeException bestEffort) {
-            // 结局已定：这一轮失败不改变终局，也不触发任何状态迁移（06-planning §6.9）
-        } finally {
-            scope.clear(session.id());
-        }
+    private static String correctionMarker(PlanStep step) {
+        return "[重划纠偏 step=" + step.id().getValue() + "]";
     }
 
-    /** 计划诞生 / 重划：检索经验并交给 Plan 自己改状态（记忆只返回分配结果）。 */
+    /** 去重靠流水本身：每个 step 最多一次纠偏（06-planning §6.8.1 规则 6）。 */
+    private static boolean alreadyCorrected(Session session, PlanStep step) {
+        String marker = correctionMarker(step);
+        for (Record record : session.records()) {
+            if (record.role() == RecordRole.SYSTEM && record.content() != null
+                    && record.content().startsWith(marker)) {
+                return true;
+            }
+        }
+        return false;
+    }
+    /**
+     * 计划诞生 / 重划：检索经验并交给 Plan 自己改状态（记忆只返回分配结果）。
+     */
     private void assignExperiences(Session session, Plan plan) {
         List<StepBrief> briefs = new ArrayList<StepBrief>();
         for (PlanStep step : plan.steps()) {
@@ -371,7 +404,9 @@ public final class ExecutionLoop implements SessionRunner {
         commitScope.commit();
     }
 
-    /** 去重靠流水本身：标记是"可推导状态"，不落库。 */
+    /**
+     * 去重靠流水本身：标记是"可推导状态"，不落库。
+     */
     private static boolean alreadyInjected(Session session, PlanStep step) {
         String marker = "[经验注入 step=" + step.id().getValue() + "]";
         for (Record record : session.records()) {
@@ -391,7 +426,9 @@ public final class ExecutionLoop implements SessionRunner {
         experienceFeedback.onStepFailed(feedbackOf(step));
     }
 
-    /** 本期"注入"与"建议"同源：分配即注入（奖惩不对称仍按两段分支执行）。 */
+    /**
+     * 本期"注入"与"建议"同源：分配即注入（奖惩不对称仍按两段分支执行）。
+     */
     private static FeedbackInput feedbackOf(PlanStep step) {
         return new FeedbackInput(step.id(), step.assignedExperienceIds());
     }
@@ -471,7 +508,9 @@ public final class ExecutionLoop implements SessionRunner {
         commitPlan(plan);
     }
 
-    /** 计划完结（含终局失败）：组装事实摘要交给编排者，记忆不遍历 Plan。 */
+    /**
+     * 计划完结（含终局失败）：组装事实摘要交给编排者，记忆不遍历 Plan。
+     */
     private void curate(Session session, Plan plan) {
         List<StepTrace> traces = new ArrayList<StepTrace>();
         for (PlanStep step : plan.steps()) {
@@ -492,7 +531,9 @@ public final class ExecutionLoop implements SessionRunner {
                 ? reflections.get(attempt.reflectionId()).get().conclusion() : null;
     }
 
-    /** 进度文案里的 N 只计未 SUPERSEDED 的步骤：旧尾部会保留审计，算进去会越来越大（08-application §8.7）。 */
+    /**
+     * 进度文案里的 N 只计未 SUPERSEDED 的步骤：旧尾部会保留审计，算进去会越来越大（08-application §8.7）。
+     */
     private static int pendingSteps(Plan plan) {
         int count = 0;
         for (PlanStep step : plan.steps()) {

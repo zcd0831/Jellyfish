@@ -4,6 +4,7 @@ import io.github.zcd0831.jellyfish.application.action.BudgetService;
 import io.github.zcd0831.jellyfish.application.action.ToolExecOutcome;
 import io.github.zcd0831.jellyfish.application.action.ToolExecutor;
 import io.github.zcd0831.jellyfish.application.action.port.ChatMessage;
+import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationException;
 import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationPort;
 import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationRequest;
 import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationResult;
@@ -17,6 +18,7 @@ import io.github.zcd0831.jellyfish.application.shared.Question;
 import io.github.zcd0831.jellyfish.application.shared.port.CommitScope;
 import io.github.zcd0831.jellyfish.application.shared.port.HumanInteractionPort;
 import io.github.zcd0831.jellyfish.domain.perception.policy.RuntimePolicy;
+import io.github.zcd0831.jellyfish.domain.action.model.ModelError;
 import io.github.zcd0831.jellyfish.domain.perception.session.ContextUsage;
 import io.github.zcd0831.jellyfish.domain.perception.session.ContextWindow;
 import io.github.zcd0831.jellyfish.domain.perception.session.Record;
@@ -159,6 +161,34 @@ class ReActLoopTest {
         IterationResult result = loop(oneRound).runIteration(session(), null, null);
 
         assertFalse(result.isConverged());
+    }
+
+    /**
+     * 请求超限：内循环在发起请求处强制折叠一次后重试这次请求，不消耗重试名额。
+     * 规则出处：04-perception §4.9.2 规则 10、06-planning §6.9.1 关键分支。
+     */
+    @Test
+    void 请求超限时在发起请求处强制折叠一次后重试() {
+        when(model.invoke(any(ModelInvocationRequest.class)))
+                .thenThrow(new ModelInvocationException(ModelError.CONTEXT_EXCEEDED, "超限"))
+                .thenReturn(reply("答复", Collections.<ToolCall>emptyList(), ModelId.of("m1")));
+
+        IterationResult result = loop(RuntimePolicy.defaults()).runIteration(session(), null, null);
+
+        assertTrue(result.isConverged(), "折叠后重试这一次请求应当成功");
+        verify(contextWindow).forceCollapse(any(Session.class));
+        verify(model, times(2)).invoke(any(ModelInvocationRequest.class));
+    }
+
+    /** 同一轮只折一次：补折后仍然超限就上抛，交给外层按“模型不可用”处理。 */
+    @Test
+    void 同一轮只补折一次_仍超限就上抛() {
+        when(model.invoke(any(ModelInvocationRequest.class)))
+                .thenThrow(new ModelInvocationException(ModelError.CONTEXT_EXCEEDED, "超限"));
+
+        assertThrows(ModelInvocationException.class,
+                () -> loop(RuntimePolicy.defaults()).runIteration(session(), null, null));
+        verify(contextWindow, times(1)).forceCollapse(any(Session.class));
     }
 
     private static String call(String callId, String name, String arguments) {

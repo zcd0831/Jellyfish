@@ -92,15 +92,10 @@ class RunSessionUseCaseTest {
     }
 
     @Test
-    void 挂起与轮次用尽如实映射() {
+    void 挂起如实映射() {
         when(runner.run(any(Session.class), any(ChunkSink.class), any(RunContext.class)))
                 .thenReturn(RunOutcome.SUSPENDED);
         assertEquals(RunSessionResult.Outcome.SUSPENDED,
-                useCase().run(SessionId.of("s1"), "hi", ChunkSink.NOOP).value().outcome());
-
-        when(runner.run(any(Session.class), any(ChunkSink.class), any(RunContext.class)))
-                .thenReturn(RunOutcome.ROUNDS_EXHAUSTED);
-        assertEquals(RunSessionResult.Outcome.ROUNDS_EXHAUSTED,
                 useCase().run(SessionId.of("s1"), "hi", ChunkSink.NOOP).value().outcome());
     }
 

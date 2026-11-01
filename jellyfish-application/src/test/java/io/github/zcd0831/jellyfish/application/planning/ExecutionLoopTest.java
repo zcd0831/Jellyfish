@@ -25,6 +25,7 @@ import io.github.zcd0831.jellyfish.domain.planning.plan.AttemptOutcome;
 import io.github.zcd0831.jellyfish.domain.planning.plan.Plan;
 import io.github.zcd0831.jellyfish.domain.planning.plan.PlanStatus;
 import io.github.zcd0831.jellyfish.domain.planning.plan.PlanSteps;
+import io.github.zcd0831.jellyfish.domain.planning.plan.PlanStep;
 import io.github.zcd0831.jellyfish.domain.planning.plan.StepStatus;
 import io.github.zcd0831.jellyfish.domain.planning.verification.VerificationOutcome;
 import io.github.zcd0831.jellyfish.domain.planning.verification.VerificationReport;
@@ -186,28 +187,29 @@ class ExecutionLoopTest {
     }
 
     @Test
-    void 无计划且撞轮次上限返回轮次用尽() {
+    void 无计划且撞轮次上限提示后挂起() {
         when(reActLoop.runIteration(any(Session.class), any(), any(ChunkSink.class)))
                 .thenReturn(IterationResult.notConverged(20, java.util.Collections.emptyList()));
 
-        assertEquals(RunOutcome.ROUNDS_EXHAUSTED, loop().run(session, ChunkSink.NOOP, NO_CONTEXT));
+        assertEquals(RunOutcome.SUSPENDED, loop().run(session, ChunkSink.NOOP, NO_CONTEXT));
+        assertTrue(progressEvents.stream().anyMatch(e -> e.kind()
+                        == io.github.zcd0831.jellyfish.application.shared.ProgressEvent.Kind.ROUNDS_EXHAUSTED),
+                "撞轮次上限要提示用户：" + progressEvents);
     }
 
     @Test
-    void 撞轮次上限时判当前attempt失败而不是按轮次号猜() {
+    void 撞轮次上限不判失败也不消耗重试() {
         policy = policy.adjust(Collections.<String, Object>singletonMap("maxRetries", 3));
         Plan plan = plan();
         planScript.add(plan);
-        // 先撞上限（第 20 轮），重试后模型不调工具 → 挂起
         when(reActLoop.runIteration(any(Session.class), any(), any(ChunkSink.class)))
-                .thenReturn(IterationResult.notConverged(20, java.util.Collections.emptyList()))
-                .thenReturn(converged());
+                .thenReturn(IterationResult.notConverged(20, java.util.Collections.emptyList()));
 
-        loop().run(session, ChunkSink.NOOP, NO_CONTEXT);
+        assertEquals(RunOutcome.SUSPENDED, loop().run(session, ChunkSink.NOOP, NO_CONTEXT));
 
-        assertEquals(AttemptOutcome.FAILED, plan.steps().get(0).attempts().get(0).outcome(),
-                "撞轮次上限要落到当前 attempt 上（轮次号 20 与 attempt 号无关）");
-        assertEquals(2, plan.steps().get(0).attempts().size(), "失败后应重试同一步");
+        assertEquals(StepStatus.RUNNING, plan.steps().get(0).status(), "撞上限不判失败：step 仍 RUNNING");
+        assertEquals(1, plan.steps().get(0).attempts().size(), "不消耗重试：不新建 attempt");
+        assertNull(plan.steps().get(0).attempts().get(0).outcome(), "attempt 不落终态");
     }
 
     @Test
@@ -292,34 +294,41 @@ class ExecutionLoopTest {
     }
 
     @Test
-    void 重试用尽则重划_重划成功后继续执行() {
+    void 重试用尽先注入纠偏指令_模型重划成功后继续执行() {
         policy = policy.adjust(new java.util.LinkedHashMap<String, Object>() {{
             put("maxRetries", 1);
             put("maxReplanGeneration", 1);
         }});
         Plan plan = plan(VerificationType.DETERMINISTIC);
         planScript.add(plan);
-        java.util.concurrent.atomic.AtomicInteger replans = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
         when(reActLoop.runIteration(any(Session.class), any(), any(ChunkSink.class))).thenAnswer(call -> {
-            if (call.getArgument(1) == null && replans.get() == 0) {
-                // 重划调用的真实效果在 replan_plan 处理器里：这里模拟“聚合已替换尾部”
-                replans.incrementAndGet();
-                plan.applyReplan(Collections.singletonList(PlanSteps.draft(StepId.of("step2"), 0, "换个做法",
-                        "g", "o", "c", Collections.singleton(VerificationType.DETERMINISTIC))));
-                return converged();
-            }
-            if (call.getArgument(1) == null) {
+            PlanStep current = call.getArgument(1);
+            if (current == null) {
                 return converged();   // 结论交付轮
             }
-            return replans.get() > 0 ? submitted("第二次") : submitted("第一次");
+            if (calls.incrementAndGet() == 2) {
+                // 纠偏 attempt 里模型主动重划：真实效果在 replan_plan 处理器里
+                plan.applyReplan(Collections.singletonList(PlanSteps.draft(StepId.of("step2"), 0, "换个做法",
+                        "g", "o", "c", Collections.singleton(VerificationType.DETERMINISTIC))));
+            }
+            return submitted("第 " + calls.get() + " 次");
         });
         when(verificationRunner.verify(any(Session.class), any(Plan.class), any(), anyInt(), any()))
                 .thenReturn(failed())
+                .thenReturn(passed())
                 .thenReturn(passed());
 
         loop().run(session, ChunkSink.NOOP, NO_CONTEXT);
 
         assertEquals(1, plan.replanGeneration(), "应发生一次重划");
+        assertEquals(2, plan.steps().get(0).attempts().size(), "纠偏 attempt 不占 maxRetries，只建一条");
+        assertEquals(StepStatus.SUCCEEDED, plan.steps().get(0).status(),
+                "重划只换未执行尾部，执行中的 step 提交仍然有效");
+        assertTrue(session.records().stream().anyMatch(r ->
+                        r.role() == io.github.zcd0831.jellyfish.domain.perception.session.RecordRole.SYSTEM
+                                && r.content() != null && r.content().startsWith("[重划纠偏 step=")),
+                "重试用尽要注入纠偏指令");
         assertTrue(progressEvents.stream().anyMatch(e ->
                         e.kind() == io.github.zcd0831.jellyfish.application.shared.ProgressEvent.Kind.PLAN_REPLAN
                                 && e.message().contains("第 1 代")),
@@ -327,27 +336,21 @@ class ExecutionLoopTest {
     }
 
     @Test
-    void 重划失败即终止且不再重划() {
+    void 纠偏attempt也未成功则终止并补结论交付轮() {
         policy = policy.adjust(new java.util.LinkedHashMap<String, Object>() {{
             put("maxRetries", 1);
             put("maxReplanGeneration", 3);
         }});
         Plan plan = plan(VerificationType.DETERMINISTIC);
         planScript.add(plan);
-        java.util.concurrent.atomic.AtomicInteger nullStepCalls = new java.util.concurrent.atomic.AtomicInteger();
-        java.util.concurrent.atomic.AtomicBoolean replanScopeOnlyReplan = new java.util.concurrent.atomic.AtomicBoolean();
         java.util.concurrent.atomic.AtomicBoolean conclusionToolsBanned = new java.util.concurrent.atomic.AtomicBoolean();
         when(reActLoop.runIteration(any(Session.class), any(), any(ChunkSink.class))).thenAnswer(call -> {
-            if (call.getArgument(1) != null) {
-                return submitted("第一次");
+            if (call.getArgument(1) == null) {
+                conclusionToolsBanned.set(!scope.allows(session.id(), ToolId.of("read_file"))
+                        && !scope.allows(session.id(), ToolId.of("replan_plan")));
+                return converged();
             }
-            if (nullStepCalls.incrementAndGet() == 1) {
-                replanScopeOnlyReplan.set(scope.allows(session.id(), ToolId.of("replan_plan"))
-                        && !scope.allows(session.id(), ToolId.of("read_file")));
-            } else {
-                conclusionToolsBanned.set(!scope.allows(session.id(), ToolId.of("read_file")));
-            }
-            return converged();
+            return submitted("做完了");
         });
         when(verificationRunner.verify(any(Session.class), any(Plan.class), any(), anyInt(), any()))
                 .thenReturn(failed());
@@ -356,12 +359,12 @@ class ExecutionLoopTest {
 
         assertEquals(PlanStatus.FAILED, plan.status());
         assertEquals(0, plan.replanGeneration(), "没换成新尾部就不该推进代次");
-        assertTrue(replanScopeOnlyReplan.get(), "重划调用只挂 replan_plan");
+        assertEquals(2, plan.steps().get(0).attempts().size(), "每个 step 最多一次纠偏");
         assertTrue(conclusionToolsBanned.get(), "结论交付轮禁用全部工具");
     }
 
     @Test
-    void 重划也用尽则终止并沉淀() {
+    void 重划代次已用尽则不纠偏直接终止并沉淀() {
         policy = policy.adjust(new java.util.LinkedHashMap<String, Object>() {{
             put("maxRetries", 1);
             put("maxReplanGeneration", 0);
@@ -381,16 +384,6 @@ class ExecutionLoopTest {
         assertEquals(RunOutcome.CONVERGED, outcome);
         assertEquals(PlanStatus.FAILED, plan.status());
         verify(curator).curate(any(Session.class), any(DistillationInput.class));
-    }
-
-    @Test
-    void 请求超限时强制折叠一次后继续() {
-        when(reActLoop.runIteration(any(Session.class), any(), any(ChunkSink.class)))
-                .thenThrow(new ModelInvocationException(ModelError.CONTEXT_EXCEEDED, "超限"))
-                .thenReturn(converged());
-
-        assertEquals(RunOutcome.CONVERGED, loop().run(session, ChunkSink.NOOP, NO_CONTEXT));
-        verify(contextWindow).forceCollapse(session);
     }
 
     @Test
@@ -464,33 +457,16 @@ class ExecutionLoopTest {
     }
 
     @Test
-    void 一次run里串行两个计划要各播报一次() {
-        Plan first = plan();
-        Plan second = Plan.create(PlanId.of("p2"), SessionId.of("s1"), "第二个目标", Collections.singletonList(
-                PlanSteps.draft(StepId.of("step9"), 1, "第二步", "g", "o", "c",
-                        Collections.<VerificationType>emptySet())));
-        planScript.add(first);
-        java.util.concurrent.atomic.AtomicInteger nullStepCalls = new java.util.concurrent.atomic.AtomicInteger();
-        when(reActLoop.runIteration(any(Session.class), any(), any(ChunkSink.class))).thenAnswer(call -> {
-            if (call.getArgument(1) != null) {
-                return submitted("完成");
-            }
-            // 结论交付轮里再生成一个计划（模拟 generate_plan 成功）
-            if (nullStepCalls.incrementAndGet() == 1) {
-                when(plans.findRunning(SessionId.of("s1"))).thenReturn(Collections.singletonList(second));
-            }
-            return converged();
-        });
+    void 交付轮禁用全部工具且跑完即结束() {
+        Plan plan = plan();
+        planScript.add(plan);
+        when(reActLoop.runIteration(any(Session.class), any(), any(ChunkSink.class)))
+                .thenReturn(submitted("完成"))
+                .thenReturn(converged());
 
-        loop().run(session, ChunkSink.NOOP, NO_CONTEXT);
+        assertEquals(RunOutcome.CONVERGED, loop().run(session, ChunkSink.NOOP, NO_CONTEXT));
 
-        long created = progressEvents.stream()
-                .filter(e -> e.kind() == io.github.zcd0831.jellyfish.application.shared.ProgressEvent.Kind.PLAN_CREATED)
-                .count();
-        assertTrue(created >= 1, "至少播报第一个计划：" + progressEvents);
-        assertTrue(progressEvents.stream().anyMatch(e ->
-                        e.kind() == io.github.zcd0831.jellyfish.application.shared.ProgressEvent.Kind.PLAN_CREATED
-                                && e.message().contains("第二个目标")),
-                "新 planId 要重新播报：" + progressEvents);
+        assertEquals(PlanStatus.COMPLETED, plan.status());
+        verify(reActLoop, times(2)).runIteration(any(Session.class), any(), any(ChunkSink.class));
     }
 }

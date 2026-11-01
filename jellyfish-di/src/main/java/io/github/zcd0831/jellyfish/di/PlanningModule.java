@@ -86,8 +86,9 @@ public final class PlanningModule {
     @Provides
     @Singleton
     ReplanPlanHandler replanPlanHandler(PlanFactory planFactory, PlanRepository plans,
-                                        CatalogRepository catalog, CommitScope commitScope) {
-        return new ReplanPlanHandler(planFactory, plans, catalog, commitScope);
+                                        CatalogRepository catalog, CommitScope commitScope,
+                                        PolicyRepository policies) {
+        return new ReplanPlanHandler(planFactory, plans, catalog, commitScope, policies);
     }
 
     @Provides

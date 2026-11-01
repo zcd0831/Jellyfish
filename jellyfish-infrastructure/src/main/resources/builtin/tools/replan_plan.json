@@ -1,7 +1,7 @@
 {
   "id": "replan_plan",
   "name": "replan_plan",
-  "description": "原计划执行失败后，给出修正后的剩余步骤（只替换未执行的尾部）。只在被要求重划时使用。",
+  "description": "修正计划：给出修正后的剩余步骤（只替换未执行的尾部，正在执行的那一步不受影响）。发现原计划方向不对、或某一步反复失败时使用。",
   "inputSchema": {
     "type": "object",
     "required": ["steps"],

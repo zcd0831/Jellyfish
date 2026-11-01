@@ -3,6 +3,7 @@ package io.github.zcd0831.jellyfish.application.planning;
 import io.github.zcd0831.jellyfish.application.action.InternalToolHandler;
 import io.github.zcd0831.jellyfish.application.action.ToolExecOutcome;
 import io.github.zcd0831.jellyfish.application.action.port.CatalogRepository;
+import io.github.zcd0831.jellyfish.application.perception.port.PolicyRepository;
 import io.github.zcd0831.jellyfish.application.planning.port.PlanRepository;
 import io.github.zcd0831.jellyfish.application.shared.port.CommitScope;
 import io.github.zcd0831.jellyfish.domain.action.agent.AgentDefinition;
@@ -31,13 +32,15 @@ public final class ReplanPlanHandler implements InternalToolHandler {
     private final PlanRepository plans;
     private final CatalogRepository catalog;
     private final CommitScope commitScope;
+    private final PolicyRepository policies;
 
     public ReplanPlanHandler(PlanFactory planFactory, PlanRepository plans, CatalogRepository catalog,
-                             CommitScope commitScope) {
+                             CommitScope commitScope, PolicyRepository policies) {
         this.planFactory = planFactory;
         this.plans = plans;
         this.catalog = catalog;
         this.commitScope = commitScope;
+        this.policies = policies;
     }
 
     @Override
@@ -45,6 +48,11 @@ public final class ReplanPlanHandler implements InternalToolHandler {
         Plan plan = runningPlan(session);
         if (plan == null) {
             return ToolExecOutcome.plain("没有可重划的计划");
+        }
+        // 重划次数上限：工具自己读策略、超限直接当工具失败回灌（06-planning §6.8.1 约束表）
+        int generationLimit = policies.load().maxReplanGeneration();
+        if (plan.replanGeneration() >= generationLimit) {
+            return ToolExecOutcome.plain("重划已用尽（已达 " + generationLimit + " 代上限），请换一种做法重做这一步");
         }
         Plan draft;
         try {

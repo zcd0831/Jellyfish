@@ -11,6 +11,7 @@ import io.github.zcd0831.jellyfish.domain.action.agent.AgentDefinition;
 import io.github.zcd0831.jellyfish.domain.planning.plan.Plan;
 import io.github.zcd0831.jellyfish.domain.planning.plan.PlanCreationException;
 import io.github.zcd0831.jellyfish.domain.planning.plan.PlanFactory;
+import io.github.zcd0831.jellyfish.domain.planning.plan.PlanStatus;
 import io.github.zcd0831.jellyfish.domain.perception.session.Session;
 import io.github.zcd0831.jellyfish.domain.shared.DomainEvent;
 import io.github.zcd0831.jellyfish.domain.shared.PlanId;
@@ -44,6 +45,13 @@ public final class GeneratePlanHandler implements InternalToolHandler {
 
     @Override
     public ToolExecOutcome handle(Session session, Map<String, Object> args) {
+        // 同一会话至多一个可执行计划（06-planning §6.4.1 不变量 ⑥、§6.8.1 规则 1）：
+        // 已有 EXECUTING 计划时拒绝新建，要改它就调 replan_plan
+        for (Plan running : plans.findRunning(session.id())) {
+            if (running.status() == PlanStatus.EXECUTING) {
+                return ToolExecOutcome.plain("已有一个执行中的计划，先做完它，或用 replan_plan 修正它");
+            }
+        }
         Plan plan;
         try {
             plan = planFactory.create(PlanId.of(UUID.randomUUID().toString()), session.id(), args,

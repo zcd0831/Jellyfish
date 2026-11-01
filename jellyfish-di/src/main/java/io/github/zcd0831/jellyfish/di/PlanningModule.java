@@ -88,8 +88,8 @@ public final class PlanningModule {
     @Singleton
     ReplanPlanHandler replanPlanHandler(PlanFactory planFactory, PlanRepository plans,
                                         CatalogRepository catalog, CommitScope commitScope,
-                                        PolicyRepository policies) {
-        return new ReplanPlanHandler(planFactory, plans, catalog, commitScope, policies);
+                                        PolicyRepository policies, ExperienceRetriever experienceRetriever) {
+        return new ReplanPlanHandler(planFactory, plans, catalog, commitScope, policies, experienceRetriever);
     }
 
     @Provides

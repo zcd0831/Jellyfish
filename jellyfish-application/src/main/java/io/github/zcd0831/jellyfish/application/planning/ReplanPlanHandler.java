@@ -3,6 +3,9 @@ package io.github.zcd0831.jellyfish.application.planning;
 import io.github.zcd0831.jellyfish.application.action.InternalToolHandler;
 import io.github.zcd0831.jellyfish.application.action.ToolExecOutcome;
 import io.github.zcd0831.jellyfish.application.action.port.CatalogRepository;
+import io.github.zcd0831.jellyfish.application.memory.ExperienceRetriever;
+import io.github.zcd0831.jellyfish.application.memory.RetrievalInput;
+import io.github.zcd0831.jellyfish.application.memory.StepBrief;
 import io.github.zcd0831.jellyfish.application.perception.port.PolicyRepository;
 import io.github.zcd0831.jellyfish.application.planning.port.PlanRepository;
 import io.github.zcd0831.jellyfish.application.shared.port.CommitScope;
@@ -14,9 +17,12 @@ import io.github.zcd0831.jellyfish.domain.planning.plan.PlanFactory;
 import io.github.zcd0831.jellyfish.domain.planning.plan.PlanStatus;
 import io.github.zcd0831.jellyfish.domain.planning.plan.PlanStep;
 import io.github.zcd0831.jellyfish.domain.planning.plan.StepStatus;
+import io.github.zcd0831.jellyfish.domain.shared.ExperienceId;
 import io.github.zcd0831.jellyfish.domain.shared.PlanId;
+import io.github.zcd0831.jellyfish.domain.shared.StepId;
 import io.github.zcd0831.jellyfish.domain.shared.ToolId;
 
+import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -33,14 +39,17 @@ public final class ReplanPlanHandler implements InternalToolHandler {
     private final CatalogRepository catalog;
     private final CommitScope commitScope;
     private final PolicyRepository policies;
+    private final ExperienceRetriever experienceRetriever;
 
     public ReplanPlanHandler(PlanFactory planFactory, PlanRepository plans, CatalogRepository catalog,
-                             CommitScope commitScope, PolicyRepository policies) {
+                             CommitScope commitScope, PolicyRepository policies,
+                             ExperienceRetriever experienceRetriever) {
         this.planFactory = planFactory;
         this.plans = plans;
         this.catalog = catalog;
         this.commitScope = commitScope;
         this.policies = policies;
+        this.experienceRetriever = experienceRetriever;
     }
 
     @Override
@@ -62,10 +71,29 @@ public final class ReplanPlanHandler implements InternalToolHandler {
             return ToolExecOutcome.plain("重划被拒绝：" + rejected.getMessage());
         }
         plan.applyReplan(draft.steps());
+        // 新尾部立刻分配经验：留给外循环的话，取消/异常会让它永远拿不到经验（06-planning §6.8.1 规则 6/9）
+        assignExperiences(session, plan);
         commitScope.stageReplace(plan);
         commitScope.commit();
         return ToolExecOutcome.plain("计划已重划（第 " + plan.replanGeneration() + " 代）：剩余 "
                 + pendingSteps(plan) + " 步");
+    }
+
+    private void assignExperiences(Session session, Plan plan) {
+        List<StepBrief> briefs = new ArrayList<StepBrief>();
+        for (PlanStep step : plan.steps()) {
+            if (step.status() == StepStatus.PENDING) {
+                briefs.add(new StepBrief(step.id(), step.description()));
+            }
+        }
+        if (briefs.isEmpty()) {
+            return;
+        }
+        Map<StepId, List<ExperienceId>> assignment = experienceRetriever.retrieveAndAssign(session,
+                new RetrievalInput(plan.id(), briefs));
+        for (Map.Entry<StepId, List<ExperienceId>> entry : assignment.entrySet()) {
+            plan.assignExperiences(entry.getKey(), entry.getValue());
+        }
     }
 
     private Plan runningPlan(Session session) {

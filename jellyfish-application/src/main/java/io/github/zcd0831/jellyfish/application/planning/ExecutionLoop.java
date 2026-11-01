@@ -195,7 +195,7 @@ public final class ExecutionLoop implements SessionRunner {
             if (replanned != null && replanned.replanGeneration() > replanGeneration) {
                 replanGeneration = replanned.replanGeneration();
                 plan = replanned;
-                assignExperiences(session, plan);
+                // 经验由 replan_plan 工具在迁移时分配好：这里只播报（06-planning §6.8.1 规则 6）
                 progress.emit(ProgressEvent.of(ProgressEvent.Kind.PLAN_REPLAN,
                         "重划（第 " + plan.replanGeneration() + " 代）：" + plan.goal()
                                 + "（" + pendingSteps(plan) + " 步）"));

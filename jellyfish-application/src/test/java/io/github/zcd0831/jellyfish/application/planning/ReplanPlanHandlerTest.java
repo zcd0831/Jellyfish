@@ -4,6 +4,9 @@ import io.github.zcd0831.jellyfish.application.action.ToolExecOutcome;
 import io.github.zcd0831.jellyfish.application.action.port.CatalogRepository;
 import io.github.zcd0831.jellyfish.application.planning.port.PlanRepository;
 import io.github.zcd0831.jellyfish.application.perception.port.PolicyRepository;
+import io.github.zcd0831.jellyfish.application.memory.ExperienceRetriever;
+import io.github.zcd0831.jellyfish.application.memory.RetrievalInput;
+import io.github.zcd0831.jellyfish.application.memory.StepBrief;
 import io.github.zcd0831.jellyfish.application.shared.port.CommitScope;
 import io.github.zcd0831.jellyfish.domain.planning.plan.Plan;
 import io.github.zcd0831.jellyfish.domain.planning.plan.PlanFactory;
@@ -17,11 +20,13 @@ import io.github.zcd0831.jellyfish.domain.shared.AgentId;
 import io.github.zcd0831.jellyfish.domain.shared.ModelId;
 import io.github.zcd0831.jellyfish.domain.shared.PlanId;
 import io.github.zcd0831.jellyfish.domain.shared.SessionId;
+import io.github.zcd0831.jellyfish.domain.shared.ExperienceId;
 import io.github.zcd0831.jellyfish.domain.shared.StepId;
 import org.junit.jupiter.api.Test;
 
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -37,13 +42,15 @@ class ReplanPlanHandlerTest {
     private final CatalogRepository catalog = mock(CatalogRepository.class);
     private final CommitScope commitScope = mock(CommitScope.class);
     private final PolicyRepository policies = mock(PolicyRepository.class);
+    private final ExperienceRetriever retriever = mock(ExperienceRetriever.class);
     private final Session session = Session.create(SessionId.of("s1"), null, AgentId.of("a"),
             ModelId.of("m1"), 1L, null);
 
     private ReplanPlanHandler handler() {
         when(catalog.agents()).thenReturn(Collections.emptyList());
         when(policies.load()).thenReturn(RuntimePolicy.defaults());
-        return new ReplanPlanHandler(new PlanFactory(), plans, catalog, commitScope, policies);
+        when(retriever.retrieveAndAssign(any(Session.class), any())).thenReturn(Collections.emptyMap());
+        return new ReplanPlanHandler(new PlanFactory(), plans, catalog, commitScope, policies, retriever);
     }
 
     private static Plan plan() {
@@ -111,5 +118,31 @@ class ReplanPlanHandlerTest {
         assertTrue(outcome.content().startsWith("重划被拒绝："), outcome.content());
         assertEquals(0, plan.replanGeneration());
         assertEquals(PlanStatus.EXECUTING, plan.status());
+    }
+
+    /**
+     * 新尾部在工具内就分配经验：留给外循环的话，取消/异常会让它永远拿不到经验。
+     * 规则出处：06-planning §6.8.1 规则 6、规则 9。
+     */
+    @Test
+    void 重划成功后立即为新尾部分配经验() {
+        Plan plan = plan();
+        when(plans.findRunning(any(SessionId.class))).thenReturn(Collections.singletonList(plan));
+        ReplanPlanHandler handler = handler();
+        when(retriever.retrieveAndAssign(any(Session.class), any(RetrievalInput.class)))
+                .thenAnswer(call -> {
+                    RetrievalInput input = call.getArgument(1);
+                    Map<StepId, List<ExperienceId>> assignment = new LinkedHashMap<StepId, List<ExperienceId>>();
+                    for (StepBrief brief : input.steps()) {
+                        assignment.put(brief.stepId(),
+                                Collections.singletonList(ExperienceId.of("e-" + brief.description())));
+                    }
+                    return assignment;
+                });
+
+        handler.handle(session, draft("换个做法"));
+
+        assertEquals(Collections.singletonList(ExperienceId.of("e-换个做法")),
+                plan.getCurrentStep().assignedExperienceIds(), "新尾部要带经验");
     }
 }

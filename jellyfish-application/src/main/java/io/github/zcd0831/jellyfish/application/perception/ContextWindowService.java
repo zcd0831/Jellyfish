@@ -138,18 +138,20 @@ public final class ContextWindowService {
         List<List<Record>> turns = session.turnsAfter(coveredThrough(session));
         int keepFrom = retainStart(turns, policy.collapseRetainRecordCount());
         if (keepFrom <= 0) {
-            return;   // 窗口本来就在保留区以内：没有可折的旧轮
+            // 窗口本来就在保留区以内：没有可折的旧轮
+            return;
         }
         int covered = lastSequenceOf(turns.subList(0, keepFrom));
         progress.emit(ProgressEvent.of(ProgressEvent.Kind.SUMMARIZING, "上下文压缩中"));
         TechnicalLog.fold(session.id().getValue(), window.getUsage().getUsedTokens());
 
-        List<Record> material = new ArrayList<Record>(summaryOf(window));
-        List<List<Record>> kept = new ArrayList<List<Record>>(turns.subList(0, keepFrom));
-        List<Record> dropped = new ArrayList<Record>();
+        List<Record> material = new ArrayList<>(summaryOf(window));
+        List<List<Record>> kept = new ArrayList<>(turns.subList(0, keepFrom));
+        List<Record> dropped = new ArrayList<>();
         ModelInvocationResult result = summarize(session, material, kept, dropped);
         if (result == null) {
-            return;   // 素材丢完仍超限：本次不折叠，留给上层按“请求超限”处理
+            // 素材丢完仍超限：本次不折叠，留给上层按“请求超限”处理
+            return;
         }
         if (result.usage() != null) {
             budgetService.recordUsage(session, result.usage());

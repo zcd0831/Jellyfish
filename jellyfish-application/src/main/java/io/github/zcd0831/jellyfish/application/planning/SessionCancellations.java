@@ -35,6 +35,22 @@ public final class SessionCancellations implements CancellationRegistry {
     public CancellationToken register(SessionId sessionId, SessionId parentSessionId) {
         Signal signal = new Signal();
         signals.put(sessionId, signal);
+        return linkToParent(sessionId, parentSessionId, signal);
+    }
+
+    /**
+     * 抢占运行权：同一会话同时只允许一个 run（08-application §8.11）。
+     * 已被登记（另一个 run 在跑）⇒ 返回 {@code null}，调用方按“忙”处理，不排队、不并发。
+     */
+    public CancellationToken beginRun(SessionId sessionId, SessionId parentSessionId) {
+        Signal signal = new Signal();
+        if (signals.putIfAbsent(sessionId, signal) != null) {
+            return null;
+        }
+        return linkToParent(sessionId, parentSessionId, signal);
+    }
+
+    private CancellationToken linkToParent(SessionId sessionId, SessionId parentSessionId, Signal signal) {
         if (parentSessionId != null) {
             parents.put(sessionId, parentSessionId);
             childrenOf(parentSessionId).add(sessionId);

@@ -75,7 +75,11 @@ public final class RunSessionUseCase {
         }
         // 终止信号按会话登记：外部令牌（外壳）只是同一信号的另一个触发器，
         // 这样模型调用与工具执行都能按 sessionId 取到它（08-application §8.9.4.1）
-        final CancellationToken termination = cancellations.registerIfAbsent(sessionId, session.parentSessionId());
+        // 同时它也是运行权：同一会话同时只允许一个 run（08-application §8.11）
+        final CancellationToken termination = cancellations.beginRun(sessionId, session.parentSessionId());
+        if (termination == null) {
+            return Result.fail(UseCaseError.of(SessionError.RUN_IN_PROGRESS, "该会话正在运行", sessionId));
+        }
         if (token != null && token != termination) {
             token.onCancel(new Runnable() {
                 @Override

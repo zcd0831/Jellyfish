@@ -14,6 +14,7 @@ import io.github.zcd0831.jellyfish.application.shared.Result;
 import io.github.zcd0831.jellyfish.application.shared.port.CommitScope;
 import io.github.zcd0831.jellyfish.domain.action.model.ModelError;
 import io.github.zcd0831.jellyfish.domain.perception.session.Session;
+import io.github.zcd0831.jellyfish.domain.perception.session.SessionError;
 import io.github.zcd0831.jellyfish.domain.shared.AgentId;
 import io.github.zcd0831.jellyfish.domain.shared.ModelId;
 import io.github.zcd0831.jellyfish.domain.shared.SessionId;
@@ -49,11 +50,14 @@ class RunSessionUseCaseTest {
     private final Session session = Session.create(SessionId.of("s1"), null, AgentId.of("a"),
             ModelId.of("m1"), 1L, null);
 
+    /** 运行权登记表是进程级共享的，所以测试里也只建一份（08-application §8.11）。 */
+    private final SessionCancellations cancellations = new SessionCancellations();
+
     private RunSessionUseCase useCase() {
         when(sessions.load(SessionId.of("s1"))).thenReturn(session);
         when(records.last(any(SessionId.class), anyInt())).thenReturn(Collections.emptyList());
         return new RunSessionUseCase(sessions, records, commitScope, events -> { }, runner, model, tools, human,
-                progress, plans, contextWindow, new SessionCancellations());
+                progress, plans, contextWindow, cancellations);
     }
 
     @Test
@@ -122,5 +126,30 @@ class RunSessionUseCaseTest {
         assertFalse(result.isOk());
         assertEquals("M_UNAVAILABLE", result.error().error().code());
         verify(runner).run(any(Session.class), any(ChunkSink.class), any(RunContext.class));
+    }
+
+    /**
+     * 同一会话同时只允许一个 run：第二个在第一个还没返回时来抢，必须被拒（不排队、不并发），
+     * 否则两个 run 会同时读到“没有运行中的计划”，把单计划守卫绕过去。
+     * 规则出处：08-application §8.11。
+     */
+    @Test
+    void 同一会话已有run在跑时拒绝第二次() {
+        RunSessionUseCase useCase = useCase();
+        final int[] rejected = new int[1];
+        when(runner.run(any(Session.class), any(ChunkSink.class), any(RunContext.class))).thenAnswer(call -> {
+            Result<RunSessionResult> second = useCase.run(SessionId.of("s1"), "再来一句", ChunkSink.NOOP);
+            assertFalse(second.isOk());
+            assertEquals(SessionError.RUN_IN_PROGRESS, second.error().error());
+            rejected[0]++;
+            return RunOutcome.CONVERGED;
+        });
+
+        assertEquals(RunSessionResult.Outcome.CONVERGED,
+                useCase.run(SessionId.of("s1"), "hi", ChunkSink.NOOP).value().outcome());
+        assertEquals(1, rejected[0]);
+        // 跑完之后运行权已释放：同一会话可以再次进入
+        assertEquals(RunSessionResult.Outcome.CONVERGED,
+                useCase.run(SessionId.of("s1"), "第二轮", ChunkSink.NOOP).value().outcome());
     }
 }

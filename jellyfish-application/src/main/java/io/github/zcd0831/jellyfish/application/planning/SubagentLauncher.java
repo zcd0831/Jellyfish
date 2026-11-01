@@ -101,8 +101,20 @@ public final class SubagentLauncher {
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
             terminateAll(tasks);
+        } finally {
+            // 子会话的用量在发起线程上一次性归集：子代理是在线程池里跑的，直接在子线程写族台账
+            // 会让多个 Budget 读-改-写相互覆盖（05-action §5.8.5）
+            settleUsage(tasks);
         }
         return fillMissing(results);
+    }
+
+    private void settleUsage(List<SubagentTask> tasks) {
+        for (SubagentTask task : tasks) {
+            if (task.childId() != null) {
+                budgetService.settleFromSubSession(task.childId());
+            }
+        }
     }
 
     /** 到期就终止该子代理，返回下一步最多等多久（毫秒）。 */
@@ -252,8 +264,8 @@ public final class SubagentLauncher {
                         ? TERMINATED : "子会话创建失败：" + started.error().error().code());
             }
             childId = started.value();
-            // 子会话的消耗经 parentSessionId 直接记到族根台账（BudgetService.recordUsage），
-            // 不再二次归集，避免同一笔消耗被计两次。
+            // 子会话的消耗只在本进程内累计（BudgetService 看 parentSessionId），
+            // 由发起线程 join 后一次性归集，不在子线程里写族台账。
             Result<RunSessionResult> run = runSession.get().run(childId, null, ChunkSink.NOOP);
             if (signal.isCancelled()) {
                 return SubagentResult.of(childId, TERMINATED);   // 半截结论不当结论

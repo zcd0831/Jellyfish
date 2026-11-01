@@ -18,7 +18,9 @@ import io.github.zcd0831.jellyfish.domain.shared.SessionId;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 把会话族内任意位置的消耗归集到根台账。规则出处：05-action §5.5、§5.9.4。
@@ -31,6 +33,11 @@ public final class BudgetService {
     private final CommitScope commitScope;
     private final DomainEventPublisher eventPublisher;
     private final ProgressPort progress;
+    /**
+     * 子会话的本地累计（按子会话 id）：子会话不写族台账，结束后由发起线程一次性归集。
+     * 否则多个子代理线程会同时读-改-写同一个 Budget 聚合，丢更新（05-action §5.8.5）。
+     */
+    private final Map<SessionId, Long> subUsage = new ConcurrentHashMap<SessionId, Long>();
 
     public BudgetService(BudgetRepository budgets, SessionRepository sessions, PolicyRepository policies,
                          CommitScope commitScope, DomainEventPublisher eventPublisher, ProgressPort progress) {
@@ -47,6 +54,10 @@ public final class BudgetService {
      * 顺手记下本轮请求的输入用量，界面提示符据此显示"实际 / 上限"（05-action §5.9.4）。
      */
     public boolean recordUsage(Session session, ModelUsage usage) {
+        if (isSubSession(session)) {
+            accumulate(session.id(), usage.total());
+            return false;   // 子会话不写族台账：本地累计，结束后一次性归集（05-action §5.8.5）
+        }
         SessionId rootId = rootOf(session);
         RuntimePolicy policy = policies.load();
         Budget budget = budgets.load(rootId);
@@ -74,7 +85,11 @@ public final class BudgetService {
      * 子会话结束后一次性归集：子会话不写自己的台账，避免并发写同一聚合。
      * 规则出处：05-action §5.8.5 规则 5、§5.9.1。
      */
-    public void settleFromSubSession(SessionId subSessionId, long tokens) {
+    public void settleFromSubSession(SessionId subSessionId) {
+        long tokens = takeSubUsage(subSessionId);
+        if (tokens <= 0) {
+            return;   // 没有消耗，或者已经归集过
+        }
         Session sub = sessions.load(subSessionId);
         SessionId rootId = sub == null ? subSessionId : rootOf(sub);
         RuntimePolicy policy = policies.load();
@@ -96,6 +111,10 @@ public final class BudgetService {
      * 规则出处：05-action §5.4.4。
      */
     public boolean recordTurnUsage(Session session, ModelUsage usage) {
+        if (isSubSession(session)) {
+            accumulate(session.id(), usage.total());
+            return false;   // 子会话的小请求不得盖掉真实窗口的观测值（05-action §5.4.4）
+        }
         boolean warned = recordUsage(session, usage);
         if (usage.inputTokens() > 0) {
             SessionId rootId = rootOf(session);
@@ -129,6 +148,27 @@ public final class BudgetService {
         budget.forgetPromptObservation();
         commitScope.stageReplace(budget);
         commitScope.commit();
+    }
+
+    private static boolean isSubSession(Session session) {
+        return session.parentSessionId() != null;
+    }
+
+    private void accumulate(SessionId subSessionId, long tokens) {
+        if (tokens <= 0) {
+            return;
+        }
+        synchronized (subUsage) {
+            Long used = subUsage.get(subSessionId);
+            subUsage.put(subSessionId, used == null ? tokens : used + tokens);
+        }
+    }
+
+    private long takeSubUsage(SessionId subSessionId) {
+        synchronized (subUsage) {
+            Long used = subUsage.remove(subSessionId);
+            return used == null ? 0L : used;
+        }
     }
 
     /** 子会话不自建台账：沿 parentSessionId 上溯到族根（05-action §5.8.5 规则 5）。 */

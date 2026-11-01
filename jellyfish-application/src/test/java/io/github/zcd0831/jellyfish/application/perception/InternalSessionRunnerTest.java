@@ -23,6 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -38,6 +39,8 @@ class InternalSessionRunnerTest {
     private final SessionRepository sessions = mock(SessionRepository.class);
     private final ReActLoop reActLoop = mock(ReActLoop.class);
     private final SessionCancellations cancellations = new SessionCancellations();
+    private final io.github.zcd0831.jellyfish.application.action.BudgetService budget =
+            mock(io.github.zcd0831.jellyfish.application.action.BudgetService.class);
 
     private final Session parent = Session.create(PARENT, null, AgentId.of("a"), ModelId.of("m1"), 1L, null);
     private final Session child = Session.create(CHILD, PARENT, AgentId.of("a"), ModelId.of("m1"), 1L, null);
@@ -66,7 +69,7 @@ class InternalSessionRunnerTest {
                     @Override
                     public void commit() {
                     }
-                }, () -> 1L, cancellations);
+                }, () -> 1L, cancellations, budget);
     }
 
     /**
@@ -117,5 +120,19 @@ class InternalSessionRunnerTest {
 
         assertNull(runner().run(parent, "反思一下"));
         assertEquals(Collections.emptyList(), parent.records());
+    }
+
+    /**
+     * fork 的用量不在子会话里写族台账：结束后由发起线程一次性归集。
+     * 规则出处：05-action §5.8.5、08-application §8.9.7。
+     */
+    @Test
+    void fork结束后用量归集到族根() {
+        when(startSession.forkInternal(PARENT)).thenReturn(Result.ok(CHILD));
+        when(sessions.load(CHILD)).thenReturn(child);
+
+        runner().run(parent, "反思一下");
+
+        verify(budget).settleFromSubSession(CHILD);
     }
 }

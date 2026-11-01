@@ -141,7 +141,7 @@ class S2AcceptanceTest {
                         new io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner(
                                 startSession, sessions, reActLoop, new SessionToolScope(),
                                 new FileCommitScope(dir, codec), () -> System.currentTimeMillis(),
-                                cancellations),
+                                cancellations, budgetService),
                         new FileCommitScope(dir, codec));
         ExecutionLoop executionLoop = new ExecutionLoop(contextWindow, reActLoop, verificationRunner, plans,
                 planFactory, catalog, policies, new FileCommitScope(dir, codec), publisher, event -> { },
@@ -149,7 +149,8 @@ class S2AcceptanceTest {
                 new SessionToolScope(),
                 new io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner(
                         startSession, sessions, reActLoop, new SessionToolScope(),
-                        new FileCommitScope(dir, codec), () -> System.currentTimeMillis(), cancellations));
+                        new FileCommitScope(dir, codec), () -> System.currentTimeMillis(), cancellations,
+                        budgetService));
         runSession = new RunSessionUseCase(sessions, records, new FileCommitScope(dir, codec), publisher,
                 executionLoop, model, toolExecutor, human, event -> { }, plans, contextWindow,
                 cancellations);

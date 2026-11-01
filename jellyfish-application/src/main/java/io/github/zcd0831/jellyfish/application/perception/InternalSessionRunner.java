@@ -1,5 +1,6 @@
 package io.github.zcd0831.jellyfish.application.perception;
 
+import io.github.zcd0831.jellyfish.application.action.BudgetService;
 import io.github.zcd0831.jellyfish.application.action.SessionToolScope;
 import io.github.zcd0831.jellyfish.application.perception.port.SessionRepository;
 import io.github.zcd0831.jellyfish.application.planning.ReActLoop;
@@ -29,10 +30,11 @@ public class InternalSessionRunner {
     private final CommitScope commitScope;
     private final Clock clock;
     private final SessionCancellations cancellations;
+    private final BudgetService budgetService;
 
     public InternalSessionRunner(StartSessionUseCase startSession, SessionRepository sessions, ReActLoop reActLoop,
                                  SessionToolScope scope, CommitScope commitScope, Clock clock,
-                                 SessionCancellations cancellations) {
+                                 SessionCancellations cancellations, BudgetService budgetService) {
         this.startSession = startSession;
         this.sessions = sessions;
         this.reActLoop = reActLoop;
@@ -40,6 +42,7 @@ public class InternalSessionRunner {
         this.commitScope = commitScope;
         this.clock = clock;
         this.cancellations = cancellations;
+        this.budgetService = budgetService;
     }
 
     /**
@@ -62,6 +65,8 @@ public class InternalSessionRunner {
         try {
             return runInChild(parent, childId, instruction);
         } finally {
+            // 用量一次性归集到族根：子会话不写自己的台账（05-action §5.8.5、08-application §8.9.7）
+            budgetService.settleFromSubSession(childId);
             // 一次性子会话：结束即注销，否则长会话里登记表只增不减（08-application §8.9.4.1）
             scope.clear(childId);
             cancellations.unregister(childId);

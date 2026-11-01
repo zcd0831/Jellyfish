@@ -55,6 +55,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -501,5 +502,25 @@ class ExecutionLoopTest {
 
         assertEquals(PlanStatus.COMPLETED, plan.status());
         verify(reActLoop, times(2)).runIteration(any(Session.class), any(), any(ChunkSink.class));
+    }
+
+    /**
+     * 沉淀期间被终止：取消是终态，必须上抛（不能吞成“本次不沉淀”），也不得再进交付轮。
+     * 规则出处：08-application §8.9.4.1、§8.9.7（fork 期间被终止 ⇒ 不写告知记录、不播报）。
+     */
+    @Test
+    void 沉淀期间被终止则上抛且不进交付轮() {
+        Plan plan = plan();
+        planScript.add(plan);
+        when(reActLoop.runIteration(any(Session.class), any(), any(ChunkSink.class)))
+                .thenReturn(submitted("做完了"));
+        doThrow(new java.util.concurrent.CancellationException("用户中断"))
+                .when(curator).curate(any(Session.class), any(DistillationInput.class));
+
+        assertThrows(java.util.concurrent.CancellationException.class,
+                () -> loop().run(session, ChunkSink.NOOP, NO_CONTEXT));
+
+        assertEquals(PlanStatus.COMPLETED, plan.status(), "沉淀前计划已完结，这一轮不算失败");
+        verify(reActLoop, times(1)).runIteration(any(Session.class), any(), any(ChunkSink.class));
     }
 }

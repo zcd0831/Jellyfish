@@ -5,8 +5,11 @@ import io.github.zcd0831.jellyfish.application.action.port.ModelUsage;
 import io.github.zcd0831.jellyfish.application.perception.port.PolicyRepository;
 import io.github.zcd0831.jellyfish.application.perception.port.SessionRepository;
 import io.github.zcd0831.jellyfish.application.shared.port.CommitScope;
+import io.github.zcd0831.jellyfish.application.shared.port.DomainEventPublisher;
 import io.github.zcd0831.jellyfish.application.shared.port.ProgressPort;
 import io.github.zcd0831.jellyfish.domain.action.budget.Budget;
+import io.github.zcd0831.jellyfish.domain.action.budget.BudgetWarning;
+import io.github.zcd0831.jellyfish.domain.shared.DomainEvent;
 import io.github.zcd0831.jellyfish.domain.perception.policy.RuntimePolicy;
 import io.github.zcd0831.jellyfish.domain.perception.session.Session;
 import io.github.zcd0831.jellyfish.domain.shared.AgentId;
@@ -14,8 +17,12 @@ import io.github.zcd0831.jellyfish.domain.shared.BudgetId;
 import io.github.zcd0831.jellyfish.domain.shared.ModelId;
 import io.github.zcd0831.jellyfish.domain.shared.SessionId;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -33,6 +40,7 @@ class BudgetServiceTest {
     private final PolicyRepository policies = mock(PolicyRepository.class);
     private final CommitScope commitScope = mock(CommitScope.class);
     private final ProgressPort progress = mock(ProgressPort.class);
+    private final DomainEventPublisher publisher = mock(DomainEventPublisher.class);
     private final Budget budget = Budget.openFor(BudgetId.of("b1"), ROOT);
 
     private final Session root = Session.create(ROOT, null, AgentId.of("a"), ModelId.of("m1"), 1L, null);
@@ -43,7 +51,7 @@ class BudgetServiceTest {
         when(budgets.load(ROOT)).thenReturn(budget);
         when(sessions.load(ROOT)).thenReturn(root);
         when(sessions.load(CHILD)).thenReturn(child);
-        return new BudgetService(budgets, sessions, policies, commitScope, events -> { }, progress);
+        return new BudgetService(budgets, sessions, policies, commitScope, publisher, progress);
     }
 
     /**
@@ -84,5 +92,27 @@ class BudgetServiceTest {
 
         assertEquals(120, budget.consumedTokens());
         verify(commitScope).stageReplace(budget);
+    }
+
+    /**
+     * 归集造成的越阈值只记账 + 发 BudgetWarning，不弹确认：ask_user 只挂在主请求路径上，
+     * 归集发生在工具执行中（05-action §5.8.5）。这条用例把“静默过去”钉成已知取舍。
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    void 归集越过阈值只发事件不弹确认() {
+        BudgetService service = service();
+
+        service.recordUsage(child, new ModelUsage(900000, 0));
+        service.settleFromSubSession(CHILD);
+
+        ArgumentCaptor<List<DomainEvent>> events = ArgumentCaptor.forClass(List.class);
+        verify(publisher).publishAfterCommit(events.capture());
+        boolean warned = false;
+        for (DomainEvent event : events.getValue()) {
+            warned = warned || event instanceof BudgetWarning;
+        }
+        assertTrue(warned, "越阈值要发 BudgetWarning 供界面/审计看见：" + events.getValue());
+        assertEquals(900000, budget.consumedTokens());
     }
 }

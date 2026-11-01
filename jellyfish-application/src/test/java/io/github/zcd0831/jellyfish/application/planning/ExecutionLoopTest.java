@@ -456,6 +456,39 @@ class ExecutionLoopTest {
                 java.util.Collections.emptyList(), java.util.Collections.emptyList());
     }
 
+    /**
+     * “第 x/N 步”的 x 与 N 同一口径：N 只计未被 SUPERSEDED 的步骤。
+     * 旧尾部会被重划置为 SUPERSEDED 并保留审计，算进去分母会虚高。
+     * 规则出处：08-application §8.7。
+     */
+    @Test
+    void 进度分母不把被重划替换的旧步骤算进去() {
+        Plan plan = Plan.create(PlanId.of("p1"), SessionId.of("s1"), "目标", java.util.Arrays.asList(
+                PlanSteps.draft(StepId.of("step1"), 1, "第一步", "g", "o", "c",
+                        EnumSet.noneOf(VerificationType.class)),
+                PlanSteps.draft(StepId.of("step2"), 2, "第二步", "g", "o", "c",
+                        EnumSet.noneOf(VerificationType.class))));
+        planScript.add(plan);
+        java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
+        when(reActLoop.runIteration(any(Session.class), any(), any(ChunkSink.class))).thenAnswer(call -> {
+            PlanStep current = call.getArgument(1);
+            if (current == null) {
+                return converged();   // 结论交付轮
+            }
+            if (calls.incrementAndGet() == 1) {
+                // 执行第一步时重划：把未执行的尾部（第二步）替掉
+                plan.applyReplan(Collections.singletonList(PlanSteps.draft(StepId.of("step3"), 0, "第三步",
+                        "g", "o", "c", Collections.<VerificationType>emptySet())));
+            }
+            return submitted("完成");
+        });
+
+        loop().run(session, ChunkSink.NOOP, NO_CONTEXT);
+
+        assertTrue(progressEvents.stream().anyMatch(e -> e.message().equals("第 2/2 步：第三步")),
+                "分母只计未 SUPERSEDED 的步骤：" + progressEvents);
+    }
+
     @Test
     void 交付轮禁用全部工具且跑完即结束() {
         Plan plan = plan();

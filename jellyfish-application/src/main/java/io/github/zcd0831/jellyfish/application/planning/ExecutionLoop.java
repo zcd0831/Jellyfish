@@ -163,7 +163,7 @@ public final class ExecutionLoop implements SessionRunner {
                 attempt = plan.beginCurrentStep();
                 commitPlan(plan);
                 progress.emit(ProgressEvent.of(ProgressEvent.Kind.STEP_STARTED,
-                        "第 " + step.sequence() + "/" + plan.steps().size() + " 步：" + step.description()));
+                        "第 " + stepProgress(plan, step) + " 步：" + step.description()));
             } else if (step != null && !step.attempts().isEmpty()) {
                 attempt = step.attempts().get(step.attempts().size() - 1);
             }
@@ -250,7 +250,7 @@ public final class ExecutionLoop implements SessionRunner {
                 commitPlan(plan);
                 feedbackSucceeded(step);
                 progress.emit(ProgressEvent.of(ProgressEvent.Kind.STEP_FINISHED,
-                        "第 " + step.sequence() + "/" + plan.steps().size() + " 步完成（免验证）"));
+                        "第 " + stepProgress(plan, step) + " 步完成（免验证）"));
             } else {
                 VerificationReport report = verificationRunner.verify(session, plan, step,
                         attempt == null ? 0 : attempt.attemptNo(), iteration.submittedSummary());
@@ -260,7 +260,7 @@ public final class ExecutionLoop implements SessionRunner {
                     commitPlan(plan);
                     feedbackSucceeded(step);
                     progress.emit(ProgressEvent.of(ProgressEvent.Kind.STEP_FINISHED,
-                            "第 " + step.sequence() + "/" + plan.steps().size() + " 步验收通过"));
+                            "第 " + stepProgress(plan, step) + " 步验收通过"));
                 } else {
                     plan.markStepFailed(step.id(), report.id());
                     commitPlan(plan);
@@ -268,7 +268,7 @@ public final class ExecutionLoop implements SessionRunner {
                     feedbackFailed(step);
                     reflectIfNeeded(session, plan, step, report.failureReason());
                     progress.emit(ProgressEvent.of(ProgressEvent.Kind.STEP_FINISHED,
-                            "第 " + step.sequence() + "/" + plan.steps().size()
+                            "第 " + stepProgress(plan, step)
                                     + " 步验收未通过：" + report.outcome()));
                     if (advanceAfterFailure(session, plan, step,
                             report.failureReason() == null ? String.valueOf(report.outcome())
@@ -532,7 +532,7 @@ public final class ExecutionLoop implements SessionRunner {
     }
 
     /**
-     * 进度文案里的 N 只计未 SUPERSEDED 的步骤：旧尾部会保留审计，算进去会越来越大（08-application §8.7）。
+     * 播报里的「（N 步）」：剩余待做步数，不含已完成、不含被替换的旧尾部（08-application §8.7）。
      */
     private static int pendingSteps(Plan plan) {
         int count = 0;
@@ -542,6 +542,26 @@ public final class ExecutionLoop implements SessionRunner {
             }
         }
         return count;
+    }
+
+    /**
+     * 进度文案里的「第 x/N 步」：x 与 N 同一口径，N 只计未 SUPERSEDED 的总步数。
+     * 不能用 step.sequence()/steps().size()：重划会保留被替换的旧尾部，两个数都会虚高。
+     * 规则出处：08-application §8.7。
+     */
+    private static String stepProgress(Plan plan, PlanStep step) {
+        int total = 0;
+        int position = 0;
+        for (PlanStep each : plan.steps()) {
+            if (each.status() == StepStatus.SUPERSEDED) {
+                continue;
+            }
+            total++;
+            if (each.id().equals(step.id())) {
+                position = total;
+            }
+        }
+        return position + "/" + total;
     }
 
     private static boolean stepNeedsVerification(PlanStep step) {

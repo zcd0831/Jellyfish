@@ -24,6 +24,7 @@ public final class TuiProgressReporter implements ProgressPort {
             case PLAN_CREATED:
             case PLAN_REPLAN:
             case STEP_STARTED:
+            case ROUNDS_EXHAUSTED:
                 renderer.status("");
                 renderer.info("· " + event.message());
                 break;

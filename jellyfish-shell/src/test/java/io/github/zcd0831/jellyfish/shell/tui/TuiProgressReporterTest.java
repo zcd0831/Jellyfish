@@ -31,6 +31,14 @@ class TuiProgressReporterTest {
     }
 
     @Test
+    void 轮次用尽走常驻行() throws Exception {
+        String text = render(ProgressEvent.Kind.ROUNDS_EXHAUSTED);
+
+        assertTrue(text.contains("消息"), text);
+        assertTrue(text.endsWith("\n"), "轮次用尽要留下痕迹，不能被下一行冲掉：" + text);
+    }
+
+    @Test
     void 工具开始与结束各占一行() throws Exception {
         String started = render(ProgressEvent.Kind.TOOL_STARTED);
         String finished = render(ProgressEvent.Kind.TOOL_FINISHED);

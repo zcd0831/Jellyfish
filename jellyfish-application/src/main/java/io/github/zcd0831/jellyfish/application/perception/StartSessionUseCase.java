@@ -175,6 +175,40 @@ public final class StartSessionUseCase {
         return Result.ok(childId);
     }
 
+    /**
+     * 无历史 fork（裁判 / 检索）：**不复制父会话窗口**，按目标代理重新组装快照——
+     * 没有父前缀可命中，所以不必沿用父快照；裁判因此只看得见自己绑定的只读工具（08-application §8.9.7）。
+     */
+    public Result<SessionId> forkWithAgent(SessionId parentSessionId, AgentId agentId) {
+        Session parent = sessions.load(parentSessionId);
+        if (parent == null) {
+            return Result.fail(UseCaseError.of(SessionError.NOT_FOUND, "父会话不存在", parentSessionId));
+        }
+        AgentDefinition agent = resolveAgent(agentId);
+        if (agent == null) {
+            return Result.fail(UseCaseError.of(SessionError.NO_USABLE_AGENT, "没有可用的代理", agentId));
+        }
+        Model model = resolveModel(parent.activeModelId());
+        if (model == null) {
+            return Result.fail(UseCaseError.of(SessionError.NO_USABLE_MODEL, "没有可用的模型",
+                    parent.activeModelId()));
+        }
+        SessionId childId = SessionId.of(UUID.randomUUID().toString());
+        Session child = Session.create(childId, parentSessionId, agent.id(), model.id(), clock.nowMillis(),
+                freeze(agent));
+        child.retitle(parent.title());
+        CancellationToken signal = cancellations.registerIfAbsent(childId, parentSessionId);
+        if (signal.isCancelled()) {
+            cancellations.unregister(childId);
+            return Result.fail(UseCaseError.of(SessionError.NOT_FOUND, "子会话被终止，未创建", childId));
+        }
+        sessions.save(child);
+        commitScope.stageReplace(child);
+        commitScope.commit();
+        child.pullEvents();   // 内部子会话不发 SessionStarted：它不进会话列表
+        return Result.ok(childId);
+    }
+
     /** 提交后派发创建事件：只供界面 / 审计，不驱动任何动作（04-perception §4.8.1 规则 1）。 */
     private void publishStarted(Session session) {
         eventPublisher.publishAfterCommit(new ArrayList<DomainEvent>(session.pullEvents()));

@@ -1,11 +1,8 @@
 package io.github.zcd0831.jellyfish.application.memory;
 
-import io.github.zcd0831.jellyfish.application.action.BudgetService;
 import io.github.zcd0831.jellyfish.application.action.port.CatalogRepository;
-import io.github.zcd0831.jellyfish.application.action.port.ChatMessage;
 import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationPort;
-import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationRequest;
-import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationResult;
+import io.github.zcd0831.jellyfish.application.perception.ForkRunnerProvider;
 import io.github.zcd0831.jellyfish.application.memory.port.ExperienceRepository;
 import io.github.zcd0831.jellyfish.application.perception.port.PolicyRepository;
 import io.github.zcd0831.jellyfish.application.shared.Json;
@@ -13,7 +10,6 @@ import io.github.zcd0831.jellyfish.application.shared.TechnicalLog;
 import io.github.zcd0831.jellyfish.domain.shared.TokenEstimator;
 import io.github.zcd0831.jellyfish.domain.action.agent.AgentDefinition;
 import io.github.zcd0831.jellyfish.domain.memory.experience.Experience;
-import io.github.zcd0831.jellyfish.domain.perception.session.RecordRole;
 import io.github.zcd0831.jellyfish.domain.perception.session.Session;
 import io.github.zcd0831.jellyfish.domain.shared.AgentId;
 import io.github.zcd0831.jellyfish.domain.shared.ExperienceId;
@@ -35,21 +31,22 @@ public final class ExperienceRetriever {
     private static final AgentId RETRIEVE_AGENT = AgentId.of("builtin.retrieve");
 
     private final ExperienceRepository experiences;
-    private final ModelInvocationPort model;
     private final CatalogRepository catalog;
     private final PolicyRepository policies;
-    private final BudgetService budgetService;
     private final TokenEstimator estimator;
+    private final ForkRunnerProvider forks;
+    /** 只用来查模型档案（maxInputTokens），不发起任何模型调用。 */
+    private final ModelInvocationPort model;
 
-    public ExperienceRetriever(ExperienceRepository experiences, ModelInvocationPort model,
-                               CatalogRepository catalog, PolicyRepository policies,
-                               BudgetService budgetService, TokenEstimator estimator) {
+    public ExperienceRetriever(ExperienceRepository experiences, CatalogRepository catalog,
+                               PolicyRepository policies, TokenEstimator estimator,
+                               ForkRunnerProvider forks, ModelInvocationPort model) {
         this.experiences = experiences;
-        this.model = model;
         this.catalog = catalog;
         this.policies = policies;
-        this.budgetService = budgetService;
         this.estimator = estimator;
+        this.forks = forks;
+        this.model = model;
     }
 
     public Map<StepId, List<ExperienceId>> retrieveAndAssign(Session session, RetrievalInput input) {
@@ -67,14 +64,16 @@ public final class ExperienceRetriever {
         }
         String material = material(candidates, input);
         try {
-            ModelInvocationResult result = model.invoke(new ModelInvocationRequest(session.id(), session.activeModelId(),
-                    agent.basePrompt().getTemplateText(),
-                    Collections.singletonList(ChatMessage.of(RecordRole.USER, material)),
-                    Collections.emptyList(), 0, null));
-            if (result.usage() != null) {
-                budgetService.recordUsage(session, result.usage());
+            // 无历史子会话里跑检索代理：工具集暂空 ⇒ 一轮；将来加工具就自动支持多轮
+            // （07-memory §7.9.1、08-application §8.9.7）
+            io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner runner = forks.get();
+            if (runner == null) {
+                return Collections.emptyMap();   // 未装配执行点：本次没有经验可用
             }
-            return parse(result.text(), input, active);
+            String reply = runner.runStateless(session, RETRIEVE_AGENT, material, null);
+            return parse(reply, input, active);
+        } catch (java.util.concurrent.CancellationException terminated) {
+            throw terminated;   // 终止是终态，不当成“这次没有经验”
         } catch (RuntimeException unavailable) {
             // 检索失败只是"这次没有经验可用"，不阻断计划执行
             return Collections.emptyMap();

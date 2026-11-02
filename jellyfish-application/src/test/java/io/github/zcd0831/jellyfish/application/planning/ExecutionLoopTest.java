@@ -265,7 +265,7 @@ class ExecutionLoopTest {
         when(reActLoop.runIteration(any(Session.class), any(), any(ChunkSink.class)))
                 .thenReturn(submitted("做完了"))
                 .thenReturn(converged());
-        when(verificationRunner.verify(any(Session.class), any(Plan.class), any(), anyInt(), any()))
+        when(verificationRunner.verify(any(Session.class), any(Plan.class), any(), anyInt(), any(), any()))
                 .thenReturn(passed());
 
         loop().run(session, ChunkSink.NOOP, NO_CONTEXT);
@@ -283,7 +283,7 @@ class ExecutionLoopTest {
                 .thenReturn(submitted("做完了"))
                 .thenReturn(submitted("做完了"))
                 .thenReturn(converged());
-        when(verificationRunner.verify(any(Session.class), any(Plan.class), any(), anyInt(), any()))
+        when(verificationRunner.verify(any(Session.class), any(Plan.class), any(), anyInt(), any(), any()))
                 .thenReturn(failed())
                 .thenReturn(passed());
 
@@ -315,7 +315,7 @@ class ExecutionLoopTest {
             }
             return submitted("第 " + calls.get() + " 次");
         });
-        when(verificationRunner.verify(any(Session.class), any(Plan.class), any(), anyInt(), any()))
+        when(verificationRunner.verify(any(Session.class), any(Plan.class), any(), anyInt(), any(), any()))
                 .thenReturn(failed())
                 .thenReturn(passed())
                 .thenReturn(passed());
@@ -353,7 +353,7 @@ class ExecutionLoopTest {
             }
             return submitted("做完了");
         });
-        when(verificationRunner.verify(any(Session.class), any(Plan.class), any(), anyInt(), any()))
+        when(verificationRunner.verify(any(Session.class), any(Plan.class), any(), anyInt(), any(), any()))
                 .thenReturn(failed());
 
         loop().run(session, ChunkSink.NOOP, NO_CONTEXT);
@@ -376,7 +376,7 @@ class ExecutionLoopTest {
                 .thenReturn(submitted("第一次"))
                 .thenReturn(submitted("第二次"))
                 .thenReturn(converged());
-        when(verificationRunner.verify(any(Session.class), any(Plan.class), any(), anyInt(), any()))
+        when(verificationRunner.verify(any(Session.class), any(Plan.class), any(), anyInt(), any(), any()))
                 .thenReturn(failed())
                 .thenReturn(failed());
 
@@ -408,7 +408,7 @@ class ExecutionLoopTest {
                 .thenReturn(submitted("第一次"))
                 .thenReturn(submitted("第二次"))
                 .thenReturn(converged());
-        when(verificationRunner.verify(any(Session.class), any(Plan.class), any(), anyInt(), any()))
+        when(verificationRunner.verify(any(Session.class), any(Plan.class), any(), anyInt(), any(), any()))
                 .thenReturn(failed())
                 .thenReturn(passed());
         when(catalog.agents()).thenReturn(Collections.singletonList(reflectAgent()));
@@ -434,7 +434,7 @@ class ExecutionLoopTest {
         planScript.add(plan);
         when(reActLoop.runIteration(any(Session.class), any(), any(ChunkSink.class)))
                 .thenReturn(submitted("第一次"));
-        when(verificationRunner.verify(any(Session.class), any(Plan.class), any(), anyInt(), any()))
+        when(verificationRunner.verify(any(Session.class), any(Plan.class), any(), anyInt(), any(), any()))
                 .thenReturn(failed());
         when(catalog.agents()).thenReturn(Collections.singletonList(reflectAgent()));
         when(forks.run(any(Session.class), any()))

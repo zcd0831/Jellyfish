@@ -19,6 +19,9 @@ public final class SessionToolScope {
     private static final int MAX_DENIALS = 3;
 
     private final Map<SessionId, Set<ToolId>> allowed = new ConcurrentHashMap<SessionId, Set<ToolId>>();
+    /** 可读产物白名单：<code>read_artifact</code> 只认这里声明过的路径，未声明 = 一律拒绝。 */
+    private final Map<SessionId, Set<String>> readableArtifacts =
+            new ConcurrentHashMap<SessionId, Set<String>>();
     private final Map<SessionId, Integer> denials = new ConcurrentHashMap<SessionId, Integer>();
 
     /** 声明本会话只能用这些工具（空集 = 一个都不许用）。 */
@@ -30,7 +33,33 @@ public final class SessionToolScope {
     /** 解除限制：主循环与普通子代理不受白名单约束。 */
     public void clear(SessionId sessionId) {
         allowed.remove(sessionId);
+        readableArtifacts.remove(sessionId);
         denials.remove(sessionId);
+    }
+
+    /** 声明本会话可读哪些产物（验证裁判用）：未声明 ⇒ 一律拒绝，不做“读全盘”退让。 */
+    public void allowArtifacts(SessionId sessionId, java.util.Collection<String> paths) {
+        Set<String> set = new HashSet<String>();
+        for (String path : paths) {
+            set.add(normalize(path));
+        }
+        readableArtifacts.put(sessionId, Collections.unmodifiableSet(set));
+    }
+
+    public boolean allowsArtifact(SessionId sessionId, String path) {
+        Set<String> set = readableArtifacts.get(sessionId);
+        return set != null && set.contains(normalize(path));
+    }
+
+    private static String normalize(String path) {
+        if (path == null) {
+            return "";
+        }
+        String trimmed = path.trim();
+        while (trimmed.startsWith("./")) {
+            trimmed = trimmed.substring(2);
+        }
+        return trimmed;
     }
 
     /** 本会话是否被显式授权了这个工具（授权优先于“代理绑定”）。 */

@@ -73,6 +73,39 @@ public class InternalSessionRunner {
         }
     }
 
+    /**
+     * 无历史调用（裁判 / 检索）：不复制父窗口、按目标代理组装快照，跑内循环（≤ maxReActRounds）后
+     * 取最后一条 assistant 文本。`artifacts` 是本会话 `read_artifact` 唯一可读的产物清单。
+     * 规则出处：06-planning §6.8.2、08-application §8.9.7。
+     */
+    public String runStateless(Session parent, io.github.zcd0831.jellyfish.domain.shared.AgentId agentId,
+                               String instruction, java.util.List<String> artifacts) {
+        if (parent == null) {
+            return null;
+        }
+        Result<SessionId> forked = startSession.forkWithAgent(parent.id(), agentId);
+        if (!forked.isOk()) {
+            cancellations.forSession(parent.id()).throwIfCancelled();
+            return null;
+        }
+        SessionId childId = forked.value();
+        try {
+            Session child = sessions.load(childId);
+            Record instructionRecord = child.appendRecord(RecordRole.USER, instruction, null, clock.nowMillis());
+            commitScope.stageAppend(childId, instructionRecord);
+            commitScope.commit();
+            if (artifacts != null && !artifacts.isEmpty()) {
+                scope.allowArtifacts(childId, artifacts);
+            }
+            reActLoop.runIteration(child, null, ChunkSink.NOOP);
+            return lastAssistant(child);
+        } finally {
+            budgetService.settleFromSubSession(childId);
+            scope.clear(childId);
+            cancellations.unregister(childId);
+        }
+    }
+
     private String runInChild(Session parent, SessionId childId, String instruction) {
         Session child = sessions.load(childId);
         copyWindow(parent, child);

@@ -1,15 +1,12 @@
 package io.github.zcd0831.jellyfish.application.memory;
 
-import io.github.zcd0831.jellyfish.application.action.BudgetService;
 import io.github.zcd0831.jellyfish.application.action.port.CatalogRepository;
-import io.github.zcd0831.jellyfish.application.action.port.ChatMessage;
 import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationPort;
-import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationRequest;
-import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationResult;
 import io.github.zcd0831.jellyfish.application.action.port.ModelProfile;
 import io.github.zcd0831.jellyfish.application.memory.port.ExperienceRepository;
+import io.github.zcd0831.jellyfish.application.perception.ForkRunnerProvider;
+import io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner;
 import io.github.zcd0831.jellyfish.application.perception.port.PolicyRepository;
-import io.github.zcd0831.jellyfish.application.shared.ChunkSink;
 import io.github.zcd0831.jellyfish.domain.action.agent.AgentDefinition;
 import io.github.zcd0831.jellyfish.domain.action.agent.AgentSource;
 import io.github.zcd0831.jellyfish.domain.action.agent.AgentStatus;
@@ -37,6 +34,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /** 检索：素材口径、超限裁剪、放弃、解析过滤（07-memory §7.9.1）。 */
@@ -45,35 +43,32 @@ class ExperienceRetrieverTest {
     private final ExperienceRepository experiences = mock(ExperienceRepository.class);
     private final CatalogRepository catalog = mock(CatalogRepository.class);
     private final PolicyRepository policies = mock(PolicyRepository.class);
-    private final BudgetService budget = mock(BudgetService.class);
-    private final List<ModelInvocationRequest> requests = new ArrayList<ModelInvocationRequest>();
+    private final InternalSessionRunner forks = mock(InternalSessionRunner.class);
+    private final ModelInvocationPort model = mock(ModelInvocationPort.class);
+    private final List<String> instructions = new ArrayList<String>();
     private String answer = "{}";
     private final Session session = Session.create(SessionId.of("s1"), null, AgentId.of("a"),
             ModelId.of("m1"), 1L, null);
 
-    private final ModelInvocationPort model = new ModelInvocationPort() {
-        @Override
-        public ModelInvocationResult invoke(ModelInvocationRequest request) {
-            requests.add(request);
-            return new ModelInvocationResult(answer, Collections.emptyList(), null, ModelId.of("m1"));
-        }
-
-        @Override
-        public ModelInvocationResult invokeStreaming(ModelInvocationRequest request, ChunkSink sink) {
-            return invoke(request);
-        }
-
-        @Override
-        public ModelProfile describe(ModelId modelId) {
-            return new ModelProfile(100000, 4096);
-        }
-    };
-
     private ExperienceRetriever retriever() {
         when(policies.load()).thenReturn(RuntimePolicy.defaults());
         when(catalog.agents()).thenReturn(Collections.singletonList(agent("提示词")));
-        return new ExperienceRetriever(experiences, model, catalog, policies, budget,
-                text -> text == null ? 0 : text.length());
+        when(model.describe(any(ModelId.class))).thenReturn(new ModelProfile(100000, 4096));
+        when(forks.runStateless(any(Session.class), any(), any(), any())).thenAnswer(call -> {
+            instructions.add(call.getArgument(2));
+            return answer;
+        });
+        return new ExperienceRetriever(experiences, catalog, policies,
+                text -> text == null ? 0 : text.length(), provider(), model);
+    }
+
+    private ForkRunnerProvider provider() {
+        return new ForkRunnerProvider() {
+            @Override
+            public InternalSessionRunner get() {
+                return forks;
+            }
+        };
     }
 
     private static AgentDefinition agent(String prompt) {
@@ -93,16 +88,21 @@ class ExperienceRetrieverTest {
                 Collections.singletonList(new StepBrief(StepId.of("step1"), "改代码")));
     }
 
+    /**
+     * 素材只有经验与步骤描述：检索跑在**无历史子会话**里，塞进指令的只有这两样，
+     * 对话轨迹一个字都不给（07-memory §7.9.1）。
+     */
     @Test
     void 素材只有经验与步骤描述且不用对话轨迹() {
         when(experiences.findActive()).thenReturn(Collections.singletonList(experience("e1", "改代码时", 0.5)));
 
         retriever().retrieveAndAssign(session, input());
 
-        String material = requests.get(0).messages().get(0).content();
+        assertEquals(1, instructions.size());
+        String material = instructions.get(0);
         assertTrue(material.contains("e1"), material);
         assertTrue(material.contains("改代码"), material);
-        assertEquals(RecordRoleOf.USER, requests.get(0).messages().get(0).role());
+        verify(forks).runStateless(any(Session.class), any(), any(), any());
     }
 
     @Test
@@ -117,12 +117,17 @@ class ExperienceRetrieverTest {
         when(policies.load()).thenReturn(RuntimePolicy.defaults().adjust(
                 Collections.<String, Object>singletonMap("summarizationTokenThreshold", 100)));
         when(catalog.agents()).thenReturn(Collections.singletonList(agent("提示词")));
-        ExperienceRetriever subject = new ExperienceRetriever(experiences, model, catalog, policies, budget,
-                text -> text == null ? 0 : text.length());
+        when(model.describe(any(ModelId.class))).thenReturn(new ModelProfile(100000, 4096));
+        when(forks.runStateless(any(Session.class), any(), any(), any())).thenAnswer(call -> {
+            instructions.add(call.getArgument(2));
+            return answer;
+        });
+        ExperienceRetriever subject = new ExperienceRetriever(experiences, catalog, policies,
+                text -> text == null ? 0 : text.length(), provider(), model);
 
         subject.retrieveAndAssign(session, input());
 
-        String material = requests.get(0).messages().get(0).content();
+        String material = instructions.get(0);
         assertTrue(!material.contains("| 长"), "最低分先被丢掉：" + material);
         assertTrue(material.contains("| 高分"), material);
     }
@@ -137,7 +142,7 @@ class ExperienceRetrieverTest {
         Map<StepId, List<ExperienceId>> assignment = subject.retrieveAndAssign(session, input());
 
         assertTrue(assignment.isEmpty());
-        assertTrue(requests.isEmpty(), "放弃检索就不该再调模型");
+        assertTrue(instructions.isEmpty(), "放弃检索就不该再开子会话");
     }
 
     @Test
@@ -149,11 +154,5 @@ class ExperienceRetrieverTest {
 
         assertEquals(1, assignment.get(StepId.of("step1")).size());
         assertEquals("e1", assignment.get(StepId.of("step1")).get(0).getValue());
-    }
-
-    /** 消息角色断言用的常量，避免额外 import。 */
-    private static final class RecordRoleOf {
-        static final io.github.zcd0831.jellyfish.domain.perception.session.RecordRole USER =
-                io.github.zcd0831.jellyfish.domain.perception.session.RecordRole.USER;
     }
 }

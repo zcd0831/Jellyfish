@@ -253,7 +253,8 @@ public final class ExecutionLoop implements SessionRunner {
                         "第 " + stepProgress(plan, step) + " 步完成（免验证）"));
             } else {
                 VerificationReport report = verificationRunner.verify(session, plan, step,
-                        attempt == null ? 0 : attempt.attemptNo(), iteration.submittedSummary());
+                        attempt == null ? 0 : attempt.attemptNo(), iteration.submittedSummary(),
+                        iteration.submittedArtifacts());
                 commitScope.stageFact(report);
                 if (report.outcome() == VerificationOutcome.PASSED) {
                     plan.markStepSucceeded(step.id(), iteration.submittedSummary(), report.id());

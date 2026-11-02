@@ -1,24 +1,18 @@
 package io.github.zcd0831.jellyfish.application.planning;
 
-import io.github.zcd0831.jellyfish.application.action.BudgetService;
-import io.github.zcd0831.jellyfish.application.action.port.CatalogRepository;
-import io.github.zcd0831.jellyfish.application.action.port.ChatMessage;
-import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationPort;
-import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationRequest;
-import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationResult;
+import io.github.zcd0831.jellyfish.application.perception.ForkRunnerProvider;
+import io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner;
 import io.github.zcd0831.jellyfish.application.shared.Answer;
 import io.github.zcd0831.jellyfish.application.shared.Json;
 import io.github.zcd0831.jellyfish.application.shared.Question;
 import io.github.zcd0831.jellyfish.application.shared.TechnicalLog;
 import io.github.zcd0831.jellyfish.application.shared.port.HumanInteractionPort;
-import io.github.zcd0831.jellyfish.domain.action.agent.AgentDefinition;
 import io.github.zcd0831.jellyfish.domain.planning.plan.Plan;
 import io.github.zcd0831.jellyfish.domain.planning.plan.PlanStep;
 import io.github.zcd0831.jellyfish.domain.planning.verification.VerificationChain;
 import io.github.zcd0831.jellyfish.domain.planning.verification.VerificationOutcome;
 import io.github.zcd0831.jellyfish.domain.planning.verification.VerificationReport;
 import io.github.zcd0831.jellyfish.domain.planning.verification.VerificationType;
-import io.github.zcd0831.jellyfish.domain.perception.session.RecordRole;
 import io.github.zcd0831.jellyfish.domain.perception.session.Session;
 import io.github.zcd0831.jellyfish.domain.shared.AgentId;
 import io.github.zcd0831.jellyfish.domain.shared.VerificationReportId;
@@ -37,27 +31,24 @@ public final class VerificationRunner {
     private static final AgentId JUDGE_AGENT = AgentId.of("builtin.judge");
 
     private final VerificationChain chain = new VerificationChain();
-    private final ModelInvocationPort model;
-    private final CatalogRepository catalog;
+    private final ForkRunnerProvider forks;
     private final HumanInteractionPort human;
-    private final BudgetService budgetService;
     private final EnvironmentFeedbackVerifier envFeedback;
 
-    public VerificationRunner(ModelInvocationPort model, CatalogRepository catalog, HumanInteractionPort human,
-                              BudgetService budgetService, EnvironmentFeedbackVerifier envFeedback) {
-        this.model = model;
-        this.catalog = catalog;
+    public VerificationRunner(ForkRunnerProvider forks, HumanInteractionPort human,
+                              EnvironmentFeedbackVerifier envFeedback) {
+        this.forks = forks;
         this.human = human;
-        this.budgetService = budgetService;
         this.envFeedback = envFeedback;
     }
 
-    public VerificationReport verify(Session session, Plan plan, PlanStep step, int attemptNo, String summary) {
+    public VerificationReport verify(Session session, Plan plan, PlanStep step, int attemptNo, String summary,
+                                     List<String> artifacts) {
         String reportId = UUID.randomUUID().toString();
         long startedAt = System.currentTimeMillis();
         List<VerificationType> layers = chain.orderedLayers(step.requiredVerifications());
         for (VerificationType layer : layers) {
-            LayerResult result = runLayer(session, step, summary, layer);
+            LayerResult result = runLayer(session, step, summary, artifacts, layer);
             if (result.outcome != VerificationOutcome.PASSED) {
                 TechnicalLog.verified(plan.id().getValue(), step.id().getValue(), result.outcome.name(),
                         System.currentTimeMillis() - startedAt);
@@ -71,14 +62,15 @@ public final class VerificationRunner {
                 System.currentTimeMillis());
     }
 
-    private LayerResult runLayer(Session session, PlanStep step, String summary, VerificationType layer) {
+    private LayerResult runLayer(Session session, PlanStep step, String summary, List<String> artifacts,
+                                 VerificationType layer) {
         switch (layer) {
             case DETERMINISTIC:
                 return deterministic(summary);
             case ENV_FEEDBACK:
                 return fromEnv(envFeedback.verify(step, summary));
             case LLM_JUDGE:
-                return judge(session, step, summary);
+                return judge(session, step, summary, artifacts);
             default:
                 return humanApproval(step, summary);
         }
@@ -112,29 +104,39 @@ public final class VerificationRunner {
     }
 
     /**
-     * 第三层：裁判只吃"目标 / 期望 / 标准 / 结果"，拿不到执行者的推理链（父子包庇对策）。
+     * 第三层：裁判在**无历史子会话**里跑 ReAct，只能读 submit_step 声明的产物；
+     * 拿不到执行者的推理链（父子包庇对策，06-planning §6.8.2、§6.9.3）。
      */
-    private LayerResult judge(Session session, PlanStep step, String summary) {
-        AgentDefinition judgeAgent = judgeAgent();
-        if (judgeAgent == null) {
-            return LayerResult.undetermined("裁判代理 builtin.judge 缺失");
-        }
+    private LayerResult judge(Session session, PlanStep step, String summary, List<String> artifacts) {
         String input = "原定目标：" + text(step.goal())
                 + "\n结果期望：" + text(step.expectedOutcome())
                 + "\n验证标准：" + text(step.verificationCriteria())
-                + "\n执行结果：" + text(summary);
+                + "\n执行结果：" + text(summary)
+                + (artifacts == null || artifacts.isEmpty() ? ""
+                        : "\n可读产物（read_artifact 只能读这些）：" + join(artifacts));
         try {
-            ModelInvocationResult result = model.invoke(new ModelInvocationRequest(session.id(), session.activeModelId(),
-                    judgeAgent.basePrompt().getTemplateText(),
-                    Collections.singletonList(ChatMessage.of(RecordRole.USER, input)),
-                    Collections.emptyList(), 0, null));
-            if (result.usage() != null) {
-                budgetService.recordUsage(session, result.usage());
+            InternalSessionRunner runner = forks.get();
+            if (runner == null) {
+                return LayerResult.undetermined("裁判执行点未装配");
             }
-            return parseVerdict(result.text());
+            String verdict = runner.runStateless(session, JUDGE_AGENT, input, artifacts);
+            return parseVerdict(verdict);
+        } catch (java.util.concurrent.CancellationException terminated) {
+            throw terminated;   // 终止是终态，不能吞成“无法判定”（08-application §8.9.4.1）
         } catch (RuntimeException unavailable) {
             return LayerResult.undetermined("裁判调用失败：" + unavailable.getMessage());
         }
+    }
+
+    private static String join(List<String> values) {
+        StringBuilder out = new StringBuilder();
+        for (String value : values) {
+            if (out.length() > 0) {
+                out.append("、");
+            }
+            out.append(value);
+        }
+        return out.toString();
     }
 
     private static LayerResult parseVerdict(String text) {
@@ -172,14 +174,6 @@ public final class VerificationRunner {
         return LayerResult.failed(text.trim().isEmpty() ? "用户不同意，但未给出原因" : text);
     }
 
-    private AgentDefinition judgeAgent() {
-        for (AgentDefinition agent : catalog.agents()) {
-            if (JUDGE_AGENT.equals(agent.id())) {
-                return agent;
-            }
-        }
-        return null;
-    }
 
     private static String text(String value) {
         return value == null || value.isEmpty() ? "（未提供）" : value;

@@ -123,12 +123,14 @@ public final class ReActLoop {
                     return IterationResult.converged(round, usedSkills);
                 }
                 String submittedSummary = null;
+                List<String> submittedArtifacts = Collections.<String>emptyList();
                 boolean first = true;
                 for (ToolCall call : result.toolCalls()) {
                     String reasoning = (text == null && first) ? result.reasoning() : null;
                     first = false;
                     if (SUBMIT_STEP.equals(call.name())) {
                         submittedSummary = summaryOf(call);
+                        submittedArtifacts = artifactsOf(call);
                         submit(session, call, reasoning, turnId, producer, pending);
                         continue;
                     }
@@ -138,7 +140,7 @@ public final class ReActLoop {
                     executeTool(session, call, reasoning, turnId, producer, pending);
                 }
                 if (submittedSummary != null) {
-                    return IterationResult.submitted(submittedSummary, round, usedSkills);
+                    return IterationResult.submitted(submittedSummary, submittedArtifacts, round, usedSkills);
                 }
             }
             return IterationResult.notConverged(policy.maxReActRounds(), usedSkills);
@@ -202,6 +204,21 @@ public final class ReActLoop {
     private static String summaryOf(ToolCall call) {
         Object summary = Json.parseObject(call.argumentsJson()).get("summary");
         return summary == null ? "" : String.valueOf(summary);
+    }
+
+    /** 提交声明的产物清单：验证裁判只能读这些路径（06-planning §6.8.2）。 */
+    private static List<String> artifactsOf(ToolCall call) {
+        Object raw = Json.parseObject(call.argumentsJson()).get("artifacts");
+        if (!(raw instanceof List)) {
+            return Collections.emptyList();
+        }
+        List<String> artifacts = new ArrayList<String>();
+        for (Object item : (List<?>) raw) {
+            if (item != null) {
+                artifacts.add(String.valueOf(item));
+            }
+        }
+        return artifacts;
     }
 
     /** 记下"本次真的加载了哪个技能"：改进判定的唯一证据（07-memory §7.8.3）。 */

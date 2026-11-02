@@ -1,61 +1,56 @@
 package io.github.zcd0831.jellyfish.application.planning;
 
-import io.github.zcd0831.jellyfish.application.action.BudgetService;
-import io.github.zcd0831.jellyfish.application.action.port.CatalogRepository;
-import io.github.zcd0831.jellyfish.application.action.port.ChatMessage;
-import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationPort;
-import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationRequest;
-import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationResult;
-import io.github.zcd0831.jellyfish.application.action.port.ModelProfile;
-import io.github.zcd0831.jellyfish.application.action.port.ModelUsage;
+import io.github.zcd0831.jellyfish.application.perception.ForkRunnerProvider;
+import io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner;
 import io.github.zcd0831.jellyfish.application.shared.Answer;
-import io.github.zcd0831.jellyfish.application.shared.ChunkSink;
 import io.github.zcd0831.jellyfish.application.shared.Question;
 import io.github.zcd0831.jellyfish.application.shared.port.HumanInteractionPort;
-import io.github.zcd0831.jellyfish.domain.action.agent.AgentDefinition;
-import io.github.zcd0831.jellyfish.domain.action.agent.AgentSource;
-import io.github.zcd0831.jellyfish.domain.action.agent.AgentStatus;
-import io.github.zcd0831.jellyfish.domain.action.agent.PromptTemplate;
+import io.github.zcd0831.jellyfish.domain.perception.session.Session;
 import io.github.zcd0831.jellyfish.domain.planning.plan.Plan;
 import io.github.zcd0831.jellyfish.domain.planning.plan.PlanSteps;
-import io.github.zcd0831.jellyfish.domain.planning.plan.StepStatus;
 import io.github.zcd0831.jellyfish.domain.planning.verification.VerificationOutcome;
 import io.github.zcd0831.jellyfish.domain.planning.verification.VerificationReport;
 import io.github.zcd0831.jellyfish.domain.planning.verification.VerificationType;
-import io.github.zcd0831.jellyfish.domain.perception.session.Session;
 import io.github.zcd0831.jellyfish.domain.shared.AgentId;
 import io.github.zcd0831.jellyfish.domain.shared.ModelId;
 import io.github.zcd0831.jellyfish.domain.shared.PlanId;
 import io.github.zcd0831.jellyfish.domain.shared.SessionId;
 import io.github.zcd0831.jellyfish.domain.shared.StepId;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.EnumSet;
+import java.util.List;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-/** 四层判定与短路。规则出处：06-planning §6.8.2。 */
+/** 四层判定与短路。规则出处：06-planning §6.8.2、§6.9.3。 */
 class VerificationRunnerTest {
 
-    private final ModelInvocationPort model = mock(ModelInvocationPort.class);
-    private final CatalogRepository catalog = mock(CatalogRepository.class);
-    private final BudgetService budget = mock(BudgetService.class);
+    private final InternalSessionRunner forks = mock(InternalSessionRunner.class);
     private final FakeHuman human = new FakeHuman();
 
     private final Session session = Session.create(SessionId.of("s1"), null, AgentId.of("a"),
             ModelId.of("m1"), 1L, null);
 
+    /** 默认：裁判子会话什么都答不出来（等价于裁判缺失）；需要的用例自己再覆盖。 */
     private VerificationRunner runner(EnvironmentFeedbackVerifier env) {
-        return new VerificationRunner(model, catalog, human, budget, env);
-    }
-
-    private static StepStatus ignored() {
-        return StepStatus.PENDING;
+        when(forks.runStateless(any(Session.class), any(), any(), any())).thenReturn(null);
+        return new VerificationRunner(new ForkRunnerProvider() {
+            @Override
+            public InternalSessionRunner get() {
+                return forks;
+            }
+        }, human, env);
     }
 
     private static Plan plan(Set<VerificationType> layers) {
@@ -68,9 +63,9 @@ class VerificationRunnerTest {
         Plan plan = plan(EnumSet.of(VerificationType.DETERMINISTIC));
 
         VerificationReport empty = runner(EnvironmentFeedbackVerifier.NOT_CONFIGURED)
-                .verify(session, plan, plan.steps().get(0), 1, " ");
+                .verify(session, plan, plan.steps().get(0), 1, " ", Collections.<String>emptyList());
         VerificationReport ok = runner(EnvironmentFeedbackVerifier.NOT_CONFIGURED)
-                .verify(session, plan, plan.steps().get(0), 1, "做完了");
+                .verify(session, plan, plan.steps().get(0), 1, "做完了", Collections.<String>emptyList());
 
         assertEquals(VerificationOutcome.FAILED, empty.outcome());
         assertEquals(VerificationOutcome.PASSED, ok.outcome());
@@ -81,7 +76,7 @@ class VerificationRunnerTest {
         Plan plan = plan(EnumSet.of(VerificationType.DETERMINISTIC));
 
         VerificationReport broken = runner(EnvironmentFeedbackVerifier.NOT_CONFIGURED)
-                .verify(session, plan, plan.steps().get(0), 1, "{\"a\":}");
+                .verify(session, plan, plan.steps().get(0), 1, "{\"a\":}", Collections.<String>emptyList());
 
         assertEquals(VerificationOutcome.FAILED, broken.outcome());
     }
@@ -91,14 +86,14 @@ class VerificationRunnerTest {
         Plan plan = plan(EnumSet.of(VerificationType.ENV_FEEDBACK));
 
         VerificationReport undetermined = runner(EnvironmentFeedbackVerifier.NOT_CONFIGURED)
-                .verify(session, plan, plan.steps().get(0), 1, "ok");
+                .verify(session, plan, plan.steps().get(0), 1, "ok", Collections.<String>emptyList());
         VerificationReport failed = runner(new EnvironmentFeedbackVerifier() {
             @Override
             public Outcome verify(io.github.zcd0831.jellyfish.domain.planning.plan.PlanStep step,
                                   String summary) {
                 return Outcome.FAILED;
             }
-        }).verify(session, plan, plan.steps().get(0), 1, "ok");
+        }).verify(session, plan, plan.steps().get(0), 1, "ok", Collections.<String>emptyList());
 
         assertEquals(VerificationOutcome.UNDETERMINED, undetermined.outcome());
         assertEquals(VerificationOutcome.FAILED, failed.outcome());
@@ -106,78 +101,93 @@ class VerificationRunnerTest {
 
     @Test
     void 裁判层_通过_失败_无法判定与解析失败() {
-        when(catalog.agents()).thenReturn(Collections.singletonList(judgeAgent()));
         Plan plan = plan(EnumSet.of(VerificationType.LLM_JUDGE));
+        VerificationRunner runner = runner(EnvironmentFeedbackVerifier.NOT_CONFIGURED);
 
-        when(model.invoke(any(ModelInvocationRequest.class))).thenReturn(reply("{\"verdict\":\"PASSED\"}"));
-        assertEquals(VerificationOutcome.PASSED, verify(plan, "ok").outcome());
+        when(forks.runStateless(any(Session.class), any(), any(), any()))
+                .thenReturn("{\"verdict\":\"PASSED\"}");
+        assertEquals(VerificationOutcome.PASSED, verifyWith(runner, plan).outcome());
 
-        when(model.invoke(any(ModelInvocationRequest.class)))
-                .thenReturn(reply("{\"verdict\":\"FAILED\",\"reason\":\"不达标\"}"));
-        VerificationReport failed = verify(plan, "ok");
+        when(forks.runStateless(any(Session.class), any(), any(), any()))
+                .thenReturn("{\"verdict\":\"FAILED\",\"reason\":\"不达标\"}");
+        VerificationReport failed = verifyWith(runner, plan);
         assertEquals(VerificationOutcome.FAILED, failed.outcome());
         assertEquals("不达标", failed.failureReason());
 
-        when(model.invoke(any(ModelInvocationRequest.class)))
-                .thenReturn(reply("{\"verdict\":\"UNDETERMINED\"}"));
-        assertEquals(VerificationOutcome.UNDETERMINED, verify(plan, "ok").outcome());
+        when(forks.runStateless(any(Session.class), any(), any(), any()))
+                .thenReturn("{\"verdict\":\"UNDETERMINED\"}");
+        assertEquals(VerificationOutcome.UNDETERMINED, verifyWith(runner, plan).outcome());
 
-        when(model.invoke(any(ModelInvocationRequest.class))).thenReturn(reply("不是JSON"));
-        assertEquals(VerificationOutcome.UNDETERMINED, verify(plan, "ok").outcome());
+        when(forks.runStateless(any(Session.class), any(), any(), any())).thenReturn("不是JSON");
+        assertEquals(VerificationOutcome.UNDETERMINED, verifyWith(runner, plan).outcome());
 
-        when(model.invoke(any(ModelInvocationRequest.class))).thenReturn(reply(null));
-        assertEquals(VerificationOutcome.UNDETERMINED, verify(plan, "ok").outcome());
+        when(forks.runStateless(any(Session.class), any(), any(), any())).thenReturn(null);
+        assertEquals(VerificationOutcome.UNDETERMINED, verifyWith(runner, plan).outcome());
+    }
+
+    /**
+     * 裁判在无历史子会话里跑，只能读 submit_step 声明的产物：产物清单必须原样交给它，
+     * 且提示里要写清“只能读这些”（06-planning §6.8.2、§6.9.3）。
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    void 裁判拿到产物清单且提示里写清可读范围() {
+        Plan plan = plan(EnumSet.of(VerificationType.LLM_JUDGE));
+        List<String> artifacts = Arrays.asList("out/report.md", "out/data.csv");
+        when(forks.runStateless(any(Session.class), any(), any(), any()))
+                .thenReturn("{\"verdict\":\"PASSED\"}");
+
+        runner(EnvironmentFeedbackVerifier.NOT_CONFIGURED)
+                .verify(session, plan, plan.steps().get(0), 1, "做完了", artifacts);
+
+        ArgumentCaptor<String> instruction = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<List> scope = ArgumentCaptor.forClass(List.class);
+        verify(forks).runStateless(eq(session), any(), instruction.capture(), scope.capture());
+        assertEquals(artifacts, scope.getValue(), "产物清单原样交给裁判");
+        assertTrue(instruction.getValue().contains("out/report.md"), instruction.getValue());
+        assertTrue(instruction.getValue().contains("read_artifact"), instruction.getValue());
     }
 
     @Test
-    void 裁判层_缺裁判代理即无法判定() {
-        when(catalog.agents()).thenReturn(Collections.<AgentDefinition>emptyList());
+    void 裁判缺失即无法判定() {
         Plan plan = plan(EnumSet.of(VerificationType.LLM_JUDGE));
 
-        assertEquals(VerificationOutcome.UNDETERMINED, verify(plan, "ok").outcome());
+        assertEquals(VerificationOutcome.UNDETERMINED,
+                verifyWith(runner(EnvironmentFeedbackVerifier.NOT_CONFIGURED), plan).outcome());
     }
 
     @Test
     void 人工层_同意通过_不同意失败_取消无法判定() {
         Plan plan = plan(EnumSet.of(VerificationType.HUMAN_APPROVAL));
+        VerificationRunner runner = runner(EnvironmentFeedbackVerifier.NOT_CONFIGURED);
 
         human.answer = "同意";
-        assertEquals(VerificationOutcome.PASSED, verify(plan, "ok").outcome());
+        assertEquals(VerificationOutcome.PASSED, verifyWith(runner, plan).outcome());
 
         human.answer = "不同意，理由不足";
-        VerificationReport failed = verify(plan, "ok");
+        VerificationReport failed = verifyWith(runner, plan);
         assertEquals(VerificationOutcome.FAILED, failed.outcome());
         assertEquals("不同意，理由不足", failed.failureReason());
 
         human.cancel = true;
-        assertEquals(VerificationOutcome.UNDETERMINED, verify(plan, "ok").outcome());
+        assertEquals(VerificationOutcome.UNDETERMINED, verifyWith(runner, plan).outcome());
     }
 
     @Test
     void 多层时前一层失败即短路() {
-        when(catalog.agents()).thenReturn(Collections.singletonList(judgeAgent()));
+        when(forks.runStateless(any(Session.class), any(), any(), any()))
+                .thenReturn("{\"verdict\":\"PASSED\"}");
         Plan plan = plan(EnumSet.of(VerificationType.DETERMINISTIC, VerificationType.LLM_JUDGE));
 
-        VerificationReport report = verify(plan, " ");
+        VerificationReport report = runner(EnvironmentFeedbackVerifier.NOT_CONFIGURED)
+                .verify(session, plan, plan.steps().get(0), 1, " ", Collections.<String>emptyList());
 
         assertEquals(VerificationOutcome.FAILED, report.outcome());
         assertEquals(VerificationType.DETERMINISTIC, report.failedType());
     }
 
-    private VerificationReport verify(Plan plan, String summary) {
-        return runner(EnvironmentFeedbackVerifier.NOT_CONFIGURED)
-                .verify(session, plan, plan.steps().get(0), 1, summary);
-    }
-
-    private static ModelInvocationResult reply(String text) {
-        return new ModelInvocationResult(text, Collections.emptyList(), new ModelUsage(1, 1),
-                ModelId.of("m1"));
-    }
-
-    private static AgentDefinition judgeAgent() {
-        return new AgentDefinition(AgentId.of("builtin.judge"), "裁判", AgentSource.BUILT_IN,
-                new PromptTemplate("你是独立判定者", Collections.<String>emptyList()), AgentStatus.ACTIVE,
-                Collections.emptyList(), Collections.emptyList());
+    private VerificationReport verifyWith(VerificationRunner runner, Plan plan) {
+        return runner.verify(session, plan, plan.steps().get(0), 1, "做完了", Collections.<String>emptyList());
     }
 
     private static final class FakeHuman implements HumanInteractionPort {

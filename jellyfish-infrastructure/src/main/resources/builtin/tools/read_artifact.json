@@ -1,19 +1,39 @@
 {
   "id": "read_artifact",
   "name": "read_artifact",
-  "description": "读取本次提交声明过的产物文件（只能读 submit_step.artifacts 里列出的路径）。用于验收时核对真实结果。",
+  "description": "读取本次提交声明过的产物文件（只能读 submit_step.artifacts 里列出的路径）。用于验收时核对真实结果；文件很长时用 offset/limit 分段读。",
   "inputSchema": {
     "type": "object",
-    "required": ["path"],
+    "required": [
+      "path"
+    ],
     "properties": {
-      "path": {"type": "string", "description": "产物路径，必须在本步骤 submit_step.artifacts 清单里"}
+      "path": {
+        "type": "string",
+        "description": "产物路径，必须在本步骤 submit_step.artifacts 清单里"
+      },
+      "offset": {
+        "type": "integer",
+        "description": "从第几行开始，默认 1"
+      },
+      "limit": {
+        "type": "integer",
+        "description": "最多读多少行，默认 2000"
+      }
     }
   },
   "outputSchema": {
     "type": "object",
-    "properties": {"result": {"type": "string"}}
+    "properties": {
+      "result": {
+        "type": "string"
+      }
+    }
   },
-  "source": {"type": "INTERNAL", "endpointOrIdentifier": "read_artifact"},
+  "source": {
+    "type": "INTERNAL",
+    "endpointOrIdentifier": "read_artifact"
+  },
   "sideEffect": "READ_ONLY",
   "timeoutMillis": 0,
   "status": "ACTIVE"

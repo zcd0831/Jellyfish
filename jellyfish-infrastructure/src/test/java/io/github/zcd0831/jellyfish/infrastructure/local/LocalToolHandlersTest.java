@@ -256,4 +256,34 @@ class LocalToolHandlersTest {
         String allowed = handlers.get("read_artifact").handle(session, args).content();
         assertTrue(allowed.contains("内容"), allowed);
     }
+
+    /** 产物很长时用 offset/limit 分段读：与 read_file 同一套渲染与上限。 */
+    @Test
+    void 读产物支持分段() throws IOException {
+        StringBuilder text = new StringBuilder();
+        for (int i = 1; i <= 10; i++) {
+            text.append("行").append(i).append('\n');
+        }
+        java.nio.file.Files.write(temp.resolve("long.md"), text.toString().getBytes("UTF-8"));
+        io.github.zcd0831.jellyfish.application.action.SessionToolScope scope =
+                new io.github.zcd0831.jellyfish.application.action.SessionToolScope();
+        Map<String, InternalToolHandler> handlers = new HashMap<String, InternalToolHandler>();
+        for (InternalToolHandlers.NamedHandler named
+                : LocalToolHandlers.all(workspace, new UrlFetcher(), scope)) {
+            handlers.put(name(named), handler(named));
+        }
+        Session session = Session.create(SessionId.of("s1"), null, AgentId.of("a"), ModelId.of("m1"), 1L, null);
+        scope.allowArtifacts(SessionId.of("s1"), java.util.Collections.singletonList("long.md"));
+        Map<String, Object> args = new HashMap<String, Object>();
+        args.put("path", "long.md");
+        args.put("offset", 3);
+        args.put("limit", 2);
+
+        String segment = handlers.get("read_artifact").handle(session, args).content();
+
+        assertTrue(segment.contains("行3"), segment);
+        assertTrue(segment.contains("行4"), segment);
+        assertTrue(!segment.contains("行5"), segment);
+        assertTrue(segment.contains("已截取 3-4"), segment);
+    }
 }

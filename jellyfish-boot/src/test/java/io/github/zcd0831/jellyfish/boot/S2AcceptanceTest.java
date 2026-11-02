@@ -117,15 +117,15 @@ class S2AcceptanceTest {
                         new FileCommitScope(dir, codec), publisher)))), event -> { }, new SessionToolScope());
         ReActLoop reActLoop = new ReActLoop(model, toolExecutor, budgetService, contextWindow, policies,
                 new FileCommitScope(dir, codec), human);
-        VerificationRunner verificationRunner = new VerificationRunner(model, catalog, human, budgetService,
+        VerificationRunner verificationRunner = new VerificationRunner(LoopSupport.noForks(), human,
                 EnvironmentFeedbackVerifier.NOT_CONFIGURED);
         io.github.zcd0831.jellyfish.application.memory.port.ExperienceRepository experiences =
                 new io.github.zcd0831.jellyfish.infrastructure.file.FileExperienceRepository(dir, codec);
         io.github.zcd0831.jellyfish.application.memory.port.ReflectionRepository reflections =
                 new io.github.zcd0831.jellyfish.infrastructure.file.FileReflectionRepository(dir, codec);
         io.github.zcd0831.jellyfish.application.memory.ExperienceRetriever retriever =
-                new io.github.zcd0831.jellyfish.application.memory.ExperienceRetriever(experiences, model,
-                        catalog, policies, budgetService, text -> text == null ? 0 : text.length());
+                new io.github.zcd0831.jellyfish.application.memory.ExperienceRetriever(experiences, catalog,
+                        policies, text -> text == null ? 0 : text.length(), LoopSupport.noForks(), model);
         io.github.zcd0831.jellyfish.application.memory.ExperienceFeedbackService feedback =
                 new io.github.zcd0831.jellyfish.application.memory.ExperienceFeedbackService(experiences,
                         policies, new FileCommitScope(dir, codec), publisher);

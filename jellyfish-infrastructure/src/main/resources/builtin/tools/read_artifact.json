@@ -1,0 +1,20 @@
+{
+  "id": "read_artifact",
+  "name": "read_artifact",
+  "description": "读取本次提交声明过的产物文件（只能读 submit_step.artifacts 里列出的路径）。用于验收时核对真实结果。",
+  "inputSchema": {
+    "type": "object",
+    "required": ["path"],
+    "properties": {
+      "path": {"type": "string", "description": "产物路径，必须在本步骤 submit_step.artifacts 清单里"}
+    }
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {"result": {"type": "string"}}
+  },
+  "source": {"type": "INTERNAL", "endpointOrIdentifier": "read_artifact"},
+  "sideEffect": "READ_ONLY",
+  "timeoutMillis": 0,
+  "status": "ACTIVE"
+}

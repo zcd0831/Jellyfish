@@ -2,6 +2,10 @@ package io.github.zcd0831.jellyfish.infrastructure.local;
 
 import io.github.zcd0831.jellyfish.application.action.InternalToolHandler;
 import io.github.zcd0831.jellyfish.application.action.InternalToolHandlers;
+import io.github.zcd0831.jellyfish.domain.perception.session.Session;
+import io.github.zcd0831.jellyfish.domain.shared.AgentId;
+import io.github.zcd0831.jellyfish.domain.shared.ModelId;
+import io.github.zcd0831.jellyfish.domain.shared.SessionId;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -32,7 +36,7 @@ class LocalToolHandlersTest {
         workspace = Workspace.at(temp);
         tools = new HashMap<String, InternalToolHandler>();
         for (InternalToolHandlers.NamedHandler named
-                : LocalToolHandlers.all(workspace, new UrlFetcher())) {
+                : LocalToolHandlers.all(workspace, new UrlFetcher(), new io.github.zcd0831.jellyfish.application.action.SessionToolScope())) {
             tools.put(name(named), handler(named));
         }
     }
@@ -226,5 +230,30 @@ class LocalToolHandlersTest {
         } catch (Exception e) {
             throw new IllegalStateException(e);
         }
+    }
+
+    /**
+     * read_artifact 只认本次提交声明的产物：没有声明就一律拒绝（06-planning §6.8.2）。
+     */
+    @Test
+    void 读产物只认声明过的路径() throws IOException {
+        java.nio.file.Files.write(temp.resolve("out.md"), "内容".getBytes("UTF-8"));
+        io.github.zcd0831.jellyfish.application.action.SessionToolScope scope =
+                new io.github.zcd0831.jellyfish.application.action.SessionToolScope();
+        Map<String, InternalToolHandler> handlers = new HashMap<String, InternalToolHandler>();
+        for (InternalToolHandlers.NamedHandler named
+                : LocalToolHandlers.all(workspace, new UrlFetcher(), scope)) {
+            handlers.put(name(named), handler(named));
+        }
+        Session session = Session.create(SessionId.of("s1"), null, AgentId.of("a"), ModelId.of("m1"), 1L, null);
+        Map<String, Object> args = new HashMap<String, Object>();
+        args.put("path", "out.md");
+
+        String denied = handlers.get("read_artifact").handle(session, args).content();
+        assertTrue(denied.contains("不在本次提交的产物清单里"), denied);
+
+        scope.allowArtifacts(SessionId.of("s1"), java.util.Collections.singletonList("out.md"));
+        String allowed = handlers.get("read_artifact").handle(session, args).content();
+        assertTrue(allowed.contains("内容"), allowed);
     }
 }

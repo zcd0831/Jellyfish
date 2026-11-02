@@ -88,15 +88,13 @@ class S4MemoryTest {
                 new FileCommitScope(dir, codec), publisher, event -> { });
         feedback = new ExperienceFeedbackService(experiences, policies, new FileCommitScope(dir, codec),
                 publisher);
-        retriever = new ExperienceRetriever(experiences, model, catalog, policies, budgetService,
-                text -> text == null ? 0 : text.length());
         ExperienceDistillationService distillation = new ExperienceDistillationService(experiences, policies,
                 new FileCommitScope(dir, codec), publisher, event -> { });
         SkillDistillationService skills = new SkillDistillationService(catalog, policies,
                 new FileCommitScope(dir, codec), publisher, event -> { });
         io.github.zcd0831.jellyfish.application.action.SessionToolScope scope =
                 new io.github.zcd0831.jellyfish.application.action.SessionToolScope();
-        io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner forks =
+        final io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner forks =
                 new io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner(
                         null, null, null, scope, new FileCommitScope(dir, codec),
                         () -> System.currentTimeMillis(),
@@ -105,7 +103,16 @@ class S4MemoryTest {
                     public String run(Session parent, String instruction) {
                         return model.reply;
                     }
+
+                    @Override
+                    public String runStateless(Session parent,
+                                               io.github.zcd0831.jellyfish.domain.shared.AgentId agentId,
+                                               String instruction, java.util.List<String> artifacts) {
+                        return model.reply;
+                    }
                 };
+        retriever = new ExperienceRetriever(experiences, catalog, policies,
+                text -> text == null ? 0 : text.length(), LoopSupport.forksOf(forks), model);
         curator = new PlanCompletionCurator(catalog, distillation, skills, forks,
                 new FileCommitScope(dir, codec));
 

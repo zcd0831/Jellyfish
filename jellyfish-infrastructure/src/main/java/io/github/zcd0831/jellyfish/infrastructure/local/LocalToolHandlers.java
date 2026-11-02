@@ -2,6 +2,7 @@ package io.github.zcd0831.jellyfish.infrastructure.local;
 
 import io.github.zcd0831.jellyfish.application.action.InternalToolHandler;
 import io.github.zcd0831.jellyfish.application.action.InternalToolHandlers;
+import io.github.zcd0831.jellyfish.application.action.SessionToolScope;
 import io.github.zcd0831.jellyfish.application.action.ToolExecOutcome;
 import io.github.zcd0831.jellyfish.application.shared.CancellationToken;
 import io.github.zcd0831.jellyfish.domain.perception.session.Session;
@@ -29,6 +30,7 @@ import java.util.regex.Pattern;
 public final class LocalToolHandlers {
 
     static final String READ_FILE = "read_file";
+    static final String READ_ARTIFACT = "read_artifact";
     static final String LIST_DIR = "list_dir";
     static final String GREP = "grep";
     static final String FETCH_URL = "fetch_url";
@@ -57,9 +59,11 @@ public final class LocalToolHandlers {
     private LocalToolHandlers() {
     }
 
-    public static List<InternalToolHandlers.NamedHandler> all(Workspace workspace, UrlFetcher fetcher) {
+    public static List<InternalToolHandlers.NamedHandler> all(Workspace workspace, UrlFetcher fetcher,
+                                                             SessionToolScope scope) {
         return Arrays.asList(
                 named(READ_FILE, readFile(workspace)),
+                readArtifact(workspace, scope),
                 named(LIST_DIR, listDir(workspace)),
                 named(GREP, grep(workspace)),
                 named(FETCH_URL, fetchUrl(fetcher)),
@@ -98,36 +102,68 @@ public final class LocalToolHandlers {
         };
     }
 
+    /**
+     * 验证裁判只能用这个工具读产物：路径必须在本次提交的 `submit_step.artifacts` 里。
+     * 越界不是异常，是工具失败结果（06-planning §6.8.2、05-action §5.4.1）。
+     */
+    private static InternalToolHandlers.NamedHandler readArtifact(final Workspace workspace,
+                                                                 final SessionToolScope scope) {
+        return new InternalToolHandlers.NamedHandler(READ_ARTIFACT, new InternalToolHandler() {
+            @Override
+            public ToolExecOutcome handle(Session session, Map<String, Object> args) {
+                Object raw = args.get("path");
+                String path = raw == null ? "" : String.valueOf(raw);
+                if (path.trim().isEmpty()) {
+                    return ToolExecOutcome.plain("缺少 path");
+                }
+                if (!scope.allowsArtifact(session.id(), path)) {
+                    return ToolExecOutcome.plain("该路径不在本次提交的产物清单里：" + path);
+                }
+                try {
+                    return ToolExecOutcome.plain(renderFile(workspace, args));
+                } catch (Workspace.OutsideWorkspace | IllegalArgumentException bad) {
+                    return ToolExecOutcome.plain("工具错误：" + bad.getMessage());
+                } catch (IOException failed) {
+                    return ToolExecOutcome.plain("工具调用失败：" + failed);
+                }
+            }
+        });
+    }
+
     private static LocalTool readFile(final Workspace workspace) {
         return new LocalTool() {
             @Override
             public String run(Map<String, Object> args) throws IOException {
-                Path path = workspace.resolve(string(args, "path"));
-                if (!Files.isRegularFile(path)) {
-                    throw new IllegalArgumentException("不是普通文件：" + workspace.relative(path));
-                }
-                byte[] bytes = Files.readAllBytes(path);
-                for (byte b : bytes) {
-                    if (b == 0) {
-                        throw new IllegalArgumentException("二进制文件，拒绝读取：" + workspace.relative(path));
-                    }
-                }
-                String[] lines = new String(bytes, StandardCharsets.UTF_8).split("\n", -1);
-                int offset = Math.max(1, number(args, "offset", 1));
-                int limit = Math.min(MAX_READ_LINES, Math.max(1, number(args, "limit", MAX_READ_LINES)));
-                int from = Math.min(offset, lines.length);
-                int to = Math.min(lines.length, from - 1 + limit);
-                StringBuilder out = new StringBuilder();
-                for (int i = from; i <= to; i++) {
-                    out.append(String.format("%6d\t%s%n", i, stripCarriageReturn(lines[i - 1])));
-                }
-                if (to < lines.length) {
-                    out.append("（共 ").append(lines.length).append(" 行，已截取 ").append(from)
-                            .append('-').append(to).append("；用 offset 继续）");
-                }
-                return out.toString();
+                return renderFile(workspace, args);
             }
         };
+    }
+
+    private static String renderFile(final Workspace workspace, Map<String, Object> args) throws IOException {
+        Path path = workspace.resolve(string(args, "path"));
+        if (!Files.isRegularFile(path)) {
+            throw new IllegalArgumentException("不是普通文件：" + workspace.relative(path));
+        }
+        byte[] bytes = Files.readAllBytes(path);
+        for (byte b : bytes) {
+            if (b == 0) {
+                throw new IllegalArgumentException("二进制文件，拒绝读取：" + workspace.relative(path));
+            }
+        }
+        String[] lines = new String(bytes, StandardCharsets.UTF_8).split("\n", -1);
+        int offset = Math.max(1, number(args, "offset", 1));
+        int limit = Math.min(MAX_READ_LINES, Math.max(1, number(args, "limit", MAX_READ_LINES)));
+        int from = Math.min(offset, lines.length);
+        int to = Math.min(lines.length, from - 1 + limit);
+        StringBuilder out = new StringBuilder();
+        for (int i = from; i <= to; i++) {
+            out.append(String.format("%6d\t%s%n", i, stripCarriageReturn(lines[i - 1])));
+        }
+        if (to < lines.length) {
+            out.append("（共 ").append(lines.length).append(" 行，已截取 ").append(from)
+                    .append('-').append(to).append("；用 offset 继续）");
+        }
+        return out.toString();
     }
 
     private static LocalTool listDir(final Workspace workspace) {

@@ -98,13 +98,13 @@ public final class PlanningModule {
                                               ReplanPlanHandler replanPlanHandler,
                                               SpawnSubagentsHandler spawnSubagentsHandler,
                                               SkillSopProvider sopProvider, Workspace workspace,
-                                              UrlFetcher urlFetcher) {
+                                              UrlFetcher urlFetcher, SessionToolScope scope) {
         List<InternalToolHandlers.NamedHandler> handlers = new ArrayList<InternalToolHandlers.NamedHandler>(Arrays.asList(
                 new InternalToolHandlers.NamedHandler("generate_plan", generatePlanHandler),
                 new InternalToolHandlers.NamedHandler("replan_plan", replanPlanHandler),
                 new InternalToolHandlers.NamedHandler("spawn_subagents", spawnSubagentsHandler),
                 new InternalToolHandlers.NamedHandler("load_skill", new LoadSkillHandler(sopProvider))));
-        handlers.addAll(LocalToolHandlers.all(workspace, urlFetcher));
+        handlers.addAll(LocalToolHandlers.all(workspace, urlFetcher, scope));
         return new InternalToolHandlers(handlers);
     }
 
@@ -148,10 +148,21 @@ public final class PlanningModule {
 
     @Provides
     @Singleton
-    VerificationRunner verificationRunner(ModelInvocationPort model, CatalogRepository catalog,
-                                          HumanInteractionPort human, BudgetService budgetService,
-                                          EnvironmentFeedbackVerifier envFeedback) {
-        return new VerificationRunner(model, catalog, human, budgetService, envFeedback);
+    VerificationRunner verificationRunner(
+            javax.inject.Provider<io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner> forks,
+            HumanInteractionPort human, EnvironmentFeedbackVerifier envFeedback) {
+        return new VerificationRunner(lazyForkRunner(forks), human, envFeedback);
+    }
+
+    /** 延迟取：裁判 → fork → 内循环 → 工具 → 计划工具 → 检索 是构造环，只能晚一步取。 */
+    private static io.github.zcd0831.jellyfish.application.perception.ForkRunnerProvider lazyForkRunner(
+            final javax.inject.Provider<io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner> forks) {
+        return new io.github.zcd0831.jellyfish.application.perception.ForkRunnerProvider() {
+            @Override
+            public io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner get() {
+                return forks.get();
+            }
+        };
     }
 
     @Provides

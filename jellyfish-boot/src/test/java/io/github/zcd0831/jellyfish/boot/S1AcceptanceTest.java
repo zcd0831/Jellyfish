@@ -108,8 +108,8 @@ class S1AcceptanceTest {
         final io.github.zcd0831.jellyfish.application.planning.port.PlanRepository plans =
                 new io.github.zcd0831.jellyfish.infrastructure.file.FilePlanRepository(dir, codec);
         final io.github.zcd0831.jellyfish.application.planning.VerificationRunner verificationRunner =
-                new io.github.zcd0831.jellyfish.application.planning.VerificationRunner(model, catalog, human,
-                        budgetService,
+                new io.github.zcd0831.jellyfish.application.planning.VerificationRunner(
+                        LoopSupport.noForks(), human,
                         io.github.zcd0831.jellyfish.application.planning.EnvironmentFeedbackVerifier.NOT_CONFIGURED);
         final io.github.zcd0831.jellyfish.application.perception.StartSessionUseCase startSessionRef =
                 startSession;

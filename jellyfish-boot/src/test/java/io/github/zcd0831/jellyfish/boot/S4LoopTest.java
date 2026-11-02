@@ -122,7 +122,7 @@ class S4LoopTest {
                                 publisher)))), event -> { }, new SessionToolScope());
         ReActLoop reActLoop = new ReActLoop(model, toolExecutor, budgetService, contextWindow, policies,
                 new FileCommitScope(dir, codec), human);
-        VerificationRunner verificationRunner = new VerificationRunner(model, catalog, human, budgetService,
+        VerificationRunner verificationRunner = new VerificationRunner(LoopSupport.noForks(), human,
                 EnvironmentFeedbackVerifier.NOT_CONFIGURED);
         SessionCancellations cancellations = new SessionCancellations();
         startSession = new StartSessionUseCase(catalog, sessions, budgets,

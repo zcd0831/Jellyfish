@@ -146,7 +146,7 @@ class S3AcceptanceTest {
                 human, policies, InternalToolHandlers.empty(), event -> { }, new SessionToolScope());
         ReActLoop reActLoop = new ReActLoop(model, toolExecutor, budgetService, contextWindow, policies,
                 new FileCommitScope(dir, codec), human);
-        VerificationRunner verificationRunner = new VerificationRunner(model, catalog, human, budgetService,
+        VerificationRunner verificationRunner = new VerificationRunner(LoopSupport.noForks(), human,
                 EnvironmentFeedbackVerifier.NOT_CONFIGURED);
         ExecutionLoop executionLoop = LoopSupport.build(dir, codec, model, policies, catalog, budgetService,
                 contextWindow, reActLoop, verificationRunner, plans, publisher, event -> { }, startSession,

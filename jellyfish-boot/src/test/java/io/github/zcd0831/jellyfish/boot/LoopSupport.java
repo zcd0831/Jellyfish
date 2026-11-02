@@ -40,6 +40,26 @@ final class LoopSupport {
     private LoopSupport() {
     }
 
+    /** 端到端测试不装配裁判 / 检索子会话：给一个“没有执行点”的提供者，按无法判定 / 空分配处理。 */
+    static io.github.zcd0831.jellyfish.application.perception.ForkRunnerProvider noForks() {
+        return new io.github.zcd0831.jellyfish.application.perception.ForkRunnerProvider() {
+            @Override
+            public io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner get() {
+                return null;
+            }
+        };
+    }
+
+    static io.github.zcd0831.jellyfish.application.perception.ForkRunnerProvider forksOf(
+            final io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner runner) {
+        return new io.github.zcd0831.jellyfish.application.perception.ForkRunnerProvider() {
+            @Override
+            public io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner get() {
+                return runner;
+            }
+        };
+    }
+
     static ExecutionLoop build(final DataDirectory dir, JsonCodec codec, ModelInvocationPort model,
                                PolicyRepository policies, CatalogRepository catalog,
                                BudgetService budgetService, ContextWindowService contextWindow,
@@ -51,20 +71,20 @@ final class LoopSupport {
                                RunSessionProvider runSession) {
         ExperienceRepository experiences = new FileExperienceRepository(dir, codec);
         ReflectionRepository reflections = new FileReflectionRepository(dir, codec);
-        ExperienceRetriever retriever = new ExperienceRetriever(experiences, model, catalog, policies,
-                budgetService, text -> text == null ? 0 : text.length());
+        io.github.zcd0831.jellyfish.application.action.SessionToolScope scope =
+                new io.github.zcd0831.jellyfish.application.action.SessionToolScope();
+        final io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner forks =
+                new io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner(startSession, sessions,
+                        reActLoop, scope, new FileCommitScope(dir, codec),
+                        () -> System.currentTimeMillis(), cancellations, budgetService);
+        ExperienceRetriever retriever = new ExperienceRetriever(experiences, catalog, policies,
+                text -> text == null ? 0 : text.length(), forksOf(forks), model);
         ExperienceFeedbackService feedback = new ExperienceFeedbackService(experiences, policies,
                 new FileCommitScope(dir, codec), publisher);
         ExperienceDistillationService distillation = new ExperienceDistillationService(experiences, policies,
                 new FileCommitScope(dir, codec), publisher, progress);
         SkillDistillationService skills = new SkillDistillationService(catalog, policies,
                 new FileCommitScope(dir, codec), publisher, progress);
-        io.github.zcd0831.jellyfish.application.action.SessionToolScope scope =
-                new io.github.zcd0831.jellyfish.application.action.SessionToolScope();
-        io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner forks =
-                new io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner(startSession, sessions,
-                        reActLoop, scope, new FileCommitScope(dir, codec),
-                        () -> System.currentTimeMillis(), cancellations, budgetService);
         PlanCompletionCurator curator = new PlanCompletionCurator(catalog, distillation, skills, forks,
                 new FileCommitScope(dir, codec));
         ExecutorService pool = Executors.newFixedThreadPool(2);

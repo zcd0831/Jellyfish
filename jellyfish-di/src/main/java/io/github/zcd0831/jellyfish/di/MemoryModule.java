@@ -27,10 +27,18 @@ public final class MemoryModule {
 
     @Provides
     @Singleton
-    ExperienceRetriever experienceRetriever(ExperienceRepository experiences, ModelInvocationPort model,
+    ExperienceRetriever experienceRetriever(ExperienceRepository experiences,
                                             CatalogRepository catalog, PolicyRepository policies,
-                                            BudgetService budgetService, TokenEstimator estimator) {
-        return new ExperienceRetriever(experiences, model, catalog, policies, budgetService, estimator);
+                                            TokenEstimator estimator,
+                                            javax.inject.Provider<io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner> forks,
+                                            ModelInvocationPort model) {
+        return new ExperienceRetriever(experiences, catalog, policies, estimator,
+                new io.github.zcd0831.jellyfish.application.perception.ForkRunnerProvider() {
+                    @Override
+                    public io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner get() {
+                        return forks.get();
+                    }
+                }, model);
     }
 
     @Provides

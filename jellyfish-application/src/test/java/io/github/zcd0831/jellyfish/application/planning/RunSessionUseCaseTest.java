@@ -114,6 +114,38 @@ class RunSessionUseCaseTest {
         assertEquals(RunSessionResult.Outcome.CANCELLED, result.value().outcome());
     }
 
+    /**
+     * 子代理的令牌必须先于会话存在（创建期就要能终止），但那个令牌不能被当成"已有 run 在跑"。
+     * 规则出处：08-application §8.11；症状是 spawn_subagents 全线 S_RUN_IN_PROGRESS。
+     */
+    @Test
+    void 会话创建期已登记令牌时仍可运行() {
+        when(runner.run(any(Session.class), any(ChunkSink.class), any(RunContext.class)))
+                .thenReturn(RunOutcome.CONVERGED);
+        io.github.zcd0831.jellyfish.application.shared.CancellationToken preRegistered =
+                cancellations.beginChild(SessionId.of("parent"));
+        cancellations.attach(SessionId.of("s1"), SessionId.of("parent"), preRegistered);
+
+        Result<RunSessionResult> result = useCase().run(SessionId.of("s1"), "hi", ChunkSink.NOOP);
+
+        assertTrue(result.isOk(), "创建期登记的令牌不能占掉运行权");
+        assertEquals(RunSessionResult.Outcome.CONVERGED, result.value().outcome());
+    }
+
+    @Test
+    void 会话创建期已终止的令牌让run直接处于已终止() {
+        when(runner.run(any(Session.class), any(ChunkSink.class), any(RunContext.class)))
+                .thenThrow(new CancellationException("父已终止"));
+        io.github.zcd0831.jellyfish.application.shared.CancellationToken preRegistered =
+                cancellations.beginChild(SessionId.of("parent"));
+        cancellations.attach(SessionId.of("s1"), SessionId.of("parent"), preRegistered);
+        cancellations.cancel(SessionId.of("s1"));
+
+        Result<RunSessionResult> result = useCase().run(SessionId.of("s1"), "hi", ChunkSink.NOOP);
+
+        assertEquals(RunSessionResult.Outcome.CANCELLED, result.value().outcome());
+    }
+
     @Test
     void 模型不可用不改状态() {
         when(runner.run(any(Session.class), any(ChunkSink.class), any(RunContext.class)))

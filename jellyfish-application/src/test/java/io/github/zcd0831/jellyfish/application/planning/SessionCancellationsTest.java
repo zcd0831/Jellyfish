@@ -95,4 +95,39 @@ class SessionCancellationsTest {
         assertFalse(cancellations.forSession(SessionId.of("idle")).isCancelled());
         assertFalse(cancellations.forSession(null).isCancelled());
     }
+
+    /**
+     * 创建期登记的令牌只为「运行前的动作也能被终止」，不代表已有 run 在跑。
+     * 规则出处：08-application §8.11（同一会话同时只允许一个 run）——运行权与终止令牌是两件事。
+     */
+    @Test
+    void 创建期登记的令牌不占用运行权() {
+        SessionId parent = SessionId.of("main");
+        SessionId child = SessionId.of("c1");
+        cancellations.register(parent, null);
+        CancellationToken early = cancellations.beginChild(parent);
+        cancellations.attach(child, parent, early);
+
+        CancellationToken run = cancellations.beginRun(child, parent);
+
+        assertTrue(run != null, "创建期令牌不能占掉运行权，否则子代理全线 S_RUN_IN_PROGRESS");
+        assertTrue(run == early, "run 必须沿用同一个令牌，否则创建期的终止会落空");
+    }
+
+    @Test
+    void 注销后同一会话可以再次运行() {
+        SessionId id = SessionId.of("s1");
+        cancellations.beginRun(id, null);
+        cancellations.unregister(id);
+
+        assertTrue(cancellations.beginRun(id, null) != null, "注销必须释放运行权");
+    }
+
+    @Test
+    void 同一会话第二次运行被拒() {
+        SessionId id = SessionId.of("s1");
+        cancellations.beginRun(id, null);
+
+        assertTrue(cancellations.beginRun(id, null) == null, "同一会话同时只允许一个 run");
+    }
 }

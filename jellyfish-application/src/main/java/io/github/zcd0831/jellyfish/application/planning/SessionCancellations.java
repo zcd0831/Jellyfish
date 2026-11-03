@@ -20,6 +20,12 @@ import java.util.concurrent.CopyOnWriteArrayList;
 public final class SessionCancellations implements CancellationRegistry {
 
     private final Map<SessionId, Signal> signals = new ConcurrentHashMap<SessionId, Signal>();
+    /**
+     * 正在跑的会话（运行权）。与 {@link #signals} 分开：会话<strong>创建时</strong>登记的令牌
+     * 只是为了「运行前的动作也可被终止」，不代表已经有 run 在跑。
+     * 规则出处：08-application §8.11（同一会话同时只允许一个 run）。
+     */
+    private final Set<SessionId> running = Collections.newSetFromMap(new ConcurrentHashMap<SessionId, Boolean>());
     /** 父会话 id → 子会话 id 集合；登记与级联都走它。 */
     private final Map<SessionId, Set<SessionId>> children = new ConcurrentHashMap<SessionId, Set<SessionId>>();
     private final Map<SessionId, SessionId> parents = new ConcurrentHashMap<SessionId, SessionId>();
@@ -43,10 +49,14 @@ public final class SessionCancellations implements CancellationRegistry {
      * 已被登记（另一个 run 在跑）⇒ 返回 {@code null}，调用方按“忙”处理，不排队、不并发。
      */
     public CancellationToken beginRun(SessionId sessionId, SessionId parentSessionId) {
-        Signal signal = new Signal();
-        if (signals.putIfAbsent(sessionId, signal) != null) {
+        if (!running.add(sessionId)) {
             return null;
         }
+        // 沿用创建期登记的令牌：父在「会话已建、run 未开」之间被终止时，这个 run 不该重新开跑
+        Signal created = new Signal();
+        Signal existing = signals.putIfAbsent(sessionId, created);
+        Signal signal = existing == null ? created : existing;
+        sessionsOfSignals.put(signal, sessionId);
         return linkToParent(sessionId, parentSessionId, signal);
     }
 
@@ -121,6 +131,7 @@ public final class SessionCancellations implements CancellationRegistry {
 
     /** 运行结束（含异常路径）注销，顺手把自己从父集合里摘掉，避免长进程里集合只增不减。 */
     public void unregister(SessionId sessionId) {
+        running.remove(sessionId);
         Signal gone = signals.remove(sessionId);
         if (gone != null) {
             sessionsOfSignals.remove(gone);

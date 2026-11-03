@@ -142,16 +142,36 @@ public final class FileRecordStore implements RecordStore {
         List<Record> out = new ArrayList<>();
         for (Path segment : segments(sessionDir)) {
             try {
-                for (String line : Files.readAllLines(segment, StandardCharsets.UTF_8)) {
-                    if (!line.trim().isEmpty()) {
-                        out.add(toDomain(codec.read(line, RecordLineDto.class)));
-                    }
+                for (String line : completeLines(segment)) {
+                    out.add(toDomain(codec.read(line, RecordLineDto.class)));
                 }
             } catch (IOException e) {
                 throw new UncheckedIOException("read failed: " + segment, e);
             }
         }
         return out;
+    }
+
+    /**
+     * 只取以换行结尾的完整行。末尾没有换行的那一段是崩溃写了一半的记录，一律跳过。
+     * 规则出处：09-infrastructure §9.7「读取时遇到末尾半行一律跳过，不视为错误」。
+     */
+    private static List<String> completeLines(Path segment) throws IOException {
+        String text = new String(Files.readAllBytes(segment), StandardCharsets.UTF_8);
+        List<String> lines = new ArrayList<>();
+        int start = 0;
+        for (int i = 0; i < text.length(); i++) {
+            if (text.charAt(i) != '\n') {
+                continue;
+            }
+            String line = text.substring(start, i);
+            if (!line.trim().isEmpty()) {
+                lines.add(line);
+            }
+            start = i + 1;
+        }
+        // start < text.length() ⇒ 末尾无换行，属于半行，丢弃
+        return lines;
     }
 
     private static RecordLineDto toDto(Record r) {

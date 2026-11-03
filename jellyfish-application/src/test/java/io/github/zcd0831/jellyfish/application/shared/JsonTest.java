@@ -57,6 +57,12 @@ class JsonTest {
         assertThrows(IllegalArgumentException.class, () -> Json.parseObject("{"));
         assertThrows(IllegalArgumentException.class, () -> Json.parseObject("{\"a\":}"));
         assertThrows(IllegalArgumentException.class, () -> Json.parseObject("{\"a\":[]}x"));
+        // 截断输入：越界也必须抛 IllegalArgumentException，不能让 StringIndexOutOfBoundsException 漏出去
+        assertThrows(IllegalArgumentException.class, () -> Json.parseObject("{\"a\":1,"));
+        assertThrows(IllegalArgumentException.class, () -> Json.parseObject("{\"a\":[1,2]"));
+        assertThrows(IllegalArgumentException.class, () -> Json.parseObject("[1,2"));
+        assertThrows(IllegalArgumentException.class, () -> Json.parseObject("{\"a\":\"x"));
+        assertThrows(IllegalArgumentException.class, () -> Json.parseObject("{\"a\":\"\\u12"));
     }
 
     @Test

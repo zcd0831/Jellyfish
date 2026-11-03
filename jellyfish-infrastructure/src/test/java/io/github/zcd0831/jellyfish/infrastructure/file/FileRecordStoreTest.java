@@ -135,4 +135,21 @@ class FileRecordStoreTest {
         assertEquals(Arrays.asList("file:records-0002.jsonl", "dir:" + sessionDir.getFileName()), events);
         assertEquals(1, Files.readAllLines(sessionDir.resolve("records-0002.jsonl"), StandardCharsets.UTF_8).size());
     }
+
+    @Test
+    void 末尾半行被跳过而不是让整个会话读不出() throws Exception {
+        givenSession("s1");
+        FileRecordStore store = new FileRecordStore(dir(), new JsonCodec());
+        store.appendAll(SessionId.of("s1"), Arrays.asList(record("r1", 1), record("r2", 2)));
+        // 模拟崩在写第三条中间：末尾没有换行
+        java.nio.file.Path segment = dir().sessionDir("s1").resolve("records-0001.jsonl");
+        Files.write(segment, "{\"id\":\"r3\"".getBytes(StandardCharsets.UTF_8),
+                java.nio.file.StandardOpenOption.APPEND);
+
+        // 规则出处：09-infrastructure §9.7「读取时遇到末尾半行一律跳过，不视为错误」
+        List<Record> all = store.last(SessionId.of("s1"), 10);
+
+        assertEquals(2, all.size());
+        assertEquals("r2", all.get(1).id().getValue());
+    }
 }

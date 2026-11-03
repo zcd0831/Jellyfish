@@ -74,7 +74,7 @@ public final class Json {
             expect(':');
             out.put(key, readValue());
             skipWhitespace();
-            char c = text.charAt(index++);
+            char c = next();
             if (c == '}') {
                 return out;
             }
@@ -95,7 +95,7 @@ public final class Json {
         while (true) {
             out.add(readValue());
             skipWhitespace();
-            char c = text.charAt(index++);
+            char c = next();
             if (c == ']') {
                 return out;
             }
@@ -117,7 +117,7 @@ public final class Json {
                 out.append(c);
                 continue;
             }
-            char escaped = text.charAt(index++);
+            char escaped = next();
             switch (escaped) {
                 case 'n':
                     out.append('\n');
@@ -135,6 +135,9 @@ public final class Json {
                     out.append('\f');
                     break;
                 case 'u':
+                    if (index + 4 > text.length()) {
+                        throw new IllegalArgumentException("JSON 转义未闭合，位置 " + index);
+                    }
                     out.append((char) Integer.parseInt(text.substring(index, index + 4), 16));
                     index += 4;
                     break;
@@ -168,6 +171,14 @@ public final class Json {
         while (index < text.length() && Character.isWhitespace(text.charAt(index))) {
             index++;
         }
+    }
+
+    /** 取下一个字符；越界一律抛 IllegalArgumentException（不让 StringIndexOutOfBoundsException 漏出去）。 */
+    private char next() {
+        if (index >= text.length()) {
+            throw new IllegalArgumentException("JSON 意外结束，位置 " + index);
+        }
+        return text.charAt(index++);
     }
 
     private char peek() {

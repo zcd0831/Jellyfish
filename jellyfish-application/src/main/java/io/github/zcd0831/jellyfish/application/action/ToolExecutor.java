@@ -33,6 +33,10 @@ import java.util.Map;
 public final class ToolExecutor implements ToolInvoker {
 
     private static final String ASK_USER = "ask_user";
+
+    /** 放行审批的固定选项（05-action §5.4、06-planning §6.8.2 规则 5）。 */
+    private static final java.util.List<String> APPROVAL_OPTIONS =
+            java.util.Collections.unmodifiableList(java.util.Arrays.asList("同意", "不同意"));
     private static final String RUN_COMMAND = "run_command";
 
     private final CatalogRepository catalog;
@@ -175,7 +179,8 @@ public final class ToolExecutor implements ToolInvoker {
                     && ASK_USER.equals(tool.source().getEndpointOrIdentifier())) {
                 Object question = args.get("question");
                 Answer answer = human.ask(new Question(Question.Source.MAIN_SESSION,
-                        question == null ? "（模型没有提供问题文本）" : String.valueOf(question), null));
+                        question == null ? "（模型没有提供问题文本）" : String.valueOf(question),
+                        optionsOf(args.get("options"))));
                 return answer.kind() == Answer.Kind.CANCELLED ? "用户取消了回答" : answer.text();
             }
             InternalToolHandler handler = handlers.find(tool.source().getEndpointOrIdentifier());
@@ -210,7 +215,7 @@ public final class ToolExecutor implements ToolInvoker {
         if (question == null) {
             return null;
         }
-        Answer answer = human.ask(new Question(Question.Source.APPROVAL, question, null));
+        Answer answer = human.ask(new Question(Question.Source.APPROVAL, question, APPROVAL_OPTIONS));
         boolean approved = answer.kind() != Answer.Kind.CANCELLED
                 && io.github.zcd0831.jellyfish.application.shared.Approvals.isApproved(answer.text());
         if (!approved) {
@@ -220,6 +225,20 @@ public final class ToolExecutor implements ToolInvoker {
             trustedWritesOf(session).addAll(WRITES);
         }
         return null;
+    }
+
+    /** 模型给的 options 原样透传；不是列表或不足 2 条则不带选项（05-action §5.4 ask_user）。 */
+    private static java.util.List<String> optionsOf(Object raw) {
+        if (!(raw instanceof java.util.List)) {
+            return null;
+        }
+        java.util.List<String> options = new java.util.ArrayList<String>();
+        for (Object item : (java.util.List<?>) raw) {
+            if (item != null) {
+                options.add(String.valueOf(item));
+            }
+        }
+        return options.size() >= 2 ? options : null;
     }
 
     private boolean isWorkspaceWrite(ToolDefinition tool) {

@@ -160,10 +160,19 @@ public final class VerificationRunner {
         return LayerResult.undetermined(reason == null ? "裁判无法判定" : reason);
     }
 
+    /** 人工层的固定选项：同意 / 不同意（06-planning §6.8.2 规则 5）。 */
+    private static final java.util.List<String> APPROVAL_OPTIONS =
+            java.util.Collections.unmodifiableList(java.util.Arrays.asList("同意", "不同意"));
+
+    private static final String DENY = "不同意";
+
+    /** 原因最多追问几次：非交互客户端可能一直返回空，追问到底会卡死。 */
+    private static final int MAX_REASON_ASKS = 3;
+
     /** 第四层：高危操作或模型无法判定的节点交人。 */
     private LayerResult humanApproval(PlanStep step, String summary) {
         Answer answer = human.ask(new Question(Question.Source.VERIFICATION,
-                "步骤「" + step.description() + "」提交验收，同意吗？（理由可选）", null));
+                "步骤「" + step.description() + "」提交验收，同意吗？", APPROVAL_OPTIONS));
         if (answer.kind() == Answer.Kind.CANCELLED) {
             return LayerResult.undetermined("用户取消了验收");
         }
@@ -171,7 +180,30 @@ public final class VerificationRunner {
         if (io.github.zcd0831.jellyfish.application.shared.Approvals.isApproved(text)) {
             return LayerResult.passed();
         }
-        return LayerResult.failed(text.trim().isEmpty() ? "用户不同意，但未给出原因" : text);
+        // 空回答不是"不同意"：人工层要求返回同意/不同意 + 原因，空回答不构成裁决，按不通过处理
+        if (text.trim().isEmpty()) {
+            return LayerResult.failed("用户未给出明确答复，按不通过处理");
+        }
+        return LayerResult.failed(reasonOf(text));
+    }
+
+    /** 选了「不同意」必须补原因，未给则重新提示；选「其他」时自由文本本身就是原因。 */
+    private String reasonOf(String text) {
+        if (!DENY.equals(text.trim())) {
+            return text;
+        }
+        for (int attempt = 0; attempt < MAX_REASON_ASKS; attempt++) {
+            Answer answer = human.ask(new Question(Question.Source.VERIFICATION,
+                    "请说明不同意的原因（必填）", null));
+            if (answer.kind() == Answer.Kind.CANCELLED) {
+                break;
+            }
+            String reason = answer.text() == null ? "" : answer.text().trim();
+            if (!reason.isEmpty()) {
+                return reason;
+            }
+        }
+        return "用户不同意，但未给出原因";
     }
 
 

@@ -1,7 +1,7 @@
 {
   "id": "ask_user",
   "name": "ask_user",
-  "description": "向用户提问并等待回答。用于只有用户知道的信息（偏好、路径、确认是否继续）；会阻塞当前循环直到用户回答。",
+  "description": "向用户提问并等待回答。用于只有用户知道的信息（偏好、路径、确认是否继续）；会阻塞当前循环直到用户回答。能列出选项的问题必须列选项（2–8 条）；少于 2 条等于没问清，多于 8 条应拆成多个问题。",
   "inputSchema": {
     "type": "object",
     "required": ["question"],
@@ -9,6 +9,13 @@
       "question": {
         "type": "string",
         "description": "要问用户的问题，一句话说清；不要一次问多个不相关的问题"
+      },
+      "options": {
+        "type": "array",
+        "items": {"type": "string"},
+        "minItems": 2,
+        "maxItems": 8,
+        "description": "候选答案（2–8 条）。外壳会自动追加最后一项「其他（自己输入）」，不需要你自己写"
       }
     }
   },

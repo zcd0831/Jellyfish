@@ -35,6 +35,7 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
@@ -132,6 +133,17 @@ class ToolExecutorTest {
     }
 
     @Test
+    void 审批环节空回答不放行可写工具() {
+        givenTool(tool("t1", SideEffectLevel.REPEATABLE, SourceType.REST, ToolStatus.ACTIVE, "{}"));
+        when(external.invoke(any(), anyMap())).thenReturn("结果");
+        when(human.ask(any(Question.class))).thenReturn(Answer.answered(""));
+
+        // 空回车不是"同意"（06-planning §6.8.2 规则 5）
+        assertTrue(executor(InternalToolHandlers.empty()).execute(session, "t1", args(), RecordId.of("r"))
+                .content().contains("用户拒绝"));
+    }
+
+    @Test
     void 外部工具抛错变成结果而不是异常() {
         givenTool(tool("t1", SideEffectLevel.READ_ONLY, SourceType.REST, ToolStatus.ACTIVE, "{}"));
         when(external.invoke(any(), anyMap())).thenThrow(new IllegalStateException("连不上"));
@@ -162,6 +174,43 @@ class ToolExecutorTest {
         when(human.ask(any(Question.class))).thenReturn(Answer.cancelled());
         assertTrue(executor(InternalToolHandlers.empty())
                 .execute(session, "ask_user", askArgs, RecordId.of("r")).content().contains("取消"));
+    }
+
+    @Test
+    void ask_user把模型给的选项透传给外壳() {
+        givenTool(tool("ask_user", SideEffectLevel.READ_ONLY, SourceType.INTERNAL, ToolStatus.ACTIVE,
+                "{\"type\":\"object\",\"required\":[\"question\"]}"));
+        Map<String, Object> askArgs = new LinkedHashMap<String, Object>();
+        askArgs.put("question", "用哪个方案？");
+        askArgs.put("options", java.util.Arrays.asList("方案甲", "方案乙"));
+        final java.util.List<Question> asked = new java.util.ArrayList<Question>();
+        when(human.ask(any(Question.class))).thenAnswer(call -> {
+            asked.add(call.getArgument(0));
+            return Answer.answered("方案乙");
+        });
+
+        executor(InternalToolHandlers.empty()).execute(session, "ask_user", askArgs, RecordId.of("r"));
+
+        // 05-action §5.4：ask_user 可带 options，模型不必自己拼「其他（自己输入）」
+        assertEquals(java.util.Arrays.asList("方案甲", "方案乙"), asked.get(0).options());
+    }
+
+    @Test
+    void ask_user的选项不足两条时不带选项() {
+        givenTool(tool("ask_user", SideEffectLevel.READ_ONLY, SourceType.INTERNAL, ToolStatus.ACTIVE,
+                "{\"type\":\"object\",\"required\":[\"question\"]}"));
+        Map<String, Object> askArgs = new LinkedHashMap<String, Object>();
+        askArgs.put("question", "随便说说？");
+        askArgs.put("options", java.util.Arrays.asList("只有一个"));
+        final java.util.List<Question> asked = new java.util.ArrayList<Question>();
+        when(human.ask(any(Question.class))).thenAnswer(call -> {
+            asked.add(call.getArgument(0));
+            return Answer.answered("好");
+        });
+
+        executor(InternalToolHandlers.empty()).execute(session, "ask_user", askArgs, RecordId.of("r"));
+
+        assertNull(asked.get(0).options(), "少于 2 条等于没问清，回退自由文本");
     }
 
     @Test

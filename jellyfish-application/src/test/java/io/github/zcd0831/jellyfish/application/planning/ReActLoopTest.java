@@ -86,6 +86,31 @@ class ReActLoopTest {
     }
 
     @Test
+    void 预算预警选停止即终止本轮() {
+        when(model.invoke(any(ModelInvocationRequest.class))).thenReturn(
+                reply("答复", Collections.<ToolCall>emptyList(), ModelId.of("m1")));
+        when(contextWindow.recordTurnUsage(any(Session.class), any())).thenReturn(true);
+        when(human.ask(any(Question.class))).thenReturn(Answer.answered("停止"));
+
+        try {
+            loop(RuntimePolicy.defaults()).runIteration(session(), null, null);
+            org.junit.jupiter.api.Assertions.fail("拒绝继续必须终止本轮（05-action §5.4.4）");
+        } catch (java.util.concurrent.CancellationException expected) {
+            // 拒绝继续等价于按一次 Esc
+        }
+    }
+
+    @Test
+    void 预算预警选继续则照常收敛() {
+        when(model.invoke(any(ModelInvocationRequest.class))).thenReturn(
+                reply("答复", Collections.<ToolCall>emptyList(), ModelId.of("m1")));
+        when(contextWindow.recordTurnUsage(any(Session.class), any())).thenReturn(true);
+        when(human.ask(any(Question.class))).thenReturn(Answer.answered("继续"));
+
+        assertTrue(loop(RuntimePolicy.defaults()).runIteration(session(), null, null).isConverged());
+    }
+
+    @Test
     void 模型不再调工具即收敛() {
         when(model.invoke(any(ModelInvocationRequest.class))).thenReturn(
                 reply("答复", Collections.<ToolCall>emptyList(), ModelId.of("m1")));

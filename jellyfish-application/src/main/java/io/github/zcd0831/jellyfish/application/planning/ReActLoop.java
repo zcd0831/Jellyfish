@@ -289,9 +289,12 @@ public final class ReActLoop {
     }
 
     private void askContinue() {
-        Answer answer = human.ask(new Question(Question.Source.BUDGET, "本族 token 已越过预警线，继续吗？", null));
-        if (answer.kind() == Answer.Kind.CANCELLED) {
-            throw new java.util.concurrent.CancellationException("用户在预算预警处取消");
+        Answer answer = human.ask(new Question(Question.Source.BUDGET, "本族 token 已越过预警线，继续吗？",
+                java.util.Collections.unmodifiableList(java.util.Arrays.asList("继续", "停止"))));
+        // 拒绝继续等价于按一次 Esc（05-action §5.4.4）
+        if (answer.kind() == Answer.Kind.CANCELLED
+                || !io.github.zcd0831.jellyfish.application.shared.Approvals.isApproved(answer.text())) {
+            throw new java.util.concurrent.CancellationException("用户在预算预警处拒绝继续");
         }
     }
 

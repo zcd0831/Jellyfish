@@ -174,6 +174,64 @@ class VerificationRunnerTest {
     }
 
     @Test
+    void 人工层空回答按不通过处理() {
+        Plan plan = plan(EnumSet.of(VerificationType.HUMAN_APPROVAL));
+        VerificationRunner runner = runner(EnvironmentFeedbackVerifier.NOT_CONFIGURED);
+
+        human.answer = "";
+        VerificationReport blank = verifyWith(runner, plan);
+
+        // 空回车不是"同意"：人工层要求返回同意/不同意 + 原因（06-planning §6.8.2 规则 5）
+        assertEquals(VerificationOutcome.FAILED, blank.outcome());
+        assertEquals("用户未给出明确答复，按不通过处理", blank.failureReason());
+
+        human.answer = "不继续";
+        assertEquals(VerificationOutcome.FAILED, verifyWith(runner, plan).outcome());
+    }
+
+    @Test
+    void 人工层以选项呈现且同意不需要原因() {
+        Plan plan = plan(EnumSet.of(VerificationType.HUMAN_APPROVAL));
+        VerificationRunner runner = runner(EnvironmentFeedbackVerifier.NOT_CONFIGURED);
+        human.queued.add("同意");
+
+        assertEquals(VerificationOutcome.PASSED, verifyWith(runner, plan).outcome());
+
+        // 06-planning §6.8.2 规则 5：人工层以选项「同意 / 不同意」呈现
+        assertEquals(java.util.Arrays.asList("同意", "不同意"), human.asked.get(0).options());
+        assertEquals(1, human.asked.size());
+    }
+
+    @Test
+    void 人工层选不同意必须补原因_原因成为失败理由() {
+        Plan plan = plan(EnumSet.of(VerificationType.HUMAN_APPROVAL));
+        VerificationRunner runner = runner(EnvironmentFeedbackVerifier.NOT_CONFIGURED);
+        human.queued.add("不同意");
+        human.queued.add("产物缺签名");
+
+        VerificationReport report = verifyWith(runner, plan);
+
+        assertEquals(VerificationOutcome.FAILED, report.outcome());
+        assertEquals("产物缺签名", report.failureReason());
+        assertEquals(2, human.asked.size());
+        assertTrue(human.asked.get(1).options() == null, "追问原因是自由文本");
+    }
+
+    @Test
+    void 人工层选不同意但一直不填原因_追问有上限且不卡死() {
+        Plan plan = plan(EnumSet.of(VerificationType.HUMAN_APPROVAL));
+        VerificationRunner runner = runner(EnvironmentFeedbackVerifier.NOT_CONFIGURED);
+        human.answer = "";
+        human.queued.add("不同意");
+
+        VerificationReport report = verifyWith(runner, plan);
+
+        assertEquals(VerificationOutcome.FAILED, report.outcome());
+        assertEquals("用户不同意，但未给出原因", report.failureReason());
+        assertEquals(1 + 3, human.asked.size(), "追问最多 3 次");
+    }
+
+    @Test
     void 多层时前一层失败即短路() {
         when(forks.runStateless(any(Session.class), any(), any(), any()))
                 .thenReturn("{\"verdict\":\"PASSED\"}");
@@ -194,10 +252,16 @@ class VerificationRunnerTest {
 
         private String answer = "同意";
         private boolean cancel;
+        private final java.util.List<String> queued = new java.util.ArrayList<String>();
+        private final java.util.List<Question> asked = new java.util.ArrayList<Question>();
 
         @Override
         public Answer ask(Question question) {
-            return cancel ? Answer.cancelled() : Answer.answered(answer);
+            asked.add(question);
+            if (cancel) {
+                return Answer.cancelled();
+            }
+            return Answer.answered(queued.isEmpty() ? answer : queued.remove(0));
         }
     }
 }

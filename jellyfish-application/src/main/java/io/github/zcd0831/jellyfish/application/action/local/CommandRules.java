@@ -164,8 +164,12 @@ public final class CommandRules {
         return Verdict.allow();
     }
 
+    /** 取值的 git 选项：`-C /repo` 会把子命令顶掉，不能直接用 firstArgument。 */
+    private static final List<String> GIT_VALUE_OPTIONS = Arrays.asList(
+            "-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path");
+
     private static Verdict checkGit(CommandParsing.Segment segment) {
-        String sub = segment.firstArgument();
+        String sub = gitSubcommand(segment);
         if ("push".equals(sub) && (segment.hasFlag("f") || segment.hasFlag("force"))) {
             return Verdict.ask("强制推送会改写远端历史");
         }
@@ -176,6 +180,22 @@ public final class CommandRules {
             return Verdict.ask("清理未跟踪文件");
         }
         return Verdict.allow();
+    }
+
+    /** 跳过取值选项后，第一个非选项操作数才是子命令（`git -C /repo push --force`）。 */
+    private static String gitSubcommand(CommandParsing.Segment segment) {
+        List<String> operands = segment.operands();
+        for (int i = 0; i < operands.size(); i++) {
+            String operand = operands.get(i);
+            if (operand.startsWith("-")) {
+                if (GIT_VALUE_OPTIONS.contains(operand)) {
+                    i++;   // 跳过它带的那个值
+                }
+                continue;
+            }
+            return operand;
+        }
+        return "";
     }
 
     /** `curl ... | sh` 之外的另一条路：`sh -c "$(curl -s ...)"`。 */
@@ -191,13 +211,11 @@ public final class CommandRules {
         return Verdict.allow();
     }
 
+    /**
+     * 凭据路径：不按"读者白名单"判定 —— `grep -r SECRET ~/.aws/credentials` 就是靠这条逃过去的。
+     * 任何命令的操作数里出现凭据路径都停下来问人（绊线是绊线，问一句的代价远低于外泄）。
+     */
     private static Verdict checkSecrets(CommandParsing.Segment segment) {
-        boolean reads = segment.is("cat") || segment.is("less") || segment.is("head") || segment.is("tail")
-                || segment.is("cp") || segment.is("scp") || segment.is("base64") || segment.is("tar");
-        boolean sends = segment.is("curl") || segment.is("wget") || segment.is("nc") || segment.is("mail");
-        if (!reads && !sends) {
-            return Verdict.allow();
-        }
         for (String operand : segment.operands()) {
             if (operand.contains(".ssh/id_") || operand.contains(".aws/credentials") || operand.endsWith(".env")
                     || operand.contains(".ssh/id_rsa")) {
@@ -247,8 +265,9 @@ public final class CommandRules {
         return null;
     }
 
+    /** `-r` 与 `-R` 都是递归（05-action §5.8.1 规则 10）：只认小写会漏掉 `rm -R /`。 */
     private static boolean recursive(CommandParsing.Segment segment) {
-        return segment.hasFlag("r") || segment.hasFlag("recursive");
+        return segment.hasFlag("r") || segment.hasFlag("R") || segment.hasFlag("recursive");
     }
 
     private static boolean hasCriticalTarget(CommandParsing.Segment segment) {

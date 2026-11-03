@@ -95,4 +95,28 @@ class CommandRulesTest {
         assertFalse(verdict.reason().isEmpty());
         return true;
     }
+
+    @Test
+    void 大写R的递归删除也要停下来问() {
+        // 05-action §5.8.1 规则 10：只认小写 -r 会漏掉 rm -R /
+        assertFalse(CommandRules.assess("rm -R /").allowed());
+        assertFalse(CommandRules.assess("rm -r /").allowed());
+        assertFalse(CommandRules.assess("rm --recursive /etc").allowed());
+    }
+
+    @Test
+    void git带取值选项时仍能认出子命令() {
+        // -C /repo 会顶掉 firstArgument，强制推送就漏判了
+        assertFalse(CommandRules.assess("git -C /repo push --force").allowed());
+        assertFalse(CommandRules.assess("git -C /repo reset --hard").allowed());
+        assertFalse(CommandRules.assess("git -c core.x=1 clean -x").allowed());
+    }
+
+    @Test
+    void 任何命令碰到凭据文件都要停下来问() {
+        // 原来只认 cat/less/curl 这类白名单，grep 于是漏了
+        assertFalse(CommandRules.assess("grep -r SECRET ~/.aws/credentials").allowed());
+        assertFalse(CommandRules.assess("awk 1 ~/.ssh/id_rsa").allowed());
+        assertFalse(CommandRules.assess("sort .env").allowed());
+    }
 }

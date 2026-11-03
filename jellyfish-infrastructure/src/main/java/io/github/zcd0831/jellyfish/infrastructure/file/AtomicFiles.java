@@ -121,6 +121,14 @@ public final class AtomicFiles {
         }
     }
 
+    /**
+     * 让目录项落盘。新建文件（如换段）后必须调用，否则崩在"文件已建、目录项未落"会整段丢失。
+     * 规则出处：09-infrastructure §9.6「流水按段滚动」。
+     */
+    static void syncDirectory(Path dir) {
+        sync.directory(dir);
+    }
+
     /** 追加一行并落盘（09-infrastructure §9.6 append 协议：单写者保证不交错）。 */
     static void append(Path target, String line) {
         appendAll(target, Collections.singletonList(line));

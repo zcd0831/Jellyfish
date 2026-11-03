@@ -120,7 +120,7 @@ class S4ReconcilerTest {
         planWithRunningStep();
         Session session = sessions.load(sessionId);
         Record request = session.appendRecord(RecordRole.TOOL_REQUEST, "{}", null, 5L);
-        records.append(sessionId, request);
+        records.appendAll(sessionId, java.util.Collections.singletonList(request));
 
         reconciler.reconcile(session);
 

@@ -38,11 +38,14 @@ public final class FileCommitScope implements CommitScope {
     private final DataDirectory dir;
     private final SessionDirs sessionDirs;
     private final JsonCodec codec;
+    /** 流水写入口：分段与滚动只有这一处决定（09-infrastructure §9.6）。 */
+    private final FileRecordStore records;
 
     public FileCommitScope(DataDirectory dir, JsonCodec codec) {
         this.dir = dir;
         this.sessionDirs = new SessionDirs(dir);
         this.codec = codec;
+        this.records = new FileRecordStore(dir, codec);
     }
 
     @Override
@@ -77,18 +80,40 @@ public final class FileCommitScope implements CommitScope {
         Staging current = staging.get();
         try {
             // 顺序即语义：事实先落，状态后落；任何崩溃点都停在"事实已存在、状态未推进"
+            // 规则出处：09-infrastructure §9.6「fsync 必须落在每个阶段的边界上」
             for (Object fact : current.facts) {
                 writeFact(fact);
             }
-            for (int i = 0; i < current.records.size(); i++) {
-                AtomicFiles.append(sessionDirOf(current.recordSessions.get(i))
-                        .resolve("records-0001.jsonl"), codec.write(toLine(current.records.get(i))));
-            }
+            appendRecords(current);
             for (Object aggregate : current.replacements) {
                 writeAggregate(aggregate);
             }
         } finally {
             current.clear();
+        }
+    }
+
+    /**
+     * 流水阶段：按会话分组后交给唯一写入口，阶段内批量追加只 fsync 一次。
+     * 规则出处：09-infrastructure §9.6 ②；§9.6「流水按段滚动」。
+     */
+    private void appendRecords(Staging current) {
+        if (current.records.isEmpty()) {
+            return;
+        }
+        java.util.Map<SessionId, List<Record>> bySession =
+                new java.util.LinkedHashMap<SessionId, List<Record>>();
+        for (int i = 0; i < current.records.size(); i++) {
+            SessionId sessionId = current.recordSessions.get(i);
+            List<Record> batch = bySession.get(sessionId);
+            if (batch == null) {
+                batch = new ArrayList<Record>();
+                bySession.put(sessionId, batch);
+            }
+            batch.add(current.records.get(i));
+        }
+        for (java.util.Map.Entry<SessionId, List<Record>> entry : bySession.entrySet()) {
+            records.appendAll(entry.getKey(), entry.getValue());
         }
     }
 

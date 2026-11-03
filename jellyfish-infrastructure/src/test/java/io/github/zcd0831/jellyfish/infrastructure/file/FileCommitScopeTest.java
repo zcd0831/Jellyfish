@@ -10,7 +10,11 @@ import io.github.zcd0831.jellyfish.domain.shared.SessionId;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -80,5 +84,58 @@ class FileCommitScopeTest {
         scope.stageReplace("不是聚合");
 
         assertThrows(UnsupportedOperationException.class, scope::commit);
+    }
+
+    @Test
+    void 提交按流水到聚合的顺序落盘且每阶段收尾目录() {
+        Session session = Session.create(SessionId.of("s1"), null, AgentId.of("a"), ModelId.of("m"), 1L, null);
+        Record record = new Record(RecordId.of("r1"), RecordRole.USER, "你好", null, 1, 2L);
+
+        List<String> events = new ArrayList<String>();
+        AtomicFiles.useSyncForTest(new AtomicFiles.DiskSync() {
+            @Override
+            public void file(java.nio.file.Path path) {
+                events.add("file:" + path.getFileName());
+            }
+
+            @Override
+            public void directory(java.nio.file.Path path) {
+                events.add("dir:" + path.getFileName());
+            }
+        });
+        try {
+            FileCommitScope scope = new FileCommitScope(dir(), new JsonCodec());
+            scope.stageAppend(SessionId.of("s1"), record);
+            scope.stageReplace(session);
+            scope.commit();
+        } finally {
+            AtomicFiles.useSyncForTest(null);
+        }
+
+        // 规则出处：09-infrastructure §9.6「② 所有 stageAppend → 追加；全部写完后 fsync 记录文件」「④ 每阶段末尾 fsync 所在目录」
+        assertEquals(java.util.Arrays.asList(
+                "file:records-0001.jsonl", "dir:s1",
+                "file:meta.json.tmp", "dir:s1"), events);
+    }
+
+    @Test
+    void 提交的流水走分段滚动而不是固定写第一段() throws Exception {
+        givenSession("s1");
+        java.nio.file.Path sessionDir = dir().sessionDir("s1");
+        Files.write(sessionDir.resolve("records-0001.jsonl"), new byte[32 * 1024 * 1024]);
+
+        FileCommitScope scope = new FileCommitScope(dir(), new JsonCodec());
+        scope.stageAppend(SessionId.of("s1"),
+                new Record(RecordId.of("r1"), RecordRole.USER, "你好", null, 1, 2L));
+        scope.commit();
+
+        // 规则出处：09-infrastructure §9.6「流水按段滚动」——写入口唯一，滚动由 RecordStore 决定
+        assertTrue(Files.exists(sessionDir.resolve("records-0002.jsonl")));
+        assertEquals(1, new FileRecordStore(dir(), new JsonCodec()).last(SessionId.of("s1"), 10).size());
+    }
+
+    private void givenSession(String id) {
+        new FileSessionRepository(dir(), new JsonCodec())
+                .save(Session.create(SessionId.of(id), null, AgentId.of("a"), ModelId.of("m"), 1L, null));
     }
 }

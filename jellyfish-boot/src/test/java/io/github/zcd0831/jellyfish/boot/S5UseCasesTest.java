@@ -175,12 +175,15 @@ class S5UseCasesTest {
     void 回放返回最近若干条并标出是否还有更早的() {
         SessionId id = newSession();
         io.github.zcd0831.jellyfish.application.perception.port.RecordStore store = store();
+        java.util.List<io.github.zcd0831.jellyfish.domain.perception.session.Record> seeded =
+                new java.util.ArrayList<io.github.zcd0831.jellyfish.domain.perception.session.Record>();
         for (int i = 0; i < 5; i++) {
-            store.append(id, new io.github.zcd0831.jellyfish.domain.perception.session.Record(
+            seeded.add(new io.github.zcd0831.jellyfish.domain.perception.session.Record(
                     io.github.zcd0831.jellyfish.domain.shared.RecordId.of("r" + i),
                     io.github.zcd0831.jellyfish.domain.perception.session.RecordRole.USER,
                     "第" + i + "条", null, i + 1, System.currentTimeMillis()));
         }
+        store.appendAll(id, seeded);
 
         io.github.zcd0831.jellyfish.application.perception.SessionTranscript tail =
                 manageSession.transcript(id, 3).value();

@@ -32,9 +32,19 @@ public final class FileRecordStore implements RecordStore {
     }
 
     @Override
-    public void append(SessionId sessionId, Record record) {
-        Path segment = currentSegment(sessionDir(sessionId));
-        AtomicFiles.append(segment, codec.write(toDto(record)));
+    public void appendAll(SessionId sessionId, List<Record> records) {
+        if (records.isEmpty()) {
+            return;
+        }
+        Path sessionDir = writableSessionDir(sessionId);
+        Path segment = currentSegment(sessionDir);
+        List<String> lines = new ArrayList<String>(records.size());
+        for (Record record : records) {
+            lines.add(codec.write(toDto(record)));
+        }
+        AtomicFiles.appendAll(segment, lines);
+        // 阶段末尾让目录项落盘：换段时新文件才真的存在（09-infrastructure §9.6「流水按段滚动」）
+                AtomicFiles.syncDirectory(sessionDir);
     }
 
     @Override
@@ -59,6 +69,22 @@ public final class FileRecordStore implements RecordStore {
             }
         }
         throw new IllegalArgumentException("record not found: " + id);
+    }
+
+    /** 写入用的目录：会话目录可能尚未建立（首次提交即建），此时返回将要用到的路径。 */
+    private Path writableSessionDir(SessionId sessionId) {
+        Path direct = dir.sessionDir(sessionId.getValue());
+        if (Files.isDirectory(direct)) {
+            return direct;
+        }
+        if (!Files.isDirectory(dir.sessions())) {
+            return direct;   // 连 sessions/ 都还没有：首次写入，直接用目标路径
+        }
+        try {
+            return sessionDir(sessionId);   // 可能是已存在的子会话
+        } catch (IllegalArgumentException notYet) {
+            return direct;                  // 新会话：目录由写入时创建
+        }
     }
 
     private Path sessionDir(SessionId sessionId) {

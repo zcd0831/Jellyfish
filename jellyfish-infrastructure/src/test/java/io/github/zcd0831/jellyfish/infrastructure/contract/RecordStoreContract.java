@@ -12,6 +12,7 @@ import io.github.zcd0831.jellyfish.domain.shared.SessionId;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.util.Arrays;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -36,8 +37,7 @@ public abstract class RecordStoreContract {
 
     @Test
     void 追加后按最近n条读取() {
-        store().append(SessionId.of("s1"), record("r1", 1));
-        store().append(SessionId.of("s1"), record("r2", 2));
+        store().appendAll(SessionId.of("s1"), Arrays.asList(record("r1", 1), record("r2", 2)));
 
         List<Record> last = store().last(SessionId.of("s1"), 1);
 
@@ -47,9 +47,7 @@ public abstract class RecordStoreContract {
 
     @Test
     void 区间读取包含两端() {
-        store().append(SessionId.of("s1"), record("r1", 1));
-        store().append(SessionId.of("s1"), record("r2", 2));
-        store().append(SessionId.of("s1"), record("r3", 3));
+        store().appendAll(SessionId.of("s1"), Arrays.asList(record("r1", 1), record("r2", 2), record("r3", 3)));
 
         List<Record> range = store().range(SessionId.of("s1"), RecordId.of("r1"), RecordId.of("r3"));
 
@@ -65,7 +63,7 @@ public abstract class RecordStoreContract {
 
     @Test
     void 区间端点不存在时抛异常() {
-        store().append(SessionId.of("s1"), record("r1", 1));
+        store().appendAll(SessionId.of("s1"), Arrays.asList(record("r1", 1)));
 
         assertThrows(IllegalArgumentException.class,
                 () -> store().range(SessionId.of("s1"), RecordId.of("r1"), RecordId.of("missing")));

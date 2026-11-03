@@ -49,6 +49,10 @@ public final class VerificationRunner {
         List<VerificationType> layers = chain.orderedLayers(step.requiredVerifications());
         for (VerificationType layer : layers) {
             LayerResult result = runLayer(session, step, summary, artifacts, layer);
+            if (result.outcome == VerificationOutcome.UNDETERMINED && !layers.contains(VerificationType.HUMAN_APPROVAL)) {
+                // 规则出处：06-planning §6.8.2 规则 3（UNDETERMINED ⇒ 升级到人工层）
+                result = escalate(step, summary, result);
+            }
             if (result.outcome != VerificationOutcome.PASSED) {
                 TechnicalLog.verified(plan.id().getValue(), step.id().getValue(), result.outcome.name(),
                         System.currentTimeMillis() - startedAt);
@@ -72,8 +76,23 @@ public final class VerificationRunner {
             case LLM_JUDGE:
                 return judge(session, step, summary, artifacts);
             default:
-                return humanApproval(step, summary);
+                return humanApproval("步骤「" + step.description() + "」提交验收，同意吗？");
         }
+    }
+
+    /**
+     * 判不了就升级到人工层：同意 ⇒ 通过；不同意 + 原因 ⇒ 失败。
+     * 已声明 HUMAN_APPROVAL 的链不重复问；升级后用户又取消 ⇒ 按 FAILED 收口，避免死循环。
+     * 规则出处：06-planning §6.8.2 规则 3。
+     */
+    private LayerResult escalate(PlanStep step, String summary, LayerResult undetermined) {
+        String context = "验收无法自动判定（" + text(undetermined.reason) + "）。步骤「"
+                + step.description() + "」是否接受？";
+        LayerResult human = humanApproval(context);
+        if (human.outcome == VerificationOutcome.UNDETERMINED) {
+            return LayerResult.failed(text(undetermined.reason) + "；用户取消了验收");
+        }
+        return human;
     }
 
     /** 第一层：非空 + 结构（形似 JSON 必须可解析）。 */
@@ -170,9 +189,8 @@ public final class VerificationRunner {
     private static final int MAX_REASON_ASKS = 3;
 
     /** 第四层：高危操作或模型无法判定的节点交人。 */
-    private LayerResult humanApproval(PlanStep step, String summary) {
-        Answer answer = human.ask(new Question(Question.Source.VERIFICATION,
-                "步骤「" + step.description() + "」提交验收，同意吗？", APPROVAL_OPTIONS));
+    private LayerResult humanApproval(String prompt) {
+        Answer answer = human.ask(new Question(Question.Source.VERIFICATION, prompt, APPROVAL_OPTIONS));
         if (answer.kind() == Answer.Kind.CANCELLED) {
             return LayerResult.undetermined("用户取消了验收");
         }

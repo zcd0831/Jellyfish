@@ -82,11 +82,24 @@ class VerificationRunnerTest {
     }
 
     @Test
-    void 环境反馈层_未配置为无法判定_配置后按其结论() {
+    void 环境反馈未配置时升级到人工层() {
+        Plan plan = plan(EnumSet.of(VerificationType.ENV_FEEDBACK));
+        human.answer = "同意";
+
+        VerificationReport escalated = runner(EnvironmentFeedbackVerifier.NOT_CONFIGURED)
+                .verify(session, plan, plan.steps().get(0), 1, "ok", Collections.<String>emptyList());
+
+        // 规则出处：06-planning §6.8.2 规则 3（UNDETERMINED ⇒ 升级到人工层）
+        assertEquals(VerificationOutcome.PASSED, escalated.outcome());
+        assertEquals(1, human.asked.size());
+        assertTrue(human.asked.get(0).prompt().contains("无法自动判定"), human.asked.get(0).prompt());
+        assertEquals(java.util.Arrays.asList("同意", "不同意"), human.asked.get(0).options());
+    }
+
+    @Test
+    void 环境反馈配置后按其结论() {
         Plan plan = plan(EnumSet.of(VerificationType.ENV_FEEDBACK));
 
-        VerificationReport undetermined = runner(EnvironmentFeedbackVerifier.NOT_CONFIGURED)
-                .verify(session, plan, plan.steps().get(0), 1, "ok", Collections.<String>emptyList());
         VerificationReport failed = runner(new EnvironmentFeedbackVerifier() {
             @Override
             public Outcome verify(io.github.zcd0831.jellyfish.domain.planning.plan.PlanStep step,
@@ -95,8 +108,8 @@ class VerificationRunnerTest {
             }
         }).verify(session, plan, plan.steps().get(0), 1, "ok", Collections.<String>emptyList());
 
-        assertEquals(VerificationOutcome.UNDETERMINED, undetermined.outcome());
         assertEquals(VerificationOutcome.FAILED, failed.outcome());
+        assertEquals(0, human.asked.size(), "配置好的环境反馈不需要问人");
     }
 
     @Test
@@ -114,15 +127,45 @@ class VerificationRunnerTest {
         assertEquals(VerificationOutcome.FAILED, failed.outcome());
         assertEquals("不达标", failed.failureReason());
 
+    }
+
+    @Test
+    void 裁判判不了时升级到人工层_同意即通过() {
+        Plan plan = plan(EnumSet.of(VerificationType.LLM_JUDGE));
         when(forks.runStateless(any(Session.class), any(), any(), any()))
                 .thenReturn("{\"verdict\":\"UNDETERMINED\"}");
-        assertEquals(VerificationOutcome.UNDETERMINED, verifyWith(runner, plan).outcome());
+        human.answer = "同意";
 
+        VerificationReport report = verifyWith(runner(EnvironmentFeedbackVerifier.NOT_CONFIGURED), plan);
+
+        // 规则出处：06-planning §6.8.2 规则 3
+        assertEquals(VerificationOutcome.PASSED, report.outcome());
+        assertEquals(1, human.asked.size());
+        assertTrue(human.asked.get(0).prompt().contains("无法自动判定"), human.asked.get(0).prompt());
+    }
+
+    @Test
+    void 裁判输出不可解析时也升级到人工层() {
+        Plan plan = plan(EnumSet.of(VerificationType.LLM_JUDGE));
         when(forks.runStateless(any(Session.class), any(), any(), any())).thenReturn("不是JSON");
-        assertEquals(VerificationOutcome.UNDETERMINED, verifyWith(runner, plan).outcome());
+        human.answer = "同意";
 
-        when(forks.runStateless(any(Session.class), any(), any(), any())).thenReturn(null);
-        assertEquals(VerificationOutcome.UNDETERMINED, verifyWith(runner, plan).outcome());
+        assertEquals(VerificationOutcome.PASSED,
+                verifyWith(runner(EnvironmentFeedbackVerifier.NOT_CONFIGURED), plan).outcome());
+        assertEquals(1, human.asked.size());
+    }
+
+    @Test
+    void 升级后用户取消验收按失败收口_避免死循环() {
+        Plan plan = plan(EnumSet.of(VerificationType.LLM_JUDGE));
+        when(forks.runStateless(any(Session.class), any(), any(), any()))
+                .thenReturn("{\"verdict\":\"UNDETERMINED\"}");
+        human.cancel = true;
+
+        VerificationReport report = verifyWith(runner(EnvironmentFeedbackVerifier.NOT_CONFIGURED), plan);
+
+        assertEquals(VerificationOutcome.FAILED, report.outcome());
+        assertTrue(report.failureReason().contains("用户取消了验收"), report.failureReason());
     }
 
     /**
@@ -149,11 +192,23 @@ class VerificationRunnerTest {
     }
 
     @Test
-    void 裁判缺失即无法判定() {
+    void 裁判缺失时升级到人工层() {
         Plan plan = plan(EnumSet.of(VerificationType.LLM_JUDGE));
+        human.answer = "同意";
+
+        assertEquals(VerificationOutcome.PASSED,
+                verifyWith(runner(EnvironmentFeedbackVerifier.NOT_CONFIGURED), plan).outcome());
+        assertEquals(1, human.asked.size(), "裁判缺失也要有人兜底");
+    }
+
+    @Test
+    void 已声明人工层的链在取消后不再重复追问() {
+        Plan plan = plan(EnumSet.of(VerificationType.HUMAN_APPROVAL));
+        human.cancel = true;
 
         assertEquals(VerificationOutcome.UNDETERMINED,
                 verifyWith(runner(EnvironmentFeedbackVerifier.NOT_CONFIGURED), plan).outcome());
+        assertEquals(1, human.asked.size(), "同一次验收只问一次");
     }
 
     @Test

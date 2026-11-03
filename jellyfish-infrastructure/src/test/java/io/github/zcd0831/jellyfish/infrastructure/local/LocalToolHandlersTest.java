@@ -286,4 +286,42 @@ class LocalToolHandlersTest {
         assertTrue(!segment.contains("行5"), segment);
         assertTrue(segment.contains("已截取 3-4"), segment);
     }
+
+    @Test
+    void grep不跟着软链读到根外() throws Exception {
+        // 软链指向工作区外：walkFileTree 不跟随，但 readAllLines 会跟
+        // 规则出处：05-action §5.8.1 规则 9（判定基于 real path）
+        Path outside = java.nio.file.Files.createTempDirectory("outside");
+        Path secret = outside.resolve("secret.txt");
+        java.nio.file.Files.write(secret, "TOPSECRET".getBytes(StandardCharsets.UTF_8));
+        try {
+            java.nio.file.Files.createSymbolicLink(temp.resolve("link.txt"), secret);
+        } catch (UnsupportedOperationException e) {
+            return;
+        }
+        java.nio.file.Files.write(temp.resolve("inside.txt"), "普通内容".getBytes(StandardCharsets.UTF_8));
+
+        Map<String, Object> args = new HashMap<String, Object>();
+        args.put("pattern", "TOPSECRET");
+        String out = tools.get("grep").handle(null, args).content();
+
+        assertFalse(out.contains("TOPSECRET"), "根外内容不能出现在结果里：" + out);
+    }
+
+    @Test
+    void list_dir不跟随指向根外的软链目录() throws Exception {
+        Path outside = java.nio.file.Files.createTempDirectory("outside-dir");
+        java.nio.file.Files.write(outside.resolve("leak.txt"), "x".getBytes(StandardCharsets.UTF_8));
+        try {
+            java.nio.file.Files.createSymbolicLink(temp.resolve("linkdir"), outside);
+        } catch (UnsupportedOperationException e) {
+            return;
+        }
+
+        Map<String, Object> args = new HashMap<String, Object>();
+        args.put("path", ".");
+        String out = tools.get("list_dir").handle(null, args).content();
+
+        assertFalse(out.contains("leak.txt"), "根外目录内容不能列出来：" + out);
+    }
 }

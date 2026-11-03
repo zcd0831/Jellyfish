@@ -202,6 +202,9 @@ public final class LocalToolHandlers {
                 }
                 Collections.sort(children);
                 for (Path child : children) {
+                    if (escapesWorkspace(workspace, child)) {
+                        continue;   // 指向根外的软链不列、也不递归（05-action §5.8.1 规则 9）
+                    }
                     if (Files.isDirectory(child)) {
                         if (IGNORED_DIRS.contains(child.getFileName().toString())) {
                             continue;
@@ -212,6 +215,9 @@ public final class LocalToolHandlers {
                     }
                 }
                 for (Path child : children) {
+                    if (escapesWorkspace(workspace, child)) {
+                        continue;
+                    }
                     if (Files.isDirectory(child) && !IGNORED_DIRS.contains(child.getFileName().toString())) {
                         collect(child, depth - 1, glob, entries);
                     }
@@ -229,7 +235,7 @@ public final class LocalToolHandlers {
                 final String glob = optional(args, "glob", null);
                 final int context = Math.max(0, Math.min(5, number(args, "context", 0)));
                 final List<String> hits = new ArrayList<String>();
-                walk(start, glob, new FileConsumer() {
+                walk(workspace, start, glob, new FileConsumer() {
                     @Override
                     public void accept(Path file) throws IOException {
                         if (hits.size() > MAX_HITS) {
@@ -480,7 +486,13 @@ public final class LocalToolHandlers {
         return out.toString();
     }
 
-    private static void walk(Path start, final String glob, final FileConsumer consumer) throws IOException {
+    /** 软链指向根外：不列、不递归、不读。规则出处：05-action §5.8.1 规则 9。 */
+    private static boolean escapesWorkspace(Workspace workspace, Path path) {
+        return Files.isSymbolicLink(path) && !workspace.isInside(path);
+    }
+
+    private static void walk(final Workspace workspace, Path start, final String glob,
+                             final FileConsumer consumer) throws IOException {
         if (!Files.isDirectory(start)) {
             consumer.accept(start);
             return;
@@ -494,6 +506,10 @@ public final class LocalToolHandlers {
 
             @Override
             public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+                // 软链指向根外就跳过：walkFileTree 不跟随，但 readAllLines 会跟（05-action §5.8.1 规则 9）
+                if (escapesWorkspace(workspace, file)) {
+                    return FileVisitResult.CONTINUE;
+                }
                 if (glob == null || matches(glob, file)) {
                     consumer.accept(file);
                 }

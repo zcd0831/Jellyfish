@@ -60,6 +60,18 @@ public final class Workspace {
         }
     }
 
+    /**
+     * 真实路径是否仍在根内。软链指向根外时返回 false —— 遍历器据此跳过。
+     * 规则出处：05-action §5.8.1 规则 9（判定基于 real path）。
+     */
+    public boolean isInside(Path path) {
+        try {
+            return path.toRealPath().startsWith(root);
+        } catch (IOException notResolvable) {
+            return false;
+        }
+    }
+
     public String relative(Path path) {
         Path rel = root.relativize(path);
         return rel.toString().isEmpty() ? "." : rel.toString();

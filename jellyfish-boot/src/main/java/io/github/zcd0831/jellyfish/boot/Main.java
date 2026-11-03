@@ -54,6 +54,11 @@ public final class Main {
 
         component.instanceLock().acquire();
         try {
+            // 启动技术清理必须先于任何读取：只处理文件层面残留（09-infrastructure §9.7）
+            for (String warning : new io.github.zcd0831.jellyfish.infrastructure.file
+                    .FileSystemCleaner(dir).clean()) {
+                System.out.println(warning);
+            }
             component.schemaMigrator().migrate();
             // 启动打印生效值，一条日志解决"我改的怎么没生效"
             System.out.println("data-dir=" + dir.root()

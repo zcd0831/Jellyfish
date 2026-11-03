@@ -378,6 +378,32 @@ public final class LocalToolHandlers {
         };
     }
 
+    /**
+     * 子进程只带运行必需的环境变量。宿主凭据（OPENAI_API_KEY 等）不能出现在子进程里 ——
+     * 否则 `env` 一条命令就能把密钥打进流水并随下一轮 prompt 出境。
+     * 规则出处：05-action §5.4（run_command 子进程不继承宿主环境）。
+     */
+    private static final List<String> ENV_WHITELIST = Arrays.asList(
+            "PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TMPDIR", "SHELL", "TERM", "USER",
+            "JAVA_HOME", "M2_HOME", "MAVEN_OPTS", "GRADLE_USER_HOME", "NVM_DIR");
+
+    private static void inheritMinimalEnvironment(ProcessBuilder builder) {
+        builder.environment().clear();
+        builder.environment().putAll(minimalEnvironment(System.getenv()));
+    }
+
+    /** 纯函数：从宿主环境里筛出白名单项。便于直接断言"凭据被丢掉"。 */
+    static Map<String, String> minimalEnvironment(Map<String, String> host) {
+        Map<String, String> kept = new java.util.LinkedHashMap<String, String>();
+        for (String name : ENV_WHITELIST) {
+            String value = host.get(name);
+            if (value != null) {
+                kept.put(name, value);
+            }
+        }
+        return kept;
+    }
+
     private static LocalTool runCommand(final Workspace workspace) {
         return new LocalTool() {
             @Override
@@ -395,6 +421,8 @@ public final class LocalToolHandlers {
                 long timeout = Math.min(MAX_TIMEOUT_MS,
                         Math.max(1_000, number(args, "timeoutMs", (int) DEFAULT_TIMEOUT_MS)));
                 ProcessBuilder builder = new ProcessBuilder("/bin/sh", "-c", string(args, "command"));
+                // 子进程不继承宿主环境：凭据类变量一律不传（05-action §5.4 run_command）
+                inheritMinimalEnvironment(builder);
                 builder.directory(cwd.toFile());
                 builder.redirectErrorStream(true);
                 Process process = builder.start();

@@ -18,6 +18,7 @@ import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.Map;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -323,5 +324,43 @@ class LocalToolHandlersTest {
         String out = tools.get("list_dir").handle(null, args).content();
 
         assertFalse(out.contains("leak.txt"), "根外目录内容不能列出来：" + out);
+    }
+
+    @Test
+    void 环境白名单只保留运行必需项_凭据类变量被丢掉() {
+        Map<String, String> host = new HashMap<String, String>();
+        host.put("PATH", "/usr/bin");
+        host.put("HOME", "/home/x");
+        host.put("OPENAI_API_KEY", "sk-should-not-leak");
+        host.put("AWS_SECRET_ACCESS_KEY", "aws-should-not-leak");
+
+        // 规则出处：05-action §5.4（run_command 子进程不继承宿主环境）
+        Map<String, String> kept = LocalToolHandlers.minimalEnvironment(host);
+
+        assertEquals("/usr/bin", kept.get("PATH"));
+        assertEquals("/home/x", kept.get("HOME"));
+        assertFalse(kept.containsKey("OPENAI_API_KEY"), "凭据类变量必须丢掉");
+        assertFalse(kept.containsKey("AWS_SECRET_ACCESS_KEY"), "凭据类变量必须丢掉");
+    }
+
+    @Test
+    void run_command子进程真的看不到非白名单变量() throws Exception {
+        // 固定候选：不能用 minimalEnvironment 去挑，否则退回旧实现时这里会自动跳过（用例恒真）
+        String any = null;
+        for (String name : java.util.Arrays.asList(
+                "SSH_AUTH_SOCK", "TERM_PROGRAM", "SHLVL", "PWD", "LOGNAME", "__CF_USER_TEXT_ENCODING")) {
+            if (System.getenv(name) != null) {
+                any = name;
+                break;
+            }
+        }
+        if (any == null) {
+            return;   // 宿主环境里没有候选变量（CI 容器可能是这样）
+        }
+        Map<String, Object> args = map("command", "echo " + any + "=${" + any + ":-unset-in-child}");
+
+        String out = tools.get("run_command").handle(null, args).content();
+
+        assertTrue(out.contains("unset-in-child"), any + " 不应出现在子进程：" + out);
     }
 }

@@ -14,6 +14,10 @@ public final class CommandParsing {
 
     /** 只作为前缀出现的包装命令：真正的程序是它后面那个词。 */
     private static final List<String> WRAPPERS = Arrays.asList("env", "command", "nohup", "time", "exec");
+    /** 段首的 shell 关键字与组命令：`{ rm -rf /; }`、`if …; then rm …; fi` 的真程序在后面。 */
+    private static final List<String> KEYWORDS = Arrays.asList(
+            "{", "}", "!", "if", "then", "else", "elif", "fi", "for", "do", "done",
+            "while", "until", "case", "esac", "select", "function");
     private static final String[] OPERATORS = {"&&", "||", ">>", "2>", "&>", "<<", "|", ";", "&", ">", "<", "(", ")"};
 
     private CommandParsing() {
@@ -193,7 +197,8 @@ public final class CommandParsing {
         int start = 0;
         while (start < words.size() - 1) {
             String word = words.get(start);
-            if (word.matches("[A-Za-z_][A-Za-z0-9_]*=.*") || WRAPPERS.contains(word)) {
+            if (word.matches("[A-Za-z_][A-Za-z0-9_]*=.*") || WRAPPERS.contains(word)
+                    || KEYWORDS.contains(word)) {
                 start++;
                 continue;
             }
@@ -211,8 +216,12 @@ public final class CommandParsing {
         return false;
     }
 
+    /** 重定向运算符（正好是这些 token）。引号里的 `>`/`<` 是普通字符，不能当成重定向。 */
+    private static final List<String> REDIRECT_OPERATORS =
+            Arrays.asList(">", ">>", "2>", "2>>", "1>", "&>", "&>>", "<", "0<");
+
     private static boolean isRedirect(String token) {
-        return token.contains(">") || token.contains("<");
+        return REDIRECT_OPERATORS.contains(token);
     }
 
     private static String baseName(String word) {
@@ -239,14 +248,23 @@ public final class CommandParsing {
                 if (c == '"') {
                     quote = 0;
                 } else if (c == '\\' && i + 1 < line.length()) {
-                    word.append(line.charAt(++i));
+                    char escaped = line.charAt(i + 1);
+                    i++;
+                    if (escaped != '\n') {
+                        word.append(escaped);
+                    }
                 } else {
                     word.append(c);
                 }
                 continue;
             }
             if (c == '\\' && i + 1 < line.length()) {
-                word.append(line.charAt(++i));
+                char escaped = line.charAt(i + 1);
+                i++;
+                if (escaped == '\n') {
+                    continue;   // 续行：反斜杠与换行整对消失，不落进词里（/bin/sh 行为）
+                }
+                word.append(escaped);
                 inWord = true;
                 continue;
             }

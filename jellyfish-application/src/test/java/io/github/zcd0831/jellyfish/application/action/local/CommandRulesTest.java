@@ -119,4 +119,31 @@ class CommandRulesTest {
         assertFalse(CommandRules.assess("awk 1 ~/.ssh/id_rsa").allowed());
         assertFalse(CommandRules.assess("sort .env").allowed());
     }
+
+    @Test
+    void 反斜杠续行不能把路径拆坏() {
+        // shell 会把「反斜杠+换行」整对消掉，判定层必须看到同一个词
+        assertFalse(CommandRules.assess("rm -rf \\\n/").allowed());
+    }
+
+    @Test
+    void 引号里的大于号不是重定向() {
+        // 曾经把 -c 的实参当重定向吞掉，内层命令直接消失
+        assertFalse(CommandRules.assess("sh -c 'echo a > b; rm -rf /'").allowed());
+        assertFalse(CommandRules.assess("bash -c \"echo a > b; rm -rf /\"").allowed());
+    }
+
+    @Test
+    void 段首关键字与组命令不掩盖真实程序名() {
+        assertFalse(CommandRules.assess("{ rm -rf /; }").allowed());
+        assertFalse(CommandRules.assess("if true; then rm -rf /; fi").allowed());
+        assertFalse(CommandRules.assess("! rm -rf /").allowed());
+    }
+
+    @Test
+    void 正常命令里的引号与重定向不受影响() {
+        assertTrue(CommandRules.assess("echo \"a > b\"").allowed());
+        assertTrue(CommandRules.assess("ls 2>&1").allowed());
+        assertTrue(CommandRules.assess("cat a.txt > b.txt").allowed());
+    }
 }

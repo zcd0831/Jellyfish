@@ -83,6 +83,10 @@ public final class TuiApp implements QuestionBroker.Answerer {
     /** 多行草稿：只在输入线程里读写。 */
     private final DraftInput draft = new DraftInput();
     private CompletableFuture<Answer> pending;
+    /** 当前问题：deliver 解析编号与「其他（自己输入）」时要用到。 */
+    private Question pendingQuestion;
+    /** 已选「其他（自己输入）」：下一行非空文本即答案。 */
+    private boolean awaitingFreeText;
     private volatile SessionId currentSession;
     private LineReader reader;
 
@@ -239,7 +243,7 @@ public final class TuiApp implements QuestionBroker.Answerer {
                         while (mode == InputMode.PAUSED) {
                             waitOnLock();
                         }
-                        prompt = mode == InputMode.QUESTION ? "回答（Esc 终止）> " : prompt();
+                        prompt = mode == InputMode.QUESTION ? questionPrompt() : prompt();
                     }
                     String line;
                     gateway.reading(reader);
@@ -301,7 +305,12 @@ public final class TuiApp implements QuestionBroker.Answerer {
                     commands.offer("exit");
                     return;
                 }
-                pending.complete(Answer.answered(line));
+                Answer chosen = interpret(text);
+                if (chosen == null) {
+                    return;   // 无效回答：不完成提问，重新提示（08-application §8.5）
+                }
+                pending.complete(chosen);
+                awaitingFreeText = false;
                 mode = InputMode.PAUSED;
                 return;
             }
@@ -450,7 +459,9 @@ public final class TuiApp implements QuestionBroker.Answerer {
         CompletableFuture<Answer> future = new CompletableFuture<Answer>();
         synchronized (inputLock) {
             pending = future;
-            renderer.question(sourceLabel(question.source()), question.prompt());
+            pendingQuestion = question;
+            awaitingFreeText = false;
+            renderer.question(sourceLabel(question.source()), question.prompt(), question.options());
             mode = InputMode.QUESTION;
             inputLock.notifyAll();
         }
@@ -464,6 +475,8 @@ public final class TuiApp implements QuestionBroker.Answerer {
         } finally {
             synchronized (inputLock) {
                 pending = null;
+                pendingQuestion = null;
+                awaitingFreeText = false;
                 mode = InputMode.PAUSED;
             }
         }
@@ -494,6 +507,38 @@ public final class TuiApp implements QuestionBroker.Answerer {
         } catch (RuntimeException ignored) {
             // 恢复失败交给终端自己兜底
         }
+    }
+
+    /** 等答案时的提示符：选了「其他」就要自由文本，否则提示可选的编号范围。 */
+    private String questionPrompt() {
+        Question question = pendingQuestion;
+        if (question == null || question.options() == null || question.options().isEmpty()) {
+            return "回答（Esc 终止）> ";
+        }
+        if (awaitingFreeText) {
+            return "回答（Esc 终止）> ";
+        }
+        return "回答（1-" + (question.options().size() + 1) + "，Esc 终止）> ";
+    }
+
+    /**
+     * 把一行输入解释成回答；返回 null 表示这行不算回答，要重新提示。
+     * 规则出处：08-application §8.5（带 options 时按编号选，自动追加「其他（自己输入）」）。
+     */
+    private Answer interpret(String text) {
+        Question question = pendingQuestion;
+        ChoiceInput.Result result = ChoiceInput.parse(text,
+                question == null ? null : question.options(), awaitingFreeText);
+        if (result.wantsFreeText) {
+            awaitingFreeText = true;
+            renderer.info("请输入你的回答（Esc 终止）");
+            return null;
+        }
+        if (result.reject != null) {
+            renderer.invalidAnswer(result.reject);
+            return null;
+        }
+        return Answer.answered(result.answer);
     }
 
     /** 终止时唤醒阻塞中的提问（Esc 与 exit 共用）。 */

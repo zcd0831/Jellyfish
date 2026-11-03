@@ -115,10 +115,27 @@ public final class AnsiRenderer {
         out.flush();
     }
 
-    /** 提问就地暂停：先断开当前行，再打印来源与问题。 */
-    public synchronized void question(String sourceLabel, String prompt) {
+    /**
+     * 提问就地暂停：先断开当前行，再打印来源与问题；带选项时逐条编号，
+     * 末尾固定追加「其他（自己输入）」（08-application §8.5 端口契约）。
+     */
+    public synchronized void question(String sourceLabel, String prompt, java.util.List<String> options) {
         endTurn();
         out.println(paint(YELLOW) + "[" + sourceLabel + "] " + prompt + paint(RESET));
+        if (options != null && !options.isEmpty()) {
+            for (int i = 0; i < options.size(); i++) {
+                out.println(paint(DIM) + "  " + (i + 1) + ") " + options.get(i) + paint(RESET));
+            }
+            out.println(paint(DIM) + "  " + (options.size() + 1) + ") 其他（自己输入）" + paint(RESET));
+        }
+        column = 0;
+        out.flush();
+    }
+
+    /** 无效回答（空行 / 编号越界）就地提示，不当作回答。 */
+    public synchronized void invalidAnswer(String text) {
+        endTurn();
+        out.println(paint(RED) + text + paint(RESET));
         column = 0;
         out.flush();
     }

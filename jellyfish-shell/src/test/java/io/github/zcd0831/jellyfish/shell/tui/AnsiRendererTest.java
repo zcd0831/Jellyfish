@@ -73,10 +73,25 @@ class AnsiRendererTest {
         AnsiRenderer renderer = new AnsiRenderer(new PrintStream(bytes, true, "UTF-8"), 80);
         renderer.append("半句话");
 
-        renderer.question("验收", "同意吗？");
+        renderer.question("验收", "同意吗？", null);
 
         String text = bytes.toString("UTF-8");
         assertTrue(text.contains("[验收] 同意吗？"));
         assertTrue(text.indexOf("半句话") < text.indexOf("[验收]"));
+    }
+
+    @Test
+    void 带选项的提问逐条编号并自动追加其他() throws UnsupportedEncodingException {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        AnsiRenderer renderer = new AnsiRenderer(new PrintStream(bytes, true, "UTF-8"), 80);
+
+        renderer.question("审批", "同意吗？", java.util.Arrays.asList("同意", "不同意"));
+
+        String text = bytes.toString("UTF-8");
+        // 08-application §8.5：有选项时按编号呈现，末尾固定「其他（自己输入）」
+        assertTrue(text.contains("[审批] 同意吗？"), text);
+        assertTrue(text.contains("1) 同意"), text);
+        assertTrue(text.contains("2) 不同意"), text);
+        assertTrue(text.contains("3) 其他（自己输入）"), text);
     }
 }

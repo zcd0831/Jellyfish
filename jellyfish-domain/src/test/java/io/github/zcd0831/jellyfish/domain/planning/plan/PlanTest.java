@@ -100,6 +100,44 @@ class PlanTest {
         assertEquals(StepStatus.PENDING, plan.getCurrentStep().status());
     }
 
+    /**
+     * SUPERSEDED 的豁免是承重的：被重划掉的步骤永远停在 SUPERSEDED，
+     * 若 allSucceeded 不认它，计划永远到不了 COMPLETED（注掉豁免 ⇒ 这条红）。
+     * 规则出处：06-planning §6.8.1 规则 5。
+     */
+    @Test
+    void 被重划掉的步骤不算未完成_计划仍能完成() {
+        Plan plan = plan(2);
+        plan.beginCurrentStep();
+        plan.markStepSucceeded(StepId.of("step1"), "完成", null);
+        plan.applyReplan(Collections.singletonList(PlanSteps.draft(StepId.of("new"), 0, "新的一步",
+                "目标", "期望", "标准", EnumSet.of(VerificationType.DETERMINISTIC))));
+
+        plan.beginCurrentStep();
+        plan.markStepSucceeded(StepId.of("new"), "完成", null);
+
+        assertEquals(StepStatus.SUPERSEDED, plan.steps().get(1).status());
+        assertEquals(PlanStatus.COMPLETED, plan.status(), "SUPERSEDED 不该挡住计划完成");
+    }
+
+    /** 5 处 requireExecuting 各守一条：终结之后任何推进都必须拒绝（§6.8.1 规则 6）。 */
+    @Test
+    void 终结后每个推进入口都拒绝() {
+        Plan plan = plan(2);
+        plan.beginCurrentStep();
+        plan.terminate("重划用尽");
+
+        assertThrows(DomainInvariantViolation.class, plan::beginCurrentStep);
+        assertThrows(DomainInvariantViolation.class,
+                () -> plan.markStepSucceeded(StepId.of("step1"), "完成", null));
+        assertThrows(DomainInvariantViolation.class,
+                () -> plan.markStepFailed(StepId.of("step1"), null));
+        assertThrows(DomainInvariantViolation.class, () -> plan.retryStep(StepId.of("step1")));
+        assertThrows(DomainInvariantViolation.class, () -> plan.applyReplan(
+                Collections.singletonList(PlanSteps.draft(StepId.of("new"), 0, "新的一步",
+                        "目标", "期望", "标准", EnumSet.noneOf(VerificationType.class)))));
+    }
+
     @Test
     void 判失败的attempt不存在时报错而不是静默忽略() {
         Plan plan = plan(2);

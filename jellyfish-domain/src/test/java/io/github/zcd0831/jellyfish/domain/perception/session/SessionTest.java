@@ -159,6 +159,53 @@ class SessionTest {
                 () -> session.buildContextForLlm(CHARS, 100000));
     }
 
+    /**
+     * 逐个分支守住 assertTurnShape：这些形状一旦被放行，模型收到的是"请求了却没结果"的历史。
+     * 规则出处：04-perception §4.8.1 规则 14/17。
+     */
+    @Test
+    void 连续两条工具请求也是不变量违反() {
+        Session session = newSession();
+        session.appendRecord(RecordRole.TOOL_REQUEST, call("c1", "list_dir"), null, "t1", "m1", null, 1L);
+        session.appendRecord(RecordRole.TOOL_REQUEST, call("c2", "list_dir"), null, "t1", "m1", null, 2L);
+
+        // 断言到具体文案：只靠末尾那条"未闭合"也能抛同样的异常，那样这条分支就没有守卫了
+        io.github.zcd0831.jellyfish.domain.shared.DomainInvariantViolation violation =
+                assertThrows(io.github.zcd0831.jellyfish.domain.shared.DomainInvariantViolation.class,
+                        () -> session.buildContextForLlm(CHARS, 100000));
+        assertTrue(violation.getMessage().contains("工具请求没有对应的结果"), violation.getMessage());
+    }
+
+    @Test
+    void 没有请求的工具结果是不变量违反() {
+        Session session = newSession();
+        session.appendRecord(RecordRole.TOOL_RESULT, "结果", null, "t1", "m1", null, 1L);
+
+        assertThrows(io.github.zcd0831.jellyfish.domain.shared.DomainInvariantViolation.class,
+                () -> session.buildContextForLlm(CHARS, 100000));
+    }
+
+    @Test
+    void 工具请求未闭合时插入普通记录也是不变量违反() {
+        Session session = newSession();
+        session.appendRecord(RecordRole.TOOL_REQUEST, call("c1", "list_dir"), null, "t1", "m1", null, 1L);
+        session.appendRecord(RecordRole.SYSTEM, "插进来的注入", null, "t1", "m1", null, 2L);
+
+        // SYSTEM 不进对话轮，所以这里命中的是「末尾未闭合」那条；两者都为真即可
+        assertThrows(io.github.zcd0831.jellyfish.domain.shared.DomainInvariantViolation.class,
+                () -> session.buildContextForLlm(CHARS, 100000));
+    }
+
+    @Test
+    void 工具请求未闭合就来了assistant也是不变量违反() {
+        Session session = newSession();
+        session.appendRecord(RecordRole.TOOL_REQUEST, call("c1", "list_dir"), null, "t1", "m1", null, 1L);
+        session.appendRecord(RecordRole.ASSISTANT, "我先说一句", null, "t1", "m1", null, 2L);
+
+        assertThrows(io.github.zcd0831.jellyfish.domain.shared.DomainInvariantViolation.class,
+                () -> session.buildContextForLlm(CHARS, 100000));
+    }
+
     @Test
     void reasoning计入窗口用量并带产者() {
         Session session = newSession();

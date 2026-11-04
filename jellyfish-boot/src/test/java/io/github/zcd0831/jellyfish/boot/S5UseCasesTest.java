@@ -49,12 +49,26 @@ class S5UseCasesTest {
     private ManageCatalogUseCase manageCatalog;
     private io.github.zcd0831.jellyfish.infrastructure.file.FileCommitScope commitScope;
     private io.github.zcd0831.jellyfish.infrastructure.file.FileBudgetRepository budgets;
+    private final java.util.List<io.github.zcd0831.jellyfish.domain.shared.DomainEvent> published =
+            new java.util.ArrayList<io.github.zcd0831.jellyfish.domain.shared.DomainEvent>();
+    private final io.github.zcd0831.jellyfish.application.planning.SessionCancellations cancellations =
+            new io.github.zcd0831.jellyfish.application.planning.SessionCancellations();
 
     @BeforeEach
     void setUp() {
         DataDirectory dir = DataDirectory.of(tmp.toString());
         this.dir = dir;
-        InProcessEventPublisher publisher = new InProcessEventPublisher();
+        final io.github.zcd0831.jellyfish.application.shared.port.DomainEventPublisher publisher =
+                new io.github.zcd0831.jellyfish.application.shared.port.DomainEventPublisher() {
+                    @Override
+                    public void publishAfterCommit(java.util.List<?> events) {
+                        for (Object event : events) {
+                            if (event instanceof io.github.zcd0831.jellyfish.domain.shared.DomainEvent) {
+                                published.add((io.github.zcd0831.jellyfish.domain.shared.DomainEvent) event);
+                            }
+                        }
+                    }
+                };
         sessions = new FileSessionRepository(dir, codec);
         policies = new FilePolicyRepository(dir, codec);
         commitScope = new FileCommitScope(dir, codec);
@@ -87,8 +101,7 @@ class S5UseCasesTest {
                         policies, commitScope, publisher, event -> { }, budgetService,
                         text -> text == null ? 0 : text.length() / 4);
         manageSession = new ManageSessionUseCase(sessions, new FileArtifactStore(dir),
-                commitScope, publisher, store(), window, budgets, policies,
-                new io.github.zcd0831.jellyfish.application.planning.SessionCancellations());
+                commitScope, publisher, store(), window, budgets, policies, cancellations);
         adjustPolicy = new AdjustPolicyUseCase(policies, commitScope, publisher);
         manageCatalog = new ManageCatalogUseCase(FileCatalogRepository.standalone(dir, codec));
     }
@@ -155,6 +168,51 @@ class S5UseCasesTest {
 
         assertNotNull(sessions.load(id), "会话仍在，只是本轮被取消");
         assertFalse(manageSession.list().value().isEmpty(), "取消不影响会话存在性");
+    }
+
+    /**
+     * 终止主会话要级联子会话：把级联删掉时下面这条会红（原先全量 288 条用例仍全绿）。
+     * 规则出处：08-application §8.9.4 / §8.9.4.1（父终止级联子令牌，每个被终止的会话各一条事件）。
+     */
+    @Test
+    void 终止主会话会级联终止子会话() {
+        SessionId root = newSession();
+        Session child = Session.create(SessionId.of("s2"), root, AgentId.of("builtin.main"),
+                ModelId.of("m1"), 2L, null);
+        sessions.save(child);
+
+        assertTrue(manageSession.cancel(root).isOk());
+
+        int cancelledEvents = 0;
+        for (io.github.zcd0831.jellyfish.domain.shared.DomainEvent event : published) {
+            if ("session.cancelled".equals(event.name())) {
+                cancelledEvents++;
+            }
+        }
+        assertEquals(2, cancelledEvents, "父会话与子会话各一条 SessionCancelled：" + published);
+    }
+
+    /**
+     * 台账在会话族根上：子会话回放时要读根台账（rootOf 退化成 return session.id() 时这条红）。
+     * 规则出处：05-action §5.9.1、08-application §8.9.4。
+     */
+    @Test
+    void 子会话回放读的是根台账() {
+        SessionId root = newSession();
+        Session child = Session.create(SessionId.of("s2"), root, AgentId.of("builtin.main"),
+                ModelId.of("m1"), 2L, null);
+        sessions.save(child);
+        io.github.zcd0831.jellyfish.domain.action.budget.Budget budget =
+                io.github.zcd0831.jellyfish.domain.action.budget.Budget.openFor(
+                        io.github.zcd0831.jellyfish.domain.shared.BudgetId.of("b1"), root);
+        budget.recordUsage(180L, policies.load());
+        budgets.save(budget);
+
+        Result<io.github.zcd0831.jellyfish.application.perception.SessionTranscript> transcript =
+                manageSession.transcript(child.id(), 10);
+
+        assertTrue(transcript.isOk());
+        assertEquals(180L, transcript.value().consumedTokens(), "子会话要显示根台账的消耗");
     }
 
     @Test

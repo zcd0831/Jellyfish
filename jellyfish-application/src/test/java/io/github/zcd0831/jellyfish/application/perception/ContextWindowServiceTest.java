@@ -174,15 +174,23 @@ class ContextWindowServiceTest {
         assertEquals("0123456789", after.getRecords().get(2).content());
     }
 
+    /**
+     * 触发点必须把末尾摘要指令算进去：素材本身没超、加指令就超 ⇒ 必须折叠。
+     * 原先只喂 1 条记录、又断言 requests 为空 —— 无论算不算指令都不会发起请求，恒真。
+     * 规则出处：04-perception §4.9.2 要点 8、§4.8.1 规则 19。
+     */
     @Test
     void 折叠触发点把摘要指令算进去() {
-        policy = tightPolicy(1, 15);
-        Session session = sessionWith(1);
-        assertTrue(service().currentWindow(session).getUsage().getUsedTokens() <= 15);
+        policy = tightPolicy(2, 100);   // 窗口 60 ≤ 100，但 60 + 指令估计 > 100
+        Session session = sessionWith(6);
+        ContextWindowService subject = service();
+        assertTrue(subject.currentWindow(session).getUsage().getUsedTokens() <= 100, "素材本身没超限");
 
-        service().ensureWithinLimit(session);
+        subject.ensureWithinLimit(session);
 
-        assertTrue(requests.isEmpty(), "素材本身没超限、但加指令会超 ⇒ 仍需折叠；这里只剩一轮，没有可折的");
+        Record last = session.records().get(session.records().size() - 1);
+        assertEquals(RecordRole.SUMMARY, last.role(), "加指令才超限也必须折叠（不算指令就永远不折）");
+        assertEquals(1, requests.size());
     }
 
     @Test

@@ -65,15 +65,19 @@ public final class ManageSessionUseCase {
         cancellations.cancel(sessionId);
         session.cancel();
         commitScope.stageReplace(session);
+        // 每个被终止的会话各一条 SessionCancelled：子会话的事件也要一起派发，
+        // 否则订阅方永远看不到"这个子会话被父终止了"（08-application §8.9.4）
+        List<DomainEvent> events = new ArrayList<DomainEvent>(session.pullEvents());
         for (SessionId child : childSessionsOf(sessionId)) {
             Session childSession = sessions.load(child);
             if (childSession != null) {
                 childSession.cancel();
                 commitScope.stageReplace(childSession);
+                events.addAll(childSession.pullEvents());
             }
         }
         commitScope.commit();
-        eventPublisher.publishAfterCommit(new ArrayList<DomainEvent>(session.pullEvents()));
+        eventPublisher.publishAfterCommit(events);
         return Result.ok(null);
     }
 

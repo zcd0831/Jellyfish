@@ -135,7 +135,9 @@ public final class ContextWindowService {
      * 规则出处：04-perception §4.9.2、§4.8.1 规则 19/20/21。
      */
     private void collapse(Session session, RuntimePolicy policy, ContextWindow window) {
-        List<List<Record>> turns = session.turnsAfter(coveredThrough(session));
+        // 先过形状守卫（每一轮必须完整），再连同 SYSTEM 运行期注入一起折
+        session.turnsAfter(coveredThrough(session));
+        List<List<Record>> turns = foldableTurns(session, coveredThrough(session));
         int keepFrom = retainStart(turns, policy.collapseRetainRecordCount());
         if (keepFrom <= 0) {
             // 窗口本来就在保留区以内：没有可折的旧轮
@@ -154,7 +156,11 @@ public final class ContextWindowService {
             return;
         }
         if (result.usage() != null) {
-            budgetService.recordUsage(session, result.usage());
+            budgetService.recordUsage(session, result.usage());   // 账不能退，但下面不落摘要
+        }
+        if (result.text() == null || result.text().trim().isEmpty()) {
+            // 摘要请求只回了 tool_calls / 空正文：按摘要失败处理，不落半截 SUMMARY（04 §4.8.1 规则 21）
+            return;
         }
         session.markSummarized(withHoleNote(result.text(), dropped), covered, System.currentTimeMillis());
         commitScope.stageAppend(session.id(), lastRecord(session));
@@ -197,6 +203,32 @@ public final class ContextWindowService {
                         ? Collections.<io.github.zcd0831.jellyfish.domain.perception.session.ToolSchemaSnapshot>emptyList()
                         : session.systemPromptSnapshot().getToolList();
         return new ModelInvocationRequest(session.id(), session.activeModelId(), systemPrompt, messages, tools, 0, null);
+    }
+
+    /**
+     * 待摘要区间的"整轮"视图，<strong>包含 SYSTEM 运行期注入</strong>（SOP / 工具 / 经验注入）。
+     * {@link Session#turnsAfter} 会过滤掉 SYSTEM——那是给形状检查用的；但折叠素材必须是
+     * "区间里的全部记录"，否则注入内容既不在素材里、也不在被丢弃区间声明里，静默消失。
+     * 规则出处：04-perception §4.8.1 规则 9/19（SYSTEM 记录同受覆盖边界约束）、§4.9.2。
+     */
+    private static List<List<Record>> foldableTurns(Session session, int coveredThrough) {
+        List<List<Record>> turns = new ArrayList<List<Record>>();
+        List<Record> current = null;
+        String currentTurnId = null;
+        for (Record record : session.records()) {
+            if (record.sequence() <= coveredThrough || record.role() == RecordRole.SUMMARY) {
+                continue;
+            }
+            boolean joins = current != null && record.turnId() != null
+                    && record.turnId().equals(currentTurnId);
+            if (!joins) {
+                current = new ArrayList<Record>();
+                currentTurnId = record.turnId();
+                turns.add(current);
+            }
+            current.add(record);
+        }
+        return turns;
     }
 
     /** 保留区从第几轮开始：从最后一轮往前累计条数，够 retainCount 即止（整轮对齐）。 */

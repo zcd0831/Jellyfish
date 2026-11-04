@@ -63,8 +63,11 @@ public final class ConversationMessages {
         String producer = null;
         List<ToolCall> calls = new ArrayList<ToolCall>();
         List<String> results = new ArrayList<String>();
+        List<String> injections = new ArrayList<String>();
         for (Record record : turn) {
-            if (record.role() == RecordRole.ASSISTANT) {
+            if (record.role() == RecordRole.SYSTEM) {
+                injections.add(record.content());   // 同行注入不能被静默丢掉：单独成一条
+            } else if (record.role() == RecordRole.ASSISTANT) {
                 content = record.content();
             } else if (record.role() == RecordRole.TOOL_REQUEST) {
                 calls.addAll(parseCalls(record.content()));
@@ -77,6 +80,9 @@ public final class ConversationMessages {
             if (producer == null) {
                 producer = record.producerModelId();
             }
+        }
+        for (String injection : injections) {
+            messages.add(ChatMessage.of(RecordRole.SYSTEM, injection));
         }
         String replayReasoning = producer != null && producer.equals(targetModelId.getValue()) ? reasoning : null;
         if (calls.isEmpty()) {

@@ -56,12 +56,18 @@ class ContextWindowServiceTest {
 
     private final List<ModelInvocationRequest> requests = new ArrayList<ModelInvocationRequest>();
     private final Deque<RuntimeException> failures = new ArrayDeque<RuntimeException>();
+    /** 非 null 时压过默认的"摘要正文"回复：用来构造空正文/只回工具调用的摘要响应。 */
+    private ModelInvocationResult forced;
+
     private final ModelInvocationPort model = new ModelInvocationPort() {
         @Override
         public ModelInvocationResult invoke(ModelInvocationRequest request) {
             requests.add(request);
             if (!failures.isEmpty()) {
                 throw failures.removeFirst();
+            }
+            if (forced != null) {
+                return forced;
             }
             return new ModelInvocationResult("摘要正文", Collections.emptyList(), null, ModelId.of("m1"));
         }
@@ -328,4 +334,52 @@ class ContextWindowServiceTest {
         values.put("inputSafetyMargin", 0);
         return RuntimePolicy.defaults().adjust(values);
     }
+    /**
+     * 折叠素材必须含 SYSTEM 运行期注入：不在素材里、又不在"被丢弃区间"声明里，
+     * 那条 SOP / 经验注入就随折叠静默消失。规则出处：04-perception §4.8.1 规则 9/19。
+     */
+    @Test
+    void 折叠素材包含运行期注入() {
+        policy = tightPolicy(2, 20);
+        Session session = Session.create(SessionId.of("s1"), null, AgentId.of("a"), ModelId.of("m1"), 1L, null);
+        session.appendRecord(RecordRole.USER, "0123456789", null, 0);
+        session.appendRecord(RecordRole.ASSISTANT, "0123456789", null, "t0", "m1", null, 1);
+        // 运行期注入自成一条（turnId 为空），与真实注入一致
+        session.appendRecord(RecordRole.SYSTEM, "SOP：先读文件再改", null, System.currentTimeMillis());
+        session.appendRecord(RecordRole.USER, "0123456789", null, 3);
+        session.appendRecord(RecordRole.USER, "0123456789", null, 4);
+        session.appendRecord(RecordRole.USER, "0123456789", null, 5);
+
+        service().ensureWithinLimit(session);
+
+        assertFalse(requests.isEmpty(), "该折的时候要折");
+        boolean sawInjection = false;
+        for (ChatMessage message : requests.get(0).messages()) {
+            if (message.content() != null && message.content().contains("SOP：先读文件再改")) {
+                sawInjection = true;
+            }
+        }
+        assertTrue(sawInjection, "摘要素材里要有那条注入：" + requests.get(0).messages());
+    }
+
+    /**
+     * 摘要请求只回了 tool_calls / 空正文 ⇒ 按摘要失败处理：不落半截 SUMMARY，不推进覆盖边界。
+     * 规则出处：04-perception §4.8.1 规则 21（摘要请求里模型若返回 tool_calls ⇒ 按摘要失败处理）。
+     */
+    @Test
+    void 摘要没有正文就不落盘() {
+        policy = tightPolicy(2, 20);
+        forced = new ModelInvocationResult(null,
+                Collections.singletonList(new io.github.zcd0831.jellyfish.application.action.port.ToolCall(
+                        "c1", "read_file", "{}")),
+                null, ModelId.of("m1"));
+        Session session = sessionWith(6);
+
+        service().ensureWithinLimit(session);
+
+        for (Record record : session.records()) {
+            assertFalse(record.role() == RecordRole.SUMMARY, "空摘要不能落盘：" + record.content());
+        }
+    }
+
 }

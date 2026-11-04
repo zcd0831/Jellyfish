@@ -34,12 +34,20 @@ public final class PluginAssembler {
         this.routes = routes;
     }
 
-    /** 路由表是 (manifest, runtime) 的纯函数：整体重算最不容易错，也不必担心增量残留。 */
+    /**
+     * 路由表是 (manifest, runtime) 的纯函数：整体重算最不容易错，也不必担心增量残留。
+     * <strong>只装配已授权的插件</strong>（grantedCapabilities 非空）；启动时由 Main 调一次。
+     * 规则出处：08-application §8.9.6。
+     */
     public void assembleAll() {
         List<PluginManifest> all = manifests.list();
         unregisterTools(all);
         Map<String, Object> next = new LinkedHashMap<String, Object>();
         for (PluginManifest manifest : all) {
+            if (manifest.grantedCapabilities().isEmpty()) {
+                // 未授权的插件只保留声明：不装载 jar，第三方代码不得开始执行（08-application §8.9.6）
+                continue;
+            }
             runtime.start(manifest.id());
             if (manifest.isGranted(TOOLS)) {
                 registerTools(manifest);

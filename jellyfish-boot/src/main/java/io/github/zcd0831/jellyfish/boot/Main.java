@@ -60,6 +60,8 @@ public final class Main {
                 System.out.println(warning);
             }
             component.schemaMigrator().migrate();
+            // 已授权插件在装配完声明之后、任何工具调用之前装载（08-application §8.9.6）
+            component.pluginAssembler().assembleAll();
             // 启动打印生效值，一条日志解决"我改的怎么没生效"
             System.out.println("data-dir=" + dir.root()
                     + "  log-level=" + options.logLevel()

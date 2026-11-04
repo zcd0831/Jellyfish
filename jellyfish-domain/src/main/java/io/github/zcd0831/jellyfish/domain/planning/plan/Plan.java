@@ -60,7 +60,7 @@ public class Plan {
     public PlanStep getCurrentStep() {
         PlanStep pending = null;
         for (PlanStep step : steps) {
-            if (step.status() == StepStatus.RUNNING || step.status() == StepStatus.VERIFYING) {
+            if (step.status() == StepStatus.RUNNING) {
                 return step;
             }
             if (pending == null && step.status() == StepStatus.PENDING) {
@@ -155,10 +155,6 @@ public class Plan {
             }
         }
         throw new DomainInvariantViolation("计划里没有该尝试：" + stepId.getValue() + "#" + attemptNo);
-    }
-
-    public void markStepVerifying(StepId stepId) {
-        requireStep(stepId).markVerifying();
     }
 
     public void assignExperiences(StepId stepId, List<ExperienceId> experienceIds) {

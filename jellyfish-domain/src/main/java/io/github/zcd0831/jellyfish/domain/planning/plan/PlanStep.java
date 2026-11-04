@@ -80,10 +80,6 @@ public class PlanStep {
         this.status = StepStatus.SUPERSEDED;
     }
 
-    void markVerifying() {
-        this.status = StepStatus.VERIFYING;
-    }
-
     void markRunning() {
         this.status = StepStatus.RUNNING;
     }

@@ -269,4 +269,15 @@ class PlanTest {
         assertEquals(PlanStatus.COMPLETED, finished.status());
     }
 
+    /**
+     * 状态集与文档逐字对齐：多出来的状态就是"没人生产的状态"（曾经的 VERIFYING）。
+     * 规则出处：06-planning §6.4 StepStatus（PENDING / RUNNING / SUCCEEDED / FAILED / SUPERSEDED）。
+     */
+    @Test
+    void 步骤状态只有文档列出的五种() {
+        assertEquals(EnumSet.of(StepStatus.PENDING, StepStatus.RUNNING, StepStatus.SUCCEEDED,
+                        StepStatus.FAILED, StepStatus.SUPERSEDED),
+                EnumSet.allOf(StepStatus.class));
+    }
+
 }

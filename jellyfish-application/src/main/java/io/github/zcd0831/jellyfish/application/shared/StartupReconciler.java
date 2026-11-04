@@ -105,7 +105,7 @@ public final class StartupReconciler {
     /** 规则 ①②⑥：事实已落盘但聚合没跟上。 */
     private void reconcilePlan(Session session, Plan plan) {
         for (PlanStep step : plan.steps()) {
-            if (step.status() != StepStatus.RUNNING && step.status() != StepStatus.VERIFYING) {
+            if (step.status() != StepStatus.RUNNING) {
                 continue;
             }
             Attempt attempt = step.attempts().isEmpty() ? null : step.attempts().get(step.attempts().size() - 1);

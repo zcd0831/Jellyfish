@@ -129,6 +129,17 @@ public class Session {
      * 规则出处：04-perception §4.9.2 第 3 步、§4.8.1 规则 9 ③ / 规则 11。
      */
     public void markSummarized(String summary, int coveredThroughSequence, long now) {
+        int floor = latest(RecordRole.SUMMARY) == null ? 0 : latest(RecordRole.SUMMARY).summaryCoversUpTo();
+        int ceiling = records.isEmpty() ? 0 : records.get(records.size() - 1).sequence();
+        if (coveredThroughSequence < floor) {
+            throw new DomainInvariantViolation("摘要覆盖边界不能倒退：" + coveredThroughSequence
+                    + " < " + floor);
+        }
+        if (coveredThroughSequence > ceiling) {
+            throw new DomainInvariantViolation("摘要覆盖边界越界：" + coveredThroughSequence
+                    + " > " + ceiling);
+        }
+        assertTurnBoundary(coveredThroughSequence);
         Record record = new Record(RecordId.of(java.util.UUID.randomUUID().toString()), RecordRole.SUMMARY,
                 summary, null, null, coveredThroughSequence, nextSequence(), now);
         records.add(record);
@@ -233,6 +244,7 @@ public class Session {
      */
     private static void assertTurnShape(List<List<Record>> turns) {
         for (List<Record> turn : turns) {
+            assertTurnHead(turn);
             int assistants = 0;
             boolean pending = false;
             for (Record record : turn) {
@@ -261,6 +273,50 @@ public class Session {
             if (assistants > 1) {
                 throw new DomainInvariantViolation("同一轮模型响应出现了多条 assistant 记录");
             }
+        }
+    }
+
+    /**
+     * 轮首判定：用户输入自成一"轮"，不能与其他记录共享 turnId。
+     * 注意这里<strong>不</strong>要求轮首是 ASSISTANT：模型只调工具、不写字时
+     * 这一轮在流水里就是 [TOOL_REQUEST…]，没有 assistant 记录可打头（04 §4.8.1 规则 14）。
+     * 折叠边界切在一轮中间由 {@link #assertTurnBoundary} 在写入时拦住。
+     * 规则出处：04-perception §4.8.1 规则 14。
+     */
+    private static void assertTurnHead(List<Record> turn) {
+        Record head = turn.get(0);
+        if (head.role() == RecordRole.USER && turn.size() > 1) {
+            throw new DomainInvariantViolation("用户输入自成一轮，不能与其他记录同轮："
+                    + head.id().getValue());
+        }
+    }
+
+    /**
+     * 折叠边界必须落在轮边界上：边界前后不能是同一轮的两条记录。
+     * 切在轮中间会让窗口以 [TOOL_REQUEST, TOOL_RESULT] 打头，那条 assistant 原文就凭空消失
+     * （发给模型时 content 变 null），而形状检查发现不了。
+     * 规则出处：04-perception §4.8.1（"折叠边界必须落在轮边界，否则窗口里会留下半截工具轮"）、规则 14。
+     */
+    private void assertTurnBoundary(int coveredThroughSequence) {
+        if (coveredThroughSequence <= 0) {
+            return;   // 边界在流水起点之前：整窗保留，不存在切轮
+        }
+        Record before = null;
+        Record after = null;
+        for (Record record : records) {
+            if (record.role() == RecordRole.SYSTEM || record.role() == RecordRole.SUMMARY) {
+                continue;   // 运行期注入与摘要不是"轮"的成员
+            }
+            if (record.sequence() <= coveredThroughSequence) {
+                before = record;
+            } else if (after == null) {
+                after = record;
+            }
+        }
+        if (before != null && after != null && before.turnId() != null
+                && before.turnId().equals(after.turnId())) {
+            throw new DomainInvariantViolation("摘要覆盖边界切在轮中间（turnId="
+                    + before.turnId() + "，记录 " + before.sequence() + "/" + after.sequence() + "）");
         }
     }
 

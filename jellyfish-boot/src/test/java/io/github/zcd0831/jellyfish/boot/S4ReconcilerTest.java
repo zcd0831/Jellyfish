@@ -151,15 +151,15 @@ class S4ReconcilerTest {
         Session crashed = sessions.load(sessionId);
         records.appendAll(sessionId, java.util.Arrays.asList(
                 crashed.appendRecord(RecordRole.USER, "读一下文件", null, "turn-1", null, null, 1L),
-                crashed.appendRecord(RecordRole.ASSISTANT, "我来读", null, "turn-1", "m1", null, 2L),
+                crashed.appendRecord(RecordRole.ASSISTANT, "我来读", null, "turn-2", "m1", null, 2L),
                 crashed.appendRecord(RecordRole.TOOL_REQUEST, "{\"tool\":\"read_file\"}", null,
-                        "turn-1", "m1", null, 3L)));
+                        "turn-2", "m1", null, 3L)));
 
         reconciler.reconcileStartup();
 
         List<Record> tail = records.last(sessionId, 1);
         assertEquals(RecordRole.TOOL_RESULT, tail.get(0).role());
-        assertEquals("turn-1", tail.get(0).turnId(), "中止结果挂在原轮上，流水才算闭合");
+        assertEquals("turn-2", tail.get(0).turnId(), "中止结果挂在原轮上，流水才算闭合");
         // 续跑的第一步：会话带着流水重建，组装上下文不抛；且那条轮仍然完整（ASSISTANT 打头）
         Session resumed = Session.rehydrate(sessionId, null, AgentId.of("builtin.main"), ModelId.of("m1"),
                 null, 1L, records.last(sessionId, 10), null);

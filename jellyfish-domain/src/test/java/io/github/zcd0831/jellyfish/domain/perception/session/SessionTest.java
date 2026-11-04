@@ -4,6 +4,7 @@ import io.github.zcd0831.jellyfish.domain.shared.AgentId;
 import io.github.zcd0831.jellyfish.domain.shared.ModelId;
 import io.github.zcd0831.jellyfish.domain.shared.SessionId;
 import io.github.zcd0831.jellyfish.domain.shared.TokenEstimator;
+import io.github.zcd0831.jellyfish.domain.shared.DomainInvariantViolation;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -166,8 +167,9 @@ class SessionTest {
     @Test
     void 连续两条工具请求也是不变量违反() {
         Session session = newSession();
-        session.appendRecord(RecordRole.TOOL_REQUEST, call("c1", "list_dir"), null, "t1", "m1", null, 1L);
-        session.appendRecord(RecordRole.TOOL_REQUEST, call("c2", "list_dir"), null, "t1", "m1", null, 2L);
+        session.appendRecord(RecordRole.ASSISTANT, "我来看看", null, "t1", "m1", null, 1L);
+        session.appendRecord(RecordRole.TOOL_REQUEST, call("c1", "list_dir"), null, "t1", "m1", null, 2L);
+        session.appendRecord(RecordRole.TOOL_REQUEST, call("c2", "list_dir"), null, "t1", "m1", null, 3L);
 
         // 断言到具体文案：只靠末尾那条"未闭合"也能抛同样的异常，那样这条分支就没有守卫了
         io.github.zcd0831.jellyfish.domain.shared.DomainInvariantViolation violation =
@@ -209,9 +211,11 @@ class SessionTest {
     @Test
     void reasoning计入窗口用量并带产者() {
         Session session = newSession();
-        session.appendRecord(RecordRole.TOOL_REQUEST, call("c1", "list_dir"), "思考了十个字符", "t1", "m-model",
-                null, 1L);
-        session.appendRecord(RecordRole.TOOL_RESULT, "结果", null, "t1", "m-model", null, 2L);
+        // reasoning 是模型私有状态，落在 assistant 那条上（04 §4.8.1 规则 14）
+        session.appendRecord(RecordRole.ASSISTANT, null, "思考了十个字符", "t1", "m-model", null, 1L);
+        session.appendRecord(RecordRole.TOOL_REQUEST, call("c1", "list_dir"), null, "t1", "m-model",
+                null, 2L);
+        session.appendRecord(RecordRole.TOOL_RESULT, "结果", null, "t1", "m-model", null, 3L);
 
         ContextWindow window = session.buildContextForLlm(CHARS, 100000);
 
@@ -263,4 +267,38 @@ class SessionTest {
 
         assertEquals(1, session.pullEvents().size());
     }
+    /**
+     * 折叠边界必须落在轮边界：切在 ASSISTANT 之后会让窗口以 [TOOL_REQUEST, TOOL_RESULT] 打头，
+     * 那条 assistant 原文凭空消失（形状检查发现不了）。
+     * 规则出处：04-perception §4.8.1 规则 14、"折叠边界必须落在轮边界"。
+     */
+    @Test
+    void 摘要边界切在轮中间是不变量违反() {
+        Session session = newSession();
+        session.appendRecord(RecordRole.USER, "读一下", null, "t1", null, null, 1L);
+        session.appendRecord(RecordRole.ASSISTANT, "我来读", null, "t2", "m1", null, 2L);
+        session.appendRecord(RecordRole.TOOL_REQUEST, call("c1", "read_file"), null, "t2", "m1", null, 3L);
+        session.appendRecord(RecordRole.TOOL_RESULT, "内容", null, "t2", "m1", null, 4L);
+
+        DomainInvariantViolation violation = assertThrows(DomainInvariantViolation.class,
+                () -> session.markSummarized("摘要", 2, 5L));
+
+        assertTrue(violation.getMessage().contains("切在轮中间"), violation.getMessage());
+    }
+
+    /** 覆盖边界单调不减、且不能超过流水末尾。规则出处：04-perception §4.8.1 规则 20。 */
+    @Test
+    void 摘要覆盖边界不能倒退也不能越界() {
+        Session session = newSession();
+        session.appendRecord(RecordRole.USER, "一", null, "t1", null, null, 1L);
+        session.appendRecord(RecordRole.USER, "二", null, "t2", null, null, 2L);
+        session.appendRecord(RecordRole.USER, "三", null, "t3", null, null, 3L);
+
+        session.markSummarized("摘要", 2, 4L);
+
+        assertThrows(DomainInvariantViolation.class, () -> session.markSummarized("倒退", 1, 5L));
+        assertThrows(DomainInvariantViolation.class, () -> session.markSummarized("越界", 9999, 6L));
+        session.markSummarized("正常", 3, 7L);
+    }
+
 }

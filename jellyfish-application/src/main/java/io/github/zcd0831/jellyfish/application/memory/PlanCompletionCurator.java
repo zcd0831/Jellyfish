@@ -153,33 +153,22 @@ public final class PlanCompletionCurator {
     private DistillationOutcome parseNewKnowledge(String text) {
         Map<String, Object> parsed = parseObject(text);
         ExperienceDraft experience = experienceOf(parsed.get("experience"));
-        SkillDraft skill = skillOf(parsed.get("skill"));
-        if (experience != null && skill != null) {
+        List<SkillDraft> skills = draftsOf(parsed.get("skills"));
+        if (experience != null && !skills.isEmpty()) {
             return DistillationOutcome.empty();
         }
         if (experience != null) {
             return DistillationOutcome.experience(experience);
         }
-        return skill == null ? DistillationOutcome.empty()
-                : DistillationOutcome.skills(Collections.singletonList(skill));
+        return skills.isEmpty() ? DistillationOutcome.empty() : DistillationOutcome.skills(skills);
     }
 
     /** 用过技能：只接受对这些技能的改进（子代理不许顺手沉淀新技能）。 */
     private DistillationOutcome parseRevisions(String text, List<SkillId> used) {
-        Map<String, Object> parsed = parseObject(text);
-        Object raw = parsed.get("revisions");
-        if (!(raw instanceof List)) {
-            return DistillationOutcome.empty();
-        }
         List<SkillDraft> drafts = new ArrayList<SkillDraft>();
-        for (Object item : (List<?>) raw) {
-            if (!(item instanceof Map)) {
-                continue;
-            }
-            Map<?, ?> fields = (Map<?, ?>) item;
-            Object body = fields.get("sopBody");
-            SkillId target = skillIdOf(fields.get("skillId"));
-            if (body == null || target == null || !used.contains(target)) {
+        for (SkillDraft draft : draftsOf(parseObject(text).get("skills"))) {
+            SkillId target = draft.targetSkillId();
+            if (!draft.isMerge() || target == null || !used.contains(target)) {
                 continue;
             }
             SkillDefinition existing = find(target);
@@ -188,9 +177,24 @@ public final class PlanCompletionCurator {
             }
             // 三件套沿用现有值：子代理只能改正文，不能借改进悄悄换掉发现入口
             drafts.add(new SkillDraft(SkillDraft.Action.MERGE, target, existing.name(),
-                    existing.description(), existing.triggerCondition(), String.valueOf(body)));
+                    existing.description(), existing.triggerCondition(), draft.sopBody()));
         }
         return drafts.isEmpty() ? DistillationOutcome.empty() : DistillationOutcome.skills(drafts);
+    }
+
+    /** 唯一的技能产物形状：与指令、`SkillDraft` VO 同一组字段（07-memory §7.2 SkillDraft）。 */
+    private static List<SkillDraft> draftsOf(Object raw) {
+        if (!(raw instanceof List)) {
+            return Collections.emptyList();
+        }
+        List<SkillDraft> drafts = new ArrayList<SkillDraft>();
+        for (Object item : (List<?>) raw) {
+            SkillDraft draft = skillOf(item);
+            if (draft != null) {
+                drafts.add(draft);
+            }
+        }
+        return drafts;
     }
 
     private ExperienceDraft experienceOf(Object raw) {
@@ -207,7 +211,8 @@ public final class PlanCompletionCurator {
                 fields.get("expectedOutcome") == null ? null : String.valueOf(fields.get("expectedOutcome")));
     }
 
-    private SkillDraft skillOf(Object raw) {
+    /** 单个技能产物：缺正文就不算（`sopBody` 是唯一不可省的字段）。 */
+    private static SkillDraft skillOf(Object raw) {
         if (!(raw instanceof Map)) {
             return null;
         }
@@ -216,7 +221,7 @@ public final class PlanCompletionCurator {
         if (sopBody == null) {
             return null;
         }
-        SkillId target = skillIdOf(fields.get("mergeInto"));
+        SkillId target = skillIdOf(fields.get("targetSkillId"));
         if (target != null) {
             return new SkillDraft(SkillDraft.Action.MERGE, target, text(fields.get("name")),
                     text(fields.get("description")), text(fields.get("triggerCondition")),

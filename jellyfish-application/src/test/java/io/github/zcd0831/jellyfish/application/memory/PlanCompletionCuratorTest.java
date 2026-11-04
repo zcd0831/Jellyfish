@@ -29,6 +29,7 @@ import io.github.zcd0831.jellyfish.domain.shared.SessionId;
 import io.github.zcd0831.jellyfish.domain.shared.SkillId;
 import io.github.zcd0831.jellyfish.domain.shared.StepId;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -121,8 +122,8 @@ class PlanCompletionCuratorTest {
         when(catalog.agents()).thenReturn(Collections.singletonList(distillAgent()));
         when(catalog.skills()).thenReturn(Collections.<SkillDefinition>emptyList());
         when(forks.run(any(Session.class), any())).thenReturn((
-                "{\"skill\":{\"name\":\"依赖升级\",\"description\":\"升版本\",\"triggerCondition\":\"升级时\","
-                        + "\"sopBody\":\"## 步骤\"}}"));
+                "{\"skills\":[{\"action\":\"CREATE\",\"name\":\"依赖升级\",\"description\":\"升版本\","
+                        + "\"triggerCondition\":\"升级时\",\"sopBody\":\"## 步骤\"}]}"));
 
         DistillationOutcome outcome = curator().curate(session, input(traceWithoutSkill()));
 
@@ -138,8 +139,8 @@ class PlanCompletionCuratorTest {
         when(catalog.skills()).thenReturn(Collections.<SkillDefinition>emptyList());
         when(forks.run(any(Session.class), any())).thenReturn((
                 "{\"experience\":{\"applicableScenario\":\"场景\",\"instruction\":\"教训\"},"
-                        + "\"skill\":{\"name\":\"n\",\"description\":\"d\",\"triggerCondition\":\"t\","
-                        + "\"sopBody\":\"b\"}}"));
+                        + "\"skills\":[{\"name\":\"n\",\"description\":\"d\",\"triggerCondition\":\"t\","
+                        + "\"sopBody\":\"b\"}]}"));
 
         DistillationOutcome outcome = curator().curate(session, input(traceWithoutSkill()));
 
@@ -153,14 +154,34 @@ class PlanCompletionCuratorTest {
         when(catalog.agents()).thenReturn(Collections.singletonList(distillAgent()));
         when(catalog.skills()).thenReturn(Collections.singletonList(skill("learned.a", true)));
         when(forks.run(any(Session.class), any())).thenReturn((
-                "{\"revisions\":[{\"skillId\":\"learned.a\",\"sopBody\":\"新正文\"},"
-                        + "{\"skillId\":\"learned.zzz\",\"sopBody\":\"幻觉\"}]}"));
+                "{\"skills\":[{\"action\":\"MERGE\",\"targetSkillId\":\"learned.a\",\"sopBody\":\"新正文\"},"
+                        + "{\"action\":\"MERGE\",\"targetSkillId\":\"learned.zzz\",\"sopBody\":\"幻觉\"}]}"));
 
         DistillationOutcome outcome = curator().curate(session, input(traceWithSkill("learned.a")));
 
         assertEquals(1, outcome.skills().size());
         assertEquals(SkillId.of("learned.a"), outcome.skills().get(0).targetSkillId());
         verify(experienceWriter, never()).apply(any(ExperienceDraft.class), any(SessionId.class), any());
+    }
+
+    /**
+     * 指令要求模型输出的字段，解析器必须真的读得到 —— 两侧格式对不上就是"永远沉淀不出来"。
+     * 规则出处：07-memory §7.2 SkillDraft（action / targetSkillId / name / description /
+     * triggerCondition / sopBody）；§7.9.6 代码解析 + 校验。
+     */
+    @Test
+    void 指令要求的字段与解析器读取的字段一致() {
+        when(catalog.agents()).thenReturn(Collections.singletonList(distillAgent()));
+        when(catalog.skills()).thenReturn(Collections.singletonList(skill("learned.a", true)));
+        ArgumentCaptor<String> instruction = ArgumentCaptor.forClass(String.class);
+        when(forks.run(any(Session.class), instruction.capture())).thenReturn("{}");
+
+        curator().curate(session, input(traceWithSkill("learned.a")));
+
+        String asked = instruction.getValue();
+        assertTrue(asked.contains("\"skills\""), "指令要写 skills（复数，数组）：" + asked);
+        assertTrue(asked.contains("targetSkillId"), "改进目标字段名要写进指令：" + asked);
+        assertTrue(asked.contains("sopBody"), "正文必须能从指令里读出来：" + asked);
     }
 
     @Test

@@ -82,8 +82,9 @@ public final class TuiApp implements QuestionBroker.Answerer {
     private Thread keyListener;
     /** 多行草稿：只在输入线程里读写。 */
     private final DraftInput draft = new DraftInput();
-    private CompletableFuture<Answer> pending;
-    /** 当前问题：deliver 解析编号与「其他（自己输入）」时要用到。 */
+    /** 提问单队列：所有来源排队逐个呈现，受 inputLock 保护（08-application §8.11）。 */
+    private final java.util.ArrayDeque<Pending> questions = new java.util.ArrayDeque<Pending>();
+    /** 队首问题：deliver 解析编号与「其他（自己输入）」时要用到。 */
     private Question pendingQuestion;
     /** 已选「其他（自己输入）」：下一行非空文本即答案。 */
     private boolean awaitingFreeText;
@@ -296,10 +297,11 @@ public final class TuiApp implements QuestionBroker.Answerer {
     private void deliver(String line) {
         String text = line == null ? "" : line.trim();
         synchronized (inputLock) {
-            if (mode == InputMode.QUESTION && pending != null) {
+            Pending current = questions.peekFirst();
+            if (mode == InputMode.QUESTION && current != null) {
                 if (isExit(text)) {
                     // 正在等答案时退出：先终止本轮，别让主循环卡在提问上
-                    pending.complete(Answer.cancelled());
+                    cancelAllQuestions();
                     mode = InputMode.PAUSED;
                     token.cancel();
                     commands.offer("exit");
@@ -309,8 +311,9 @@ public final class TuiApp implements QuestionBroker.Answerer {
                 if (chosen == null) {
                     return;   // 无效回答：不完成提问，重新提示（08-application §8.5）
                 }
-                pending.complete(chosen);
+                current.future.complete(chosen);
                 awaitingFreeText = false;
+                // 后面还有提问就由它的 ask() 收尾时接着呈现，这里先让输入线程停下
                 mode = InputMode.PAUSED;
                 return;
             }
@@ -354,8 +357,16 @@ public final class TuiApp implements QuestionBroker.Answerer {
         }
     }
 
+    /**
+     * 回到提示符。**有人正在等答案时不抢输入**：提问可能在主循环空闲时进来（并行子代理的
+     * ask_user），把 mode 无条件改回 PROMPT 会让那一行输入被当成普通输入交给用例。
+     * 规则出处：08-application §8.11（单队列，cancellation 可唤醒）。
+     */
     private void resumePrompt() {
         synchronized (inputLock) {
+            if (mode == InputMode.QUESTION) {
+                return;
+            }
             mode = InputMode.PROMPT;
             inputLock.notifyAll();
         }
@@ -456,17 +467,16 @@ public final class TuiApp implements QuestionBroker.Answerer {
      */
     @Override
     public Answer ask(Question question) {
-        CompletableFuture<Answer> future = new CompletableFuture<Answer>();
+        Pending mine = new Pending(question);
         synchronized (inputLock) {
-            pending = future;
-            pendingQuestion = question;
-            awaitingFreeText = false;
-            renderer.question(sourceLabel(question.source()), question.prompt(), question.options());
-            mode = InputMode.QUESTION;
-            inputLock.notifyAll();
+            // 单队列：后来的排在队尾，等前一个答完才呈现（08-application §8.11）
+            questions.addLast(mine);
+            if (questions.peekFirst() == mine) {
+                present(mine);
+            }
         }
         try {
-            return future.get();
+            return mine.future.get();
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
             return Answer.cancelled();
@@ -474,11 +484,37 @@ public final class TuiApp implements QuestionBroker.Answerer {
             return Answer.cancelled();
         } finally {
             synchronized (inputLock) {
-                pending = null;
-                pendingQuestion = null;
-                awaitingFreeText = false;
-                mode = InputMode.PAUSED;
+                questions.remove(mine);
+                Pending next = questions.peekFirst();
+                if (next != null) {
+                    present(next);          // 唤醒下一个提问方，别的来源不必永远等
+                } else {
+                    pendingQuestion = null;
+                    awaitingFreeText = false;
+                    mode = InputMode.PAUSED;
+                }
             }
+        }
+    }
+
+    /** 呈现队首问题：调用方必须已持 inputLock。 */
+    private void present(Pending entry) {
+        pendingQuestion = entry.question;
+        awaitingFreeText = false;
+        renderer.question(sourceLabel(entry.question.source()), entry.question.prompt(),
+                entry.question.options());
+        mode = InputMode.QUESTION;
+        inputLock.notifyAll();
+    }
+
+    /** 一次提问的登记项。 */
+    private static final class Pending {
+
+        private final Question question;
+        private final CompletableFuture<Answer> future = new CompletableFuture<Answer>();
+
+        Pending(Question question) {
+            this.question = question;
         }
     }
 
@@ -544,9 +580,17 @@ public final class TuiApp implements QuestionBroker.Answerer {
     /** 终止时唤醒阻塞中的提问（Esc 与 exit 共用）。 */
     private void cancelPendingQuestion() {
         synchronized (inputLock) {
-            if (pending != null) {
-                pending.complete(Answer.cancelled());
-            }
+            cancelAllQuestions();
+            pendingQuestion = null;
+            awaitingFreeText = false;
+            mode = InputMode.PAUSED;
+        }
+    }
+
+    /** 把排队的提问全部取消：只取消队首会把后排永久留在 future 上。调用方已持锁。 */
+    private void cancelAllQuestions() {
+        while (!questions.isEmpty()) {
+            questions.pollFirst().future.complete(Answer.cancelled());
         }
     }
 

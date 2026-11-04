@@ -13,6 +13,7 @@ import io.github.zcd0831.jellyfish.application.shared.port.ProgressPort;
 import io.github.zcd0831.jellyfish.domain.action.budget.Budget;
 import io.github.zcd0831.jellyfish.domain.perception.session.Record;
 import io.github.zcd0831.jellyfish.domain.perception.session.RecordRole;
+import io.github.zcd0831.jellyfish.domain.memory.reflection.Reflection;
 import io.github.zcd0831.jellyfish.domain.perception.session.Session;
 import io.github.zcd0831.jellyfish.domain.planning.plan.Attempt;
 import io.github.zcd0831.jellyfish.domain.planning.plan.Plan;
@@ -22,6 +23,7 @@ import io.github.zcd0831.jellyfish.domain.planning.verification.VerificationOutc
 import io.github.zcd0831.jellyfish.domain.planning.verification.VerificationReport;
 import io.github.zcd0831.jellyfish.domain.shared.BudgetId;
 import io.github.zcd0831.jellyfish.domain.shared.DomainEvent;
+import io.github.zcd0831.jellyfish.domain.shared.ReflectionId;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -98,7 +100,7 @@ public final class StartupReconciler {
         sessions.cleanupArchiveResidue();
     }
 
-    /** 规则 ①②：报告已存在但步骤状态没跟上。 */
+    /** 规则 ①②⑥：事实已落盘但聚合没跟上。 */
     private void reconcilePlan(Session session, Plan plan) {
         for (PlanStep step : plan.steps()) {
             if (step.status() != StepStatus.RUNNING && step.status() != StepStatus.VERIFYING) {
@@ -108,6 +110,7 @@ public final class StartupReconciler {
             if (attempt == null) {
                 continue;
             }
+            reconcileReflection(plan, step, attempt);
             List<VerificationReport> found = reports.findByStep(plan.id(), step.id());
             for (VerificationReport report : found) {
                 if (report.attemptNo() != attempt.attemptNo()) {
@@ -123,6 +126,23 @@ public final class StartupReconciler {
             }
         }
         flush(session, plan);
+    }
+
+    /**
+     * 规则 ⑥：反思事实落了、attempt 还没挂上 ⇒ 按坐标取回并补挂。
+     * 反思 id 由 (planId, stepId, attemptNo) 决定，所以不需要额外索引。
+     * 规则出处：08-application §8.10 规则 6、§8.8.1。
+     */
+    private void reconcileReflection(Plan plan, PlanStep step, Attempt attempt) {
+        if (attempt.reflectionId() != null) {
+            return;
+        }
+        ReflectionId id = Reflection.identify(plan.id(), step.id(), attempt.attemptNo());
+        if (!reflections.get(id).isPresent()) {
+            return;
+        }
+        plan.recordReflection(step.id(), attempt.attemptNo(), id);
+        announce("对账：按既存反思补齐尝试记录（" + step.id().getValue() + " / #" + attempt.attemptNo() + "）");
     }
 
     /**

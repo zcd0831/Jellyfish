@@ -8,6 +8,8 @@ import io.github.zcd0831.jellyfish.application.planning.port.VerificationReportR
 import io.github.zcd0831.jellyfish.application.shared.ProgressEvent;
 import io.github.zcd0831.jellyfish.application.shared.StartupReconciler;
 import io.github.zcd0831.jellyfish.domain.action.budget.Budget;
+import io.github.zcd0831.jellyfish.domain.memory.reflection.Reflection;
+import io.github.zcd0831.jellyfish.domain.planning.plan.Attempt;
 import io.github.zcd0831.jellyfish.domain.perception.session.Record;
 import io.github.zcd0831.jellyfish.domain.perception.session.RecordRole;
 import io.github.zcd0831.jellyfish.domain.perception.session.Session;
@@ -21,6 +23,7 @@ import io.github.zcd0831.jellyfish.domain.shared.AgentId;
 import io.github.zcd0831.jellyfish.domain.shared.BudgetId;
 import io.github.zcd0831.jellyfish.domain.shared.ModelId;
 import io.github.zcd0831.jellyfish.domain.shared.PlanId;
+import io.github.zcd0831.jellyfish.domain.shared.ReflectionId;
 import io.github.zcd0831.jellyfish.domain.shared.SessionId;
 import io.github.zcd0831.jellyfish.domain.shared.StepId;
 import io.github.zcd0831.jellyfish.domain.shared.VerificationReportId;
@@ -55,6 +58,7 @@ class S4ReconcilerTest {
     private VerificationReportRepository reports;
     private FileRecordStore records;
     private BudgetRepository budgets;
+    private ReflectionRepository reflections;
     private final List<ProgressEvent> announced = new ArrayList<ProgressEvent>();
     private StartupReconciler reconciler;
     private SessionId sessionId;
@@ -68,7 +72,7 @@ class S4ReconcilerTest {
         reports = new FileReportRepository(dir, codec);
         records = new FileRecordStore(dir, codec);
         budgets = new FileBudgetRepository(dir, codec);
-        ReflectionRepository reflections = new FileReflectionRepository(dir, codec);
+        reflections = new FileReflectionRepository(dir, codec);
         Session session = Session.create(SessionId.of("s1"), null, AgentId.of("builtin.main"),
                 ModelId.of("m1"), 1L, null);
         sessions.save(session);
@@ -109,6 +113,35 @@ class S4ReconcilerTest {
 
         Plan reloaded = plans.load(PlanId.of("p1"));
         assertEquals(StepStatus.FAILED, reloaded.steps().get(0).status());
+    }
+
+    /**
+     * 崩在「反思事实落盘」与「挂回 attempt」之间：反思文件在、reflectionId 是 null。
+     * 反思 id 由 (planId, stepId, attemptNo) 决定，对账按坐标取回补挂。
+     * 规则出处：08-application §8.10 规则 6、§8.8.1。
+     */
+    @Test
+    void 规则6_有反思事实就补挂到尝试上() {
+        planWithRunningStep();
+        ReflectionId reflectionId = Reflection.identify(PlanId.of("p1"), StepId.of("step1"), 1);
+        reflections.save(Reflection.record(PlanId.of("p1"), StepId.of("step1"), 1, "下次先读文件", 10L));
+
+        reconciler.reconcile(sessions.load(sessionId));
+
+        Plan reloaded = plans.load(PlanId.of("p1"));
+        Attempt attempt = reloaded.steps().get(0).attempts().get(0);
+        assertEquals(reflectionId, attempt.reflectionId(), "反思事实在，attempt 必须挂上它");
+        assertTrue(announced.stream().anyMatch(e -> e.message().contains("反思")), announced.toString());
+    }
+
+    @Test
+    void 规则6_没有反思事实就不动尝试() {
+        planWithRunningStep();
+
+        reconciler.reconcile(sessions.load(sessionId));
+
+        Plan reloaded = plans.load(PlanId.of("p1"));
+        assertNull(reloaded.steps().get(0).attempts().get(0).reflectionId());
     }
 
     /**

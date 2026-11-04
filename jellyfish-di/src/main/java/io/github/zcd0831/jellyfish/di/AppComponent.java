@@ -25,7 +25,6 @@ import io.github.zcd0831.jellyfish.application.shared.port.TokenCounter;
 import io.github.zcd0831.jellyfish.domain.perception.session.SystemPromptAssembler;
 import io.github.zcd0831.jellyfish.infrastructure.file.DataDirectory;
 import io.github.zcd0831.jellyfish.infrastructure.file.JsonCodec;
-import io.github.zcd0831.jellyfish.infrastructure.model.HttpJsonClient;
 import io.github.zcd0831.jellyfish.shell.tui.TuiApp;
 
 import java.util.concurrent.ExecutorService;
@@ -70,9 +69,6 @@ public interface AppComponent {
     /** 供 boot 的关闭钩子停止子代理池。 */
     ExecutorService subagentPool();
 
-    /** 供 boot 的关闭钩子取消在途请求。 */
-    HttpJsonClient httpJsonClient();
-
     /** 供 boot 的关闭钩子与外壳发起终止（08-application §8.9.4.1）。 */
     SessionCancellations sessionCancellations();
 
@@ -83,7 +79,10 @@ public interface AppComponent {
     /** 启动时装配已授权插件（08-application §8.9.6）。 */
     PluginAssembler pluginAssembler();
 
-    /** 启动对账：崩溃残留按 5 条规则补齐（08-application §8.10）。 */
+    /** 端口路由表：插件与测试用它在装配之后替换端口实现（08-application §8.11）。 */
+    io.github.zcd0831.jellyfish.application.action.PortRoutes portRoutes();
+
+    /** 启动对账：崩溃残留按 6 条规则补齐（08-application §8.10）。 */
     io.github.zcd0831.jellyfish.application.shared.StartupReconciler startupReconciler();
 
     ToolExecutor toolExecutor();

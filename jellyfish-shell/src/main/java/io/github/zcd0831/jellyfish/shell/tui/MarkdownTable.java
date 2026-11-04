@@ -23,37 +23,17 @@ final class MarkdownTable {
 
     /** @param lines 含表头与分隔行的原始 Markdown 行 */
     static String render(List<String> lines, int terminalWidth, boolean color) {
-        List<List<String>> rows = new ArrayList<List<String>>();
-        List<String> aligns = null;
-        for (int i = 0; i < lines.size(); i++) {
-            List<String> cells = split(lines.get(i));
-            if (cells == null) {
-                return raw(lines);
-            }
-            if (i == 1) {
-                aligns = alignments(cells);
-                if (aligns == null) {
-                    return raw(lines);
-                }
-                continue;
-            }
-            rows.add(cells);
-        }
-        if (aligns == null || rows.isEmpty()) {
+        Parsed parsed = parse(lines);
+        if (parsed == null) {
             return raw(lines);
         }
-        int columns = aligns.size();
-        for (List<String> row : rows) {
-            if (row.size() != columns) {
-                return raw(lines);
-            }
-        }
+        int columns = parsed.aligns.size();
 
         // 单元格先按行内 Markdown 渲染，再按可见宽度测宽
         List<List<String>> styled = new ArrayList<List<String>>();
         InlineFormatter inline = new InlineFormatter(color);
         List<int[]> widths = new ArrayList<int[]>();
-        for (List<String> row : rows) {
+        for (List<String> row : parsed.rows) {
             List<String> out = new ArrayList<String>();
             int[] width = new int[columns];
             for (int c = 0; c < columns; c++) {
@@ -69,7 +49,54 @@ final class MarkdownTable {
         if (columnWidth == null) {
             return raw(lines);
         }
+        return draw(styled, parsed.aligns, columnWidth, color);
+    }
 
+    /** 解析结果：列对齐方式 + 数据行；解析不出合法的表就返回 null（整表原样输出）。 */
+    private static final class Parsed {
+
+        private final List<String> aligns;
+        private final List<List<String>> rows;
+
+        Parsed(List<String> aligns, List<List<String>> rows) {
+            this.aligns = aligns;
+            this.rows = rows;
+        }
+    }
+
+    /** 形状判定：每行列数一致、第二行是对齐分隔行；任一不满足就整表原样输出。 */
+    private static Parsed parse(List<String> lines) {
+        List<List<String>> rows = new ArrayList<List<String>>();
+        List<String> aligns = null;
+        for (int i = 0; i < lines.size(); i++) {
+            List<String> cells = split(lines.get(i));
+            if (cells == null) {
+                return null;
+            }
+            if (i == 1) {
+                aligns = alignments(cells);
+                if (aligns == null) {
+                    return null;
+                }
+                continue;
+            }
+            rows.add(cells);
+        }
+        if (aligns == null || rows.isEmpty()) {
+            return null;
+        }
+        for (List<String> row : rows) {
+            if (row.size() != aligns.size()) {
+                return null;
+            }
+        }
+        return new Parsed(aligns, rows);
+    }
+
+    /** 逐行画：每个单元格先按列宽折行，再补齐、去尾空白；表头之后补分隔行。 */
+    private static String draw(List<List<String>> styled, List<String> aligns,
+                               int[] columnWidth, boolean color) {
+        int columns = columnWidth.length;
         StringBuilder text = new StringBuilder();
         for (int r = 0; r < styled.size(); r++) {
             List<List<String>> cells = new ArrayList<List<String>>();

@@ -9,54 +9,44 @@ package io.github.zcd0831.jellyfish.shell.tui;
  * <p>
  * 未闭合的标记：开启后一直生效到行尾（流式中途本来就可能是半截），不吐多余字符；
  * 没开启过的（比如 `2 * 3`、列表外的 `-`）按字面输出。换行时复位所有行内状态。
+ * <p>
+ * 职责分工：样式在 {@link MarkdownStyle}，表格块在 {@link MarkdownTableBuffer}，
+ * 这里只做"看清一个字符属于哪一类，然后交给对应的一方"。
+ * 规则出处：08-application §8.7（外壳原样呈现正文）。
  */
 final class MarkdownStream {
 
-    private static final String BOLD = "\u001B[1m";
-    private static final String ITALIC = "\u001B[3m";
-    private static final String CODE = "\u001B[36m";
-    private static final String DIM = "\u001B[2m";
-    private static final String RESET = "\u001B[0m";
-    private static final java.util.regex.Pattern LINK =
-            java.util.regex.Pattern.compile("\\[([^\\]]*)\\]\\(([^)]*)\\)");
-    private static final int MAX_LINK = 200;
+    private static final int FENCE = 3;
 
-    private final boolean color;
     private final int width;
     private final StringBuilder out = new StringBuilder();
+    private final MarkdownStyle style;
+    private final MarkdownTableBuffer tables;
 
     private boolean lineStart = true;
     private boolean inFence;
     private boolean skippingFenceLine;
-    private boolean heading;
-    private boolean quote;
-
-    private boolean bold;
-    private boolean italic;
-    private boolean code;
-    private String emitted = "";
 
     private int starRun;
     private int backtickRun;
     private int hashRun;
     private char markerCandidate;
     private boolean skipQuoteSpace;
-    /** 正在攒一个 `[文字](url)`：跨分块时先存着，凑齐 `)` 再决定渲染还是原样吐出。 */
-    private StringBuilder linkBuffer;
-    /** 行首 `|` 开头的行要先攒着：只有下一行是分隔行才确认是表格。 */
-    private boolean holdingLine;
-    private String pendingHeader;
-    private boolean inTable;
-    private final StringBuilder rawLine = new StringBuilder();
-    private final java.util.List<String> tableLines = new java.util.ArrayList<String>();
+    private final MarkdownLink link = new MarkdownLink();
 
     MarkdownStream(boolean color) {
         this(color, 80);
     }
 
     MarkdownStream(boolean color, int width) {
-        this.color = color;
         this.width = width <= 0 ? 80 : width;
+        this.style = new MarkdownStyle(color);
+        this.tables = new MarkdownTableBuffer(this.width, color, new MarkdownTableBuffer.PlainEmitter() {
+            @Override
+            public void emit(String raw) {
+                emitPlainLine(raw);
+            }
+        });
     }
 
     /** 是否在围栏内：围栏内不折行，交给终端自己折。 */
@@ -67,25 +57,10 @@ final class MarkdownStream {
     /** 一轮结束时收尾：把还没配对的标记按字面吐出，并复位围栏（下一轮从干净状态开始）。 */
     String finish() {
         out.setLength(0);
-        if (inTable) {
-            flushTable();
-        }
-        if (holdingLine) {
-            String raw = rawLine.toString();
-            rawLine.setLength(0);
-            holdingLine = false;
-            emitPlainLine(raw);
-        }
-        if (pendingHeader != null) {
-            String raw = pendingHeader;
-            pendingHeader = null;
-            emitPlainLine(raw);
-        }
-        if (linkBuffer != null) {
-            emitLinkBufferAsIs();
-        }
+        tables.drain(out);
+        link.flushAsIs(style, out);
         closePendingMarker();
-        flushStyle();
+        style.flush(out);
         lineStart = true;
         inFence = false;
         skippingFenceLine = false;
@@ -101,123 +76,50 @@ final class MarkdownStream {
         for (int i = 0; i < delta.length(); i++) {
             accept(delta.charAt(i));
         }
-        flushStyle();
+        style.flush(out);
         return out.toString();
     }
 
+    // ---------- 字符分派：按"此刻这个字符属于哪一类"分支，每类一个方法 ----------
+
     private void accept(char c) {
         if (c == '\n') {
-            if (holdingLine || inTable) {
-                String raw = rawLine.toString();
-                rawLine.setLength(0);
-                holdingLine = false;
-                handleTableLine(raw);
-                return;
-            }
-            if (skippingFenceLine) {
-                skippingFenceLine = false;
-                lineStart = true;
-                return;
-            }
-            closePendingMarker();
-            if (linkBuffer != null) {
-                emitLinkBufferAsIs();
-            }
-            skipLineMarker();
-            out.append('\n');
-            resetLine();
+            acceptNewline();
             return;
         }
         if (skippingFenceLine) {
             return;
         }
         if (inFence) {
-            // 围栏内原样保留，但要能识别收尾的那一行 ```
-            if (lineStart && c == '`') {
-                backtickRun++;
-                if (backtickRun == 3) {
-                    inFence = false;
-                    skippingFenceLine = true;
-                    backtickRun = 0;
-                    lineStart = false;
-                }
-                return;
-            }
-            if (backtickRun > 0) {
-                for (int i = 0; i < backtickRun; i++) {
-                    out.append('`');
-                }
-                backtickRun = 0;
-            }
-            out.append(c);
+            acceptInFence(c);
             return;
         }
-        if (skipQuoteSpace) {
-            skipQuoteSpace = false;
-            if (c == ' ') {
-                return;
-            }
-        }
-        if (holdingLine) {
-            rawLine.append(c);
-            return;
-        }
-        if (lineStart && c == '|') {
-            holdingLine = true;
-            rawLine.setLength(0);
-            rawLine.append(c);
-            return;
-        }
-        if (lineStart) {
-            lineStart(c);
-            return;
-        }
-        if (linkBuffer != null) {
-            linkBuffer.append(c);
-            if (c == ')') {
-                emitLink();
-            } else if (linkBuffer.length() > MAX_LINK) {
-                emitLinkBufferAsIs();
-            }
-            return;
-        }
-        if (c == '[') {
-            linkBuffer = new StringBuilder("[").append("");
-            linkBuffer.setLength(0);
-            linkBuffer.append('[');
-            return;
-        }
-        if (c == '`') {
-            backtickRun++;
-            return;
-        }
-        if (backtickRun > 0) {
-            toggleCode(backtickRun);
-            backtickRun = 0;
-        }
-        if (c == '*') {
-            starRun++;
-            return;
-        }
-        if (starRun > 0) {
-            if (c == ' ' || starRun > 2) {
-                for (int i = 0; i < starRun; i++) {
-                    emit('*');
-                }
-            } else {
-                toggleEmphasis(starRun);
-            }
-            starRun = 0;
-        }
-        emit(c);
+        acceptVisible(c);
     }
 
-    private void lineStart(char c) {
-        // 围栏：行首连续三个反引号（可带语言名）——整行吞掉，只切换模式
-        if (c == '`') {
+    private void acceptNewline() {
+        if (tables.collecting()) {
+            tables.onLine(tables.takeLine(), out);
+            return;
+        }
+        if (skippingFenceLine) {
+            skippingFenceLine = false;
+            lineStart = true;
+            return;
+        }
+        closePendingMarker();
+        link.flushAsIs(style, out);
+        skipLineMarker();
+        out.append('\n');
+        resetLine();
+    }
+
+    /** 围栏内：原样保留，但要能识别收尾的那一行 ```。 */
+    private void acceptInFence(char c) {
+        if (lineStart && c == '`') {
             backtickRun++;
-            if (backtickRun == 3) {
-                inFence = !inFence;
+            if (backtickRun == FENCE) {
+                inFence = false;
                 skippingFenceLine = true;
                 backtickRun = 0;
                 lineStart = false;
@@ -225,124 +127,184 @@ final class MarkdownStream {
             return;
         }
         if (backtickRun > 0) {
-            int run = backtickRun;
+            for (int i = 0; i < backtickRun; i++) {
+                out.append('`');
+            }
             backtickRun = 0;
-            if (run < 3) {
-                for (int i = 0; i < run; i++) {
-                    emit('`');
-                }
-            }
         }
-        // 标题：`#` 序列 + 空格
-        if (c == '#') {
-            hashRun++;
-            return;
-        }
-        if (hashRun > 0) {
-            int run = hashRun;
-            hashRun = 0;
+        out.append(c);
+    }
+
+    private void acceptVisible(char c) {
+        if (skipQuoteSpace) {
+            skipQuoteSpace = false;
             if (c == ' ') {
-                heading = true;
-                lineStart = false;
-                ensureStyle();
                 return;
-            }
-            for (int i = 0; i < run; i++) {
-                emit('#');
             }
         }
-        // 列表：`-` / `*` / `+` + 空格；`**` 不是列表，而是强调开头
-        if (markerCandidate != 0) {
-            char marker = markerCandidate;
-            if (marker == '*' && c == '*') {
-                markerCandidate = 0;
-                lineStart = false;
-                starRun = 2;
-                return;
-            }
-            markerCandidate = 0;
-            if (c == ' ') {
-                emit('•');
-                emit(' ');
-                lineStart = false;
-                return;
-            }
-            if (marker == '*') {
-                lineStart = false;
-                starRun = 1;
-                accept(c);
-                return;
-            }
-            emit(marker);
-            lineStart = false;
-            accept(c);
+        if (tables.holdingLine()) {
+            tables.append(c);
             return;
         }
-        if (c == '-' || c == '*' || c == '+') {
-            markerCandidate = c;
+        if (lineStart && c == '|') {
+            tables.begin(out);
             return;
         }
-        // 引用：`>` + 可选空格
-        if (c == '>') {
-            quote = true;
-            emit('│');
-            emit(' ');
-            lineStart = false;
-            skipQuoteSpace = true;
+        if (lineStart) {
+            acceptLineStart(c);
+            return;
+        }
+        acceptInline(c);
+    }
+
+    /** 行首：围栏 / 标题 / 列表 / 引用，都不是才回到普通字符。 */
+    private void acceptLineStart(char c) {
+        if (acceptFenceOpen(c) || acceptHeading(c) || acceptListMarker(c) || acceptQuote(c)) {
             return;
         }
         lineStart = false;
         accept(c);
     }
 
-    /** 行结束/收尾时把"看到了但没配对的标记"按字面吐出来。 */
-    /** 表格是块级语法：攒够一块再画，画不了就原样输出。 */
-    private void handleTableLine(String raw) {
-        if (inTable) {
-            if (MarkdownTable.split(raw) != null) {
-                tableLines.add(raw);
-                return;
+    private boolean acceptFenceOpen(char c) {
+        if (c == '`') {
+            backtickRun++;
+            if (backtickRun == FENCE) {
+                inFence = !inFence;
+                skippingFenceLine = true;
+                backtickRun = 0;
+                lineStart = false;
             }
-            flushTable();
-            emitPlainLine(raw);
-            return;
+            return true;
         }
-        if (pendingHeader != null) {
-            if (MarkdownTable.isSeparator(raw)) {
-                inTable = true;
-                tableLines.add(pendingHeader);
-                tableLines.add(raw);
-                pendingHeader = null;
-                return;
+        if (backtickRun > 0) {
+            int run = backtickRun;
+            backtickRun = 0;
+            if (run < FENCE) {
+                emitBackticks(run);
             }
-            emitPlainLine(pendingHeader);
-            pendingHeader = null;
-            handleTableLine(raw);
-            return;
         }
-        if (MarkdownTable.split(raw) != null) {
-            pendingHeader = raw;
-            return;
-        }
-        emitPlainLine(raw);
+        return false;
     }
 
-    private void flushTable() {
-        if (tableLines.isEmpty()) {
+    private boolean acceptHeading(char c) {
+        if (c == '#') {
+            hashRun++;
+            return true;
+        }
+        if (hashRun == 0) {
+            return false;
+        }
+        int run = hashRun;
+        hashRun = 0;
+        if (c == ' ') {
+            style.setHeading(true);
+            lineStart = false;
+            style.ensureStyle(out);
+            return true;
+        }
+        for (int i = 0; i < run; i++) {
+            style.emit(out, '#');
+        }
+        return false;
+    }
+
+    private boolean acceptListMarker(char c) {
+        if (markerCandidate != 0) {
+            return completeListMarker(c);
+        }
+        if (c == '-' || c == '*' || c == '+') {
+            markerCandidate = c;
+            return true;
+        }
+        return false;
+    }
+
+    private boolean completeListMarker(char c) {
+        char marker = markerCandidate;
+        if (marker == '*' && c == '*') {
+            markerCandidate = 0;
+            lineStart = false;
+            starRun = 2;
+            return true;
+        }
+        markerCandidate = 0;
+        if (c == ' ') {
+            style.emit(out, '•');
+            style.emit(out, ' ');
+            lineStart = false;
+            return true;
+        }
+        if (marker == '*') {
+            lineStart = false;
+            starRun = 1;
+            accept(c);
+            return true;
+        }
+        style.emit(out, marker);
+        lineStart = false;
+        accept(c);
+        return true;
+    }
+
+    private boolean acceptQuote(char c) {
+        if (c != '>') {
+            return false;
+        }
+        style.setQuote(true);
+        style.emit(out, '│');
+        style.emit(out, ' ');
+        lineStart = false;
+        skipQuoteSpace = true;
+        return true;
+    }
+
+    /** 行内：链接、行内代码、强调，其余按当前样式直出。 */
+    private void acceptInline(char c) {
+        if (link.active()) {
+            link.accept(c, style, out);
             return;
         }
-        String rendered = MarkdownTable.render(tableLines, width, color);
-        for (int i = 0; i < rendered.length(); i++) {
-            char c = rendered.charAt(i);
-            if (c == '\n') {
-                out.append('\n');
-            } else {
-                out.append(c);
-            }
+        if (c == '[') {
+            link.start();
+            return;
         }
-        tableLines.clear();
-        inTable = false;
+        if (c == '`') {
+            backtickRun++;
+            return;
+        }
+        closeBacktickRun();
+        if (c == '*') {
+            starRun++;
+            return;
+        }
+        closeStarRun(c);
+        style.emit(out, c);
     }
+
+    private void closeBacktickRun() {
+        if (backtickRun > 0) {
+            style.toggleCode(backtickRun);
+            backtickRun = 0;
+        }
+    }
+
+    /** 星号不是成对出现（后面跟空格，或超过两个）就按字面吐出来。 */
+    private void closeStarRun(char c) {
+        if (starRun == 0) {
+            return;
+        }
+        if (c == ' ' || starRun > 2) {
+            for (int i = 0; i < starRun; i++) {
+                style.emit(out, '*');
+            }
+        } else {
+            style.toggleEmphasis(starRun);
+        }
+        starRun = 0;
+    }
+
+    // ---------- 成行的输出 ----------
 
     /** 非表格行：按行内规则渲染并换行（此时字符是攒着的，可以整行处理）。 */
     private void emitPlainLine(String raw) {
@@ -353,75 +315,28 @@ final class MarkdownStream {
         resetLine();
     }
 
-    /** 语法成立就渲染成 `文字（url）`，否则原样吐出（不猜）。 */
-    private void emitLink() {
-        String raw = linkBuffer.toString();
-        linkBuffer = null;
-        java.util.regex.Matcher matcher = LINK.matcher(raw);
-        if (!matcher.matches()) {
-            for (int i = 0; i < raw.length(); i++) {
-                emit(raw.charAt(i));
-            }
-            return;
-        }
-        String text = matcher.group(1);
-        String url = matcher.group(2);
-        for (int i = 0; i < text.length(); i++) {
-            emit(text.charAt(i));
-        }
-        emit('（');
-        String before = styleOf();
-        emitted = before;
-        boolean codeWas = code;
-        code = false;
-        bold = false;
-        italic = false;
-        quote = false;
-        heading = false;
-        ensureStyle();
-        for (int i = 0; i < url.length(); i++) {
-            out.append(url.charAt(i));
-        }
-        if (color) {
-            out.append(RESET);
-        }
-        emitted = "";
-        out.append('）');
-        code = codeWas;
-    }
+    // ---------- 未配对的标记 ----------
 
-    private void emitLinkBufferAsIs() {
-        String raw = linkBuffer.toString();
-        linkBuffer = null;
-        for (int i = 0; i < raw.length(); i++) {
-            emit(raw.charAt(i));
-        }
-    }
-
+    /** 行结束/收尾时把"看到了但没配对的标记"按字面吐出来。 */
     private void closePendingMarker() {
         if (backtickRun > 0) {
-            for (int i = 0; i < backtickRun; i++) {
-                emit('`');
-            }
+            emitBackticks(backtickRun);
             backtickRun = 0;
-            code = false;
+            style.setCode(false);
         }
         if (starRun > 0) {
-            if (bold || italic) {
-                // 已经按样式渲染到行尾：直接收尾，别吐出多余的星号
-                starRun = 0;
-            } else {
+            if (!style.isBold() && !style.isItalic()) {
                 for (int i = 0; i < starRun; i++) {
-                    emit('*');
+                    style.emit(out, '*');
                 }
-                starRun = 0;
             }
-            bold = false;
-            italic = false;
+            // 已按样式渲染到行尾的：直接收尾，别吐出多余的星号
+            starRun = 0;
         }
+        style.clearEmphasis();
         if (hashRun > 0) {
             for (int i = 0; i < hashRun; i++) {
-                emit('#');
+                style.emit(out, '#');
             }
             hashRun = 0;
         }
@@ -431,84 +346,19 @@ final class MarkdownStream {
         if (markerCandidate != 0) {
             char marker = markerCandidate;
             markerCandidate = 0;
-            emit(marker);
+            style.emit(out, marker);
+        }
+    }
+
+    private void emitBackticks(int count) {
+        for (int i = 0; i < count; i++) {
+            out.append('`');
         }
     }
 
     private void resetLine() {
         lineStart = true;
         skippingFenceLine = false;
-        heading = false;
-        quote = false;
-        bold = false;
-        italic = false;
-        code = false;
-    }
-
-    private void toggleCode(int run) {
-        if (run % 2 == 1) {
-            code = !code;
-            if (code) {
-                italic = false;
-                bold = false;
-            }
-        }
-    }
-
-    private void toggleEmphasis(int run) {
-        if (run >= 2) {
-            bold = !bold;
-        } else {
-            italic = !italic;
-        }
-    }
-
-    private void emit(char c) {
-        ensureStyle();
-        out.append(c);
-    }
-
-    /** 只在样式变化时插 ANSI，避免每个字符都套一层。 */
-    private void ensureStyle() {
-        String want = styleOf();
-        if (want.equals(emitted)) {
-            return;
-        }
-        if (!emitted.isEmpty()) {
-            out.append(color ? RESET : "");
-        }
-        if (!want.isEmpty()) {
-            out.append(want);
-        }
-        emitted = want;
-    }
-
-    private void flushStyle() {
-        if (!emitted.isEmpty()) {
-            out.append(color ? RESET : "");
-            emitted = "";
-        }
-    }
-
-    private String styleOf() {
-        if (!color) {
-            return "";
-        }
-        if (code) {
-            return CODE;
-        }
-        if (bold) {
-            return BOLD;
-        }
-        if (italic) {
-            return ITALIC;
-        }
-        if (quote) {
-            return DIM;
-        }
-        if (heading) {
-            return BOLD;
-        }
-        return "";
+        style.resetLine();
     }
 }

@@ -142,6 +142,31 @@ class S4ReconcilerTest {
      * 反思 id 由 (planId, stepId, attemptNo) 决定，对账按坐标取回补挂。
      * 规则出处：08-application §8.10 规则 6、§8.8.1。
      */
+    /**
+     * 崩溃残留的端到端口径：启动对账跑完之后，用户 `/open` 再说一句话就能续跑。
+     * 规则出处：04-perception §4.8.1 规则 7、08-application §8.9.3、§8.10 规则 3。
+     */
+    @Test
+    void 崩溃残留经启动对账后会话可续跑() {
+        Session crashed = sessions.load(sessionId);
+        records.appendAll(sessionId, java.util.Arrays.asList(
+                crashed.appendRecord(RecordRole.USER, "读一下文件", null, "turn-1", null, null, 1L),
+                crashed.appendRecord(RecordRole.ASSISTANT, "我来读", null, "turn-1", "m1", null, 2L),
+                crashed.appendRecord(RecordRole.TOOL_REQUEST, "{\"tool\":\"read_file\"}", null,
+                        "turn-1", "m1", null, 3L)));
+
+        reconciler.reconcileStartup();
+
+        List<Record> tail = records.last(sessionId, 1);
+        assertEquals(RecordRole.TOOL_RESULT, tail.get(0).role());
+        assertEquals("turn-1", tail.get(0).turnId(), "中止结果挂在原轮上，流水才算闭合");
+        // 续跑的第一步：会话带着流水重建，组装上下文不抛；且那条轮仍然完整（ASSISTANT 打头）
+        Session resumed = Session.rehydrate(sessionId, null, AgentId.of("builtin.main"), ModelId.of("m1"),
+                null, 1L, records.last(sessionId, 10), null);
+        assertTrue(resumed.buildContextForLlm(text -> text == null ? 0 : text.length(), 100000)
+                .getRecords().size() >= 4);
+    }
+
     @Test
     void 规则6_有反思事实就补挂到尝试上() {
         planWithRunningStep();
@@ -189,6 +214,8 @@ class S4ReconcilerTest {
         // 补的中止结果必须挂在原请求那一轮，否则原 TOOL_REQUEST 仍自成一"轮"
         assertEquals("turn-7", aborted.turnId(), "中止结果与原请求同一轮");
         assertTrue(announced.stream().anyMatch(e -> e.message().contains("半截工具调用")));
+        // 补齐的唯一验收口径：这一轮能重新组装上下文（否则续跑第一句就抛"流水末尾有未闭合的工具请求"）
+        sessions.load(sessionId).buildContextForLlm(text -> text == null ? 0 : text.length(), 100000);
     }
 
     /** 启动编排：规则 4 全局一次，规则 1/2/3/5 覆盖**全部**会话（08-application §8.10）。 */

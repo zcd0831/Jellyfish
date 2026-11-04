@@ -199,9 +199,16 @@ class S3AcceptanceTest {
         ToolExecOutcome outcome = toolExecutorHolder.execute(main, "spawn_subagents", args,
                 io.github.zcd0831.jellyfish.domain.shared.RecordId.of("r1"));
         Path sd = tmp.resolve("sessions").resolve("main").resolve("sub");
+        // 断言到"内容 + 顺序"：标题与结论在假模型里是**两张不同的文本**，
+        // 所以命中"结论X"就证明结论真的从子会话传上来了，不是标题兜底（R1 阻断 5）
         assertTrue(outcome.content().contains("结论A"), outcome.content());
         assertTrue(outcome.content().contains("结论B"), outcome.content());
         assertTrue(outcome.content().contains("结论C"), outcome.content());
+        assertTrue(!outcome.content().contains("标题"), "不得把子会话标题当结论：" + outcome.content());
+        int a = outcome.content().indexOf("结论A");
+        int b = outcome.content().indexOf("结论B");
+        int c = outcome.content().indexOf("结论C");
+        assertTrue(a < b && b < c, "结论要按任务顺序回来：" + outcome.content());
         Path sub = tmp.resolve("sessions").resolve("main").resolve("sub");
         assertTrue(Files.isDirectory(sub), "子会话应落在 sub/ 下");
         assertEquals(3, sub.toFile().listFiles().length);
@@ -368,6 +375,12 @@ class S3AcceptanceTest {
                 }
             }
             String name = task.replaceAll(".*任务([A-C]).*", "$1");
+            // 标题调用必须给出**和结论不同**的文本：否则 contains("结论A") 会被子会话标题兜底满足，
+            // 用例证明不了结论真的传上来了（R1 阻断 5 就是这样存活的）
+            if (task.contains("概括用户这段话")) {
+                return new ModelInvocationResult("标题" + name, Collections.<ToolCall>emptyList(),
+                        new ModelUsage(4, 2), ModelId.of("m1"));
+            }
             String text = task.contains("慢") ? "慢任务的结论" : ("结论" + (name.isEmpty() ? "" : name));
             return new ModelInvocationResult(text, Collections.<ToolCall>emptyList(), new ModelUsage(4, 2),
                     ModelId.of("m1"));

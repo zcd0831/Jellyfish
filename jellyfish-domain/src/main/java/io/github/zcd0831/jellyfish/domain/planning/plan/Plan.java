@@ -190,6 +190,14 @@ public class Plan {
         pendingEvents.add(new PlanFailed());
     }
 
+    /**
+     * 重读已终结的计划时恢复终止原因：terminate() 会 raise 事件，不能拿来重建。
+     * 规则出处：09-infrastructure §9.5（plans/&lt;id&gt;.json 往返）。
+     */
+    public void restoreTerminationReason(String reason) {
+        this.terminationReason = reason;
+    }
+
     public List<DomainEvent> pullEvents() {
         List<DomainEvent> events = new ArrayList<DomainEvent>(pendingEvents);
         pendingEvents.clear();

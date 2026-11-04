@@ -51,8 +51,11 @@ public class PlanDto {
             PlanStep restored = step.toDomain();
             planSteps.add(restored);
         }
-        return Plan.rehydrate(PlanId.of(id), SessionId.of(sessionId), goal, PlanStatus.valueOf(status),
+        Plan plan = Plan.rehydrate(PlanId.of(id), SessionId.of(sessionId), goal, PlanStatus.valueOf(status),
                 replanGeneration, planSteps);
+        // 字段可选：老文件没有这一项就是"当时没记"，与 null 同义
+        plan.restoreTerminationReason(terminationReason);
+        return plan;
     }
 
     public static class StepDto {
@@ -119,6 +122,8 @@ public class PlanDto {
         public String verificationReportId;
         public String reflectionId;
         public String outcome;
+        /** 本次尝试用过的技能：改进判定的唯一证据（06-planning §6.6、§6.9.1）。 */
+        public List<String> usedSkillIds = new ArrayList<String>();
 
         static AttemptDto from(Attempt attempt) {
             AttemptDto dto = new AttemptDto();
@@ -127,6 +132,9 @@ public class PlanDto {
                     ? null : attempt.verificationReportId().getValue();
             dto.reflectionId = attempt.reflectionId() == null ? null : attempt.reflectionId().getValue();
             dto.outcome = attempt.outcome() == null ? null : attempt.outcome().name();
+            for (io.github.zcd0831.jellyfish.domain.shared.SkillId skillId : attempt.usedSkillIds()) {
+                dto.usedSkillIds.add(skillId.getValue());
+            }
             return dto;
         }
 
@@ -140,6 +148,11 @@ public class PlanDto {
             }
             if (outcome != null) {
                 attempt.finish(AttemptOutcome.valueOf(outcome));
+            }
+            if (usedSkillIds != null) {
+                for (String skillId : usedSkillIds) {
+                    attempt.recordSkillUsage(io.github.zcd0831.jellyfish.domain.shared.SkillId.of(skillId));
+                }
             }
             return attempt;
         }

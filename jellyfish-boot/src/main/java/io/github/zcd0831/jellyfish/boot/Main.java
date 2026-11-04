@@ -62,6 +62,8 @@ public final class Main {
             component.schemaMigrator().migrate();
             // 已授权插件在装配完声明之后、任何工具调用之前装载（08-application §8.9.6）
             component.pluginAssembler().assembleAll();
+            // 崩溃残留按 5 条规则补齐；会话可直接续跑（08-application §8.10）
+            component.startupReconciler().reconcileStartup();
             // 启动打印生效值，一条日志解决"我改的怎么没生效"
             System.out.println("data-dir=" + dir.root()
                     + "  log-level=" + options.logLevel()

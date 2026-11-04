@@ -60,6 +60,19 @@ public final class PlanningModule {
 
     @Provides
     @Singleton
+    io.github.zcd0831.jellyfish.application.shared.StartupReconciler startupReconciler(
+            SessionRepository sessions, PlanRepository plans,
+            io.github.zcd0831.jellyfish.application.planning.port.VerificationReportRepository reports,
+            RecordStore records,
+            io.github.zcd0831.jellyfish.application.action.port.BudgetRepository budgets,
+            io.github.zcd0831.jellyfish.application.memory.port.ReflectionRepository reflections,
+            CommitScope commitScope, DomainEventPublisher eventPublisher, ProgressPort progress) {
+        return new io.github.zcd0831.jellyfish.application.shared.StartupReconciler(sessions, plans, reports,
+                records, budgets, reflections, commitScope, eventPublisher, progress);
+    }
+
+    @Provides
+    @Singleton
     PlanFactory planFactory() {
         return new PlanFactory();
     }

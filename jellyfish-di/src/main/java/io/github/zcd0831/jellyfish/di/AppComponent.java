@@ -83,6 +83,9 @@ public interface AppComponent {
     /** 启动时装配已授权插件（08-application §8.9.6）。 */
     PluginAssembler pluginAssembler();
 
+    /** 启动对账：崩溃残留按 5 条规则补齐（08-application §8.10）。 */
+    io.github.zcd0831.jellyfish.application.shared.StartupReconciler startupReconciler();
+
     ToolExecutor toolExecutor();
 
     StartSessionUseCase startSessionUseCase();

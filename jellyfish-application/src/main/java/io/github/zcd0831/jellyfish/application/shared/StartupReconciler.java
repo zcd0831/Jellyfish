@@ -4,6 +4,7 @@ import io.github.zcd0831.jellyfish.application.action.port.BudgetRepository;
 import io.github.zcd0831.jellyfish.application.memory.port.ReflectionRepository;
 import io.github.zcd0831.jellyfish.application.perception.port.RecordStore;
 import io.github.zcd0831.jellyfish.application.perception.port.SessionRepository;
+import io.github.zcd0831.jellyfish.application.perception.port.SessionSummary;
 import io.github.zcd0831.jellyfish.application.planning.port.PlanRepository;
 import io.github.zcd0831.jellyfish.application.planning.port.VerificationReportRepository;
 import io.github.zcd0831.jellyfish.application.shared.port.CommitScope;
@@ -61,8 +62,31 @@ public final class StartupReconciler {
         this.progress = progress;
     }
 
-    public void reconcile(Session session) {
+    /**
+     * 启动对账的编排入口：规则 4 是全局的（扫整个 archive 区），只做一次；
+     * 规则 1/2/3 按会话补齐，规则 5 只对根会话。5 条全部幂等。
+     * 规则出处：08-application §8.10（崩溃残留 ⇒ 启动时补齐）。
+     */
+    public void reconcileStartup() {
         reconcileArchiveResidue();
+        for (SessionSummary summary : sessions.list()) {
+            Session session = sessions.load(summary.id());
+            if (session == null) {
+                continue;
+            }
+            reconcileSession(session);
+            if (!summary.isSubSession()) {
+                reconcileBudget(session);
+            }
+        }
+    }
+
+    /** 按会话对账（规则 1/2/3）；规则 4 是全局的，由 {@link #reconcileStartup()} 统一做一次。 */
+    public void reconcile(Session session) {
+        reconcileSession(session);
+    }
+
+    private void reconcileSession(Session session) {
         for (Plan plan : plans.findRunning(session.id())) {
             reconcilePlan(session, plan);
         }

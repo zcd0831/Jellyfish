@@ -136,6 +136,28 @@ class S4ReconcilerTest {
         assertTrue(announced.stream().anyMatch(e -> e.message().contains("半截工具调用")));
     }
 
+    /** 启动编排：规则 4 全局一次，规则 1/2/3/5 覆盖**全部**会话（08-application §8.10）。 */
+    @Test
+    void 启动对账遍历全部会话_不是只看当前会话() {
+        Session first = sessions.load(sessionId);
+        records.appendAll(sessionId, java.util.Collections.singletonList(
+                first.appendRecord(RecordRole.TOOL_REQUEST, "{}", null, "t1", "m1", null, 5L)));
+        Session second = Session.create(SessionId.of("s2"), null, AgentId.of("builtin.main"),
+                ModelId.of("m1"), 2L, null);
+        sessions.save(second);
+        records.appendAll(second.id(), java.util.Collections.singletonList(
+                second.appendRecord(RecordRole.TOOL_REQUEST, "{}", null, "t2", "m1", null, 6L)));
+
+        reconciler.reconcileStartup();
+
+        for (SessionId id : java.util.Arrays.asList(sessionId, SessionId.of("s2"))) {
+            List<Record> tail = records.last(id, 1);
+            assertEquals(RecordRole.TOOL_RESULT, tail.get(0).role(), "会话 " + id.getValue() + " 的残留要补齐");
+        }
+        // 规则 5 只对根会话：启动编排里顺带做了，不需要调用方再单独调
+        assertEquals(0L, budgets.load(sessionId).consumedTokens(), "台账缺失要被重建");
+    }
+
     @Test
     void 规则5_台账缺失就重建为0并告警() {
         Session root = sessions.load(sessionId);

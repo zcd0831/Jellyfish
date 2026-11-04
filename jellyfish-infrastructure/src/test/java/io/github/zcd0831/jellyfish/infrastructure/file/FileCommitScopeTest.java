@@ -33,6 +33,57 @@ class FileCommitScopeTest {
         return DataDirectory.of(tmp.toString());
     }
 
+    /**
+     * 全局资产（experience/、plugins/）的落盘必须与 globalWrite 同一把锁 ——
+     * 只靠调用方自觉包一层，没包的那条路径照样能并发替换。
+     * 规则出处：09-infrastructure §9.6、§9.9。
+     */
+    @Test
+    void 全局资产写入被globalWrite的锁挡住() throws Exception {
+        final FileCommitScope scope = new FileCommitScope(dir(), new JsonCodec());
+        final java.util.concurrent.CountDownLatch held = new java.util.concurrent.CountDownLatch(1);
+        final java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        Thread holder = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                scope.globalWrite(new Runnable() {
+                    @Override
+                    public void run() {
+                        held.countDown();
+                        try {
+                            release.await(5, java.util.concurrent.TimeUnit.SECONDS);
+                        } catch (InterruptedException interrupted) {
+                            Thread.currentThread().interrupt();
+                        }
+                    }
+                });
+            }
+        }, "global-writer");
+        holder.start();
+        assertTrue(held.await(5, java.util.concurrent.TimeUnit.SECONDS), "先拿到写段");
+
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newSingleThreadExecutor();
+        try {
+            java.util.concurrent.Future<?> commit = pool.submit(new Runnable() {
+                @Override
+                public void run() {
+                    scope.stageReplace(io.github.zcd0831.jellyfish.domain.memory.experience.Experience.create(
+                            io.github.zcd0831.jellyfish.domain.shared.ExperienceId.of("e1"), "场景",
+                            new io.github.zcd0831.jellyfish.domain.memory.experience.LessonLearned("教训", null),
+                            0.5, 1L, null));
+                    scope.commit();
+                }
+            });
+            Thread.sleep(200L);
+            assertTrue(!commit.isDone(), "写段被别人持有时，全局资产替换必须等，不能并发落盘");
+            release.countDown();
+            commit.get(5, java.util.concurrent.TimeUnit.SECONDS);
+        } finally {
+            release.countDown();
+            pool.shutdownNow();
+        }
+    }
+
     @Test
     void 提交后既写入流水也替换会话头() {
         Session session = Session.create(SessionId.of("s1"), null, AgentId.of("a"), ModelId.of("m"), 1L, null);

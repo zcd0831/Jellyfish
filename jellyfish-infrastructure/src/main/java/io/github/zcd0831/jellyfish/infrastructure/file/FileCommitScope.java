@@ -75,6 +75,17 @@ public final class FileCommitScope implements CommitScope {
         }
     }
 
+    /**
+     * 全局资产（experience/、plugins/）的落盘自己也走同一把锁：只靠调用方包 globalWrite
+     * 不足以拦住"没包的那条路径"，锁必须落在写入点上。
+     * 规则出处：09-infrastructure §9.6、§9.9。
+     */
+    private static void writeGlobalAsset(java.nio.file.Path file, String content) {
+        synchronized (GLOBAL_ASSET_LOCK) {
+            AtomicFiles.write(file, content);
+        }
+    }
+
     @Override
     public void commit() {
         Staging current = staging.get();
@@ -164,13 +175,13 @@ public final class FileCommitScope implements CommitScope {
         }
         if (aggregate instanceof Experience) {
             Experience experience = (Experience) aggregate;
-            AtomicFiles.write(dir.experience().resolve(experience.id().getValue() + ".json"),
+            writeGlobalAsset(dir.experience().resolve(experience.id().getValue() + ".json"),
                     codec.write(FileExperienceRepository.ExperienceDto.from(experience)));
             return;
         }
         if (aggregate instanceof PluginManifest) {
             PluginManifest manifest = (PluginManifest) aggregate;
-            AtomicFiles.write(dir.plugins().resolve(manifest.id().getValue()).resolve("plugin.json"),
+            writeGlobalAsset(dir.plugins().resolve(manifest.id().getValue()).resolve("plugin.json"),
                     codec.write(FilePluginRepository.PluginDto.from(manifest)));
             return;
         }

@@ -119,7 +119,8 @@ class S4ReconcilerTest {
     void 规则3_半截工具调用补中止结果且attempt不结束() {
         planWithRunningStep();
         Session session = sessions.load(sessionId);
-        Record request = session.appendRecord(RecordRole.TOOL_REQUEST, "{}", null, 5L);
+        Record request = session.appendRecord(RecordRole.TOOL_REQUEST, "{}", null,
+                "turn-7", "m1", null, 5L);
         records.appendAll(sessionId, java.util.Collections.singletonList(request));
 
         reconciler.reconcile(session);
@@ -127,8 +128,11 @@ class S4ReconcilerTest {
         Plan reloaded = plans.load(PlanId.of("p1"));
         assertEquals(StepStatus.RUNNING, reloaded.steps().get(0).status(), "崩溃不算失败，步骤仍在跑");
         assertNull(reloaded.steps().get(0).attempts().get(0).outcome(), "attempt 不落终态");
-        List<Record> tail = records.last(sessionId, 1);
-        assertEquals(RecordRole.TOOL_RESULT, tail.get(tail.size() - 1).role(), "半截调用要补中止结果");
+        List<Record> tail = records.last(sessionId, 2);
+        Record aborted = tail.get(tail.size() - 1);
+        assertEquals(RecordRole.TOOL_RESULT, aborted.role(), "半截调用要补中止结果");
+        // 补的中止结果必须挂在原请求那一轮，否则原 TOOL_REQUEST 仍自成一"轮"
+        assertEquals("turn-7", aborted.turnId(), "中止结果与原请求同一轮");
         assertTrue(announced.stream().anyMatch(e -> e.message().contains("半截工具调用")));
     }
 

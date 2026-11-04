@@ -85,7 +85,18 @@ public final class BudgetService {
      * 子会话结束后一次性归集：子会话不写自己的台账，避免并发写同一聚合。
      * 规则出处：05-action §5.8.5 规则 5、§5.9.1。
      */
-    public void settleFromSubSession(SessionId subSessionId) {
+    public void settleFromSubSession(final SessionId subSessionId) {
+        // 并行子代理会同时归集到同一个根台账：load→改→save 必须在同一写段里，
+        // 否则两次归集读到同一个旧值、后写的盖掉先写的（05-action §5.8.5 规则 5）
+        commitScope.globalWrite(new Runnable() {
+            @Override
+            public void run() {
+                settleLocked(subSessionId);
+            }
+        });
+    }
+
+    private void settleLocked(SessionId subSessionId) {
         long tokens = takeSubUsage(subSessionId);
         if (tokens <= 0) {
             return;   // 没有消耗，或者已经归集过

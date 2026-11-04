@@ -40,7 +40,20 @@ public final class ExperienceDistillationService {
         this.progress = progress;
     }
 
-    public void apply(ExperienceDraft draft, SessionId sessionId, PlanId planId) {
+    /**
+     * 经验落盘：幂等判定、查重、容量淘汰、写入四步必须在同一全局写段里（07-memory §7.9.2）。
+     * 否则两个并行子会话同时沉淀时，容量判据读到同一个旧值，双双通过、超容量。
+     */
+    public void apply(final ExperienceDraft draft, final SessionId sessionId, final PlanId planId) {
+        commitScope.globalWrite(new Runnable() {
+            @Override
+            public void run() {
+                applyLocked(draft, sessionId, planId);
+            }
+        });
+    }
+
+    private void applyLocked(ExperienceDraft draft, SessionId sessionId, PlanId planId) {
         if (draft == null || alreadySourced(planId)) {
             return;
         }

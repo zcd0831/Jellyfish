@@ -47,6 +47,14 @@ class BudgetServiceTest {
     private final Session child = Session.create(CHILD, ROOT, AgentId.of("a"), ModelId.of("m1"), 1L, null);
 
     private BudgetService service() {
+        // 全局写段：测试里同步执行，并记下"归集确实进了写段"
+        org.mockito.Mockito.doAnswer(new org.mockito.stubbing.Answer<Void>() {
+            @Override
+            public Void answer(org.mockito.invocation.InvocationOnMock invocation) {
+                ((Runnable) invocation.getArgument(0)).run();
+                return null;
+            }
+        }).when(commitScope).globalWrite(any(Runnable.class));
         when(policies.load()).thenReturn(RuntimePolicy.defaults());
         when(budgets.load(ROOT)).thenReturn(budget);
         when(sessions.load(ROOT)).thenReturn(root);
@@ -70,6 +78,8 @@ class BudgetServiceTest {
 
         service.settleFromSubSession(CHILD);
 
+        // 并行子代理会同时归集到同一个根台账：读-判-写必须在同一写段里（05-action §5.8.5）
+        verify(commitScope).globalWrite(any(Runnable.class));
         assertEquals(180, budget.consumedTokens(), "归集一次性写入全部累计");
         verify(commitScope).stageReplace(budget);
     }

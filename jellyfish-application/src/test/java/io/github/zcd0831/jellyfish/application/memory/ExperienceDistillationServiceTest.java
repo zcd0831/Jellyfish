@@ -31,6 +31,14 @@ class ExperienceDistillationServiceTest {
 
     private ExperienceDistillationService service(RuntimePolicy policy) {
         when(policies.load()).thenReturn(policy);
+        // 全局写段：测试里同步执行，保证"读-判-写"真的跑起来
+        org.mockito.Mockito.doAnswer(new org.mockito.stubbing.Answer<Void>() {
+            @Override
+            public Void answer(org.mockito.invocation.InvocationOnMock invocation) {
+                ((Runnable) invocation.getArgument(0)).run();
+                return null;
+            }
+        }).when(commitScope).globalWrite(org.mockito.ArgumentMatchers.any(Runnable.class));
         return new ExperienceDistillationService(experiences, policies, commitScope, events -> { }, event -> { });
     }
 
@@ -66,6 +74,9 @@ class ExperienceDistillationServiceTest {
         service(RuntimePolicy.defaults()).apply(new ExperienceDraft("新场景", "新教训", null), SessionId.of("s1"), null);
 
         org.mockito.Mockito.verify(commitScope).stageReplace(any(Experience.class));
+        // 容量判定与写入必须同处一个全局写段（07-memory §7.9.2）
+        org.mockito.Mockito.verify(commitScope, org.mockito.Mockito.atLeastOnce())
+                .globalWrite(org.mockito.ArgumentMatchers.any(Runnable.class));
     }
 
     private static Experience experience(String id, String scenario, double confidence) {

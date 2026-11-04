@@ -153,7 +153,7 @@ class S2AcceptanceTest {
                         budgetService));
         runSession = new RunSessionUseCase(sessions, records, new FileCommitScope(dir, codec), publisher,
                 executionLoop, model, toolExecutor, human, event -> { }, plans, contextWindow,
-                cancellations);
+                cancellations, session -> { });
         runSessionHolder[0] = runSession;
         startSession = new StartSessionUseCase(catalog, sessions, budgets,
                 new SessionTitleGenerator(model, budgetService), new SystemPromptAssembler(),

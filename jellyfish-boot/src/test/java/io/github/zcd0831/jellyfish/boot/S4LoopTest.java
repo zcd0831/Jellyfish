@@ -138,7 +138,7 @@ class S4LoopTest {
                 });
         runSession = new RunSessionUseCase(sessions, records, new FileCommitScope(dir, codec), publisher,
                 executionLoop, model, toolExecutor, human, event -> { }, plans, contextWindow,
-                cancellations);
+                cancellations, session -> { });
         holder[0] = runSession;
     }
 

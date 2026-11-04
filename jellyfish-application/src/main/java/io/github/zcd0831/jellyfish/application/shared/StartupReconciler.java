@@ -4,7 +4,6 @@ import io.github.zcd0831.jellyfish.application.action.port.BudgetRepository;
 import io.github.zcd0831.jellyfish.application.memory.port.ReflectionRepository;
 import io.github.zcd0831.jellyfish.application.perception.port.RecordStore;
 import io.github.zcd0831.jellyfish.application.perception.port.SessionRepository;
-import io.github.zcd0831.jellyfish.application.perception.port.SessionSummary;
 import io.github.zcd0831.jellyfish.application.planning.port.PlanRepository;
 import io.github.zcd0831.jellyfish.application.planning.port.VerificationReportRepository;
 import io.github.zcd0831.jellyfish.application.shared.port.CommitScope;
@@ -24,6 +23,7 @@ import io.github.zcd0831.jellyfish.domain.planning.verification.VerificationRepo
 import io.github.zcd0831.jellyfish.domain.shared.BudgetId;
 import io.github.zcd0831.jellyfish.domain.shared.DomainEvent;
 import io.github.zcd0831.jellyfish.domain.shared.ReflectionId;
+import io.github.zcd0831.jellyfish.domain.shared.SessionId;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -33,7 +33,7 @@ import java.util.UUID;
  * 启动对账：崩溃残留的业务补齐（5 条）。只管业务语义，文件级残留在基础设施层。
  * 规则出处：08-application §8.10（StartupReconciler 的 5 条规则）。
  */
-public final class StartupReconciler {
+public final class StartupReconciler implements SessionResidueReconciler {
 
     private final SessionRepository sessions;
     private final PlanRepository plans;
@@ -67,34 +67,43 @@ public final class StartupReconciler {
     }
 
     /**
-     * 启动对账的编排入口：规则 4 是全局的（扫整个 archive 区），只做一次；
-     * 规则 1/2/3 按会话补齐，规则 5 只对根会话。5 条全部幂等。
-     * 规则出处：08-application §8.10（崩溃残留 ⇒ 启动时补齐）。
+     * 启动只做全局那一条（规则 4：归档中间态）。
+     * 其余 5 条按会话在**续跑入口**做（{@link #reconcile(Session)} / {@link #reconcileBudget}）：
+     * 启动成本若正比于会话总量，用户攒了几千个会话就要等几秒，而绝大多数会话根本不会再被打开。
+     * 规则出处：08-application §8.10、§8.9.3（`U3->>SR: reconcile(session)`）、
+     * 04-perception §4.8.1 规则 7（续跑先对账）。
      */
     public void reconcileStartup() {
         reconcileArchiveResidue();
-        for (SessionSummary summary : sessions.list()) {
-            Session session = sessions.load(summary.id());
-            if (session == null) {
-                continue;
-            }
-            reconcileSession(session);
-            if (!summary.isSubSession()) {
-                reconcileBudget(session);
-            }
+    }
+
+    /**
+     * 会话要跑之前补齐这一个会话：规则 1/2/3/5/6，外加根会话的台账（规则 5）。
+     * 幂等：干净会话一次读、零写入。
+     */
+    @Override
+    public void reconcileBeforeRun(Session session) {
+        reconcileSession(session.id());
+        if (session.parentSessionId() == null) {
+            reconcileBudget(session.id());
         }
     }
 
-    /** 按会话对账（规则 1/2/3）；规则 4 是全局的，由 {@link #reconcileStartup()} 统一做一次。 */
-    public void reconcile(Session session) {
-        reconcileSession(session);
-    }
-
+    /**
+     * 按会话对账。**先看有没有要补的，再去读会话头**：启动成本正比于会话数，
+     * 每多读一次 meta.json 都是纯开销，而绝大多数会话是干净的。
+     */
     private void reconcileSession(Session session) {
-        for (Plan plan : plans.findRunning(session.id())) {
-            reconcilePlan(session, plan);
+        reconcileSession(session.id());
+    }
+
+    private void reconcileSession(SessionId sessionId) {
+        for (Plan plan : plans.findRunning(sessionId)) {
+            if (reconcilePlan(plan)) {
+                flush(plan);
+            }
         }
-        reconcileHalfToolCall(session);
+        reconcileHalfToolCall(sessionId);
     }
 
     /** 规则 4：归档中间态对账——包完整则补删原目录，半截包直接丢弃。 */
@@ -102,8 +111,13 @@ public final class StartupReconciler {
         sessions.cleanupArchiveResidue();
     }
 
-    /** 规则 ①②⑥：事实已落盘但聚合没跟上。 */
-    private void reconcilePlan(Session session, Plan plan) {
+    /**
+     * 规则 ①②⑥：事实已落盘但聚合没跟上。
+     *
+     * @return 是否真的补了什么（没有就一个字节都不写，续跑只花一次读）
+     */
+    private boolean reconcilePlan(Plan plan) {
+        boolean changed = false;
         for (PlanStep step : plan.steps()) {
             if (step.status() != StepStatus.RUNNING) {
                 continue;
@@ -112,7 +126,7 @@ public final class StartupReconciler {
             if (attempt == null) {
                 continue;
             }
-            reconcileReflection(plan, step, attempt);
+            changed |= reconcileReflection(plan, step, attempt);
             List<VerificationReport> found = reports.findByStep(plan.id(), step.id());
             for (VerificationReport report : found) {
                 if (report.attemptNo() != attempt.attemptNo()) {
@@ -125,20 +139,22 @@ public final class StartupReconciler {
                     plan.markStepFailed(step.id(), report.id());
                     announce("对账：按既存 " + report.outcome() + " 报告补齐步骤失败（" + step.id().getValue() + "）");
                 }
+                changed = true;
             }
         }
-        convergeIfExhausted(plan);
-        flush(session, plan);
+        return convergeIfExhausted(plan) || changed;
     }
 
     /**
      * 补齐之后必须收敛：规则 1/2 判完最后一批步骤，计划可能停在「EXECUTING 却无当前步」；
      * 不收尾的话该会话再也无法 generate_plan（06-planning §6.8.1「无当前步即终结」）。
      */
-    private void convergeIfExhausted(Plan plan) {
+    private boolean convergeIfExhausted(Plan plan) {
         if (plan.failIfNoCurrentStep(EXHAUSTED_STEPS)) {
             announce("对账：所有步骤已终结，计划收敛为失败（" + plan.id().getValue() + "）");
+            return true;
         }
+        return false;
     }
 
     /**
@@ -146,16 +162,17 @@ public final class StartupReconciler {
      * 反思 id 由 (planId, stepId, attemptNo) 决定，所以不需要额外索引。
      * 规则出处：08-application §8.10 规则 6、§8.8.1。
      */
-    private void reconcileReflection(Plan plan, PlanStep step, Attempt attempt) {
+    private boolean reconcileReflection(Plan plan, PlanStep step, Attempt attempt) {
         if (attempt.reflectionId() != null) {
-            return;
+            return false;
         }
         ReflectionId id = Reflection.identify(plan.id(), step.id(), attempt.attemptNo());
         if (!reflections.get(id).isPresent()) {
-            return;
+            return false;
         }
         plan.recordReflection(step.id(), attempt.attemptNo(), id);
         announce("对账：按既存反思补齐尝试记录（" + step.id().getValue() + " / #" + attempt.attemptNo() + "）");
+        return true;
     }
 
     /**
@@ -163,38 +180,42 @@ public final class StartupReconciler {
      * 崩溃/强杀不形成任何终态：attempt 不落终态、不消耗重试名额，会话可以直接续跑
      * （08-application §8.10 规则 3、§8.9.4.1）。
      */
-    private void reconcileHalfToolCall(Session session) {
-        List<Record> recent = records.last(session.id(), 2);
+    private void reconcileHalfToolCall(SessionId sessionId) {
+        List<Record> recent = records.last(sessionId, 2);
         if (recent.size() < 1) {
             return;
         }
         Record request = recent.get(recent.size() - 1);
         if (request.role() != RecordRole.TOOL_REQUEST) {
+            return;   // 干净的收尾：不读会话头
+        }
+        Session session = sessions.load(sessionId);
+        if (session == null) {
             return;
         }
         // 中止结果必须与原请求同一轮（turnId）：自成一轮会让原 TOOL_REQUEST 仍然悬空
         // 规则出处：04-perception §4.8.1 规则 14；08-application §8.10 规则 3
         Record aborted = session.appendRecord(RecordRole.TOOL_RESULT, ABORTED_TOOL_RESULT, null,
                 request.turnId(), request.producerModelId(), null, System.currentTimeMillis());
-        commitScope.stageAppend(session.id(), aborted);
+        commitScope.stageAppend(sessionId, aborted);
         commitScope.commit();
         announce("对账：半截工具调用补中止结果，会话可续跑");
     }
 
     /** 规则 ⑤：台账缺失或损坏 ⇒ 重建为 0 并告警（预算不精确可接受）。 */
-    public void reconcileBudget(Session rootSession) {
+    public void reconcileBudget(SessionId rootSessionId) {
         try {
-            if (budgets.load(rootSession.id()) == null) {
-                budgets.save(Budget.openFor(BudgetId.of(UUID.randomUUID().toString()), rootSession.id()));
-                announce("对账：台账缺失，已重建为 0（" + rootSession.id().getValue() + "）");
+            if (budgets.load(rootSessionId) == null) {
+                budgets.save(Budget.openFor(BudgetId.of(UUID.randomUUID().toString()), rootSessionId));
+                announce("对账：台账缺失，已重建为 0（" + rootSessionId.getValue() + "）");
             }
         } catch (RuntimeException corrupted) {
-            budgets.save(Budget.openFor(BudgetId.of(UUID.randomUUID().toString()), rootSession.id()));
-            announce("对账：台账损坏，已重建为 0（" + rootSession.id().getValue() + "）");
+            budgets.save(Budget.openFor(BudgetId.of(UUID.randomUUID().toString()), rootSessionId));
+            announce("对账：台账损坏，已重建为 0（" + rootSessionId.getValue() + "）");
         }
     }
 
-    private void flush(Session session, Plan plan) {
+    private void flush(Plan plan) {
         commitScope.stageReplace(plan);
         commitScope.commit();
         publish(plan.pullEvents());

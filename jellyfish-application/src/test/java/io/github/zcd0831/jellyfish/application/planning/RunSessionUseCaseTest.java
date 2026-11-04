@@ -54,10 +54,14 @@ class RunSessionUseCaseTest {
     private final SessionCancellations cancellations = new SessionCancellations();
 
     private RunSessionUseCase useCase() {
+        return useCase(session -> { });
+    }
+
+    private RunSessionUseCase useCase(io.github.zcd0831.jellyfish.application.shared.SessionResidueReconciler reconciler) {
         when(sessions.load(SessionId.of("s1"))).thenReturn(session);
         when(records.last(any(SessionId.class), anyInt())).thenReturn(Collections.emptyList());
         return new RunSessionUseCase(sessions, records, commitScope, events -> { }, runner, model, tools, human,
-                progress, plans, contextWindow, cancellations);
+                progress, plans, contextWindow, cancellations, reconciler);
     }
 
     @Test
@@ -184,4 +188,23 @@ class RunSessionUseCaseTest {
         assertEquals(RunSessionResult.Outcome.CONVERGED,
                 useCase.run(SessionId.of("s1"), "第二轮", ChunkSink.NOOP).value().outcome());
     }
+    /** 会话要跑之前先对账：崩溃残留不能等到 buildContextForLlm 才发现（08-application §8.9.3）。 */
+    @Test
+    void 跑之前先对账这一个会话() {
+        final java.util.List<String> reconciled = new java.util.ArrayList<String>();
+        when(runner.run(any(Session.class), any(ChunkSink.class), any(RunContext.class)))
+                .thenReturn(RunOutcome.CONVERGED);
+        useCase(session -> reconciled.add(session.id().getValue())).run(SessionId.of("s1"), "hi", ChunkSink.NOOP);
+
+        assertEquals(java.util.Collections.singletonList("s1"), reconciled);
+    }
+
+    @Test
+    void 会话不存在时不对账() {
+        final java.util.List<String> reconciled = new java.util.ArrayList<String>();
+        useCase(session -> reconciled.add(session.id().getValue())).run(SessionId.of("nope"), "hi", ChunkSink.NOOP);
+
+        assertTrue(reconciled.isEmpty());
+    }
+
 }

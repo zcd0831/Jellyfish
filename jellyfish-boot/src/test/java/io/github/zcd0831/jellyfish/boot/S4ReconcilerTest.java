@@ -98,7 +98,7 @@ class S4ReconcilerTest {
         reports.save(VerificationReport.decide(VerificationReportId.of("r1"), PlanId.of("p1"),
                 StepId.of("step1"), 1, VerificationOutcome.PASSED, null, null, 10L));
 
-        reconciler.reconcile(sessions.load(sessionId));
+        reconciler.reconcileBeforeRun(sessions.load(sessionId));
 
         Plan reloaded = plans.findRunning(sessionId).isEmpty() ? plans.load(PlanId.of("p1")) : plans.findRunning(sessionId).get(0);
         assertEquals(StepStatus.SUCCEEDED, reloaded.steps().get(0).status());
@@ -110,7 +110,7 @@ class S4ReconcilerTest {
         reports.save(VerificationReport.decide(VerificationReportId.of("r1"), PlanId.of("p1"),
                 StepId.of("step1"), 1, VerificationOutcome.FAILED, VerificationType.LLM_JUDGE, "不合格", 10L));
 
-        reconciler.reconcile(sessions.load(sessionId));
+        reconciler.reconcileBeforeRun(sessions.load(sessionId));
 
         Plan reloaded = plans.load(PlanId.of("p1"));
         assertEquals(StepStatus.FAILED, reloaded.steps().get(0).status());
@@ -127,7 +127,7 @@ class S4ReconcilerTest {
         reports.save(VerificationReport.decide(VerificationReportId.of("r1"), PlanId.of("p1"),
                 StepId.of("step1"), 1, VerificationOutcome.FAILED, VerificationType.LLM_JUDGE, "不合格", 10L));
 
-        reconciler.reconcile(sessions.load(sessionId));
+        reconciler.reconcileBeforeRun(sessions.load(sessionId));
 
         assertTrue(plans.findRunning(sessionId).isEmpty(), "收敛后不该再有执行中的计划");
         Plan reloaded = plans.load(PlanId.of("p1"));
@@ -143,11 +143,11 @@ class S4ReconcilerTest {
      * 规则出处：08-application §8.10 规则 6、§8.8.1。
      */
     /**
-     * 崩溃残留的端到端口径：启动对账跑完之后，用户 `/open` 再说一句话就能续跑。
+     * 崩溃残留的端到端口径：这个会话要跑之前先补齐，用户 `/open` 再说一句话就能续跑。
      * 规则出处：04-perception §4.8.1 规则 7、08-application §8.9.3、§8.10 规则 3。
      */
     @Test
-    void 崩溃残留经启动对账后会话可续跑() {
+    void 崩溃残留经续跑前对账后会话可续跑() {
         Session crashed = sessions.load(sessionId);
         records.appendAll(sessionId, java.util.Arrays.asList(
                 crashed.appendRecord(RecordRole.USER, "读一下文件", null, "turn-1", null, null, 1L),
@@ -155,7 +155,7 @@ class S4ReconcilerTest {
                 crashed.appendRecord(RecordRole.TOOL_REQUEST, "{\"tool\":\"read_file\"}", null,
                         "turn-2", "m1", null, 3L)));
 
-        reconciler.reconcileStartup();
+        reconciler.reconcileBeforeRun(sessions.load(sessionId));
 
         List<Record> tail = records.last(sessionId, 1);
         assertEquals(RecordRole.TOOL_RESULT, tail.get(0).role());
@@ -173,7 +173,7 @@ class S4ReconcilerTest {
         ReflectionId reflectionId = Reflection.identify(PlanId.of("p1"), StepId.of("step1"), 1);
         reflections.save(Reflection.record(PlanId.of("p1"), StepId.of("step1"), 1, "下次先读文件", 10L));
 
-        reconciler.reconcile(sessions.load(sessionId));
+        reconciler.reconcileBeforeRun(sessions.load(sessionId));
 
         Plan reloaded = plans.load(PlanId.of("p1"));
         Attempt attempt = reloaded.steps().get(0).attempts().get(0);
@@ -185,7 +185,7 @@ class S4ReconcilerTest {
     void 规则6_没有反思事实就不动尝试() {
         planWithRunningStep();
 
-        reconciler.reconcile(sessions.load(sessionId));
+        reconciler.reconcileBeforeRun(sessions.load(sessionId));
 
         Plan reloaded = plans.load(PlanId.of("p1"));
         assertNull(reloaded.steps().get(0).attempts().get(0).reflectionId());
@@ -203,7 +203,7 @@ class S4ReconcilerTest {
                 "turn-7", "m1", null, 5L);
         records.appendAll(sessionId, java.util.Collections.singletonList(request));
 
-        reconciler.reconcile(session);
+        reconciler.reconcileBeforeRun(session);
 
         Plan reloaded = plans.load(PlanId.of("p1"));
         assertEquals(StepStatus.RUNNING, reloaded.steps().get(0).status(), "崩溃不算失败，步骤仍在跑");
@@ -218,9 +218,12 @@ class S4ReconcilerTest {
         sessions.load(sessionId).buildContextForLlm(text -> text == null ? 0 : text.length(), 100000);
     }
 
-    /** 启动编排：规则 4 全局一次，规则 1/2/3/5 覆盖**全部**会话（08-application §8.10）。 */
+    /**
+     * 启动只清全局残留（规则 4），**不遍历会话**：启动成本不能正比于用户攒下的会话总量。
+     * 会话级规则 1/2/3/5 在它自己要跑之前做（08-application §8.10、§8.9.3）。
+     */
     @Test
-    void 启动对账遍历全部会话_不是只看当前会话() {
+    void 启动不遍历会话_会话级补齐留到续跑前() {
         Session first = sessions.load(sessionId);
         records.appendAll(sessionId, java.util.Collections.singletonList(
                 first.appendRecord(RecordRole.TOOL_REQUEST, "{}", null, "t1", "m1", null, 5L)));
@@ -232,19 +235,23 @@ class S4ReconcilerTest {
 
         reconciler.reconcileStartup();
 
-        for (SessionId id : java.util.Arrays.asList(sessionId, SessionId.of("s2"))) {
-            List<Record> tail = records.last(id, 1);
-            assertEquals(RecordRole.TOOL_RESULT, tail.get(0).role(), "会话 " + id.getValue() + " 的残留要补齐");
-        }
-        // 规则 5 只对根会话：启动编排里顺带做了，不需要调用方再单独调
-        assertEquals(0L, budgets.load(sessionId).consumedTokens(), "台账缺失要被重建");
+        assertEquals(RecordRole.TOOL_REQUEST, records.last(sessionId, 1).get(0).role(),
+                "启动不该动流水：会话级的补齐留到它真的要被跑之前");
+
+        // 真正要跑的时候，那一个会话补齐；另一个会话保持原样，谁跑谁补
+        reconciler.reconcileBeforeRun(sessions.load(sessionId));
+
+        assertEquals(RecordRole.TOOL_RESULT, records.last(sessionId, 1).get(0).role(), "跑之前补齐");
+        assertEquals(RecordRole.TOOL_REQUEST, records.last(SessionId.of("s2"), 1).get(0).role(),
+                "没被跑的会话不补——成本正比于用户实际做的事");
+        assertEquals(0L, budgets.load(sessionId).consumedTokens(), "规则 5 只对根会话，跑之前顺带做");
     }
 
     @Test
     void 规则5_台账缺失就重建为0并告警() {
         Session root = sessions.load(sessionId);
 
-        reconciler.reconcileBudget(root);
+        reconciler.reconcileBudget(root.id());
 
         Budget rebuilt = budgets.load(sessionId);
         assertEquals(0L, rebuilt.consumedTokens());
@@ -264,7 +271,7 @@ class S4ReconcilerTest {
             throw new IllegalStateException(e);
         }
 
-        reconciler.reconcileBudget(root);
+        reconciler.reconcileBudget(root.id());
 
         assertEquals(0L, budgets.load(sessionId).consumedTokens());
     }

@@ -158,7 +158,7 @@ class S3AcceptanceTest {
                 });
         runSession = new RunSessionUseCase(sessions, records, new FileCommitScope(dir, codec), publisher,
                 executionLoop, model, toolExecutor, human, event -> { }, plans, contextWindow,
-                cancellations);
+                cancellations, session -> { });
         runSessionHolder[0] = runSession;
         startSession = new StartSessionUseCase(catalog, sessions, budgets, titleGenerator,
                 new SystemPromptAssembler(), new FileCommitScope(dir, codec), new SystemClock(),

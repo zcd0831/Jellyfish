@@ -13,6 +13,7 @@ import io.github.zcd0831.jellyfish.application.shared.CancellationToken;
 import io.github.zcd0831.jellyfish.application.shared.ChunkSink;
 import io.github.zcd0831.jellyfish.application.shared.ProgressEvent;
 import io.github.zcd0831.jellyfish.application.shared.Result;
+import io.github.zcd0831.jellyfish.application.shared.SessionResidueReconciler;
 import io.github.zcd0831.jellyfish.application.shared.UseCaseError;
 import io.github.zcd0831.jellyfish.application.shared.port.CommitScope;
 import io.github.zcd0831.jellyfish.application.shared.port.DomainEventPublisher;
@@ -43,12 +44,14 @@ public final class RunSessionUseCase {
     private final PlanRepository plans;
     private final ContextWindowService contextWindow;
     private final SessionCancellations cancellations;
+    private final SessionResidueReconciler reconciler;
 
     public RunSessionUseCase(SessionRepository sessions, RecordStore records, CommitScope commitScope,
                              DomainEventPublisher eventPublisher, SessionRunner runner,
                              ModelInvocationPort model, ToolInvoker tools, HumanInteractionPort human,
                              ProgressPort progress, PlanRepository plans, ContextWindowService contextWindow,
-                             SessionCancellations cancellations) {
+                             SessionCancellations cancellations,
+                             SessionResidueReconciler reconciler) {
         this.sessions = sessions;
         this.records = records;
         this.commitScope = commitScope;
@@ -61,6 +64,7 @@ public final class RunSessionUseCase {
         this.plans = plans;
         this.contextWindow = contextWindow;
         this.cancellations = cancellations;
+        this.reconciler = reconciler;
     }
 
     /** 没有令牌的调用（测试复跑、内部复用）按"永不取消"处理（§8.4.1）。 */
@@ -97,6 +101,9 @@ public final class RunSessionUseCase {
 
     private Result<RunSessionResult> execute(Session session, SessionId sessionId, String text, ChunkSink sink,
                                              CancellationToken token) {
+        // 这个会话要跑了：先把崩溃残留补齐（规则 1/2/3/5/6）。放在续跑入口而不是启动，
+        // 是因为启动全量对账的成本正比于用户攒下的会话总量（08-application §8.10、§8.9.3）。
+        reconciler.reconcileBeforeRun(session);
         session.hydrateRecords(records.last(sessionId, Integer.MAX_VALUE));
         if (text != null) {
             // 续跑（text == null）不追加用户消息：会话开启时首条输入已落盘（08-application §8.9.3）

@@ -225,8 +225,9 @@ public final class PlanningModule {
                                         SessionRunner runner, ModelInvocationPort model, ToolInvoker tools,
                                         HumanInteractionPort human, ProgressPort progress,
                                         PlanRepository plans, ContextWindowService contextWindow,
-                                        SessionCancellations cancellations) {
+                                        SessionCancellations cancellations,
+                                        io.github.zcd0831.jellyfish.application.shared.StartupReconciler reconciler) {
         return new RunSessionUseCase(sessions, records, commitScope, publisher, runner, model, tools, human,
-                progress, plans, contextWindow, cancellations);
+                progress, plans, contextWindow, cancellations, reconciler);
     }
 }

@@ -53,10 +53,23 @@ public class PlanStep {
         return attempts.isEmpty() ? null : attempts.get(attempts.size() - 1);
     }
 
+    /**
+     * 判定通过 ⇒ 这一步的尝试也结束了：结局落 SUCCEEDED，验证报告挂到该 attempt 上。
+     * 不结算的话，续跑重建出的 attempt 会永远停在"没做完"（outcome = null），
+     * 与"未做完不结束尝试"的定义冲突。
+     * 规则出处：06-planning §6.8.1（一次尝试以判定结束）、§6.6。
+     */
     void markSucceeded(String summary, VerificationReportId reportId) {
         this.status = StepStatus.SUCCEEDED;
         this.finalOutput = summary;
         this.finalVerificationReportId = reportId;
+        Attempt attempt = currentAttempt();
+        if (attempt != null) {
+            if (reportId != null) {
+                attempt.attachReport(reportId);
+            }
+            attempt.finish(AttemptOutcome.SUCCEEDED);
+        }
     }
 
     void markFailed() {

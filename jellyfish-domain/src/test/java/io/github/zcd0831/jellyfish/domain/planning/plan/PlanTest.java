@@ -201,4 +201,28 @@ class PlanTest {
         assertEquals(StepStatus.RUNNING, plan.steps().get(0).status());
         assertNotNull(plan.getCurrentStep(), "续跑：下次输入继续同一步");
     }
+    @Test
+    void 步骤判定通过时该次尝试也结算成成功() {
+        Plan plan = plan(1);
+        Attempt attempt = plan.beginCurrentStep();
+        io.github.zcd0831.jellyfish.domain.shared.VerificationReportId reportId =
+                io.github.zcd0831.jellyfish.domain.shared.VerificationReportId.of("report-1");
+
+        plan.markStepSucceeded(StepId.of("step1"), "第一步完成", reportId);
+
+        assertEquals(AttemptOutcome.SUCCEEDED, attempt.outcome());
+        assertEquals(reportId, attempt.verificationReportId());
+    }
+
+    @Test
+    void 免验证通过时尝试结局仍是成功() {
+        Plan plan = plan(1);
+        Attempt attempt = plan.beginCurrentStep();
+
+        plan.markStepSucceeded(StepId.of("step1"), "第一步完成", null);
+
+        assertEquals(AttemptOutcome.SUCCEEDED, attempt.outcome());
+        assertNull(attempt.verificationReportId());
+    }
+
 }

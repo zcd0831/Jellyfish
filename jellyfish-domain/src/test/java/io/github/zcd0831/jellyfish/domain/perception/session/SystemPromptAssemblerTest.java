@@ -21,7 +21,7 @@ class SystemPromptAssemblerTest {
         values.put("role", "审查员");
         List<ToolSchemaSnapshot> tools = Arrays.asList(
                 new ToolSchemaSnapshot("read_file", "读文件", "{}", "文件内容"));
-        List<SkillSummarySnapshot> skills = Arrays.asList(new SkillSummarySnapshot("code-review", "代码评审"));
+        List<SkillSummarySnapshot> skills = Arrays.asList(new SkillSummarySnapshot("code-review", "代码评审", "当需要评审时"));
 
         SystemPromptSnapshot snapshot = new SystemPromptAssembler().assemble(new AgentSnapshotInput(
                 AgentId.of("builtin.main"), new PromptTemplate("你是 ${role}。", Arrays.asList("role")),

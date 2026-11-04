@@ -38,6 +38,7 @@ final class SessionMetaMapper {
                 SessionMetaDto.SkillDto skillDto = new SessionMetaDto.SkillDto();
                 skillDto.name = skill.getName();
                 skillDto.description = skill.getDescription();
+                skillDto.triggerCondition = skill.getTriggerCondition();
                 dto.systemPrompt.skills.add(skillDto);
             }
         }
@@ -60,7 +61,7 @@ final class SessionMetaMapper {
         }
         List<SkillSummarySnapshot> skills = new ArrayList<SkillSummarySnapshot>();
         for (SessionMetaDto.SkillDto skill : dto.skills) {
-            skills.add(new SkillSummarySnapshot(skill.name, skill.description));
+            skills.add(new SkillSummarySnapshot(skill.name, skill.description, skill.triggerCondition));
         }
         return new SystemPromptSnapshot(dto.renderedPrompt, tools, skills);
     }

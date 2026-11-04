@@ -227,7 +227,7 @@ public final class StartSessionUseCase {
         List<SkillSummarySnapshot> skills = new ArrayList<SkillSummarySnapshot>();
         for (SkillDefinition skill : catalog.skills()) {
             if (skill.isActive() && agent.listBoundSkillIds().contains(skill.id())) {
-                skills.add(new SkillSummarySnapshot(skill.name(), skill.description()));
+                skills.add(new SkillSummarySnapshot(skill.name(), skill.description(), skill.triggerCondition()));
             }
         }
         return assembler.assemble(new AgentSnapshotInput(agent.id(), agent.basePrompt(), null, tools, skills,

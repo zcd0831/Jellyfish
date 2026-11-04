@@ -38,5 +38,7 @@ public class SessionMetaDto {
     public static class SkillDto {
         public String name;
         public String description;
+        /** 可选：老 meta.json 没有这一项，读回按 null。 */
+        public String triggerCondition;
     }
 }

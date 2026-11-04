@@ -174,6 +174,17 @@ public final class FileRecordStore implements RecordStore {
         return lines;
     }
 
+    private static RecordLineDto.ToolPayloadDto payloadOf(
+            io.github.zcd0831.jellyfish.domain.perception.session.ToolResultPayload payload) {
+        if (payload == null) {
+            return null;
+        }
+        RecordLineDto.ToolPayloadDto dto = new RecordLineDto.ToolPayloadDto();
+        dto.truncated = payload.isTruncated();
+        dto.resourceUri = payload.getResourceUri();
+        return dto;
+    }
+
     private static RecordLineDto toDto(Record r) {
         RecordLineDto d = new RecordLineDto();
         d.id = r.id();
@@ -182,7 +193,7 @@ public final class FileRecordStore implements RecordStore {
         d.reasoning = r.reasoning();
         d.turnId = r.turnId();
         d.producerModelId = r.producerModelId();
-        d.toolPayload = r.toolPayload();
+        d.toolPayload = payloadOf(r.toolPayload());
         d.summaryCoversUpTo = r.summaryCoversUpTo();
         d.sequence = r.sequence();
         d.date = r.date();
@@ -190,7 +201,16 @@ public final class FileRecordStore implements RecordStore {
     }
 
     private static Record toDomain(RecordLineDto d) {
-        return new Record(d.id, d.role, d.content, d.reasoning, d.turnId, d.producerModelId, d.toolPayload,
-                d.summaryCoversUpTo, d.sequence, d.date);
+        return new Record(d.id, d.role, d.content, d.reasoning, d.turnId, d.producerModelId,
+                payloadToDomain(d.toolPayload), d.summaryCoversUpTo, d.sequence, d.date);
+    }
+
+    private static io.github.zcd0831.jellyfish.domain.perception.session.ToolResultPayload payloadToDomain(
+            RecordLineDto.ToolPayloadDto dto) {
+        if (dto == null) {
+            return null;
+        }
+        return new io.github.zcd0831.jellyfish.domain.perception.session.ToolResultPayload(
+                dto.truncated, dto.resourceUri);
     }
 }

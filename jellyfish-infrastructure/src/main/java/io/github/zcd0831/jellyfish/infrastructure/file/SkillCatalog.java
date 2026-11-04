@@ -74,8 +74,21 @@ final class SkillCatalog {
         return out.toString();
     }
 
+    /**
+     * 缺省 ACTIVE；认不出的状态按 DRAFT —— 写错的技能宁可看不见，也不能被当成启用。
+     * 规则出处：09-infrastructure §9.5（status 由 front-matter 决定）。
+     */
     private static SkillStatus status(String raw) {
-        return raw == null ? SkillStatus.ACTIVE : SkillStatus.valueOf(raw.toUpperCase());
+        if (raw == null) {
+            return SkillStatus.ACTIVE;
+        }
+        String word = raw.trim().split("\\s+")[0].toUpperCase(java.util.Locale.ROOT);
+        for (SkillStatus status : SkillStatus.values()) {
+            if (status.name().equals(word)) {
+                return status;
+            }
+        }
+        return SkillStatus.DRAFT;
     }
 
     /** 缺省可变：人写技能默认允许系统改进（§7.3 规则 ③）。 */

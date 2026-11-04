@@ -209,6 +209,17 @@ public final class FileCommitScope implements CommitScope {
      * 漏一个字段，内存里正确、落盘后丢失，重启即真相改变。
      * 规则出处：09-infrastructure §9.4（RecordStore 行字段）。
      */
+    private static RecordLineDto.ToolPayloadDto payloadOf(
+            io.github.zcd0831.jellyfish.domain.perception.session.ToolResultPayload payload) {
+        if (payload == null) {
+            return null;
+        }
+        RecordLineDto.ToolPayloadDto dto = new RecordLineDto.ToolPayloadDto();
+        dto.truncated = payload.isTruncated();
+        dto.resourceUri = payload.getResourceUri();
+        return dto;
+    }
+
     private static RecordLineDto toLine(Record r) {
         RecordLineDto d = new RecordLineDto();
         d.id = r.id();
@@ -217,7 +228,7 @@ public final class FileCommitScope implements CommitScope {
         d.reasoning = r.reasoning();
         d.turnId = r.turnId();
         d.producerModelId = r.producerModelId();
-        d.toolPayload = r.toolPayload();
+        d.toolPayload = payloadOf(r.toolPayload());
         d.summaryCoversUpTo = r.summaryCoversUpTo();
         d.sequence = r.sequence();
         d.date = r.date();

@@ -35,7 +35,7 @@ final class FrontMatter {
             }
             int colon = line.indexOf(':');
             if (colon > 0) {
-                values.put(line.substring(0, colon).trim(), line.substring(colon + 1).trim());
+                values.put(line.substring(0, colon).trim(), value(line.substring(colon + 1)));
             }
         }
         StringBuilder body = new StringBuilder();
@@ -46,6 +46,17 @@ final class FrontMatter {
             }
         }
         return new FrontMatter(values, body.toString());
+    }
+
+    /** 剥掉行内注释：` #` 之后到行尾不算值（09-infrastructure §9.5 的示例本身就带注释）。 */
+    private static String value(String raw) {
+        String trimmed = raw.trim();
+        for (int i = 1; i < trimmed.length(); i++) {
+            if (trimmed.charAt(i) == '#' && Character.isWhitespace(trimmed.charAt(i - 1))) {
+                return trimmed.substring(0, i).trim();
+            }
+        }
+        return trimmed;
     }
 
     String get(String key) {

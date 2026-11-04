@@ -48,6 +48,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
 import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -146,17 +147,24 @@ class S4MemoryTest {
 
     @Test
     void 检索把子代理的建议映射回步骤且不超过TopN() {
-        saved("e1", 0.5);
-        saved("e2", 0.5);
-        model.reply = "{\"steps\":[{\"stepId\":\"step1\",\"experienceIds\":[\"e1\",\"e2\"]}]}";
+        // 建议条数必须**多于** topN，否则 "<= topN" 恒真（原先只喂 2 个、topN=5）
+        int topN = runtimeTopN();
+        List<ExperienceId> suggested = new ArrayList<ExperienceId>();
+        StringBuilder ids = new StringBuilder();
+        for (int i = 1; i <= topN + 3; i++) {
+            saved("e" + i, 0.5);
+            suggested.add(ExperienceId.of("e" + i));
+            ids.append(i == 1 ? "" : ",").append("\"e").append(i).append("\"");
+        }
+        model.reply = "{\"steps\":[{\"stepId\":\"step1\",\"experienceIds\":[" + ids + "]}]}";
 
         Map<StepId, List<ExperienceId>> assignment = retriever.retrieveAndAssign(session,
                 new RetrievalInput(PlanId.of("p1"),
                         Collections.singletonList(new StepBrief(StepId.of("step1"), "读文件"))));
 
         assertEquals(1, assignment.size());
-        assertTrue(assignment.get(StepId.of("step1")).size() <= runtimeTopN());
-        assertEquals(2, assignment.get(StepId.of("step1")).size());
+        assertEquals(topN, assignment.get(StepId.of("step1")).size(), "超出的建议必须被截到 topN");
+        assertTrue(topN + 3 > topN, "喂进去的建议要多于 topN，断言才有意义：" + suggested.size());
     }
 
     @Test

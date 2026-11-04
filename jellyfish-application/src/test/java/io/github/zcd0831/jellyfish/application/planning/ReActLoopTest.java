@@ -46,6 +46,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.same;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
@@ -352,18 +353,30 @@ class ReActLoopTest {
 
     @Test
     void 流式路径把增量交给sink() {
+        // 增量由模型侧推给传入的 sink：这里断言内循环把**调用方给的那个** sink 原样转下去，
+        // 否则外壳收不到任何增量（06-planning §6.4 流式路径）。
         when(model.invokeStreaming(any(ModelInvocationRequest.class), any(ChunkSink.class)))
-                .thenReturn(reply("完整", Collections.<ToolCall>emptyList(), ModelId.of("m1")));
+                .thenAnswer(new org.mockito.stubbing.Answer<ModelInvocationResult>() {
+                    @Override
+                    public ModelInvocationResult answer(org.mockito.invocation.InvocationOnMock invocation) {
+                        ChunkSink passed = (ChunkSink) invocation.getArgument(1);
+                        passed.accept("完");
+                        passed.accept("整");
+                        return reply("完整", Collections.<ToolCall>emptyList(), ModelId.of("m1"));
+                    }
+                });
         final StringBuilder seen = new StringBuilder();
-
-        loop(RuntimePolicy.defaults()).runIteration(session(), null, new ChunkSink() {
+        ChunkSink shell = new ChunkSink() {
             @Override
             public void accept(String delta) {
                 seen.append(delta);
             }
-        });
+        };
 
-        assertTrue(seen.length() >= 0);
+        loop(RuntimePolicy.defaults()).runIteration(session(), null, shell);
+
+        assertEquals("完整", seen.toString(), "模型推的增量必须经外壳的 sink 出来");
+        verify(model).invokeStreaming(any(ModelInvocationRequest.class), same(shell));
     }
 
     private static int systemRecords(Session session) {

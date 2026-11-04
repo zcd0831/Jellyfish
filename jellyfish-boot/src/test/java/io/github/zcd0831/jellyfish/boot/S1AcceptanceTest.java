@@ -208,7 +208,16 @@ class S1AcceptanceTest {
         assertTrue(!result.isOk());
         assertEquals("M_UNAVAILABLE", result.error().error().code());
         Session reloaded = new FileSessionRepository(dir, codec).load(sessionId);
-        assertEquals("你好", reloaded.title().isEmpty() ? "你好" : "你好", "模型不可用不改会话数据");
+        // 断言具体值：标题是建会话时模型给的（"标题"），失败的一轮不得再动它。
+        // 原先写成 isEmpty() ? "你好" : "你好"，两支同一常量，无论标题是什么都过。
+        assertEquals("标题", reloaded.title(), "模型不可用不改会话数据");
+        List<Record> records = new FileRecordStore(dir, codec).last(sessionId, 10);
+        assertEquals(2, records.size(), "只有建会话那条 + 本轮用户输入，不留半截回复：" + records.size());
+        boolean halfReply = false;
+        for (Record record : records) {
+            halfReply = halfReply || record.role() == RecordRole.ASSISTANT;
+        }
+        assertTrue(!halfReply, "失败的一轮不得留下半截回复");
     }
 
     private void write(String relative, String content) throws IOException {

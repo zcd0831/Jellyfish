@@ -217,12 +217,23 @@ public final class InfrastructureModule {
         return routes.resolve("ExternalToolPort", (ExternalToolPort) new HttpToolAdapter());
     }
 
-    /** 子代理用有界池，不用 ForkJoinPool.commonPool。 */
+    /**
+     * 子代理用有界池，不用 ForkJoinPool.commonPool。
+     * <strong>线程必须是守护线程</strong>：否则用户 exit 后 main 已返回、JVM 仍在等子代理线程，
+     * 关闭钩子不执行、终端回不来（08-application §8.9.4.1）。
+     */
     @Provides
     @Singleton
     ExecutorService subagentPool() {
-        int size = Math.min(4, Runtime.getRuntime().availableProcessors());
-        return Executors.newFixedThreadPool(Math.max(1, size));
+        int size = Math.max(1, Math.min(4, Runtime.getRuntime().availableProcessors()));
+        return Executors.newFixedThreadPool(size, new java.util.concurrent.ThreadFactory() {
+            @Override
+            public Thread newThread(Runnable task) {
+                Thread thread = new Thread(task, "jellyfish-subagent");
+                thread.setDaemon(true);
+                return thread;
+            }
+        });
     }
 
     @Provides

@@ -241,4 +241,32 @@ class PlanTest {
         assertThrows(DomainInvariantViolation.class, () -> plan.retryStep(StepId.of("step1")));
     }
 
+    @Test
+    void 所有步骤终结后计划必须收敛为失败() {
+        Plan plan = plan(1);
+        plan.beginCurrentStep();
+        plan.markStepFailed(StepId.of("step1"),
+                io.github.zcd0831.jellyfish.domain.shared.VerificationReportId.of("report-1"));
+        assertEquals(PlanStatus.EXECUTING, plan.status(), "补判失败只改 step，计划还停在执行中");
+        assertNull(plan.getCurrentStep());
+
+        assertTrue(plan.failIfNoCurrentStep("对账后所有步骤已终结"));
+
+        assertEquals(PlanStatus.FAILED, plan.status());
+        assertEquals("对账后所有步骤已终结", plan.terminationReason());
+    }
+
+    @Test
+    void 收敛是幂等的_已有当前步或已终结都不动() {
+        Plan stillRunnable = plan(2);
+        stillRunnable.beginCurrentStep();
+        assertTrue(!stillRunnable.failIfNoCurrentStep("不该发生"), "还有当前步就不能收敛");
+
+        Plan finished = plan(1);
+        finished.beginCurrentStep();
+        finished.markStepSucceeded(StepId.of("step1"), "完成", null);
+        assertTrue(!finished.failIfNoCurrentStep("不该发生"), "COMPLETED 不能被改成 FAILED");
+        assertEquals(PlanStatus.COMPLETED, finished.status());
+    }
+
 }

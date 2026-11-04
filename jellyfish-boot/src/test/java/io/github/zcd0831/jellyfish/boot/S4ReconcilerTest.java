@@ -14,6 +14,7 @@ import io.github.zcd0831.jellyfish.domain.perception.session.Record;
 import io.github.zcd0831.jellyfish.domain.perception.session.RecordRole;
 import io.github.zcd0831.jellyfish.domain.perception.session.Session;
 import io.github.zcd0831.jellyfish.domain.planning.plan.Plan;
+import io.github.zcd0831.jellyfish.domain.planning.plan.PlanStatus;
 import io.github.zcd0831.jellyfish.domain.planning.plan.PlanSteps;
 import io.github.zcd0831.jellyfish.domain.planning.plan.StepStatus;
 import io.github.zcd0831.jellyfish.domain.planning.verification.VerificationOutcome;
@@ -113,6 +114,27 @@ class S4ReconcilerTest {
 
         Plan reloaded = plans.load(PlanId.of("p1"));
         assertEquals(StepStatus.FAILED, reloaded.steps().get(0).status());
+    }
+
+    /**
+     * 补判的是最后一个未完成步：计划会停在「EXECUTING 却无当前步」，
+     * 不收敛的话 generate_plan 永久拒绝，会话再也无法规划。
+     * 规则出处：06-planning §6.8.1「无当前步即终结」、08-application §8.10。
+     */
+    @Test
+    void 规则2补齐后计划收敛为失败_会话可重新规划() {
+        planWithRunningStep();
+        reports.save(VerificationReport.decide(VerificationReportId.of("r1"), PlanId.of("p1"),
+                StepId.of("step1"), 1, VerificationOutcome.FAILED, VerificationType.LLM_JUDGE, "不合格", 10L));
+
+        reconciler.reconcile(sessions.load(sessionId));
+
+        assertTrue(plans.findRunning(sessionId).isEmpty(), "收敛后不该再有执行中的计划");
+        Plan reloaded = plans.load(PlanId.of("p1"));
+        assertEquals(PlanStatus.FAILED, reloaded.status());
+        assertEquals("对账后所有步骤已终结", reloaded.terminationReason());
+        assertTrue(announced.stream().anyMatch(e -> e.message().contains("计划收敛为失败")),
+                "收敛要让用户看见：" + announced);
     }
 
     /**

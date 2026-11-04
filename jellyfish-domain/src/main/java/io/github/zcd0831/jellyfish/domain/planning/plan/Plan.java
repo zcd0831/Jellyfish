@@ -188,6 +188,21 @@ public class Plan {
         this.status = PlanStatus.EXECUTING;
     }
 
+    /**
+     * 无当前步即终结：EXECUTING 却没有任何可执行步骤（崩溃补齐后可能落到这里）是非法状态，
+     * 收敛为 FAILED，让会话能重新规划，而不是永远卡在「已有一个执行中的计划」。
+     * 规则出处：06-planning §6.8.1 规则 7 与「无当前步即终结」。
+     *
+     * @return 是否发生了收敛（已经终结的计划返回 false，对账可重入）
+     */
+    public boolean failIfNoCurrentStep(String reason) {
+        if (status != PlanStatus.EXECUTING || getCurrentStep() != null) {
+            return false;
+        }
+        terminate(reason);
+        return true;
+    }
+
     /** 规则出处：§7.1 规则 6（COMPLETED / FAILED 都是终态）。 */
     public void terminate(String reason) {
         if (status == PlanStatus.COMPLETED || status == PlanStatus.FAILED) {

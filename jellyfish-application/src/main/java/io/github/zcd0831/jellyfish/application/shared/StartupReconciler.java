@@ -46,6 +46,8 @@ public final class StartupReconciler {
     private final ProgressPort progress;
 
     /** 与内循环同一句中止事实：终止/崩溃都不算工具失败，只是没拿到结果。 */
+    private static final String EXHAUSTED_STEPS = "对账后所有步骤已终结";
+
     private static final String ABORTED_TOOL_RESULT =
             "（本轮中止：进程退出，工具结果未回灌）";
 
@@ -125,7 +127,18 @@ public final class StartupReconciler {
                 }
             }
         }
+        convergeIfExhausted(plan);
         flush(session, plan);
+    }
+
+    /**
+     * 补齐之后必须收敛：规则 1/2 判完最后一批步骤，计划可能停在「EXECUTING 却无当前步」；
+     * 不收尾的话该会话再也无法 generate_plan（06-planning §6.8.1「无当前步即终结」）。
+     */
+    private void convergeIfExhausted(Plan plan) {
+        if (plan.failIfNoCurrentStep(EXHAUSTED_STEPS)) {
+            announce("对账：所有步骤已终结，计划收敛为失败（" + plan.id().getValue() + "）");
+        }
     }
 
     /**

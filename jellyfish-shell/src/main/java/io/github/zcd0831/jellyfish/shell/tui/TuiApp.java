@@ -88,7 +88,8 @@ public final class TuiApp implements QuestionBroker.Answerer {
     private Question pendingQuestion;
     /** 已选「其他（自己输入）」：下一行非空文本即答案。 */
     private boolean awaitingFreeText;
-    private volatile SessionId currentSession;
+    private final SessionCursor cursor = new SessionCursor();
+    private final CommandDispatcher dispatcher;
     private LineReader reader;
 
     public TuiApp(StartSessionUseCase startSession, RunSessionUseCase runSession,
@@ -109,6 +110,8 @@ public final class TuiApp implements QuestionBroker.Answerer {
         this.token = token;
         this.stats = stats;
         broker.bind(this);
+        this.dispatcher = new CommandDispatcher(renderer, stats, manageSession, adjustPolicy, switchModel,
+                plugins, catalog, cursor);
     }
 
     public void run() {
@@ -349,7 +352,7 @@ public final class TuiApp implements QuestionBroker.Answerer {
                 continue;
             }
             if (text.startsWith("/")) {
-                command(text);
+                dispatcher.command(text);
             } else {
                 handle(text);
             }
@@ -386,18 +389,18 @@ public final class TuiApp implements QuestionBroker.Answerer {
         if (draft.isContinuing()) {
             return "...> ";
         }
-        return currentSession == null ? "新会话> " : "继续> ";
+        return cursor.current() == null ? "新会话> " : "继续> ";
     }
 
 
     private void handle(String text) {
-        if (currentSession == null) {
+        if (cursor.current() == null) {
             Result<SessionId> started = startSession.start(null, null, text);
             if (!started.isOk()) {
-                printError(started.error());
+                dispatcher.printError(started.error());
                 return;
             }
-            currentSession = started.value();
+            cursor.moveTo(started.value());
             runOnce(null);
             return;
         }
@@ -414,14 +417,14 @@ public final class TuiApp implements QuestionBroker.Answerer {
         TurnOutput sink = new TurnOutput();
         Result<RunSessionResult> result;
         try {
-            result = runSession.run(currentSession, text, sink, token);
+            result = runSession.run(cursor.current(), text, sink, token);
         } finally {
             stopKeyListener();
             restore(original);
         }
         renderer.endTurn();
         if (!result.isOk()) {
-            printError(result.error());
+            dispatcher.printError(result.error());
             printSummary();
             return;
         }
@@ -602,208 +605,25 @@ public final class TuiApp implements QuestionBroker.Answerer {
         hintTerminate();
     }
 
-    private void command(String line) {
-        String[] parts = line.split("\\s+");
-        String name = parts[0];
-        boolean sessionFree = !Commands.needsSession(name);
-        if ("/help".equals(name)) {
-            renderer.info("/sessions /open <id> /new /archive /delete /cancel [id] /policy k=v "
-                    + "/model <id> /tools /agents /models /providers /skills /plugins /exit");
-            return;
-        }
-        if (currentSession == null && !sessionFree) {
-            renderer.info("（还没有会话）");
-            return;
-        }
-        if ("/new".equals(name)) {
-            // 当前会话留在 sessions/ 里，下一条输入开新会话：不必退出重进
-            currentSession = null;
-            stats.reset();
-            renderer.info("（新会话：下一条输入将开启）");
-        } else if ("/sessions".equals(name)) {
-            listSessions();
-        } else if ("/open".equals(name) && parts.length > 1) {
-            openSession(SessionId.of(parts[1]));
-        } else if ("/archive".equals(name)) {
-            print(manageSession.archive(currentSession));
-            currentSession = null;
-            renderer.info("（已归档：应用不再列出该会话）");
-        } else if ("/delete".equals(name)) {
-            print(manageSession.delete(currentSession));
-            currentSession = null;
-        } else if ("/cancel".equals(name)) {
-            cancelSession(parts.length > 1 ? SessionId.of(parts[1]) : currentSession);
-        } else if ("/model".equals(name) && parts.length > 1) {
-            print(switchModel.switchTo(currentSession,
-                    io.github.zcd0831.jellyfish.domain.shared.ModelId.of(parts[1])));
-            renderer.info("（当前模型：" + parts[1] + "）");
-        } else if ("/policy".equals(name)) {
-            Map<String, Object> changes = new LinkedHashMap<String, Object>();
-            for (int i = 1; i < parts.length; i++) {
-                int eq = parts[i].indexOf('=');
-                if (eq > 0) {
-                    changes.put(parts[i].substring(0, eq), parts[i].substring(eq + 1));
-                }
-            }
-            print(adjustPolicy.adjust(changes));
-            renderer.info("策略已更新（立即生效）");
-        } else {
-            list(name);
-        }
-    }
 
     /**
      * 终止一个会话（当前会话或按 id 指定的子代理会话）：在途模型调用与工具收手、子会话级联。
      * 本轮在跑时输入被暂停，那种情况下用 Esc；这条命令的价值是**按 id 终止别的会话**。
      * 规则出处：08-application §8.9.4（终止）、§8.9.4.1。
      */
-    private void cancelSession(SessionId sessionId) {
-        if (sessionId == null) {
-            renderer.info("（还没有会话）");
-            return;
-        }
-        Result<Void> cancelled = manageSession.cancel(sessionId);
-        if (cancelled.isOk()) {
-            renderer.info("（已终止：" + sessionId.getValue() + "；本轮不写进历史，可继续输入）");
-        } else {
-            printError(cancelled.error());
-        }
-    }
 
     /** 切到已有会话并回放最近记录：用户想接着聊，不该自己再翻一遍历史。 */
-    private void openSession(SessionId sessionId) {
-        Result<io.github.zcd0831.jellyfish.application.perception.SessionTranscript> loaded =
-                manageSession.transcript(sessionId, REPLAY_RECORDS);
-        if (!loaded.isOk()) {
-            printError(loaded.error());
-            return;
-        }
-        currentSession = sessionId;
-        stats.reset();
-        replay(loaded.value());
-        stats.restoreContextLabel(loaded.value().contextLabel());
-        stats.restoreUsage(loaded.value().consumedTokens(), loaded.value().budgetLimitTokens());
-    }
 
     /** 只回放"人话"：用户与助手正文；工具压一行、摘要一行、系统注入与 reasoning 一律不显示。 */
-    private void replay(io.github.zcd0831.jellyfish.application.perception.SessionTranscript transcript) {
-        renderer.divider("—— 会话：" + transcript.title() + "（" + transcript.modelId().getValue()
-                + "，" + dateFormat().format(new java.util.Date(transcript.createdDate())) + "） ——");
-        for (io.github.zcd0831.jellyfish.domain.perception.session.Record record : transcript.records()) {
-            switch (record.role()) {
-                case USER:
-                    renderer.userPrefix();
-                    renderer.append(record.content());
-                    renderer.endTurn();
-                    break;
-                case ASSISTANT:
-                    renderer.assistantPrefix();
-                    renderer.append(record.content());
-                    renderer.endTurn();
-                    break;
-                case TOOL_REQUEST:
-                    renderer.info("↳ " + record.content());
-                    break;
-                case TOOL_RESULT:
-                    renderer.info("✓ " + firstLine(record.content(), 80));
-                    break;
-                case SUMMARY:
-                    renderer.info("〔更早对话已压缩为摘要〕");
-                    break;
-                default:
-                    // SYSTEM（经验/SOP 注入）不是对话内容，回放时不显示
-            }
-        }
-        if (transcript.hasEarlier()) {
-            renderer.info("（上面是最近 " + REPLAY_RECORDS + " 条，更早的没有显示）");
-        }
-        StringBuilder line = new StringBuilder("—— 上下文 "
-                + transcript.contextLabel().replaceAll("\\s*/\\s*", "/"));
-        if (transcript.consumedTokens() > 0) {
-            line.append(" / 累计 ").append(transcript.consumedTokens());
-            if (transcript.budgetLimitTokens() > 0) {
-                line.append(" / 上限 ").append(transcript.budgetLimitTokens());
-            }
-        }
-        renderer.divider(line.append(" ——").toString());
-        renderer.info("（已切到该会话，继续输入即可）");
-    }
 
-    private static java.text.SimpleDateFormat dateFormat() {
-        return new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.ROOT);
-    }
 
-    private static String firstLine(String text, int limit) {
-        if (text == null) {
-            return "";
-        }
-        int newline = text.indexOf('\n');
-        String line = newline < 0 ? text : text.substring(0, newline);
-        return line.length() > limit ? line.substring(0, limit) + "…" : line;
-    }
 
     /** 会话列表只来自存在的目录。 */
-    private void listSessions() {
-        Result<java.util.List<io.github.zcd0831.jellyfish.application.perception.port.SessionSummary>> listed =
-                manageSession.list();
-        if (!listed.isOk()) {
-            printError(listed.error());
-            return;
-        }
-        for (io.github.zcd0831.jellyfish.application.perception.port.SessionSummary summary : listed.value()) {
-            String marker = summary.isSubSession() ? "  └ " : "";
-            renderer.info(marker + summary.id().getValue() + "  " + summary.title()
-                    + "  " + summary.modelId().getValue());
-        }
-    }
 
     /** 目录只读浏览；增删改走"编辑文件 + 重启"。 */
-    private void list(String what) {
-        if ("/tools".equals(what)) {
-            for (io.github.zcd0831.jellyfish.domain.action.tool.ToolDefinition tool : catalog.tools()) {
-                renderer.info("tool " + tool.id().getValue() + " [" + tool.status() + "] "
-                        + tool.source().getType());
-            }
-        } else if ("/agents".equals(what)) {
-            for (io.github.zcd0831.jellyfish.domain.action.agent.AgentDefinition agent : catalog.agents()) {
-                renderer.info("agent " + agent.id().getValue() + " [" + agent.status() + "] " + agent.source());
-            }
-        } else if ("/models".equals(what)) {
-            for (io.github.zcd0831.jellyfish.domain.action.model.Model model : catalog.models()) {
-                renderer.info("model " + model.id().getValue() + " [" + model.status() + "] " + model.modelName());
-            }
-        } else if ("/providers".equals(what)) {
-            for (io.github.zcd0831.jellyfish.domain.action.model.Provider provider : catalog.providers()) {
-                renderer.info("provider " + provider.id().getValue() + " [" + provider.status() + "] "
-                        + provider.protocol());
-            }
-        } else if ("/skills".equals(what)) {
-            for (io.github.zcd0831.jellyfish.domain.memory.skill.SkillDefinition skill : catalog.skills()) {
-                renderer.info("skill " + skill.id().getValue() + " [" + skill.status() + "] " + skill.name());
-            }
-        } else if ("/plugins".equals(what)) {
-            for (io.github.zcd0831.jellyfish.domain.action.plugin.PluginManifest manifest
-                    : plugins.list()) {
-                renderer.info("plugin " + manifest.id().getValue() + " v" + manifest.version()
-                        + (manifest.isTrusted() ? " [trusted]" : " [untrusted]")
-                        + " granted=" + manifest.grantedCapabilities()
-                        + " tools=" + manifest.toolIds().size());
-            }
-        } else {
-            renderer.info("未知命令：" + what + "（/help 查看）");
-        }
-    }
 
-    private void print(Result<?> result) {
-        if (!result.isOk()) {
-            printError(result.error());
-        }
-    }
 
     /** 文案在 shell；缺 key 回退显示 code。 */
-    private void printError(UseCaseError error) {
-        renderer.error(Messages.text(error.error().code()));
-    }
 
     private void waitOnLock() {
         try {

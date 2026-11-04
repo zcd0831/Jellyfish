@@ -563,8 +563,8 @@ public final class TuiApp implements QuestionBroker.Answerer {
         String name = parts[0];
         boolean sessionFree = !Commands.needsSession(name);
         if ("/help".equals(name)) {
-            renderer.info("/sessions /open <id> /new /archive /delete /policy k=v /model <id> "
-                    + "/tools /agents /models /providers /skills /plugins /exit");
+            renderer.info("/sessions /open <id> /new /archive /delete /cancel [id] /policy k=v "
+                    + "/model <id> /tools /agents /models /providers /skills /plugins /exit");
             return;
         }
         if (currentSession == null && !sessionFree) {
@@ -587,6 +587,8 @@ public final class TuiApp implements QuestionBroker.Answerer {
         } else if ("/delete".equals(name)) {
             print(manageSession.delete(currentSession));
             currentSession = null;
+        } else if ("/cancel".equals(name)) {
+            cancelSession(parts.length > 1 ? SessionId.of(parts[1]) : currentSession);
         } else if ("/model".equals(name) && parts.length > 1) {
             print(switchModel.switchTo(currentSession,
                     io.github.zcd0831.jellyfish.domain.shared.ModelId.of(parts[1])));
@@ -603,6 +605,24 @@ public final class TuiApp implements QuestionBroker.Answerer {
             renderer.info("策略已更新（立即生效）");
         } else {
             list(name);
+        }
+    }
+
+    /**
+     * 终止一个会话（当前会话或按 id 指定的子代理会话）：在途模型调用与工具收手、子会话级联。
+     * 本轮在跑时输入被暂停，那种情况下用 Esc；这条命令的价值是**按 id 终止别的会话**。
+     * 规则出处：08-application §8.9.4（终止）、§8.9.4.1。
+     */
+    private void cancelSession(SessionId sessionId) {
+        if (sessionId == null) {
+            renderer.info("（还没有会话）");
+            return;
+        }
+        Result<Void> cancelled = manageSession.cancel(sessionId);
+        if (cancelled.isOk()) {
+            renderer.info("（已终止：" + sessionId.getValue() + "；本轮不写进历史，可继续输入）");
+        } else {
+            printError(cancelled.error());
         }
     }
 

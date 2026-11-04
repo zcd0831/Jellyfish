@@ -156,6 +156,38 @@ class TuiAppCommandTest {
         return Result.ok(Collections.<SessionSummary>emptyList());
     }
 
+    @Test
+    void help列出终止命令() throws Exception {
+        app("/help\nexit\n").run();
+
+        assertTrue(screen().contains("/cancel"), "/help 与补全都从 Commands.NAMES 取，必须列出 /cancel：" + screen());
+    }
+
+    /** 终止入口：`/cancel` 取消当前会话，`/cancel <id>` 取消指定会话（08-application §8.9.4）。 */
+    @Test
+    void cancel终止当前会话并给出反馈() throws Exception {
+        when(startSession.start(any(), any(), eq("你好"))).thenReturn(Result.ok(SessionId.of("s1")));
+        when(runSession.run(eq(SessionId.of("s1")), eq((String) null), any(), any()))
+                .thenReturn(Result.ok(RunSessionResult.of(RunSessionResult.Outcome.CONVERGED)));
+        when(manageSession.transcript(eq(SessionId.of("s1")), anyInt())).thenReturn(Result.ok(transcript()));
+        when(manageSession.cancel(any(SessionId.class))).thenReturn(Result.ok(null));
+
+        app("/open s1\n/cancel\nexit\n").run();
+
+        verify(manageSession).cancel(SessionId.of("s1"));
+        assertTrue(screen().contains("已终止：s1"), "终止要有反馈：" + screen());
+    }
+
+    @Test
+    void cancel可以按id终止别的会话() throws Exception {
+        when(manageSession.cancel(any(SessionId.class))).thenReturn(Result.ok(null));
+
+        app("/cancel sub-7\nexit\n").run();
+
+        verify(manageSession).cancel(SessionId.of("sub-7"));
+        assertTrue(screen().contains("已终止：sub-7"), "子代理会话也要能按 id 终止：" + screen());
+    }
+
     private TuiApp app(String script) throws Exception {
         return app(new ByteArrayInputStream(script.getBytes(StandardCharsets.UTF_8)));
     }

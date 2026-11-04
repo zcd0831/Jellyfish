@@ -3,6 +3,8 @@ package io.github.zcd0831.jellyfish.boot;
 import io.github.zcd0831.jellyfish.di.AppComponent;
 import io.github.zcd0831.jellyfish.di.DaggerAppComponent;
 import io.github.zcd0831.jellyfish.di.InfrastructureModule;
+import io.github.zcd0831.jellyfish.application.shared.TechnicalLog;
+import io.github.zcd0831.jellyfish.domain.shared.DomainInvariantViolation;
 import io.github.zcd0831.jellyfish.infrastructure.file.DataDirectory;
 
 /**
@@ -53,26 +55,65 @@ public final class Main {
         }, "jellyfish-shutdown"));
 
         component.instanceLock().acquire();
+        int exitCode;
         try {
-            // 启动技术清理必须先于任何读取：只处理文件层面残留（09-infrastructure §9.7）
-            for (String warning : new io.github.zcd0831.jellyfish.infrastructure.file
-                    .FileSystemCleaner(dir).clean()) {
-                System.out.println(warning);
-            }
-            component.schemaMigrator().migrate();
-            // 已授权插件在装配完声明之后、任何工具调用之前装载（08-application §8.9.6）
-            component.pluginAssembler().assembleAll();
-            // 崩溃残留按 5 条规则补齐；会话可直接续跑（08-application §8.10）
-            component.startupReconciler().reconcileStartup();
-            // 启动打印生效值，一条日志解决"我改的怎么没生效"
-            System.out.println("data-dir=" + dir.root()
-                    + "  log-level=" + options.logLevel()
-                    + "  maxReActRounds=" + component.policyRepository().load().maxReActRounds()
-                    + "  schemaVersion=1");
-            warnMissingCredentials(component);
-            component.tuiApp().run();
+            exitCode = guarded(new Runnable() {
+                @Override
+                public void run() {
+                    startup(component, dir, options);
+                }
+            }, dir.logs(), dir.root().toString());
         } finally {
             component.instanceLock().release();
         }
+        if (exitCode != 0) {
+            System.exit(exitCode);
+        }
+    }
+
+    /**
+     * 最外层兜底站：领域不变量违反不在这里"修好"，只负责留证并给一句人话
+     * （约定出处：Jellyfish/AGENTS.md「错误表达」）。{@code Error} 记完原样上抛。
+     */
+    static int guarded(Runnable body, java.nio.file.Path logsDir, String dataDir) {
+        try {
+            body.run();
+            return 0;
+        } catch (DomainInvariantViolation violated) {
+            return report("domain_invariant", logsDir, violated, dataDir, "内部约定被违反");
+        } catch (Error fatal) {
+            report("fatal_error", logsDir, fatal, dataDir, "运行时致命错误");
+            throw fatal;
+        }
+    }
+
+    private static int report(String kind, java.nio.file.Path logsDir, Throwable error,
+                              String dataDir, String what) {
+        TechnicalLog.event("fatal." + kind, 0L,
+                "type=" + error.getClass().getName(), "msg=" + error.getMessage());
+        java.nio.file.Path written = CrashReport.write(logsDir, kind, error, dataDir);
+        System.err.println(what + "：" + error.getMessage()
+                + (written == null ? "" : "（现场快照：" + written + "）"));
+        return 1;
+    }
+
+    private static void startup(AppComponent component, DataDirectory dir, BootOptions options) {
+        // 启动技术清理必须先于任何读取：只处理文件层面残留（09-infrastructure §9.7）
+        for (String warning : new io.github.zcd0831.jellyfish.infrastructure.file
+                .FileSystemCleaner(dir).clean()) {
+            System.out.println(warning);
+        }
+        component.schemaMigrator().migrate();
+        // 已授权插件在装配完声明之后、任何工具调用之前装载（08-application §8.9.6）
+        component.pluginAssembler().assembleAll();
+        // 崩溃残留按 5 条规则补齐；会话可直接续跑（08-application §8.10）
+        component.startupReconciler().reconcileStartup();
+        // 启动打印生效值，一条日志解决"我改的怎么没生效"
+        System.out.println("data-dir=" + dir.root()
+                + "  log-level=" + options.logLevel()
+                + "  maxReActRounds=" + component.policyRepository().load().maxReActRounds()
+                + "  schemaVersion=1");
+        warnMissingCredentials(component);
+        component.tuiApp().run();
     }
 }

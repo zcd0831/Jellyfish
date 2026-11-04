@@ -225,4 +225,20 @@ class PlanTest {
         assertNull(attempt.verificationReportId());
     }
 
+    @Test
+    void 成功是终态不能再重试() {
+        Plan plan = plan(1);
+        plan.beginCurrentStep();
+        plan.markStepSucceeded(StepId.of("step1"), "完成", null);
+
+        assertThrows(DomainInvariantViolation.class, () -> plan.retryStep(StepId.of("step1")));
+    }
+
+    @Test
+    void 没跑过的步骤不能重试() {
+        Plan plan = plan(1);
+
+        assertThrows(DomainInvariantViolation.class, () -> plan.retryStep(StepId.of("step1")));
+    }
+
 }

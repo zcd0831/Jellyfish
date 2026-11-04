@@ -117,10 +117,18 @@ public class Plan {
         throw new DomainInvariantViolation("计划里没有该尝试：" + stepId.getValue() + "#" + attemptNo);
     }
 
-    /** 步骤重试：新建 Attempt，同一步回到 RUNNING。 */
+    /**
+     * 步骤重试：新建 Attempt，同一步回到 RUNNING。
+     * 只有失败的步骤能重试 —— 成功是终态（§6.8.1 规则 4），没跑过的步骤也不需要重试。
+     * 规则出处：06-planning §6.8.1 规则 4。
+     */
     public Attempt retryStep(StepId stepId) {
         requireExecuting();
         PlanStep step = requireStep(stepId);
+        if (step.status() != StepStatus.FAILED) {
+            throw new DomainInvariantViolation("只有失败的步骤能重试：" + stepId.getValue()
+                    + " 当前 " + step.status());
+        }
         step.markRunning();
         return step.beginAttempt();
     }

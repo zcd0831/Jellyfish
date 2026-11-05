@@ -158,6 +158,17 @@ class LocalToolHandlersTest {
     }
 
     @Test
+    void 输出很大时也只回尾部() {
+        // 规则 9：run_command 只回尾部 200 行 + 退出码（05-action §5.8.1）
+        String out = call("run_command", "command", "seq 1 100000");
+
+        assertTrue(out.startsWith("退出码：0"), out.substring(0, Math.min(40, out.length())));
+        assertTrue(out.contains("100000"), "最后一行必须在");
+        assertTrue(out.contains("只显示最后 200 行"), "超限要说明只回了尾部");
+        assertTrue(out.length() < 20_000, "不能把 100000 行都回给模型，实际 " + out.length() + " 字符");
+    }
+
+    @Test
     void 超时终止进程() {
         Map<String, Object> args = map("command", "sleep 5", "timeoutMs", 1000);
 

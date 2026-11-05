@@ -429,7 +429,8 @@ public final class LocalToolHandlers {
                 builder.directory(cwd.toFile());
                 builder.redirectErrorStream(true);
                 Process process = builder.start();
-                StringBuilder output = new StringBuilder();
+                // 只留尾部：输出量再大，占的内存也不随命令输出增长（§5.8.1 规则 9）
+                OutputTail output = new OutputTail(TAIL_LINES);
                 Thread reader = drain(process, output);
                 // 分片等待：令牌一响就杀进程树，不必等到工具自己的超时（§8.9.4.1）
                 long deadline = System.currentTimeMillis() + timeout;
@@ -451,16 +452,17 @@ public final class LocalToolHandlers {
                     kill(process);
                     process.waitFor();
                     reader.join(1_000);
-                    return "（超时 " + timeout + "ms，已终止）\n" + tail(output.toString());
+                    return "（超时 " + timeout + "ms，已终止）\n" + output.render();
                 }
                 reader.join(2_000);
-                return "退出码：" + process.exitValue() + "\n" + tail(output.toString());
+                output.finish();
+                return "退出码：" + process.exitValue() + "\n" + output.render();
             }
         };
     }
 
     /** 输出必须及时读走，否则管道写满会把子进程卡死在自己身上。 */
-    private static Thread drain(final Process process, final StringBuilder output) {
+    private static Thread drain(final Process process, final OutputTail output) {
         Thread thread = new Thread(new Runnable() {
             @Override
             public void run() {
@@ -468,9 +470,7 @@ public final class LocalToolHandlers {
                 try (java.io.InputStream in = process.getInputStream()) {
                     int read;
                     while ((read = in.read(buffer)) >= 0) {
-                        synchronized (output) {
-                            output.append(new String(buffer, 0, read, StandardCharsets.UTF_8));
-                        }
+                        output.append(buffer, read);
                     }
                 } catch (IOException ignored) {
                     // 进程被终止时流会断，这不是错误
@@ -564,18 +564,6 @@ public final class LocalToolHandlers {
         } catch (Exception e) {
             return -1;
         }
-    }
-
-    private static String tail(String output) {
-        String[] lines = output.split("\n", -1);
-        if (lines.length <= TAIL_LINES) {
-            return output;
-        }
-        StringBuilder out = new StringBuilder("（只显示最后 " + TAIL_LINES + " 行，共 " + lines.length + " 行）\n");
-        for (int i = lines.length - TAIL_LINES; i < lines.length; i++) {
-            out.append(lines[i]).append('\n');
-        }
-        return out.toString();
     }
 
     /** 软链指向根外：不列、不递归、不读。规则出处：05-action §5.8.1 规则 9。 */

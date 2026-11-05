@@ -1,5 +1,6 @@
 package io.github.zcd0831.jellyfish.boot;
 
+import io.github.zcd0831.jellyfish.application.perception.StartSessionDeps;
 import io.github.zcd0831.jellyfish.application.action.BudgetService;
 import io.github.zcd0831.jellyfish.application.action.port.ChatMessage;
 import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationPort;
@@ -86,9 +87,12 @@ class TitleBudgetTest {
                 return new ModelProfile(1000, 100);
             }
         };
-        StartSessionUseCase start = new StartSessionUseCase(catalog, sessions, budgets,
-                new SessionTitleGenerator(model, budgetService), new io.github.zcd0831.jellyfish.domain.perception.session.SystemPromptAssembler(), commitScope,
-                new SystemClock(), cancellations, publisher);
+        StartSessionUseCase start = new StartSessionUseCase(StartSessionDeps.builder()
+                .catalog(catalog).sessions(sessions).budgets(budgets)
+                .titleGenerator(new SessionTitleGenerator(model, budgetService))
+                .assembler(new io.github.zcd0831.jellyfish.domain.perception.session.SystemPromptAssembler())
+                .commitScope(commitScope).clock(new SystemClock()).cancellations(cancellations)
+                .eventPublisher(publisher).build());
 
         Result<SessionId> started = start.start(AgentId.of("builtin.main"), ModelId.of("m1"), "帮我看看这个项目");
 

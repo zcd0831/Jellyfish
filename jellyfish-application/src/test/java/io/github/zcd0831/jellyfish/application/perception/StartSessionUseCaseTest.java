@@ -1,5 +1,6 @@
 package io.github.zcd0831.jellyfish.application.perception;
 
+import io.github.zcd0831.jellyfish.application.perception.StartSessionDeps;
 import io.github.zcd0831.jellyfish.application.action.BudgetService;
 import io.github.zcd0831.jellyfish.application.action.port.CatalogRepository;
 import io.github.zcd0831.jellyfish.application.perception.port.SessionRepository;
@@ -64,8 +65,10 @@ class StartSessionUseCaseTest {
         when(clock.nowMillis()).thenReturn(1000L);
         when(catalog.providers()).thenReturn(Collections.singletonList(provider(ProviderStatus.ACTIVE)));
         when(titles.generate(any(Session.class), anyString())).thenReturn("标题");
-        return new StartSessionUseCase(catalog, sessions, budgets, titles, new SystemPromptAssembler(),
-                commitScope, clock, cancellations, eventPublisher);
+        return new StartSessionUseCase(StartSessionDeps.builder()
+                .catalog(catalog).sessions(sessions).budgets(budgets).titleGenerator(titles)
+                .assembler(new SystemPromptAssembler()).commitScope(commitScope).clock(clock)
+                .cancellations(cancellations).eventPublisher(eventPublisher).build());
     }
 
     private static AgentDefinition agent(String id, AgentStatus status) {

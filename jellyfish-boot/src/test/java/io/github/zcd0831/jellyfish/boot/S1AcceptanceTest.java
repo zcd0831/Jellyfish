@@ -1,5 +1,6 @@
 package io.github.zcd0831.jellyfish.boot;
 
+import io.github.zcd0831.jellyfish.application.perception.StartSessionDeps;
 import io.github.zcd0831.jellyfish.application.action.BudgetService;
 import io.github.zcd0831.jellyfish.application.action.SessionToolScope;
 import io.github.zcd0831.jellyfish.application.action.ToolExecutor;
@@ -127,10 +128,13 @@ class S1AcceptanceTest {
                 executionLoop, model, toolExecutor, human, event -> { }, plans, contextWindow,
                 cancellations, session -> { });
         runSessionProviderHolder[0] = runSession;
-        startSession = new StartSessionUseCase(catalog, sessions, budgets,
-                new SessionTitleGenerator(model, budgetService), new SystemPromptAssembler(),
-                new FileCommitScope(dir, codec), clock,
-                new io.github.zcd0831.jellyfish.application.planning.SessionCancellations(), publisher);
+        startSession = new StartSessionUseCase(StartSessionDeps.builder()
+                .catalog(catalog).sessions(sessions).budgets(budgets)
+                .titleGenerator(new SessionTitleGenerator(model, budgetService))
+                .assembler(new SystemPromptAssembler()).commitScope(new FileCommitScope(dir, codec))
+                .clock(clock).cancellations(
+                        new io.github.zcd0831.jellyfish.application.planning.SessionCancellations())
+                .eventPublisher(publisher).build());
     }
 
     @Test

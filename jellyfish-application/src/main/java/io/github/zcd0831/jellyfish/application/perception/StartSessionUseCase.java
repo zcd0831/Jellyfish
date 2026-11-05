@@ -53,19 +53,16 @@ public final class StartSessionUseCase {
     private final SessionCancellations cancellations;
     private final DomainEventPublisher eventPublisher;
 
-    public StartSessionUseCase(CatalogRepository catalog, SessionRepository sessions, BudgetRepository budgets,
-                               SessionTitleGenerator titleGenerator, SystemPromptAssembler assembler,
-                               CommitScope commitScope, Clock clock, SessionCancellations cancellations,
-                               DomainEventPublisher eventPublisher) {
-        this.catalog = catalog;
-        this.sessions = sessions;
-        this.budgets = budgets;
-        this.titleGenerator = titleGenerator;
-        this.assembler = assembler;
-        this.commitScope = commitScope;
-        this.clock = clock;
-        this.cancellations = cancellations;
-        this.eventPublisher = eventPublisher;
+    public StartSessionUseCase(StartSessionDeps deps) {
+        this.catalog = deps.catalog;
+        this.sessions = deps.sessions;
+        this.budgets = deps.budgets;
+        this.titleGenerator = deps.titleGenerator;
+        this.assembler = deps.assembler;
+        this.commitScope = deps.commitScope;
+        this.clock = deps.clock;
+        this.cancellations = deps.cancellations;
+        this.eventPublisher = deps.eventPublisher;
     }
 
     public Result<SessionId> start(AgentId requestedAgent, ModelId requestedModel, String firstInput) {

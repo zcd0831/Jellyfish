@@ -37,19 +37,16 @@ public final class ManageSessionUseCase {
     private final PolicyRepository policies;
     private final SessionCancellations cancellations;
 
-    public ManageSessionUseCase(SessionRepository sessions, ArtifactStore artifacts, CommitScope commitScope,
-                                DomainEventPublisher eventPublisher, RecordStore records,
-                                ContextWindowService contextWindow, BudgetRepository budgets,
-                                PolicyRepository policies, SessionCancellations cancellations) {
-        this.sessions = sessions;
-        this.artifacts = artifacts;
-        this.commitScope = commitScope;
-        this.eventPublisher = eventPublisher;
-        this.records = records;
-        this.contextWindow = contextWindow;
-        this.budgets = budgets;
-        this.policies = policies;
-        this.cancellations = cancellations;
+    public ManageSessionUseCase(ManageSessionDeps deps) {
+        this.sessions = deps.sessions;
+        this.artifacts = deps.artifacts;
+        this.commitScope = deps.commitScope;
+        this.eventPublisher = deps.eventPublisher;
+        this.records = deps.records;
+        this.contextWindow = deps.contextWindow;
+        this.budgets = deps.budgets;
+        this.policies = deps.policies;
+        this.cancellations = deps.cancellations;
     }
 
     /**

@@ -8,8 +8,10 @@ import io.github.zcd0831.jellyfish.application.action.port.CatalogRepository;
 import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationPort;
 import io.github.zcd0831.jellyfish.application.perception.ContextWindowService;
 import io.github.zcd0831.jellyfish.application.perception.AdjustPolicyUseCase;
+import io.github.zcd0831.jellyfish.application.perception.ManageSessionDeps;
 import io.github.zcd0831.jellyfish.application.perception.ManageSessionUseCase;
 import io.github.zcd0831.jellyfish.application.perception.SessionTitleGenerator;
+import io.github.zcd0831.jellyfish.application.perception.StartSessionDeps;
 import io.github.zcd0831.jellyfish.application.perception.StartSessionUseCase;
 import io.github.zcd0831.jellyfish.application.perception.SwitchModelUseCase;
 import io.github.zcd0831.jellyfish.application.perception.port.PolicyRepository;
@@ -58,8 +60,10 @@ public final class PerceptionModule {
                                               RecordStore records, ContextWindowService contextWindow,
                                               BudgetRepository budgets, PolicyRepository policies,
                                               SessionCancellations cancellations) {
-        return new ManageSessionUseCase(sessions, artifacts, commitScope, publisher, records, contextWindow,
-                budgets, policies, cancellations);
+        return new ManageSessionUseCase(ManageSessionDeps.builder()
+                .sessions(sessions).artifacts(artifacts).commitScope(commitScope).eventPublisher(publisher)
+                .records(records).contextWindow(contextWindow).budgets(budgets).policies(policies)
+                .cancellations(cancellations).build());
     }
 
     @Provides
@@ -81,7 +85,9 @@ public final class PerceptionModule {
                                             SystemPromptAssembler assembler, CommitScope commitScope,
                                             Clock clock, SessionCancellations cancellations,
                                             DomainEventPublisher publisher) {
-        return new StartSessionUseCase(catalog, sessions, budgets, titleGenerator, assembler, commitScope,
-                clock, cancellations, publisher);
+        return new StartSessionUseCase(StartSessionDeps.builder()
+                .catalog(catalog).sessions(sessions).budgets(budgets).titleGenerator(titleGenerator)
+                .assembler(assembler).commitScope(commitScope).clock(clock).cancellations(cancellations)
+                .eventPublisher(publisher).build());
     }
 }

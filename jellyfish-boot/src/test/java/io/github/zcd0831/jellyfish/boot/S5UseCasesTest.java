@@ -1,5 +1,6 @@
 package io.github.zcd0831.jellyfish.boot;
 
+import io.github.zcd0831.jellyfish.application.perception.ManageSessionDeps;
 import io.github.zcd0831.jellyfish.application.action.ManageCatalogUseCase;
 import io.github.zcd0831.jellyfish.application.perception.AdjustPolicyUseCase;
 import io.github.zcd0831.jellyfish.application.perception.ManageSessionUseCase;
@@ -100,8 +101,10 @@ class S5UseCasesTest {
                         },
                         policies, commitScope, publisher, event -> { }, budgetService,
                         text -> text == null ? 0 : text.length() / 4);
-        manageSession = new ManageSessionUseCase(sessions, new FileArtifactStore(dir),
-                commitScope, publisher, store(), window, budgets, policies, cancellations);
+        manageSession = new ManageSessionUseCase(ManageSessionDeps.builder()
+                .sessions(sessions).artifacts(new FileArtifactStore(dir)).commitScope(commitScope)
+                .eventPublisher(publisher).records(store()).contextWindow(window).budgets(budgets)
+                .policies(policies).cancellations(cancellations).build());
         adjustPolicy = new AdjustPolicyUseCase(policies, commitScope, publisher);
         manageCatalog = new ManageCatalogUseCase(FileCatalogRepository.standalone(dir, codec));
     }

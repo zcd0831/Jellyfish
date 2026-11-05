@@ -35,7 +35,12 @@ class LocalToolsSeededTest {
                 local.add(tool.id().getValue());
             }
         }
-        assertEquals(13, catalog.tools().size(), "5 个编排 + 8 个本地能力");
+        // 7 个编排（含 replan_plan / read_artifact，05-action §5.8「内置工具」表）+ 8 个本地能力
+        assertEquals(15, catalog.tools().size(), "7 个编排 + 8 个本地能力");
+        assertTrue(catalog.tools().stream().anyMatch(t -> t.id().getValue().equals("replan_plan")),
+                "replan_plan 没装进目录：模型调不到它，也就没法重划");
+        assertTrue(catalog.tools().stream().anyMatch(t -> t.id().getValue().equals("read_artifact")),
+                "read_artifact 没装进目录：验收裁判读不到产物");
         assertEquals(8, local.size());
         assertTrue(local.contains("run_command"));
         assertTrue(boundTools(catalog).containsAll(local), "主代理必须能调用本地能力");

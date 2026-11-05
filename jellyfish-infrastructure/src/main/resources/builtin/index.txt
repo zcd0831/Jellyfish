@@ -1,6 +1,7 @@
 agents/builtin.main.md
 tools/ask_user.json
 tools/generate_plan.json
+tools/replan_plan.json
 tools/submit_step.json
 agents/builtin.judge.md
 tools/spawn_subagents.json
@@ -9,6 +10,7 @@ agents/builtin.retrieve.md
 agents/builtin.distill.md
 tools/load_skill.json
 tools/read_file.json
+tools/read_artifact.json
 tools/list_dir.json
 tools/grep.json
 tools/fetch_url.json

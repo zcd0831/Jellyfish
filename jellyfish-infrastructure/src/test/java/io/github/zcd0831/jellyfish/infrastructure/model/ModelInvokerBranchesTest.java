@@ -82,7 +82,8 @@ class ModelInvokerBranchesTest {
         };
         return new ModelInvoker(catalog, policies, transport, event -> { }, counter,
                 new ModelInvoker.Sleeper() {
-                    public void sleep(long millis) { }
+                    public void sleep(long millis,
+                                      io.github.zcd0831.jellyfish.application.shared.CancellationToken token) { }
                 },
                 new ModelInvoker.CredentialLookup() {
                     public String lookup(String envName) { return apiKey; }

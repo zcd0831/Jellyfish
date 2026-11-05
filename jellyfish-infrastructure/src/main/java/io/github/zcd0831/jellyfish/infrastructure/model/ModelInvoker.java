@@ -63,12 +63,7 @@ public final class ModelInvoker implements ModelInvocationPort {
     public ModelInvoker(CatalogRepository catalog, PolicyRepository policyRepository, ChatTransport transport,
                         ProgressPort progress, TokenCounter tokenCounter, CancellationRegistry cancellations) {
         this(catalog, policyRepository, transport, progress, tokenCounter,
-                new Sleeper() {
-                    @Override
-                    public void sleep(long millis) throws InterruptedException {
-                        Thread.sleep(millis);
-                    }
-                },
+                new TokenAwareSleeper(),
                 new CredentialLookup() {
                     @Override
                     public String lookup(String envName) {
@@ -221,7 +216,7 @@ public final class ModelInvoker implements ModelInvocationPort {
                 ModelCallLog.retry(model.id().getValue(), attempt + 1, delay);
                 progress.emit(ProgressEvent.of(ProgressEvent.Kind.RETRY_SCHEDULED,
                         "第 " + (attempt + 1) + " 次重试，" + delay + "ms 后（" + e.getMessage() + "）"));
-                sleep(delay);
+                sleep(delay, token);
                 attempt++;
             }
         }
@@ -352,13 +347,19 @@ public final class ModelInvoker implements ModelInvocationPort {
         return Math.round(base * factor);
     }
 
-    private void sleep(long millis) {
+    /**
+     * 退避等待必须能被令牌打断：Retry-After 可以是 60 秒，用户按 Esc 不能等它睡完。
+     * 规则出处：08-application §8.9.4.1（模型调用与退避都听同一个令牌）、§8.9.4 终止生效时间表。
+     */
+    private void sleep(long millis, CancellationToken token) {
+        token.throwIfCancelled();
         try {
-            sleeper.sleep(millis);
+            sleeper.sleep(millis, token);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new java.util.concurrent.CancellationException("模型调用等待期间被取消");
         }
+        token.throwIfCancelled();   // 等待期间被终止：立刻收手，不再重试
     }
 
     private static String credentialEnv(Provider provider) {
@@ -404,8 +405,40 @@ public final class ModelInvoker implements ModelInvocationPort {
         }
     }
 
+    /** 等待一段退避时间；终止信号应当在 {@code millis} 之内把它唤醒。 */
     interface Sleeper {
-        void sleep(long millis) throws InterruptedException;
+        void sleep(long millis, CancellationToken token) throws InterruptedException;
+    }
+
+    /** 生产用等待：睡着时挂一个令牌回调，终止一到就醒（Retry-After 可以是 60 秒）。 */
+    static final class TokenAwareSleeper implements Sleeper {
+
+        @Override
+        public void sleep(long millis, CancellationToken token) throws InterruptedException {
+            final Object lock = new Object();
+            Runnable wake = token.onCancel(new Runnable() {
+                @Override
+                public void run() {
+                    synchronized (lock) {
+                        lock.notifyAll();
+                    }
+                }
+            });
+            try {
+                synchronized (lock) {
+                    long deadline = System.currentTimeMillis() + millis;
+                    while (!token.isCancelled()) {
+                        long remaining = deadline - System.currentTimeMillis();
+                        if (remaining <= 0) {
+                            return;
+                        }
+                        lock.wait(remaining);
+                    }
+                }
+            } finally {
+                wake.run();   // 注销回调：长会话里不能无限堆积
+            }
+        }
     }
 
     interface CredentialLookup {

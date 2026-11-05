@@ -239,7 +239,8 @@ class ModelInvokerTest {
         return new ModelInvoker(catalog, policyRepository, transport, progress, counter,
                 new ModelInvoker.Sleeper() {
                     @Override
-                    public void sleep(long millis) {
+                    public void sleep(long millis,
+                                      io.github.zcd0831.jellyfish.application.shared.CancellationToken token) {
                         sleeps.add(millis);
                     }
                 },
@@ -434,4 +435,79 @@ class ModelInvokerTest {
 
         assertEquals(42L, result.usage().inputTokens());
     }
+    /**
+     * 退避等待必须能被令牌打断：Retry-After 5 秒，100ms 时终止，不能等它睡完。
+     * 规则出处：08-application §8.9.4.1（阻塞点必须能被令牌打断）、§8.9.4 终止生效时间表。
+     */
+    @Test
+    void 退避等待能被终止打断() throws Exception {
+        final FakeCatalog catalog = new FakeCatalog();
+        catalog.models.add(model("m1", 1000));
+        catalog.providers.add(provider());
+        transport.respond(new ChatTransport.Response(429, "{}", "5"));
+        transport.respond(new ChatTransport.Response(200, OK_BODY, null));
+
+        final java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(1);
+        final java.util.concurrent.atomic.AtomicLong elapsed = new java.util.concurrent.atomic.AtomicLong();
+        final io.github.zcd0831.jellyfish.application.planning.SessionCancellations cancellations =
+                new io.github.zcd0831.jellyfish.application.planning.SessionCancellations();
+        final io.github.zcd0831.jellyfish.domain.shared.SessionId id =
+                io.github.zcd0831.jellyfish.domain.shared.SessionId.of("s-退避");
+        cancellations.register(id, null);
+
+        Thread runner = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    ModelInvoker invoker = new ModelInvoker(catalog, realPolicy(), transport, progress,
+                            realCounter(), new ModelInvoker.TokenAwareSleeper(),
+                            new ModelInvoker.CredentialLookup() {
+                                @Override
+                                public String lookup(String envName) {
+                                    return "sk-test";
+                                }
+                            }, cancellations);
+                    invoker.invoke(request(id, "m1", 10));
+                } catch (java.util.concurrent.CancellationException cancelled) {
+                    // 期望出口
+                } finally {
+                    elapsed.set(System.currentTimeMillis() - START[0]);
+                    done.countDown();
+                }
+            }
+        });
+        START[0] = System.currentTimeMillis();
+        runner.start();
+        Thread.sleep(300);   // 让它进入退避等待
+        cancellations.cancel(id);
+
+        assertTrue(done.await(3, java.util.concurrent.TimeUnit.SECONDS),
+                "终止必须唤醒退避等待，实际等了 " + elapsed.get() + "ms");
+        assertTrue(elapsed.get() < 2000, "终止应按毫秒级生效，实际 " + elapsed.get() + "ms");
+    }
+
+    private static final long[] START = new long[1];
+
+    private static PolicyRepository realPolicy() {
+        return new PolicyRepository() {
+            @Override
+            public RuntimePolicy load() {
+                return policyWithFallback(ModelId.of("m2"));
+            }
+
+            @Override
+            public void save(RuntimePolicy p) {
+            }
+        };
+    }
+
+    private static TokenCounter realCounter() {
+        return new TokenCounter() {
+            @Override
+            public int count(String systemPrompt, List<ChatMessage> messages, ModelId modelId) {
+                return 42;
+            }
+        };
+    }
+
 }

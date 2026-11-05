@@ -66,6 +66,10 @@ public final class PluginDirectories {
             return id == null || id.trim().isEmpty() ? null : id.trim();
         } catch (IOException e) {
             return null;
+        } catch (Throwable e) {
+            // 坏包可能抛 Error（java.util.zip.ZipError 等），也可能抛 RuntimeException
+            // （清单/属性文件损坏）；一律当"认不出"，否则一个坏包能让整轮扫描失败。
+            return null;
         }
     }
 

@@ -2,6 +2,7 @@ package io.github.zcd0831.jellyfish.infrastructure.plugin;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.github.zcd0831.jellyfish.application.shared.TechnicalLog;
 import io.github.zcd0831.jellyfish.application.shared.port.PluginDescriptor;
 import io.github.zcd0831.jellyfish.application.shared.port.PluginRuntimePort;
 import io.github.zcd0831.jellyfish.domain.action.tool.SideEffectLevel;
@@ -47,7 +48,12 @@ public final class Pf4jPluginRuntime implements PluginRuntimePort {
     private final JsonCodec codec;
     private final Map<String, Class<?>> capabilityTypes;
     private final JellyfishPluginManager manager;
-    private final java.util.Set<String> loadedJars = new java.util.HashSet<String>();
+    private final java.util.Set<String> loadedJars = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    /**
+     * 装载失败过的 jar：路径 → 当时的最后修改时间。同一份坏文件不反复重试，
+     * 但文件一改（重新下载/替换）就再试一次，不必重启。
+     */
+    private final Map<String, Long> failedJars = new java.util.concurrent.ConcurrentHashMap<String, Long>();
 
     public Pf4jPluginRuntime(Path pluginsDir, JsonCodec codec, Map<String, Class<?>> capabilityTypes) {
         this.pluginsDir = pluginsDir;
@@ -81,8 +87,11 @@ public final class Pf4jPluginRuntime implements PluginRuntimePort {
             if (Files.isDirectory(path)) {
                 Path toolsDir = path.resolve(TOOLS_PREFIX);
                 if (Files.isDirectory(toolsDir)) {
-                    for (Path file : Files.newDirectoryStream(toolsDir, "*.json")) {
-                        out.add(toDomain(pluginId, read(file)));
+                    try (java.nio.file.DirectoryStream<Path> files =
+                                 Files.newDirectoryStream(toolsDir, "*.json")) {
+                        for (Path file : files) {
+                            out.add(toDomain(pluginId, read(file)));
+                        }
                     }
                 }
             } else {
@@ -117,39 +126,92 @@ public final class Pf4jPluginRuntime implements PluginRuntimePort {
     /**
      * 自己扫 `plugins/<id>/*.jar` 再逐个交给 PF4J：布局由我们定义，PF4J 只负责解析与装载。
      * 每次取用前重扫 ⇒ 装上新 jar 后无需重启就能被发现。
+     * <p>
+     * 三条纪律（09-infrastructure §9.12、05-action §5.8.6「单个插件失败不牵连」）：<br>
+     * ① 目录流一律 try-with-resources：每次取用都重扫，漏关就是每轮泄漏几个 fd，攒到上限整个插件体系崩；<br>
+     * ② 一个 jar 装载失败只记它自己：坏包抛的是 {@link java.util.zip.ZipError}（Error，不是异常），
+     *    `catch (RuntimeException)` 接不住，会连带健康插件一起永久不可见；<br>
+     * ③ 先装载成功再登记：坏 jar 若先进 loadedJars，修好后也不会重装，只能重启。
      */
     private void sync() {
-        try {
-            if (!Files.isDirectory(pluginsDir)) {
-                return;
+        if (!Files.isDirectory(pluginsDir)) {
+            return;
+        }
+        for (Path pluginDir : pluginDirectories()) {
+            // 目录名与 jar 内 id 不一致（或认不出 id）⇒ 整个目录不装载：
+            // 同一 id 落在两个目录里时，卸载只会删掉自己认识的那个（09 §9.7）
+            if (PluginDirectories.mismatched(pluginDir) || PluginDirectories.unrecognizable(pluginDir)) {
+                TechnicalLog.event("plugin.dir_ignored", 0L, "dir=" + pluginDir.getFileName(),
+                        "declared=" + PluginDirectories.declaredId(pluginDir));
+                continue;
             }
-            for (Path pluginDir : Files.newDirectoryStream(pluginsDir)) {
-                if (!Files.isDirectory(pluginDir)) {
-                    continue;
-                }
-                // 目录名与 jar 内 id 不一致（或认不出 id）⇒ 整个目录不装载：
-                // 同一 id 落在两个目录里时，卸载只会删掉自己认识的那个（09 §9.7）
-                if (PluginDirectories.mismatched(pluginDir) || PluginDirectories.unrecognizable(pluginDir)) {
-                    io.github.zcd0831.jellyfish.application.shared.TechnicalLog.event("plugin.dir_ignored", 0L,
-                            "dir=" + pluginDir.getFileName(),
-                            "declared=" + PluginDirectories.declaredId(pluginDir));
-                    continue;
-                }
-                for (Path jar : Files.newDirectoryStream(pluginDir, "*.jar")) {
-                    if (loadedJars.add(jar.toAbsolutePath().toString())) {
-                        manager.loadPlugin(jar);
-                    }
+            for (Path jar : jarsIn(pluginDir)) {
+                loadOnce(jar);
+            }
+        }
+    }
+
+    private void loadOnce(Path jar) {
+        String key = jar.toAbsolutePath().toString();
+        if (loadedJars.contains(key)) {
+            return;
+        }
+        long modified = lastModified(jar);
+        Long failedAt = failedJars.get(key);
+        if (failedAt != null && failedAt.longValue() == modified) {
+            return;   // 同一份坏文件不重试；改过了才再试
+        }
+        try {
+            manager.loadPlugin(jar);
+            loadedJars.add(key);
+            failedJars.remove(key);
+        } catch (Throwable failure) {   // 含 ZipError / NoClassDefFoundError：坏包不能拖垮整轮扫描
+            failedJars.put(key, Long.valueOf(modified));
+            TechnicalLog.event("plugin.load_failed", 0L, "jar=" + jar.getFileName(),
+                    "type=" + failure.getClass().getName(), "msg=" + failure.getMessage());
+        }
+    }
+
+    private List<Path> pluginDirectories() {
+        List<Path> out = new ArrayList<Path>();
+        try (java.nio.file.DirectoryStream<Path> stream = Files.newDirectoryStream(pluginsDir)) {
+            for (Path entry : stream) {
+                if (Files.isDirectory(entry)) {
+                    out.add(entry);
                 }
             }
         } catch (IOException e) {
             throw new UncheckedIOException("扫描插件目录失败：" + pluginsDir, e);
+        }
+        return out;
+    }
+
+    private static List<Path> jarsIn(Path pluginDir) {
+        List<Path> out = new ArrayList<Path>();
+        try (java.nio.file.DirectoryStream<Path> stream = Files.newDirectoryStream(pluginDir, "*.jar")) {
+            for (Path jar : stream) {
+                out.add(jar);
+            }
+        } catch (IOException e) {
+            throw new UncheckedIOException("扫描插件目录失败：" + pluginDir, e);
+        }
+        return out;
+    }
+
+    private static long lastModified(Path file) {
+        try {
+            return Files.getLastModifiedTime(file).toMillis();
+        } catch (IOException e) {
+            return 0L;
         }
     }
 
     private void forget(String pluginId) {
         PluginWrapper wrapper = manager.getPlugin(pluginId);
         if (wrapper != null && wrapper.getPluginPath() != null) {
-            loadedJars.remove(wrapper.getPluginPath().toAbsolutePath().toString());
+            String key = wrapper.getPluginPath().toAbsolutePath().toString();
+            loadedJars.remove(key);
+            failedJars.remove(key);
         }
     }
 
@@ -181,9 +243,10 @@ public final class Pf4jPluginRuntime implements PluginRuntimePort {
         List<String> out = new ArrayList<String>();
         try {
             if (Files.isDirectory(path)) {
-                java.util.Iterator<Path> it = Files.walk(path).iterator();
-                while (it.hasNext()) {
-                    out.add(path.relativize(it.next()).toString().replace('\\', '/') + "/");
+                try (java.util.stream.Stream<Path> walked = Files.walk(path)) {
+                    for (Path entry : (Iterable<Path>) walked::iterator) {
+                        out.add(path.relativize(entry).toString().replace('\\', '/') + "/");
+                    }
                 }
             } else {
                 try (ZipFile zip = new ZipFile(path.toFile())) {

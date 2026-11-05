@@ -177,7 +177,19 @@ public class RuntimePolicy {
         }
     }
 
-    @SuppressWarnings("unchecked")
+    /**
+     * 外壳把 `/policy trustedToolIds=a,b` 的值当字符串传进来时，直接 cast 会抛 ClassCastException——
+     * 那不是我们定义的失败语义（用例接不住、界面直接退）。这里统一转成非法的参数错误。
+     * 规则出处：08-application §8.9.5（校验失败 ⇒ 拒绝并说明原因，不改）。
+     */
+    private static List<?> asList(Object raw, String key) {
+        if (!(raw instanceof List)) {
+            throw new io.github.zcd0831.jellyfish.domain.shared.DomainInvariantViolation("参数 " + key + " 需要列表，实际是 "
+                    + raw.getClass().getSimpleName() + "：" + raw);
+        }
+        return (List<?>) raw;
+    }
+
     private static List<ModelId> modelIds(java.util.Map<String, Object> changes, String key,
                                           List<ModelId> current) {
         Object raw = changes.get(key);
@@ -185,13 +197,12 @@ public class RuntimePolicy {
             return current;
         }
         List<ModelId> ids = new ArrayList<ModelId>();
-        for (Object item : (List<Object>) raw) {
+        for (Object item : asList(raw, key)) {
             ids.add(ModelId.of(String.valueOf(item)));
         }
         return ids;
     }
 
-    @SuppressWarnings("unchecked")
     private static List<ToolId> toolIds(java.util.Map<String, Object> changes, String key,
                                         List<ToolId> current) {
         Object raw = changes.get(key);
@@ -199,7 +210,7 @@ public class RuntimePolicy {
             return current;
         }
         List<ToolId> ids = new ArrayList<ToolId>();
-        for (Object item : (List<Object>) raw) {
+        for (Object item : asList(raw, key)) {
             ids.add(ToolId.of(String.valueOf(item)));
         }
         return ids;

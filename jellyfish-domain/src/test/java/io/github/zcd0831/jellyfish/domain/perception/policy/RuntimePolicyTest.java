@@ -86,4 +86,22 @@ class RuntimePolicyTest {
         RuntimePolicy never = policy.adjust(one("reflectionThreshold", 10));
         assertTrue(!never.needsReflection(3));
     }
+    /**
+     * 外壳把 /policy trustedToolIds=run_command 的值当字符串传进来：必须是我们定义的失败语义，
+     * 不是 ClassCastException（那玩意儿用例接不住，界面直接退）。
+     * 规则出处：08-application §8.9.5（校验失败 ⇒ 拒绝并说明原因，不改）。
+     */
+    @Test
+    void 列表参数传成字符串抛不变量违反而不是类型转换异常() {
+        RuntimePolicy defaults = RuntimePolicy.defaults();
+
+        io.github.zcd0831.jellyfish.domain.shared.DomainInvariantViolation tools =
+                assertThrows(io.github.zcd0831.jellyfish.domain.shared.DomainInvariantViolation.class,
+                        () -> defaults.adjust(one("trustedToolIds", "run_command")));
+        assertTrue(tools.getMessage().contains("trustedToolIds"), tools.getMessage());
+
+        assertThrows(io.github.zcd0831.jellyfish.domain.shared.DomainInvariantViolation.class,
+                () -> defaults.adjust(one("modelFallbackChain", "m2")));
+    }
+
 }

@@ -18,6 +18,4 @@ public interface ExperienceRepository {
     void save(Experience experience);
 
     void archive(ExperienceId id);
-
-    int count();
 }

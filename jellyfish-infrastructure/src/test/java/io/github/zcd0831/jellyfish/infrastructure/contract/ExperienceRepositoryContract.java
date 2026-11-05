@@ -27,7 +27,7 @@ public abstract class ExperienceRepositoryContract {
 
         assertEquals(1, repository().findActive().size());
         assertTrue(repository().find(ExperienceId.of("e1")).isPresent());
-        assertEquals(2, repository().count() + 1, "count 只数文件，这里至少为 1");
+
     }
 
     @Test
@@ -38,7 +38,7 @@ public abstract class ExperienceRepositoryContract {
 
         assertTrue(repository().findActive().isEmpty());
         assertFalse(repository().find(ExperienceId.of("e1")).get().isActive());
-        assertEquals(1, repository().count(), "归档保留供审计");
+        assertTrue(repository().find(ExperienceId.of("e1")).isPresent(), "归档保留供审计");
     }
 
     @Test

@@ -59,7 +59,6 @@ class ExperienceDistillationServiceTest {
                 .adjust(Collections.<String, Object>singletonMap("experienceCapacity", 1));
         Experience old = experience("e1", "旧场景", 0.5);
         when(experiences.findActive()).thenReturn(Collections.singletonList(old));
-        when(experiences.count()).thenReturn(1);
 
         service(tiny).apply(new ExperienceDraft("新场景", "新教训", null), SessionId.of("s1"), null);
 
@@ -69,7 +68,6 @@ class ExperienceDistillationServiceTest {
     @Test
     void 无重复且容量够则新建() {
         when(experiences.findActive()).thenReturn(Collections.<Experience>emptyList());
-        when(experiences.count()).thenReturn(0);
 
         service(RuntimePolicy.defaults()).apply(new ExperienceDraft("新场景", "新教训", null), SessionId.of("s1"), null);
 
@@ -99,4 +97,21 @@ class ExperienceDistillationServiceTest {
         assertEquals(0.5, existing.confidence().getValue(), "幂等：置信度不该再提一次");
         assertEquals(1, existing.sourcePlanIds().size());
     }
+    /**
+     * 容量按"在用条数"算：库里堆了一堆 ARCHIVED，不该因此把还在用的那条淘汰掉。
+     * 规则出处：07-memory §7.4 经验不变量③（ARCHIVED 不再参与检索）、§7.1 规则 ⑥。
+     */
+    @Test
+    void 归档的经验不占容量() {
+        RuntimePolicy tiny = RuntimePolicy.defaults()
+                .adjust(Collections.<String, Object>singletonMap("experienceCapacity", 2));
+        Experience active = experience("e1", "还在用的场景", 0.5);
+        when(experiences.findActive()).thenReturn(Collections.singletonList(active));
+
+        service(tiny).apply(new ExperienceDraft("新场景", "新教训", null), SessionId.of("s1"), null);
+
+        assertEquals(ExperienceStatus.ACTIVE, active.status(), "在用经验不该被淘汰：" + active.status());
+        org.mockito.Mockito.verify(commitScope).stageReplace(any(Experience.class));
+    }
+
 }

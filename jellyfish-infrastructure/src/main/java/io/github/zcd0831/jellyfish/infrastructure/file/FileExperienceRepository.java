@@ -90,11 +90,6 @@ public final class FileExperienceRepository implements ExperienceRepository {
         save(experience);
     }
 
-    @Override
-    public int count() {
-        return files().size();
-    }
-
     private Path fileOf(ExperienceId id) {
         return dataDirectory.experience().resolve(id.getValue() + ".json");
     }

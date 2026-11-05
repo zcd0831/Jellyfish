@@ -15,6 +15,7 @@ import io.github.zcd0831.jellyfish.domain.shared.PlanId;
 import io.github.zcd0831.jellyfish.domain.shared.SessionId;
 
 import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -70,13 +71,18 @@ public final class ExperienceDistillationService {
                 policy.experienceInitialConfidence(), System.currentTimeMillis(), planId));
     }
 
-    /** 容量满了先淘汰"最早且最少被使用"的那条：排序在应用层做，端口只提供数据（§7.1 规则 ⑥）。 */
+    /**
+     * 容量满了先淘汰"最早且最少被使用"的那条：排序在应用层做，端口只提供数据（§7.1 规则 ⑥）。
+     * 容量算的是<strong>在用条数</strong>：ARCHIVED 已经不参与检索（07-memory §7.4 经验不变量③），
+     * 把它们计入上限会让每次沉淀都白淘汰一条还在用的经验。
+     */
     private void evictIfFull(RuntimePolicy policy) {
-        if (experiences.count() < policy.experienceCapacity()) {
+        List<Experience> active = experiences.findActive();
+        if (active.size() < policy.experienceCapacity()) {
             return;
         }
         Experience evicted = null;
-        for (Experience experience : experiences.findActive()) {
+        for (Experience experience : active) {
             if (evicted == null
                     || experience.createdAt() < evicted.createdAt()
                     || (experience.createdAt() == evicted.createdAt()

@@ -64,7 +64,7 @@ class FileMemoryRepositoriesTest {
 
         assertTrue(experiences.find(ExperienceId.of("e1")).isPresent());
         assertFalse(experiences.find(ExperienceId.of("nope")).isPresent());
-        assertEquals(2, experiences.count());
+        assertEquals(2, experiences.findActive().size());
         assertEquals("e2", experiences.evictionCandidate().id().getValue(), "最早创建的先淘汰");
 
         experiences.archive(ExperienceId.of("e1"));

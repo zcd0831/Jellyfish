@@ -8,6 +8,7 @@ import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationReques
 import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationResult;
 import io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner;
 import io.github.zcd0831.jellyfish.application.perception.port.PolicyRepository;
+import io.github.zcd0831.jellyfish.application.shared.TechnicalLog;
 import io.github.zcd0831.jellyfish.application.shared.port.CommitScope;
 import io.github.zcd0831.jellyfish.application.perception.port.RecordStore;
 import io.github.zcd0831.jellyfish.application.shared.Json;
@@ -72,7 +73,17 @@ public final class PlanCompletionCurator {
             return DistillationOutcome.empty();   // 沉淀失败只是“这次没学到”，不影响会话继续
         }
         DistillationOutcome outcome = used.isEmpty() ? parseNewKnowledge(answer) : parseRevisions(answer, used);
-        dispatch(session, input, outcome);
+        try {
+            dispatch(session, input, outcome);
+        } catch (java.util.concurrent.CancellationException terminated) {
+            throw terminated;
+        } catch (RuntimeException failed) {
+            // 写入阶段失败（磁盘满、校验不过、仓储异常）：这次没学到而已，不打断会话，
+            // 也不写告知记录——否则模型会播报一条根本没落盘的东西（08-application §8.9.7）
+            TechnicalLog.event("distill.write_failed", 0L, "plan=" + input.planId().getValue(),
+                    "error=" + failed.getClass().getSimpleName());
+            return DistillationOutcome.empty();
+        }
         notifyUser(session, input, outcome);
         return outcome;
     }

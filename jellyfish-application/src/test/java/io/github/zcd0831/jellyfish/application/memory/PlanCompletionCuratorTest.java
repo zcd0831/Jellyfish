@@ -218,4 +218,26 @@ class PlanCompletionCuratorTest {
         return new SkillDefinition(SkillId.of(id), "名", "述", "触发", new InstructionTemplate("正文"),
                 SkillStatus.ACTIVE, mutable, null);
     }
+    /**
+     * 写入阶段失败（磁盘满、仓储抛异常）只能算"这次没学到"：不能冒到外循环把整个会话打断，
+     * 也不能写告知记录——否则模型会播报一条根本没落盘的东西。
+     * 规则出处：08-application §8.9.7（沉淀失败 ⇒ 不落盘、不写告知记录、会话继续）。
+     */
+    @Test
+    void 写入失败只是这次没学到() {
+        org.mockito.Mockito.doThrow(new java.io.UncheckedIOException(
+                        new java.io.IOException("磁盘满")))
+                .when(experienceWriter).apply(any(ExperienceDraft.class), any(SessionId.class), any(PlanId.class));
+        when(catalog.agents()).thenReturn(Collections.singletonList(distillAgent()));
+        when(catalog.skills()).thenReturn(Collections.<SkillDefinition>emptyList());
+        when(forks.run(any(Session.class), any())).thenReturn(
+                "{\"experience\":{\"applicableScenario\":\"改代码时\","
+                        + "\"instruction\":\"先读再改\",\"expectedOutcome\":\"不返工\"}}");
+
+        DistillationOutcome outcome = curator().curate(session, input(traceWithoutSkill()));
+
+        assertTrue(outcome.isEmpty(), "写入失败 ⇒ 本次不产出");
+        assertTrue(session.records().isEmpty(), "不能写告知记录：" + session.records());
+    }
+
 }

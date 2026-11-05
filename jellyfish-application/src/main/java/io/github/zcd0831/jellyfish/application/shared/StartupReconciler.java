@@ -195,8 +195,11 @@ public final class StartupReconciler implements SessionResidueReconciler {
         }
         // 中止结果必须与原请求同一轮（turnId）：自成一轮会让原 TOOL_REQUEST 仍然悬空
         // 规则出处：04-perception §4.8.1 规则 14；08-application §8.10 规则 3
-        Record aborted = session.appendRecord(RecordRole.TOOL_RESULT, ABORTED_TOOL_RESULT, null,
-                request.turnId(), request.producerModelId(), null, System.currentTimeMillis());
+        Record aborted = session.appendRecord(
+                io.github.zcd0831.jellyfish.domain.perception.session.RecordDraft
+                        .builder(RecordRole.TOOL_RESULT, ABORTED_TOOL_RESULT)
+                        .turnId(request.turnId()).producerModelId(request.producerModelId()).build(),
+                System.currentTimeMillis());
         commitScope.stageAppend(sessionId, aborted);
         commitScope.commit();
         announce("对账：半截工具调用补中止结果，会话可续跑");

@@ -1,5 +1,6 @@
 package io.github.zcd0831.jellyfish.infrastructure.file;
 
+import io.github.zcd0831.jellyfish.domain.perception.session.SessionHeader;
 import io.github.zcd0831.jellyfish.domain.action.budget.Budget;
 import io.github.zcd0831.jellyfish.domain.memory.experience.Experience;
 import io.github.zcd0831.jellyfish.domain.memory.experience.ExperienceStatus;
@@ -47,7 +48,8 @@ class FileMemoryRepositoriesTest {
     void setUp() {
         dir = DataDirectory.of(tmp.toString());
         sessions = new FileSessionRepository(dir, codec);
-        sessions.save(Session.create(SessionId.of("s1"), null, AgentId.of("a"), ModelId.of("m1"), 1L, null));
+        sessions.save(Session
+                .create(SessionHeader.builder(SessionId.of("s1"), AgentId.of("a"), ModelId.of("m1")).createdDate(1L).build()));
         plan = Plan.create(PlanId.of("p1"), SessionId.of("s1"), "目标", Collections.singletonList(
                 PlanSteps.draft(StepId.of("step1"), 1, "做事", "g", "o", "c",
                         EnumSet.of(VerificationType.DETERMINISTIC))));

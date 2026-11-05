@@ -20,31 +20,35 @@ public class Record {
     private int sequence;
     private long date;
 
-    /** 兼容旧构造（无 reasoning、无 turn、非摘要）：等价于 reasoning/turnId/producerModelId = null。 */
-    public Record(RecordId id, RecordRole role, String content, ToolResultPayload toolPayload, int sequence,
-                  long date) {
-        this(id, role, content, null, null, null, toolPayload, 0, sequence, date);
-    }
-
-    /** 兼容上一版构造（有 reasoning、未引入 turn）。 */
-    public Record(RecordId id, RecordRole role, String content, String reasoning,
-                  ToolResultPayload toolPayload, int summaryCoversUpTo, int sequence, long date) {
-        this(id, role, content, reasoning, null, null, toolPayload, summaryCoversUpTo, sequence, date);
-    }
-
-    public Record(RecordId id, RecordRole role, String content, String reasoning, String turnId,
-                  String producerModelId, ToolResultPayload toolPayload, int summaryCoversUpTo,
-                  int sequence, long date) {
+    /**
+     * 一条流水记录只有两条诞生路径，都由这里收口：
+     * <ul>
+     *   <li>{@link #restore}：持久化形态重建（`id` / `sequence` / `date` 由盘上读回）；</li>
+     *   <li>{@link #of}：最简单的"角色 + 正文"，编号仍由调用方给出。</li>
+     * </ul>
+     * 追加时的编号（`sequence`）与时间由 {@link Session} 决定，不允许外部指定顺序。
+     */
+    private Record(RecordId id, RecordDraft draft, int sequence, long date) {
         this.id = id;
-        this.role = role;
-        this.content = content;
-        this.reasoning = reasoning;
-        this.turnId = turnId;
-        this.producerModelId = producerModelId;
-        this.toolPayload = toolPayload;
-        this.summaryCoversUpTo = summaryCoversUpTo;
+        this.role = draft.role();
+        this.content = draft.content();
+        this.reasoning = draft.reasoning();
+        this.turnId = draft.turnId();
+        this.producerModelId = draft.producerModelId();
+        this.toolPayload = draft.toolPayload();
+        this.summaryCoversUpTo = draft.summaryCoversUpTo();
         this.sequence = sequence;
         this.date = date;
+    }
+
+    /** 从持久化形态重建一条记录；`id` / `sequence` / `date` 原样带回。 */
+    public static Record restore(RecordId id, RecordDraft draft, int sequence, long date) {
+        return new Record(id, draft, sequence, date);
+    }
+
+    /** 只有角色与正文的最常见形态（USER / SYSTEM / ASSISTANT 无私有状态时）。 */
+    public static Record of(RecordId id, RecordRole role, String content, int sequence, long date) {
+        return new Record(id, RecordDraft.builder(role, content).build(), sequence, date);
     }
 
     public RecordId id() {

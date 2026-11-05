@@ -1,6 +1,7 @@
 package io.github.zcd0831.jellyfish.infrastructure.file;
 
 import io.github.zcd0831.jellyfish.domain.perception.session.Session;
+import io.github.zcd0831.jellyfish.domain.perception.session.SessionHeader;
 import io.github.zcd0831.jellyfish.domain.perception.session.SkillSummarySnapshot;
 import io.github.zcd0831.jellyfish.domain.perception.session.SystemPromptSnapshot;
 import io.github.zcd0831.jellyfish.domain.perception.session.ToolSchemaSnapshot;
@@ -46,8 +47,9 @@ final class SessionMetaMapper {
     }
 
     static Session toDomain(SessionMetaDto dto, List<io.github.zcd0831.jellyfish.domain.perception.session.Record> records) {
-        return Session.rehydrate(dto.id, dto.parentId, dto.agentId, dto.modelId, dto.title,
-                dto.createdDate, records, snapshot(dto.systemPrompt));
+        return Session.rehydrate(SessionHeader.builder(dto.id, dto.agentId, dto.modelId)
+                .parentSessionId(dto.parentId).title(dto.title).createdDate(dto.createdDate)
+                .systemPromptSnapshot(snapshot(dto.systemPrompt)).build(), records);
     }
 
     private static SystemPromptSnapshot snapshot(SessionMetaDto.SnapshotDto dto) {

@@ -1,6 +1,6 @@
 package io.github.zcd0831.jellyfish.application.perception;
 
-import io.github.zcd0831.jellyfish.application.perception.StartSessionDeps;
+import io.github.zcd0831.jellyfish.domain.perception.session.SessionHeader;
 import io.github.zcd0831.jellyfish.application.action.BudgetService;
 import io.github.zcd0831.jellyfish.application.action.port.CatalogRepository;
 import io.github.zcd0831.jellyfish.application.perception.port.SessionRepository;
@@ -72,21 +72,25 @@ class StartSessionUseCaseTest {
     }
 
     private static AgentDefinition agent(String id, AgentStatus status) {
-        return new AgentDefinition(AgentId.of(id), id, AgentSource.BUILT_IN,
-                new PromptTemplate("提示词", Collections.<String>emptyList()), status,
-                Collections.<ToolId>emptyList(), Collections.emptyList());
+        return AgentDefinition.builder(AgentId
+                .of(id), id, AgentSource.BUILT_IN)
+                .basePrompt(new PromptTemplate("提示词", Collections.<String>emptyList()))
+                .status(status).toolIds(Collections.<ToolId>emptyList()).skillIds(Collections.emptyList()).build();
     }
 
     private static io.github.zcd0831.jellyfish.domain.action.model.Provider provider(ProviderStatus status) {
-        return new io.github.zcd0831.jellyfish.domain.action.model.Provider(
-                io.github.zcd0831.jellyfish.domain.shared.ProviderId.of("p1"), "p1", "http://localhost",
-                io.github.zcd0831.jellyfish.domain.action.model.ChatProtocol.OPENAI_CHAT,
-                new io.github.zcd0831.jellyfish.domain.action.model.ApiCredential("FAKE_KEY"), status);
+        return Provider.builder(io.github.zcd0831.jellyfish.domain.shared.ProviderId.of("p1"), "p1",
+                "http://localhost")
+                .protocol(io.github.zcd0831.jellyfish.domain.action.model.ChatProtocol.OPENAI_CHAT)
+                .credential(new io.github.zcd0831.jellyfish.domain.action.model.ApiCredential("FAKE_KEY"))
+                .status(status).build();
     }
 
     private static Model model(String id, ModelStatus status) {
-        return new Model(ModelId.of(id), io.github.zcd0831.jellyfish.domain.shared.ProviderId.of("p1"), "m",
-                status, new ContextLimit(1000, 1000), Collections.emptyList());
+        return Model.builder(ModelId
+                .of(id), io.github.zcd0831.jellyfish.domain.shared.ProviderId
+                .of("p1"), "m").status(status)
+                .contextLimit(new ContextLimit(1000, 1000)).capabilities(Collections.emptyList()).build();
     }
 
     private static ToolDefinition tool(ToolStatus status) {
@@ -189,8 +193,8 @@ class StartSessionUseCaseTest {
 
         assertFalse(useCase().startSubSession(SessionId.of("missing"), null, null, "任务").isOk());
 
-        Session parent = Session.create(SessionId.of("main"), null, AgentId.of("builtin.main"),
-                ModelId.of("m1"), 1L, null);
+        Session parent = Session.create(SessionHeader
+                .builder(SessionId.of("main"), AgentId.of("builtin.main"), ModelId.of("m1")).createdDate(1L).build());
         when(sessions.load(SessionId.of("main"))).thenReturn(parent);
         when(budgets.load(any(SessionId.class))).thenReturn((Budget) null);
 
@@ -205,8 +209,10 @@ class StartSessionUseCaseTest {
     void 父已终止时内部fork子会话不创建() {
         cancellations.register(SessionId.of("main"), null);
         cancellations.cancel(SessionId.of("main"));
-        when(sessions.load(SessionId.of("main"))).thenReturn(Session.create(SessionId.of("main"), null,
-                AgentId.of("builtin.main"), ModelId.of("m1"), 1L, null));
+        when(sessions.load(SessionId
+                .of("main"))).thenReturn(Session
+                .create(SessionHeader
+                .builder(SessionId.of("main"), AgentId.of("builtin.main"), ModelId.of("m1")).createdDate(1L).build()));
 
         assertFalse(useCase().forkInternal(SessionId.of("main")).isOk());
         verify(sessions, never()).save(any(Session.class));
@@ -215,8 +221,10 @@ class StartSessionUseCaseTest {
     /** 正常路径：登记后父终止能级联到内部 fork 子会话。规则出处：08-application §8.9.4.1。 */
     @Test
     void 内部fork子会话登记令牌并可被父级联() {
-        when(sessions.load(SessionId.of("main"))).thenReturn(Session.create(SessionId.of("main"), null,
-                AgentId.of("builtin.main"), ModelId.of("m1"), 1L, null));
+        when(sessions.load(SessionId
+                .of("main"))).thenReturn(Session
+                .create(SessionHeader
+                .builder(SessionId.of("main"), AgentId.of("builtin.main"), ModelId.of("m1")).createdDate(1L).build()));
         cancellations.register(SessionId.of("main"), null);
 
         Result<SessionId> forked = useCase().forkInternal(SessionId.of("main"));

@@ -1,5 +1,6 @@
 package io.github.zcd0831.jellyfish.infrastructure.contract;
 
+import io.github.zcd0831.jellyfish.domain.perception.session.SessionHeader;
 import io.github.zcd0831.jellyfish.application.planning.port.PlanRepository;
 import io.github.zcd0831.jellyfish.application.perception.port.SessionRepository;
 import io.github.zcd0831.jellyfish.domain.perception.session.Session;
@@ -31,7 +32,8 @@ public abstract class PlanRepositoryContract {
 
     @BeforeEach
     void givenSession() {
-        sessions().save(Session.create(SessionId.of("s1"), null, AgentId.of("a"), ModelId.of("m1"), 1L, null));
+        sessions().save(Session
+                .create(SessionHeader.builder(SessionId.of("s1"), AgentId.of("a"), ModelId.of("m1")).createdDate(1L).build()));
     }
 
     protected static Plan plan(String id, PlanStatus status) {

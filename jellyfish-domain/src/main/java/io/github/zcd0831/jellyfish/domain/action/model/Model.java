@@ -18,15 +18,57 @@ public class Model {
 
     private ModelStatus status;
 
-    public Model(ModelId id, ProviderId providerId, String modelName, ModelStatus status,
-                 ContextLimit contextLimit, List<ModelCapability> capabilities) {
-        this.id = id;
-        this.providerId = providerId;
-        this.modelName = modelName;
-        this.status = status;
-        this.contextLimit = contextLimit;
+    private Model(Builder builder) {
+        this.id = builder.id;
+        this.providerId = builder.providerId;
+        this.modelName = builder.modelName;
+        this.status = builder.status;
+        this.contextLimit = builder.contextLimit;
         this.capabilities = Collections.unmodifiableList(new ArrayList<ModelCapability>(
-                capabilities == null ? Collections.<ModelCapability>emptyList() : capabilities));
+                builder.capabilities == null ? Collections.<ModelCapability>emptyList() : builder.capabilities));
+    }
+
+    /** 身份三项必填；能力标签与上下文上限按需设置（05-action §5.4.2）。 */
+    public static Builder builder(ModelId id, ProviderId providerId, String modelName) {
+        return new Builder(id, providerId, modelName);
+    }
+
+    public static final class Builder {
+
+        private final ModelId id;
+        private final ProviderId providerId;
+        private final String modelName;
+        private ModelStatus status = ModelStatus.ACTIVE;
+        private ContextLimit contextLimit;
+        private List<ModelCapability> capabilities;
+
+        private Builder(ModelId id, ProviderId providerId, String modelName) {
+            if (id == null || providerId == null) {
+                throw new IllegalArgumentException("模型 id 与所属 Provider 不能为空");
+            }
+            this.id = id;
+            this.providerId = providerId;
+            this.modelName = modelName;
+        }
+
+        public Builder status(ModelStatus value) {
+            this.status = value;
+            return this;
+        }
+
+        public Builder contextLimit(ContextLimit value) {
+            this.contextLimit = value;
+            return this;
+        }
+
+        public Builder capabilities(List<ModelCapability> value) {
+            this.capabilities = value;
+            return this;
+        }
+
+        public Model build() {
+            return new Model(this);
+        }
     }
 
     /** 规则出处：05-action §5.8.3 规则 1（只有 ACTIVE 可调用）。 */

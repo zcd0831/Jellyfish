@@ -1,5 +1,6 @@
 package io.github.zcd0831.jellyfish.infrastructure.contract;
 
+import io.github.zcd0831.jellyfish.domain.perception.session.SessionHeader;
 import io.github.zcd0831.jellyfish.application.perception.port.SessionRepository;
 import io.github.zcd0831.jellyfish.application.perception.port.SessionSummary;
 import io.github.zcd0831.jellyfish.domain.perception.session.Session;
@@ -23,8 +24,11 @@ public abstract class SessionRepositoryContract {
     protected abstract SessionRepository repository();
 
     private static Session session(String id, SessionId parent) {
-        return Session.rehydrate(SessionId.of(id), parent, AgentId.of("builtin.main"), ModelId.of("m1"),
-                "标题-" + id, 1000L, java.util.Collections.emptyList(), null);
+        return Session.rehydrate(SessionHeader
+                .builder(SessionId.of(id), AgentId
+                .of("builtin.main"), ModelId
+                .of("m1")).parentSessionId(parent)
+                .title("标题-" + id).createdDate(1000L).build(), java.util.Collections.emptyList());
     }
 
     @Test

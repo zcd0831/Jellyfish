@@ -1,5 +1,6 @@
 package io.github.zcd0831.jellyfish.application.perception;
 
+import io.github.zcd0831.jellyfish.domain.perception.session.SessionHeader;
 import io.github.zcd0831.jellyfish.application.action.SessionToolScope;
 import io.github.zcd0831.jellyfish.application.perception.port.SessionRepository;
 import io.github.zcd0831.jellyfish.application.planning.ReActLoop;
@@ -42,8 +43,10 @@ class InternalSessionRunnerTest {
     private final io.github.zcd0831.jellyfish.application.action.BudgetService budget =
             mock(io.github.zcd0831.jellyfish.application.action.BudgetService.class);
 
-    private final Session parent = Session.create(PARENT, null, AgentId.of("a"), ModelId.of("m1"), 1L, null);
-    private final Session child = Session.create(CHILD, PARENT, AgentId.of("a"), ModelId.of("m1"), 1L, null);
+    private final Session parent = Session.create(SessionHeader
+            .builder(PARENT, AgentId.of("a"), ModelId.of("m1")).createdDate(1L).build());
+    private final Session child = Session.create(SessionHeader
+            .builder(CHILD, AgentId.of("a"), ModelId.of("m1")).parentSessionId(PARENT).createdDate(1L).build());
 
     private InternalSessionRunner runner() {
         return new InternalSessionRunner(startSession, sessions, reActLoop, new SessionToolScope(),

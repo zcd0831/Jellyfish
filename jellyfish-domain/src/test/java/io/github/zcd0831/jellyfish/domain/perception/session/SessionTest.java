@@ -29,8 +29,8 @@ class SessionTest {
 
     /** 创建本身会 raise SessionStarted（04-perception §4.7）：各用例从“创建后”起算事件。 */
     private static Session newSession() {
-        Session session = Session.create(SessionId.of("s1"), null, AgentId.of("builtin.main"),
-                ModelId.of("m1"), 1000L, null);
+        Session session = Session.create(SessionHeader
+                .builder(SessionId.of("s1"), AgentId.of("builtin.main"), ModelId.of("m1")).createdDate(1000L).build());
         session.pullEvents();
         return session;
     }
@@ -129,9 +129,12 @@ class SessionTest {
     void 窗口按turnId整轮归位() {
         Session session = newSession();
         session.appendRecord(RecordRole.USER, "u1", null, 1L);
-        session.appendRecord(RecordRole.ASSISTANT, "看一下", null, "t1", "m1", null, 2L);
-        session.appendRecord(RecordRole.TOOL_REQUEST, call("c1", "list_dir"), null, "t1", "m1", null, 3L);
-        session.appendRecord(RecordRole.TOOL_RESULT, "结果", null, "t1", "m1", null, 4L);
+        session.appendRecord(RecordDraft
+                .builder(RecordRole.ASSISTANT, "看一下").turnId("t1").producerModelId("m1").build(), 2L);
+        session.appendRecord(RecordDraft
+                .builder(RecordRole.TOOL_REQUEST, call("c1", "list_dir")).turnId("t1").producerModelId("m1").build(), 3L);
+        session.appendRecord(RecordDraft
+                .builder(RecordRole.TOOL_RESULT, "结果").turnId("t1").producerModelId("m1").build(), 4L);
         session.appendRecord(RecordRole.USER, "u2", null, 5L);
 
         ContextWindow window = session.buildContextForLlm(CHARS, 100000);
@@ -144,7 +147,8 @@ class SessionTest {
     void 未闭合的工具请求是不变量违反而不是静默丢弃() {
         Session session = newSession();
         session.appendRecord(RecordRole.USER, "u1", null, 1L);
-        session.appendRecord(RecordRole.TOOL_REQUEST, call("c1", "list_dir"), null, "t1", "m1", null, 2L);
+        session.appendRecord(RecordDraft
+                .builder(RecordRole.TOOL_REQUEST, call("c1", "list_dir")).turnId("t1").producerModelId("m1").build(), 2L);
 
         assertThrows(io.github.zcd0831.jellyfish.domain.shared.DomainInvariantViolation.class,
                 () -> session.buildContextForLlm(CHARS, 100000));
@@ -153,8 +157,10 @@ class SessionTest {
     @Test
     void 同一轮出现两条assistant记录是模型形态违规() {
         Session session = newSession();
-        session.appendRecord(RecordRole.ASSISTANT, "前半句", null, "t1", "m1", null, 1L);
-        session.appendRecord(RecordRole.ASSISTANT, "后半句", null, "t1", "m1", null, 2L);
+        session.appendRecord(RecordDraft
+                .builder(RecordRole.ASSISTANT, "前半句").turnId("t1").producerModelId("m1").build(), 1L);
+        session.appendRecord(RecordDraft
+                .builder(RecordRole.ASSISTANT, "后半句").turnId("t1").producerModelId("m1").build(), 2L);
 
         assertThrows(io.github.zcd0831.jellyfish.domain.shared.DomainInvariantViolation.class,
                 () -> session.buildContextForLlm(CHARS, 100000));
@@ -167,9 +173,12 @@ class SessionTest {
     @Test
     void 连续两条工具请求也是不变量违反() {
         Session session = newSession();
-        session.appendRecord(RecordRole.ASSISTANT, "我来看看", null, "t1", "m1", null, 1L);
-        session.appendRecord(RecordRole.TOOL_REQUEST, call("c1", "list_dir"), null, "t1", "m1", null, 2L);
-        session.appendRecord(RecordRole.TOOL_REQUEST, call("c2", "list_dir"), null, "t1", "m1", null, 3L);
+        session.appendRecord(RecordDraft
+                .builder(RecordRole.ASSISTANT, "我来看看").turnId("t1").producerModelId("m1").build(), 1L);
+        session.appendRecord(RecordDraft
+                .builder(RecordRole.TOOL_REQUEST, call("c1", "list_dir")).turnId("t1").producerModelId("m1").build(), 2L);
+        session.appendRecord(RecordDraft
+                .builder(RecordRole.TOOL_REQUEST, call("c2", "list_dir")).turnId("t1").producerModelId("m1").build(), 3L);
 
         // 断言到具体文案：只靠末尾那条"未闭合"也能抛同样的异常，那样这条分支就没有守卫了
         io.github.zcd0831.jellyfish.domain.shared.DomainInvariantViolation violation =
@@ -181,7 +190,8 @@ class SessionTest {
     @Test
     void 没有请求的工具结果是不变量违反() {
         Session session = newSession();
-        session.appendRecord(RecordRole.TOOL_RESULT, "结果", null, "t1", "m1", null, 1L);
+        session.appendRecord(RecordDraft
+                .builder(RecordRole.TOOL_RESULT, "结果").turnId("t1").producerModelId("m1").build(), 1L);
 
         assertThrows(io.github.zcd0831.jellyfish.domain.shared.DomainInvariantViolation.class,
                 () -> session.buildContextForLlm(CHARS, 100000));
@@ -190,8 +200,10 @@ class SessionTest {
     @Test
     void 工具请求未闭合时插入普通记录也是不变量违反() {
         Session session = newSession();
-        session.appendRecord(RecordRole.TOOL_REQUEST, call("c1", "list_dir"), null, "t1", "m1", null, 1L);
-        session.appendRecord(RecordRole.SYSTEM, "插进来的注入", null, "t1", "m1", null, 2L);
+        session.appendRecord(RecordDraft
+                .builder(RecordRole.TOOL_REQUEST, call("c1", "list_dir")).turnId("t1").producerModelId("m1").build(), 1L);
+        session.appendRecord(RecordDraft
+                .builder(RecordRole.SYSTEM, "插进来的注入").turnId("t1").producerModelId("m1").build(), 2L);
 
         // SYSTEM 不进对话轮，所以这里命中的是「末尾未闭合」那条；两者都为真即可
         assertThrows(io.github.zcd0831.jellyfish.domain.shared.DomainInvariantViolation.class,
@@ -201,8 +213,10 @@ class SessionTest {
     @Test
     void 工具请求未闭合就来了assistant也是不变量违反() {
         Session session = newSession();
-        session.appendRecord(RecordRole.TOOL_REQUEST, call("c1", "list_dir"), null, "t1", "m1", null, 1L);
-        session.appendRecord(RecordRole.ASSISTANT, "我先说一句", null, "t1", "m1", null, 2L);
+        session.appendRecord(RecordDraft
+                .builder(RecordRole.TOOL_REQUEST, call("c1", "list_dir")).turnId("t1").producerModelId("m1").build(), 1L);
+        session.appendRecord(RecordDraft
+                .builder(RecordRole.ASSISTANT, "我先说一句").turnId("t1").producerModelId("m1").build(), 2L);
 
         assertThrows(io.github.zcd0831.jellyfish.domain.shared.DomainInvariantViolation.class,
                 () -> session.buildContextForLlm(CHARS, 100000));
@@ -212,10 +226,12 @@ class SessionTest {
     void reasoning计入窗口用量并带产者() {
         Session session = newSession();
         // reasoning 是模型私有状态，落在 assistant 那条上（04 §4.8.1 规则 14）
-        session.appendRecord(RecordRole.ASSISTANT, null, "思考了十个字符", "t1", "m-model", null, 1L);
-        session.appendRecord(RecordRole.TOOL_REQUEST, call("c1", "list_dir"), null, "t1", "m-model",
-                null, 2L);
-        session.appendRecord(RecordRole.TOOL_RESULT, "结果", null, "t1", "m-model", null, 3L);
+        session.appendRecord(RecordDraft
+                .builder(RecordRole.ASSISTANT, null).reasoning("思考了十个字符").turnId("t1").producerModelId("m-model").build(), 1L);
+        session.appendRecord(RecordDraft
+                .builder(RecordRole.TOOL_REQUEST, call("c1", "list_dir")).turnId("t1").producerModelId("m-model").build(), 2L);
+        session.appendRecord(RecordDraft
+                .builder(RecordRole.TOOL_RESULT, "结果").turnId("t1").producerModelId("m-model").build(), 3L);
 
         ContextWindow window = session.buildContextForLlm(CHARS, 100000);
 
@@ -227,10 +243,12 @@ class SessionTest {
     @Test
     void 工具轮未闭合能被识别出来() {
         Session session = newSession();
-        session.appendRecord(RecordRole.TOOL_REQUEST, call("c1", "list_dir"), null, "t1", "m1", null, 1L);
+        session.appendRecord(RecordDraft
+                .builder(RecordRole.TOOL_REQUEST, call("c1", "list_dir")).turnId("t1").producerModelId("m1").build(), 1L);
         assertTrue(session.hasOpenToolRound());
 
-        session.appendRecord(RecordRole.TOOL_RESULT, "结果", null, "t1", "m1", null, 2L);
+        session.appendRecord(RecordDraft
+                .builder(RecordRole.TOOL_RESULT, "结果").turnId("t1").producerModelId("m1").build(), 2L);
         assertFalse(session.hasOpenToolRound());
     }
 
@@ -248,14 +266,16 @@ class SessionTest {
 
     @Test
     void 创建即raiseSessionStarted而重建不重发() {
-        Session created = Session.create(SessionId.of("s1"), null, AgentId.of("builtin.main"),
-                ModelId.of("m1"), 1000L, null);
+        Session created = Session.create(SessionHeader
+                .builder(SessionId.of("s1"), AgentId.of("builtin.main"), ModelId.of("m1")).createdDate(1000L).build());
         List<io.github.zcd0831.jellyfish.domain.shared.DomainEvent> events = created.pullEvents();
         assertEquals(1, events.size());
         assertEquals("session.started", events.get(0).name());
 
-        Session rehydrated = Session.rehydrate(SessionId.of("s1"), null, AgentId.of("builtin.main"),
-                ModelId.of("m1"), "标题", 1000L, java.util.Collections.<Record>emptyList(), null);
+        Session rehydrated = Session.rehydrate(SessionHeader
+                .builder(SessionId.of("s1"), AgentId
+                .of("builtin.main"), ModelId
+                .of("m1")).title("标题").createdDate(1000L).build(), java.util.Collections.<Record>emptyList());
         assertTrue(rehydrated.pullEvents().isEmpty(), "续跑不重发 SessionStarted（§4.8.1 规则 7）");
     }
 
@@ -275,10 +295,13 @@ class SessionTest {
     @Test
     void 摘要边界切在轮中间是不变量违反() {
         Session session = newSession();
-        session.appendRecord(RecordRole.USER, "读一下", null, "t1", null, null, 1L);
-        session.appendRecord(RecordRole.ASSISTANT, "我来读", null, "t2", "m1", null, 2L);
-        session.appendRecord(RecordRole.TOOL_REQUEST, call("c1", "read_file"), null, "t2", "m1", null, 3L);
-        session.appendRecord(RecordRole.TOOL_RESULT, "内容", null, "t2", "m1", null, 4L);
+        session.appendRecord(RecordDraft.builder(RecordRole.USER, "读一下").turnId("t1").build(), 1L);
+        session.appendRecord(RecordDraft
+                .builder(RecordRole.ASSISTANT, "我来读").turnId("t2").producerModelId("m1").build(), 2L);
+        session.appendRecord(RecordDraft
+                .builder(RecordRole.TOOL_REQUEST, call("c1", "read_file")).turnId("t2").producerModelId("m1").build(), 3L);
+        session.appendRecord(RecordDraft
+                .builder(RecordRole.TOOL_RESULT, "内容").turnId("t2").producerModelId("m1").build(), 4L);
 
         DomainInvariantViolation violation = assertThrows(DomainInvariantViolation.class,
                 () -> session.markSummarized("摘要", 2, 5L));
@@ -290,9 +313,9 @@ class SessionTest {
     @Test
     void 摘要覆盖边界不能倒退也不能越界() {
         Session session = newSession();
-        session.appendRecord(RecordRole.USER, "一", null, "t1", null, null, 1L);
-        session.appendRecord(RecordRole.USER, "二", null, "t2", null, null, 2L);
-        session.appendRecord(RecordRole.USER, "三", null, "t3", null, null, 3L);
+        session.appendRecord(RecordDraft.builder(RecordRole.USER, "一").turnId("t1").build(), 1L);
+        session.appendRecord(RecordDraft.builder(RecordRole.USER, "二").turnId("t2").build(), 2L);
+        session.appendRecord(RecordDraft.builder(RecordRole.USER, "三").turnId("t3").build(), 3L);
 
         session.markSummarized("摘要", 2, 4L);
 

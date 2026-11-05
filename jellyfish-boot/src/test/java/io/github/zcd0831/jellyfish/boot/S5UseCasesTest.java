@@ -1,5 +1,6 @@
 package io.github.zcd0831.jellyfish.boot;
 
+import io.github.zcd0831.jellyfish.domain.perception.session.SessionHeader;
 import io.github.zcd0831.jellyfish.application.perception.ManageSessionDeps;
 import io.github.zcd0831.jellyfish.application.action.ManageCatalogUseCase;
 import io.github.zcd0831.jellyfish.application.perception.AdjustPolicyUseCase;
@@ -110,8 +111,8 @@ class S5UseCasesTest {
     }
 
     private SessionId newSession() {
-        Session session = Session.create(SessionId.of("s1"), null, AgentId.of("builtin.main"),
-                ModelId.of("m1"), 1L, null);
+        Session session = Session.create(SessionHeader
+                .builder(SessionId.of("s1"), AgentId.of("builtin.main"), ModelId.of("m1")).createdDate(1L).build());
         sessions.save(session);
         return session.id();
     }
@@ -180,8 +181,9 @@ class S5UseCasesTest {
     @Test
     void 终止主会话会级联终止子会话() {
         SessionId root = newSession();
-        Session child = Session.create(SessionId.of("s2"), root, AgentId.of("builtin.main"),
-                ModelId.of("m1"), 2L, null);
+        Session child = Session.create(SessionHeader
+                .builder(SessionId.of("s2"), AgentId
+                .of("builtin.main"), ModelId.of("m1")).parentSessionId(root).createdDate(2L).build());
         sessions.save(child);
 
         assertTrue(manageSession.cancel(root).isOk());
@@ -202,8 +204,9 @@ class S5UseCasesTest {
     @Test
     void 子会话回放读的是根台账() {
         SessionId root = newSession();
-        Session child = Session.create(SessionId.of("s2"), root, AgentId.of("builtin.main"),
-                ModelId.of("m1"), 2L, null);
+        Session child = Session.create(SessionHeader
+                .builder(SessionId.of("s2"), AgentId
+                .of("builtin.main"), ModelId.of("m1")).parentSessionId(root).createdDate(2L).build());
         sessions.save(child);
         io.github.zcd0831.jellyfish.domain.action.budget.Budget budget =
                 io.github.zcd0831.jellyfish.domain.action.budget.Budget.openFor(
@@ -239,10 +242,10 @@ class S5UseCasesTest {
         java.util.List<io.github.zcd0831.jellyfish.domain.perception.session.Record> seeded =
                 new java.util.ArrayList<io.github.zcd0831.jellyfish.domain.perception.session.Record>();
         for (int i = 0; i < 5; i++) {
-            seeded.add(new io.github.zcd0831.jellyfish.domain.perception.session.Record(
+            seeded.add(io.github.zcd0831.jellyfish.domain.perception.session.Record.of(
                     io.github.zcd0831.jellyfish.domain.shared.RecordId.of("r" + i),
                     io.github.zcd0831.jellyfish.domain.perception.session.RecordRole.USER,
-                    "第" + i + "条", null, i + 1, System.currentTimeMillis()));
+                    "第" + i + "条", i + 1, System.currentTimeMillis()));
         }
         store.appendAll(id, seeded);
 

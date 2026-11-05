@@ -1,5 +1,6 @@
 package io.github.zcd0831.jellyfish.boot;
 
+import io.github.zcd0831.jellyfish.domain.perception.session.SessionHeader;
 import io.github.zcd0831.jellyfish.application.perception.StartSessionDeps;
 import io.github.zcd0831.jellyfish.application.action.BudgetService;
 import io.github.zcd0831.jellyfish.application.action.InternalToolHandlers;
@@ -182,9 +183,9 @@ class S3AcceptanceTest {
                         "spawn_subagents", new SpawnSubagentsHandler(launcher)))), event -> { }, new SessionToolScope());
         toolExecutorHolder = spawnExecutor;
 
-        main = Session.create(SessionId.of("main"), null,
-                io.github.zcd0831.jellyfish.domain.shared.AgentId.of("builtin.main"), ModelId.of("m1"),
-                1L, null);
+        main = Session.create(SessionHeader
+                .builder(SessionId.of("main"), io.github.zcd0831.jellyfish.domain.shared.AgentId
+                .of("builtin.main"), ModelId.of("m1")).createdDate(1L).build());
         sessions.save(main);
     }
 
@@ -312,9 +313,9 @@ class S3AcceptanceTest {
 
     @Test
     void 子代理不得再开子代理() {
-        Session child = Session.create(SessionId.of("child"), SessionId.of("main"),
-                io.github.zcd0831.jellyfish.domain.shared.AgentId.of("builtin.main"), ModelId.of("m1"),
-                1L, null);
+        Session child = Session.create(SessionHeader
+                .builder(SessionId.of("child"), io.github.zcd0831.jellyfish.domain.shared.AgentId
+                .of("builtin.main"), ModelId.of("m1")).parentSessionId(SessionId.of("main")).createdDate(1L).build());
 
         ToolExecOutcome outcome = toolExecutorHolder.execute(child, "spawn_subagents",
                 spawnArgs(request("任务A")), io.github.zcd0831.jellyfish.domain.shared.RecordId.of("r2"));

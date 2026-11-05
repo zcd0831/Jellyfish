@@ -1,5 +1,6 @@
 package io.github.zcd0831.jellyfish.application.memory;
 
+import io.github.zcd0831.jellyfish.domain.perception.session.SessionHeader;
 import io.github.zcd0831.jellyfish.application.action.port.CatalogRepository;
 import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationPort;
 import io.github.zcd0831.jellyfish.application.action.port.ModelProfile;
@@ -47,8 +48,8 @@ class ExperienceRetrieverTest {
     private final ModelInvocationPort model = mock(ModelInvocationPort.class);
     private final List<String> instructions = new ArrayList<String>();
     private String answer = "{}";
-    private final Session session = Session.create(SessionId.of("s1"), null, AgentId.of("a"),
-            ModelId.of("m1"), 1L, null);
+    private final Session session = Session.create(SessionHeader
+            .builder(SessionId.of("s1"), AgentId.of("a"), ModelId.of("m1")).createdDate(1L).build());
 
     private ExperienceRetriever retriever() {
         when(policies.load()).thenReturn(RuntimePolicy.defaults());
@@ -72,10 +73,12 @@ class ExperienceRetrieverTest {
     }
 
     private static AgentDefinition agent(String prompt) {
-        return new AgentDefinition(AgentId.of("builtin.retrieve"), "检索", AgentSource.BUILT_IN,
-                new PromptTemplate(prompt, Collections.<String>emptyList()), AgentStatus.ACTIVE,
-                Collections.<io.github.zcd0831.jellyfish.domain.shared.ToolId>emptyList(),
-                Collections.emptyList());
+        return AgentDefinition.builder(AgentId
+                .of("builtin.retrieve"), "检索", AgentSource.BUILT_IN)
+                .basePrompt(new PromptTemplate(prompt, Collections.<String>emptyList()))
+                .status(AgentStatus.ACTIVE)
+                .toolIds(Collections.<io.github.zcd0831.jellyfish.domain.shared.ToolId>emptyList())
+                .skillIds(Collections.emptyList()).build();
     }
 
     private static Experience experience(String id, String scenario, double confidence) {

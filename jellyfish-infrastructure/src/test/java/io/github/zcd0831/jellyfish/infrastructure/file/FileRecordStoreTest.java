@@ -1,5 +1,7 @@
 package io.github.zcd0831.jellyfish.infrastructure.file;
 
+import io.github.zcd0831.jellyfish.domain.perception.session.RecordDraft;
+import io.github.zcd0831.jellyfish.domain.perception.session.SessionHeader;
 import io.github.zcd0831.jellyfish.domain.perception.session.Record;
 import io.github.zcd0831.jellyfish.domain.perception.session.RecordRole;
 import io.github.zcd0831.jellyfish.domain.perception.session.Session;
@@ -35,11 +37,12 @@ class FileRecordStoreTest {
 
     private void givenSession(String id) {
         new FileSessionRepository(dir(), new JsonCodec())
-                .save(Session.create(SessionId.of(id), null, AgentId.of("a"), ModelId.of("m"), 1L, null));
+                .save(Session
+                        .create(SessionHeader.builder(SessionId.of(id), AgentId.of("a"), ModelId.of("m")).createdDate(1L).build()));
     }
 
     private static Record record(String id, int seq) {
-        return new Record(RecordId.of(id), RecordRole.USER, "内容" + seq, null, seq, 1000L + seq);
+        return Record.of(RecordId.of(id), RecordRole.USER, "内容" + seq, seq, 1000L + seq);
     }
 
     @Test
@@ -66,10 +69,11 @@ class FileRecordStoreTest {
         FileRecordStore store = new FileRecordStore(dir(), new JsonCodec());
 
         store.appendAll(SessionId.of("s1"), Arrays.asList(
-                new Record(RecordId.of("r1"), RecordRole.TOOL_REQUEST,
-                        "{\"callId\":\"c1\"}", "内部推理", null, 0, 1, 1000L),
-                new Record(RecordId.of("r2"), RecordRole.SUMMARY,
-                        "摘要正文", null, null, 1, 2, 1001L)));
+                Record.restore(RecordId
+                        .of("r1"), RecordDraft
+                        .builder(RecordRole.TOOL_REQUEST, "{\"callId\":\"c1\"}").reasoning("内部推理").build(), 1, 1000L),
+                Record.restore(RecordId
+                        .of("r2"), RecordDraft.builder(RecordRole.SUMMARY, "摘要正文").summaryCoversUpTo(1).build(), 2, 1001L)));
 
         List<Record> all = store.last(SessionId.of("s1"), 10);
         assertEquals("内部推理", all.get(0).reasoning());

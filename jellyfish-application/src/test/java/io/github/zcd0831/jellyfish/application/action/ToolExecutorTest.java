@@ -1,5 +1,6 @@
 package io.github.zcd0831.jellyfish.application.action;
 
+import io.github.zcd0831.jellyfish.domain.perception.session.SessionHeader;
 import io.github.zcd0831.jellyfish.application.action.port.CatalogRepository;
 import io.github.zcd0831.jellyfish.application.action.port.ExternalToolPort;
 import io.github.zcd0831.jellyfish.application.perception.port.PolicyRepository;
@@ -58,8 +59,8 @@ class ToolExecutorTest {
     private final PolicyRepository policies = mock(PolicyRepository.class);
     private final SessionToolScope scope = new SessionToolScope();
 
-    private final Session session = Session.create(SessionId.of("s1"), null, AgentId.of("a"),
-            ModelId.of("m1"), 1L, null);
+    private final Session session = Session.create(SessionHeader
+            .builder(SessionId.of("s1"), AgentId.of("a"), ModelId.of("m1")).createdDate(1L).build());
 
     private ToolExecutor executor(InternalToolHandlers handlers) {
         when(policies.load()).thenReturn(RuntimePolicy.defaults());
@@ -74,15 +75,21 @@ class ToolExecutorTest {
 
     private void givenTool(ToolDefinition tool) {
         when(catalog.tools()).thenReturn(Collections.singletonList(tool));
-        when(catalog.agents()).thenReturn(Collections.singletonList(new AgentDefinition(AgentId.of("a"), "a",
-                AgentSource.USER_DEFINED, new PromptTemplate("p", Collections.<String>emptyList()),
-                AgentStatus.ACTIVE, Collections.singletonList(tool.id()), Collections.emptyList())));
+        when(catalog.agents())
+                .thenReturn(Collections
+                .singletonList(AgentDefinition
+                .builder(AgentId.of("a"), "a", AgentSource.USER_DEFINED)
+                .basePrompt(new PromptTemplate("p", Collections.<String>emptyList()))
+                .status(AgentStatus.ACTIVE)
+                .toolIds(Collections.singletonList(tool.id())).skillIds(Collections.emptyList()).build()));
     }
 
     private static AgentDefinition givenAgent(String toolName) {
-        return new AgentDefinition(AgentId.of("a"), "a", AgentSource.USER_DEFINED,
-                new PromptTemplate("p", Collections.<String>emptyList()), AgentStatus.ACTIVE,
-                Collections.singletonList(ToolId.of(toolName)), Collections.emptyList());
+        return AgentDefinition.builder(AgentId
+                .of("a"), "a", AgentSource.USER_DEFINED)
+                .basePrompt(new PromptTemplate("p", Collections.<String>emptyList()))
+                .status(AgentStatus.ACTIVE)
+                .toolIds(Collections.singletonList(ToolId.of(toolName))).skillIds(Collections.emptyList()).build();
     }
 
     private static ToolDefinition tool(String name, SideEffectLevel sideEffect, SourceType type,
@@ -301,7 +308,8 @@ class ToolExecutorTest {
         ToolExecutor subject = executor(InternalToolHandlers.empty());
         givenTool(tool("edit_file", SideEffectLevel.REPEATABLE, SourceType.NATIVE, ToolStatus.ACTIVE, "{}"));
         when(human.ask(any(Question.class))).thenReturn(Answer.answered("同意"));
-        Session other = Session.create(SessionId.of("s2"), null, AgentId.of("a"), ModelId.of("m1"), 1L, null);
+        Session other = Session.create(SessionHeader
+                .builder(SessionId.of("s2"), AgentId.of("a"), ModelId.of("m1")).createdDate(1L).build());
 
         subject.execute(session, "edit_file", args("path", "a.txt"), RecordId.of("r1"));
         subject.execute(other, "edit_file", args("path", "a.txt"), RecordId.of("r2"));

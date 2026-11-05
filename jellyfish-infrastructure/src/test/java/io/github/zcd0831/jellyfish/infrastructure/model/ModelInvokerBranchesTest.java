@@ -58,18 +58,21 @@ class ModelInvokerBranchesTest {
     }
 
     private static Model model(String id, ModelStatus status) {
-        return new Model(ModelId.of(id), ProviderId.of("p1"), "name", status, new ContextLimit(1000, 100),
-                Collections.emptyList());
+        return Model.builder(ModelId
+                .of(id), ProviderId.of("p1"), "name")
+                .status(status).contextLimit(new ContextLimit(1000, 100)).capabilities(Collections.emptyList()).build();
     }
 
     private static Provider provider(ProviderStatus status) {
-        return new Provider(ProviderId.of("p1"), "p", "http://localhost:1/v1", ChatProtocol.OPENAI_CHAT,
-                new ApiCredential("K"), status);
+        return Provider.builder(ProviderId
+                .of("p1"), "p", "http://localhost:1/v1")
+                .protocol(ChatProtocol.OPENAI_CHAT).credential(new ApiCredential("K")).status(status).build();
     }
 
     private static Provider provider(ProviderStatus status, ChatProtocol protocol) {
-        return new Provider(ProviderId.of("p1"), "p", "http://localhost:1/v1", protocol,
-                new ApiCredential("K"), status);
+        return Provider.builder(ProviderId
+                .of("p1"), "p", "http://localhost:1/v1")
+                .protocol(protocol).credential(new ApiCredential("K")).status(status).build();
     }
 
     private ModelInvoker invoker(Catalog catalog, ChatTransport transport, String apiKey) {
@@ -191,8 +194,11 @@ class ModelInvokerBranchesTest {
     @Test
     void Anthropic协议走自己的端点与请求头() {
         Catalog catalog = new Catalog(Collections.singletonList(
-                new Model(ModelId.of("m1"), ProviderId.of("p1"), "claude-sonnet-4-5", ModelStatus.ACTIVE,
-                        new ContextLimit(1000, 100), Collections.emptyList())),
+                Model.builder(ModelId
+                        .of("m1"), ProviderId
+                        .of("p1"), "claude-sonnet-4-5")
+                        .status(ModelStatus.ACTIVE)
+                        .contextLimit(new ContextLimit(1000, 100)).capabilities(Collections.emptyList()).build()),
                 Collections.singletonList(provider(ProviderStatus.ACTIVE, ChatProtocol.ANTHROPIC_MESSAGES)));
         final String[] seen = new String[3];
         ChatTransport transport = new ChatTransport() {
@@ -220,11 +226,14 @@ class ModelInvokerBranchesTest {
     @Test
     void Gemini协议走自己的端点与请求头() {
         Catalog catalog = new Catalog(Collections.singletonList(
-                new Model(ModelId.of("m1"), ProviderId.of("p1"), "gemini-2.5-pro", ModelStatus.ACTIVE,
-                        new ContextLimit(1000, 100), Collections.emptyList())),
-                Collections.singletonList(new Provider(ProviderId.of("p1"), "p",
-                        "https://generativelanguage.googleapis.com", ChatProtocol.GEMINI,
-                        new ApiCredential("K"), ProviderStatus.ACTIVE)));
+                Model.builder(ModelId
+                        .of("m1"), ProviderId
+                        .of("p1"), "gemini-2.5-pro")
+                        .status(ModelStatus.ACTIVE)
+                        .contextLimit(new ContextLimit(1000, 100)).capabilities(Collections.emptyList()).build()),
+                Collections.singletonList(Provider
+                        .builder(ProviderId.of("p1"), "p", "https://generativelanguage.googleapis.com")
+                        .protocol(ChatProtocol.GEMINI).credential(new ApiCredential("K")).status(ProviderStatus.ACTIVE).build()));
         final String[] seen = new String[2];
         ChatTransport transport = new ChatTransport() {
             public Response post(String url, Map<String, String> headers, String body,

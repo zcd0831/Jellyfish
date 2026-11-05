@@ -1,5 +1,6 @@
 package io.github.zcd0831.jellyfish.boot;
 
+import io.github.zcd0831.jellyfish.domain.perception.session.SessionHeader;
 import io.github.zcd0831.jellyfish.application.action.BudgetService;
 import io.github.zcd0831.jellyfish.application.action.port.ChatMessage;
 import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationPort;
@@ -117,8 +118,8 @@ class S4MemoryTest {
         curator = new PlanCompletionCurator(catalog, distillation, skills, forks,
                 new FileCommitScope(dir, codec));
 
-        session = Session.create(SessionId.of("s1"), null, AgentId.of("builtin.main"), ModelId.of("m1"),
-                1L, null);
+        session = Session.create(SessionHeader
+                .builder(SessionId.of("s1"), AgentId.of("builtin.main"), ModelId.of("m1")).createdDate(1L).build());
         sessions.save(session);
     }
 

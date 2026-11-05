@@ -1,5 +1,7 @@
 package io.github.zcd0831.jellyfish.application.perception;
 
+import io.github.zcd0831.jellyfish.domain.perception.session.RecordDraft;
+import io.github.zcd0831.jellyfish.domain.perception.session.SessionHeader;
 import io.github.zcd0831.jellyfish.application.action.port.CatalogRepository;
 import io.github.zcd0831.jellyfish.application.perception.port.RecordStore;
 import io.github.zcd0831.jellyfish.application.perception.port.SessionRepository;
@@ -48,12 +50,14 @@ class SwitchModelUseCaseTest {
     }
 
     private static Model model(String id, ModelStatus status) {
-        return new Model(ModelId.of(id), ProviderId.of("p1"), id, status, new ContextLimit(1000, 100),
-                Collections.emptyList());
+        return Model.builder(ModelId
+                .of(id), ProviderId.of("p1"), id)
+                .status(status).contextLimit(new ContextLimit(1000, 100)).capabilities(Collections.emptyList()).build();
     }
 
     private Session givenSession(List<Record> history) {
-        Session session = Session.create(sessionId, null, AgentId.of("a"), ModelId.of("m1"), 1L, null);
+        Session session = Session.create(SessionHeader
+                .builder(sessionId, AgentId.of("a"), ModelId.of("m1")).createdDate(1L).build());
         when(sessions.load(sessionId)).thenReturn(session);
         when(records.last(sessionId, Integer.MAX_VALUE)).thenReturn(history);
         when(catalog.models()).thenReturn(java.util.Arrays.asList(
@@ -78,8 +82,10 @@ class SwitchModelUseCaseTest {
     void 工具轮未闭合时拒绝且不改状态() {
         Session session = givenSession(Collections.<Record>emptyList());
         List<Record> history = new ArrayList<Record>();
-        history.add(session.appendRecord(RecordRole.TOOL_REQUEST,
-                "{\"callId\":\"c1\",\"name\":\"read_file\",\"arguments\":\"{}\"}", null, "t1", "m1", null, 2L));
+        history.add(session
+                .appendRecord(RecordDraft
+                .builder(RecordRole.TOOL_REQUEST, "{\"callId\":\"c1\",\"name\":\"read_file\",\"arguments\":\"{}\"}")
+                .turnId("t1").producerModelId("m1").build(), 2L));
         when(records.last(sessionId, Integer.MAX_VALUE)).thenReturn(history);
 
         Result<Void> result = useCase().switchTo(sessionId, ModelId.of("m2"));

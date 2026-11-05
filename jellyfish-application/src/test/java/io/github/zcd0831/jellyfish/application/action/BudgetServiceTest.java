@@ -1,5 +1,6 @@
 package io.github.zcd0831.jellyfish.application.action;
 
+import io.github.zcd0831.jellyfish.domain.perception.session.SessionHeader;
 import io.github.zcd0831.jellyfish.application.action.port.BudgetRepository;
 import io.github.zcd0831.jellyfish.application.action.port.ModelUsage;
 import io.github.zcd0831.jellyfish.application.perception.port.PolicyRepository;
@@ -43,8 +44,10 @@ class BudgetServiceTest {
     private final DomainEventPublisher publisher = mock(DomainEventPublisher.class);
     private final Budget budget = Budget.openFor(BudgetId.of("b1"), ROOT);
 
-    private final Session root = Session.create(ROOT, null, AgentId.of("a"), ModelId.of("m1"), 1L, null);
-    private final Session child = Session.create(CHILD, ROOT, AgentId.of("a"), ModelId.of("m1"), 1L, null);
+    private final Session root = Session.create(SessionHeader
+            .builder(ROOT, AgentId.of("a"), ModelId.of("m1")).createdDate(1L).build());
+    private final Session child = Session.create(SessionHeader
+            .builder(CHILD, AgentId.of("a"), ModelId.of("m1")).parentSessionId(ROOT).createdDate(1L).build());
 
     private BudgetService service() {
         // 全局写段：测试里同步执行，并记下"归集确实进了写段"

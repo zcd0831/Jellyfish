@@ -128,8 +128,10 @@ public class InternalSessionRunner {
                 child.markSummarized(record.content(), 0, clock.nowMillis());
                 continue;
             }
-            child.appendRecord(record.role(), record.content(), record.reasoning(), record.turnId(),
-                    record.producerModelId(), record.toolPayload(), clock.nowMillis());
+            child.appendRecord(io.github.zcd0831.jellyfish.domain.perception.session.RecordDraft
+                    .builder(record.role(), record.content()).reasoning(record.reasoning())
+                    .turnId(record.turnId()).producerModelId(record.producerModelId())
+                    .toolPayload(record.toolPayload()).build(), clock.nowMillis());
         }
     }
 

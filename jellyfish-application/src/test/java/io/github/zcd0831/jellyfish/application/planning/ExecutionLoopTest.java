@@ -1,5 +1,6 @@
 package io.github.zcd0831.jellyfish.application.planning;
 
+import io.github.zcd0831.jellyfish.domain.perception.session.SessionHeader;
 import io.github.zcd0831.jellyfish.application.action.BudgetService;
 import io.github.zcd0831.jellyfish.application.action.port.CatalogRepository;
 import io.github.zcd0831.jellyfish.application.action.port.ChatMessage;
@@ -84,8 +85,8 @@ class ExecutionLoopTest {
     private final io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner forks =
             mock(io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner.class);
 
-    private final Session session = Session.create(SessionId.of("s1"), null, AgentId.of("a"),
-            ModelId.of("m1"), 1L, null);
+    private final Session session = Session.create(SessionHeader
+            .builder(SessionId.of("s1"), AgentId.of("a"), ModelId.of("m1")).createdDate(1L).build());
 
     /** 轮次边界的令牌真源：一个会话一个令牌（08-application §8.9.4.1）。 */
     private final SessionCancellations cancellations = new SessionCancellations();
@@ -491,12 +492,14 @@ class ExecutionLoopTest {
         assertEquals(PlanStatus.EXECUTING, plan.status(), "终止不把计划判死");
     }
 
-    private static io.github.zcd0831.jellyfish.domain.action.agent.AgentDefinition reflectAgent() {        return new io.github.zcd0831.jellyfish.domain.action.agent.AgentDefinition(
-                AgentId.of("builtin.reflect"), "反思代理",
-                io.github.zcd0831.jellyfish.domain.action.agent.AgentSource.BUILT_IN,
-                new io.github.zcd0831.jellyfish.domain.action.agent.PromptTemplate("你是复盘者", java.util.Collections.<String>emptyList()),
-                io.github.zcd0831.jellyfish.domain.action.agent.AgentStatus.ACTIVE,
-                java.util.Collections.emptyList(), java.util.Collections.emptyList());
+    private static io.github.zcd0831.jellyfish.domain.action.agent.AgentDefinition reflectAgent() {
+        return io.github.zcd0831.jellyfish.domain.action.agent.AgentDefinition
+                .builder(AgentId.of("builtin.reflect"), "反思代理",
+                        io.github.zcd0831.jellyfish.domain.action.agent.AgentSource.BUILT_IN)
+                .basePrompt(new io.github.zcd0831.jellyfish.domain.action.agent.PromptTemplate("你是复盘者",
+                        java.util.Collections.<String>emptyList()))
+                .status(io.github.zcd0831.jellyfish.domain.action.agent.AgentStatus.ACTIVE)
+                .build();
     }
 
     /**

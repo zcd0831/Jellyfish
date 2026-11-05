@@ -88,10 +88,10 @@ final class ProviderCatalog {
         }
 
         Provider toDomain() {
-            return new Provider(ProviderId.of(id), name, apiEndpoint,
-                    protocol == null ? ChatProtocol.OPENAI_CHAT : ChatProtocol.valueOf(protocol),
-                    credential == null ? null : new ApiCredential(credential.apiKeyRef),
-                    ProviderStatus.valueOf(status));
+            return Provider.builder(ProviderId.of(id), name, apiEndpoint)
+                    .protocol(protocol == null ? ChatProtocol.OPENAI_CHAT : ChatProtocol.valueOf(protocol))
+                    .credential(credential == null ? null : new ApiCredential(credential.apiKeyRef))
+                    .status(ProviderStatus.valueOf(status)).build();
         }
     }
 

@@ -20,6 +20,7 @@ import io.github.zcd0831.jellyfish.domain.perception.session.AgentSnapshotInput;
 import io.github.zcd0831.jellyfish.domain.perception.session.Record;
 import io.github.zcd0831.jellyfish.domain.perception.session.RecordRole;
 import io.github.zcd0831.jellyfish.domain.perception.session.Session;
+import io.github.zcd0831.jellyfish.domain.perception.session.SessionHeader;
 import io.github.zcd0831.jellyfish.domain.perception.session.SessionError;
 import io.github.zcd0831.jellyfish.domain.perception.session.SkillSummarySnapshot;
 import io.github.zcd0831.jellyfish.domain.perception.session.SystemPromptAssembler;
@@ -75,9 +76,9 @@ public final class StartSessionUseCase {
             return Result.fail(UseCaseError.of(SessionError.NO_USABLE_MODEL, "没有可用的模型", requestedModel));
         }
         SessionId sessionId = SessionId.of(UUID.randomUUID().toString());
-        Session session = Session.create(sessionId, null, agent.id(), model.id(), clock.nowMillis(),
-                freeze(agent));
-        Record userRecord = session.appendRecord(RecordRole.USER, firstInput, null, clock.nowMillis());
+        Session session = Session.create(SessionHeader.builder(sessionId, agent.id(), model.id())
+                .createdDate(clock.nowMillis()).systemPromptSnapshot(freeze(agent)).build());
+        Record userRecord = session.appendRecord(RecordRole.USER, firstInput, clock.nowMillis());
         Budget budget = Budget.openFor(BudgetId.of(UUID.randomUUID().toString()), sessionId);
         // 台账必须先落地再取标题：起标题会调模型、要记账，而 BudgetService.recordUsage 会
         // 自己 commit 一次——那时台账还没落盘，它会另建一份（新 BudgetId）写进去，
@@ -123,15 +124,16 @@ public final class StartSessionUseCase {
             return Result.fail(UseCaseError.of(SessionError.NO_USABLE_MODEL, "没有可用的模型", requestedModel));
         }
         SessionId childId = SessionId.of(UUID.randomUUID().toString());
-        Session child = Session.create(childId, parentSessionId, agent.id(), model.id(), clock.nowMillis(),
-                freeze(agent));
+        Session child = Session.create(SessionHeader.builder(childId, agent.id(), model.id())
+                .parentSessionId(parentSessionId).createdDate(clock.nowMillis())
+                .systemPromptSnapshot(freeze(agent)).build());
         // 开启即登记终止令牌：起标题、写流水这些“运行前”的动作也必须可被终止（08-application §8.9.4.1）
         if (signal == null) {
             cancellations.registerIfAbsent(childId, parentSessionId);
         } else {
             cancellations.attach(childId, parentSessionId, signal);
         }
-        Record userRecord = child.appendRecord(RecordRole.USER, task, null, clock.nowMillis());
+        Record userRecord = child.appendRecord(RecordRole.USER, task, clock.nowMillis());
         child.retitle(titleGenerator.generate(child, task));
         // 起标题期间可能已经超时：会话还没落盘就终止，宁可不建，也不留一个“建到一半”的子会话
         // （终止后不得再产生副作用，08-application §8.9.4.1）
@@ -159,8 +161,9 @@ public final class StartSessionUseCase {
             return Result.fail(UseCaseError.of(SessionError.NOT_FOUND, "父会话不存在", parentSessionId));
         }
         SessionId childId = SessionId.of(UUID.randomUUID().toString());
-        Session child = Session.create(childId, parentSessionId, parent.agentId(), parent.activeModelId(),
-                clock.nowMillis(), parent.systemPromptSnapshot());
+        Session child = Session.create(SessionHeader.builder(childId, parent.agentId(), parent.activeModelId())
+                .parentSessionId(parentSessionId).createdDate(clock.nowMillis())
+                .systemPromptSnapshot(parent.systemPromptSnapshot()).build());
         child.retitle(parent.title());
         // 内部 fork 也是普通子会话：开启即登记令牌（先看父状态，父已终止则立即终止），
         // 创建阶段就被终止就不落盘——宁可不建，也不留建到一半的子会话
@@ -197,8 +200,9 @@ public final class StartSessionUseCase {
                     parent.activeModelId()));
         }
         SessionId childId = SessionId.of(UUID.randomUUID().toString());
-        Session child = Session.create(childId, parentSessionId, agent.id(), model.id(), clock.nowMillis(),
-                freeze(agent));
+        Session child = Session.create(SessionHeader.builder(childId, agent.id(), model.id())
+                .parentSessionId(parentSessionId).createdDate(clock.nowMillis())
+                .systemPromptSnapshot(freeze(agent)).build());
         child.retitle(parent.title());
         CancellationToken signal = cancellations.registerIfAbsent(childId, parentSessionId);
         if (signal.isCancelled()) {
@@ -233,8 +237,9 @@ public final class StartSessionUseCase {
                 skills.add(new SkillSummarySnapshot(skill.name(), skill.description(), skill.triggerCondition()));
             }
         }
-        return assembler.assemble(new AgentSnapshotInput(agent.id(), agent.basePrompt(), null, tools, skills,
-                new ArrayList<String>()));
+        return assembler.assemble(AgentSnapshotInput.builder(agent.id()).basePrompt(agent.basePrompt())
+                .activeTools(tools).activeSkills(skills).sopReferencedToolNames(new ArrayList<String>())
+                .build());
     }
 
     private AgentDefinition resolveAgent(AgentId requested) {

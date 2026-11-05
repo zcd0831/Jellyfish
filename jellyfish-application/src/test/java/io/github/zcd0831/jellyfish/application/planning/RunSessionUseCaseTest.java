@@ -1,5 +1,6 @@
 package io.github.zcd0831.jellyfish.application.planning;
 
+import io.github.zcd0831.jellyfish.domain.perception.session.SessionHeader;
 import io.github.zcd0831.jellyfish.application.action.ToolInvoker;
 import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationPort;
 import io.github.zcd0831.jellyfish.application.perception.ContextWindowService;
@@ -47,8 +48,8 @@ class RunSessionUseCaseTest {
     private final PlanRepository plans = mock(PlanRepository.class);
     private final ContextWindowService contextWindow = mock(ContextWindowService.class);
 
-    private final Session session = Session.create(SessionId.of("s1"), null, AgentId.of("a"),
-            ModelId.of("m1"), 1L, null);
+    private final Session session = Session.create(SessionHeader
+            .builder(SessionId.of("s1"), AgentId.of("a"), ModelId.of("m1")).createdDate(1L).build());
 
     /** 运行权登记表是进程级共享的，所以测试里也只建一份（08-application §8.11）。 */
     private final SessionCancellations cancellations = new SessionCancellations();
@@ -154,7 +155,8 @@ class RunSessionUseCaseTest {
     void 模型不可用不改状态() {
         when(runner.run(any(Session.class), any(ChunkSink.class), any(RunContext.class)))
                 .thenThrow(new ModelInvocationException(ModelError.UNAVAILABLE, "全挂"));
-        Session fresh = Session.create(SessionId.of("s1"), null, AgentId.of("a"), ModelId.of("m1"), 1L, null);
+        Session fresh = Session.create(SessionHeader
+                .builder(SessionId.of("s1"), AgentId.of("a"), ModelId.of("m1")).createdDate(1L).build());
         when(sessions.load(SessionId.of("s1"))).thenReturn(fresh);
 
         Result<RunSessionResult> result = useCase().run(SessionId.of("s1"), "hi", ChunkSink.NOOP);

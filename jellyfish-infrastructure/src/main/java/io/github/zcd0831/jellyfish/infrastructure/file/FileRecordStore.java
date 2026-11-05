@@ -2,6 +2,7 @@ package io.github.zcd0831.jellyfish.infrastructure.file;
 
 import io.github.zcd0831.jellyfish.application.perception.port.RecordStore;
 import io.github.zcd0831.jellyfish.domain.perception.session.Record;
+import io.github.zcd0831.jellyfish.domain.perception.session.RecordDraft;
 import io.github.zcd0831.jellyfish.domain.shared.RecordId;
 import io.github.zcd0831.jellyfish.domain.shared.SessionId;
 
@@ -285,8 +286,10 @@ public final class FileRecordStore implements RecordStore {
     }
 
     private static Record toDomain(RecordLineDto d) {
-        return new Record(d.id, d.role, d.content, d.reasoning, d.turnId, d.producerModelId,
-                payloadToDomain(d.toolPayload), d.summaryCoversUpTo, d.sequence, d.date);
+        return Record.restore(d.id, RecordDraft.builder(d.role, d.content)
+                .reasoning(d.reasoning).turnId(d.turnId).producerModelId(d.producerModelId)
+                .toolPayload(payloadToDomain(d.toolPayload)).summaryCoversUpTo(d.summaryCoversUpTo)
+                .build(), d.sequence, d.date);
     }
 
     private static io.github.zcd0831.jellyfish.domain.perception.session.ToolResultPayload payloadToDomain(

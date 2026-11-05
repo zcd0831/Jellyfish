@@ -1,5 +1,6 @@
 package io.github.zcd0831.jellyfish.application.memory;
 
+import io.github.zcd0831.jellyfish.domain.perception.session.SessionHeader;
 import io.github.zcd0831.jellyfish.application.action.BudgetService;
 import io.github.zcd0831.jellyfish.application.action.port.CatalogRepository;
 import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationPort;
@@ -56,18 +57,20 @@ class PlanCompletionCuratorTest {
     private final io.github.zcd0831.jellyfish.application.shared.port.CommitScope commitScope =
             mock(io.github.zcd0831.jellyfish.application.shared.port.CommitScope.class);
 
-    private final Session session = Session.create(SessionId.of("s1"), null, AgentId.of("a"),
-            ModelId.of("m1"), 1L, null);
+    private final Session session = Session.create(SessionHeader
+            .builder(SessionId.of("s1"), AgentId.of("a"), ModelId.of("m1")).createdDate(1L).build());
 
     private PlanCompletionCurator curator() {
         return new PlanCompletionCurator(catalog, experienceWriter, skillWriter, forks, commitScope);
     }
 
     private static AgentDefinition distillAgent() {
-        return new AgentDefinition(AgentId.of("builtin.distill"), "归纳", AgentSource.BUILT_IN,
-                new PromptTemplate("归纳提示词", Collections.<String>emptyList()), AgentStatus.ACTIVE,
-                Collections.<io.github.zcd0831.jellyfish.domain.shared.ToolId>emptyList(),
-                Collections.emptyList());
+        return AgentDefinition.builder(AgentId
+                .of("builtin.distill"), "归纳", AgentSource.BUILT_IN)
+                .basePrompt(new PromptTemplate("归纳提示词", Collections.<String>emptyList()))
+                .status(AgentStatus.ACTIVE)
+                .toolIds(Collections.<io.github.zcd0831.jellyfish.domain.shared.ToolId>emptyList())
+                .skillIds(Collections.emptyList()).build();
     }
 
     private static ModelInvocationResult reply(String text) {

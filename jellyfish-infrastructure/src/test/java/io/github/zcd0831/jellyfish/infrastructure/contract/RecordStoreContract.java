@@ -1,5 +1,6 @@
 package io.github.zcd0831.jellyfish.infrastructure.contract;
 
+import io.github.zcd0831.jellyfish.domain.perception.session.SessionHeader;
 import io.github.zcd0831.jellyfish.application.perception.port.RecordStore;
 import io.github.zcd0831.jellyfish.application.perception.port.SessionRepository;
 import io.github.zcd0831.jellyfish.domain.perception.session.Record;
@@ -28,11 +29,12 @@ public abstract class RecordStoreContract {
 
     @BeforeEach
     void givenSession() {
-        sessions().save(Session.create(SessionId.of("s1"), null, AgentId.of("a"), ModelId.of("m1"), 1L, null));
+        sessions().save(Session
+                .create(SessionHeader.builder(SessionId.of("s1"), AgentId.of("a"), ModelId.of("m1")).createdDate(1L).build()));
     }
 
     private static Record record(String id, int seq) {
-        return new Record(RecordId.of(id), RecordRole.USER, "内容" + seq, null, seq, 1000L + seq);
+        return Record.of(RecordId.of(id), RecordRole.USER, "内容" + seq, seq, 1000L + seq);
     }
 
     @Test

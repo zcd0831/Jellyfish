@@ -1,5 +1,6 @@
 package io.github.zcd0831.jellyfish.shell.tui;
 
+import io.github.zcd0831.jellyfish.domain.perception.session.RecordDraft;
 import io.github.zcd0831.jellyfish.application.action.ManagePluginsUseCase;
 import io.github.zcd0831.jellyfish.application.action.port.CatalogRepository;
 import io.github.zcd0831.jellyfish.application.perception.AdjustPolicyUseCase;
@@ -145,9 +146,9 @@ class TuiAppCommandTest {
     }
 
     private static SessionTranscript transcript() {
-        Record user = new Record(RecordId.of("r1"), RecordRole.USER, "你好", null, 1, 1L);
-        Record assistant = new Record(RecordId.of("r2"), RecordRole.ASSISTANT, "在的", null, null,
-                "m1", null, 0, 2, 2L);
+        Record user = Record.of(RecordId.of("r1"), RecordRole.USER, "你好", 1, 1L);
+        Record assistant = Record.restore(RecordId
+                .of("r2"), RecordDraft.builder(RecordRole.ASSISTANT, "在的").producerModelId("m1").build(), 2, 2L);
         return new SessionTranscript(SessionId.of("s1"), "旧会话", ModelId.of("m1"), 1L,
                 Arrays.asList(user, assistant), false, "1k / 50k", 10L, 1000L);
     }

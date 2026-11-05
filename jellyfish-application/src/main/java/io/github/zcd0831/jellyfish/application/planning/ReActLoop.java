@@ -22,6 +22,7 @@ import io.github.zcd0831.jellyfish.application.shared.port.HumanInteractionPort;
 import io.github.zcd0831.jellyfish.domain.perception.policy.RuntimePolicy;
 import io.github.zcd0831.jellyfish.domain.perception.session.ContextWindow;
 import io.github.zcd0831.jellyfish.domain.perception.session.Record;
+import io.github.zcd0831.jellyfish.domain.perception.session.RecordDraft;
 import io.github.zcd0831.jellyfish.domain.perception.session.RecordRole;
 import io.github.zcd0831.jellyfish.domain.perception.session.Session;
 import io.github.zcd0831.jellyfish.domain.perception.session.SystemPromptSnapshot;
@@ -115,8 +116,9 @@ public final class ReActLoop {
                 currentProducer = producer;
                 String text = emptyToNull(result.text());
                 if (text != null) {
-                    Record record = session.appendRecord(RecordRole.ASSISTANT, text, result.reasoning(),
-                            turnId, producer, null, System.currentTimeMillis());
+                    Record record = session.appendRecord(RecordDraft.builder(RecordRole.ASSISTANT, text)
+                            .reasoning(result.reasoning()).turnId(turnId).producerModelId(producer).build(),
+                            System.currentTimeMillis());
                     commitAppend(session, record);
                 }
                 if (result.toolCalls().isEmpty()) {
@@ -191,12 +193,13 @@ public final class ReActLoop {
     /** submit_step 只登记，不执行：真正的判定在外循环的验证链（06-planning §6.8.2）。 */
     private void submit(Session session, ToolCall call, String reasoning, String turnId,
                         String producer, List<ToolCall> pending) {
-        Record request = session.appendRecord(RecordRole.TOOL_REQUEST, describe(call), reasoning, turnId,
-                producer, null, System.currentTimeMillis());
+        Record request = session.appendRecord(RecordDraft.builder(RecordRole.TOOL_REQUEST, describe(call))
+                .reasoning(reasoning).turnId(turnId).producerModelId(producer).build(),
+                System.currentTimeMillis());
         commitAppend(session, request);
         pending.add(call);
-        Record result = session.appendRecord(RecordRole.TOOL_RESULT, "已登记，等待验收", null, turnId,
-                producer, null, System.currentTimeMillis());
+        Record result = session.appendRecord(RecordDraft.builder(RecordRole.TOOL_RESULT, "已登记，等待验收")
+                .turnId(turnId).producerModelId(producer).build(), System.currentTimeMillis());
         pending.remove(call);
         commitAppend(session, result);
     }
@@ -231,16 +234,18 @@ public final class ReActLoop {
 
     private void executeTool(Session session, ToolCall call, String reasoning, String turnId,
                              String producer, List<ToolCall> pending) {
-        Record request = session.appendRecord(RecordRole.TOOL_REQUEST, describe(call), reasoning, turnId,
-                producer, null, System.currentTimeMillis());
+        Record request = session.appendRecord(RecordDraft.builder(RecordRole.TOOL_REQUEST, describe(call))
+                .reasoning(reasoning).turnId(turnId).producerModelId(producer).build(),
+                System.currentTimeMillis());
         commitAppend(session, request);
         pending.add(call);
 
         Map<String, Object> args = Json.parseObject(call.argumentsJson());
         ToolExecOutcome outcome = toolExecutor.execute(session, call.name(), args, request.id());
 
-        Record result = session.appendRecord(RecordRole.TOOL_RESULT, outcome.content(), null, turnId,
-                producer, new ToolResultPayload(outcome.isTruncated(), outcome.resourceUri()),
+        Record result = session.appendRecord(RecordDraft.builder(RecordRole.TOOL_RESULT, outcome.content())
+                .turnId(turnId).producerModelId(producer)
+                .toolPayload(new ToolResultPayload(outcome.isTruncated(), outcome.resourceUri())).build(),
                 System.currentTimeMillis());
         pending.remove(call);
         commitAppend(session, result);
@@ -256,8 +261,8 @@ public final class ReActLoop {
     private void closePendingToolCalls(Session session, List<ToolCall> pending, String turnId, String producer) {
         for (ToolCall call : pending) {
             try {
-                Record aborted = session.appendRecord(RecordRole.TOOL_RESULT, ABORTED_TOOL_RESULT, null,
-                        turnId, producer, null, System.currentTimeMillis());
+                Record aborted = session.appendRecord(RecordDraft.builder(RecordRole.TOOL_RESULT, ABORTED_TOOL_RESULT)
+                        .turnId(turnId).producerModelId(producer).build(), System.currentTimeMillis());
                 commitAppend(session, aborted);
             } catch (RuntimeException cannotRecord) {
                 // 收尾失败不掩盖原始异常：流水残留在下次启动对账里处理（08-application §8.10）

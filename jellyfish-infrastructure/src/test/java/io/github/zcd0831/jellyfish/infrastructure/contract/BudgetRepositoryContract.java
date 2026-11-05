@@ -1,5 +1,6 @@
 package io.github.zcd0831.jellyfish.infrastructure.contract;
 
+import io.github.zcd0831.jellyfish.domain.perception.session.SessionHeader;
 import io.github.zcd0831.jellyfish.application.action.port.BudgetRepository;
 import io.github.zcd0831.jellyfish.application.perception.port.SessionRepository;
 import io.github.zcd0831.jellyfish.domain.action.budget.Budget;
@@ -25,7 +26,8 @@ public abstract class BudgetRepositoryContract {
 
     @BeforeEach
     void givenSession() {
-        sessions().save(Session.create(SessionId.of("s1"), null, AgentId.of("a"), ModelId.of("m1"), 1L, null));
+        sessions().save(Session
+                .create(SessionHeader.builder(SessionId.of("s1"), AgentId.of("a"), ModelId.of("m1")).createdDate(1L).build()));
     }
 
     @Test

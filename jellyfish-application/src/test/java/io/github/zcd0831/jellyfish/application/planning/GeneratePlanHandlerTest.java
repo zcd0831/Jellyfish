@@ -1,5 +1,6 @@
 package io.github.zcd0831.jellyfish.application.planning;
 
+import io.github.zcd0831.jellyfish.domain.perception.session.SessionHeader;
 import io.github.zcd0831.jellyfish.application.action.ToolExecOutcome;
 import io.github.zcd0831.jellyfish.application.action.port.CatalogRepository;
 import io.github.zcd0831.jellyfish.application.planning.port.PlanRepository;
@@ -33,8 +34,8 @@ class GeneratePlanHandlerTest {
     private final PlanRepository plans = mock(PlanRepository.class);
     private final CatalogRepository catalog = mock(CatalogRepository.class);
     private final CommitScope commitScope = mock(CommitScope.class);
-    private final Session session = Session.create(SessionId.of("s1"), null, AgentId.of("a"),
-            ModelId.of("m1"), 1L, null);
+    private final Session session = Session.create(SessionHeader
+            .builder(SessionId.of("s1"), AgentId.of("a"), ModelId.of("m1")).createdDate(1L).build());
 
     private GeneratePlanHandler handler() {
         when(catalog.agents()).thenReturn(Collections.emptyList());

@@ -16,35 +16,24 @@ import java.util.Set;
 /** 会话聚合根。规则出处：04-perception §4.4.1、§4.8.1、§4.9.5。 */
 public class Session {
 
-    private final SessionId id;
-    private final AgentId agentId;
-    private final SessionId parentSessionId;
-    private final long createdDate;
-    private final SystemPromptSnapshot systemPromptSnapshot;
+    /** 身份与冻结快照都收在 header 里：开新会话与重建走同一条装配路径。 */
+    private final SessionHeader header;
     private final List<Record> records;
     private final List<DomainEvent> pendingEvents = new ArrayList<>();
 
     private ModelId activeModelId;
     private String title;
 
-    private Session(SessionId id, SessionId parentSessionId, AgentId agentId, ModelId activeModelId,
-                    String title, long createdDate, List<Record> records,
-                    SystemPromptSnapshot snapshot) {
-        this.id = id;
-        this.parentSessionId = parentSessionId;
-        this.agentId = agentId;
-        this.activeModelId = activeModelId;
-        this.title = title;
-        this.createdDate = createdDate;
+    private Session(SessionHeader header, List<Record> records) {
+        this.header = header;
+        this.activeModelId = header.modelId();
+        this.title = header.title();
         this.records = records;
-        this.systemPromptSnapshot = snapshot;
     }
 
     /** 会话开启 / 子代理派遣的唯一创建路径（应用层调用）。规则出处：04-perception §4.5、§4.8.1 规则 1。 */
-    public static Session create(SessionId id, SessionId parentSessionId, AgentId agentId, ModelId modelId,
-                                 long now, SystemPromptSnapshot snapshot) {
-        Session session = new Session(id, parentSessionId, agentId, modelId, null, now,
-                new ArrayList<Record>(), snapshot);
+    public static Session create(SessionHeader header) {
+        Session session = new Session(header, new ArrayList<Record>());
         // 创建即事实：会话开启与子代理派遣同一路径（04-perception §4.7）
         session.pendingEvents.add(new SessionStarted());
         return session;
@@ -52,11 +41,8 @@ public class Session {
 
     /** 会话续跑：从持久化形态重建，**不重发 SessionStarted**（续跑不是状态迁移）。
      * 规则出处：04-perception §4.8.1 规则 7、§4.7。 */
-    public static Session rehydrate(SessionId id, SessionId parentSessionId, AgentId agentId, ModelId modelId,
-                                    String title, long createdDate,
-                                    List<Record> records, SystemPromptSnapshot snapshot) {
-        return new Session(id, parentSessionId, agentId, modelId, title, createdDate,
-                new ArrayList<Record>(records), snapshot);
+    public static Session rehydrate(SessionHeader header, List<Record> restored) {
+        return new Session(header, new ArrayList<Record>(restored));
     }
 
     /**
@@ -68,31 +54,27 @@ public class Session {
         records.addAll(hydrated);
     }
 
-    /** 规则出处：04-perception §4.8.1 规则 5（只追加）。 */
-    public Record appendRecord(RecordRole role, String content, ToolResultPayload payload, long now) {
-        return appendRecord(role, content, null, payload, now);
-    }
-
     /**
-     * 追加一条带模型私有状态的记录：`reasoning` + `producerModelId` 一起写，回放时按产者过滤。
-     * 规则出处：04-perception §4.8.1 规则 15。
+     * 追加一条记录。编号（`sequence`）与时间由会话决定，调用方只能通过 {@link RecordDraft}
+     * 描述"这是什么"——位置参数一多就会把 reasoning 写进 turnId（规则 5、14、15）。
      */
-    public Record appendRecord(RecordRole role, String content, String reasoning, ToolResultPayload payload,
-                               long now) {
-        return appendRecord(role, content, reasoning, null, null, payload, now);
-    }
-
-    /**
-     * 追加一条属于某次模型响应的记录：同一响应的全部记录共享 `turnId`。
-     * 规则出处：04-perception §4.8.1 规则 14/17。
-     */
-    public Record appendRecord(RecordRole role, String content, String reasoning, String turnId,
-                               String producerModelId, ToolResultPayload payload, long now) {
-        Record record = new Record(RecordId.of(java.util.UUID.randomUUID().toString()), role, content, reasoning,
-                turnId, producerModelId, payload, 0, nextSequence(), now);
+    public Record appendRecord(RecordDraft draft, long now) {
+        Record record = Record.restore(RecordId.of(java.util.UUID.randomUUID().toString()), draft,
+                nextSequence(), now);
         records.add(record);
         return record;
     }
+
+    /** 只带角色与正文的常见形态。规则出处：04-perception §4.8.1 规则 5（只追加）。 */
+    public Record appendRecord(RecordRole role, String content, long now) {
+        return appendRecord(RecordDraft.builder(role, content).build(), now);
+    }
+
+    /** 带模型私有状态（reasoning）：只回放给产者（规则 15）。 */
+    public Record appendRecord(RecordRole role, String content, String reasoning, long now) {
+        return appendRecord(RecordDraft.builder(role, content).reasoning(reasoning).build(), now);
+    }
+
 
     private int nextSequence() {
         return records.isEmpty() ? 1 : records.get(records.size() - 1).sequence() + 1;
@@ -140,9 +122,8 @@ public class Session {
                     + " > " + ceiling);
         }
         assertTurnBoundary(coveredThroughSequence);
-        Record record = new Record(RecordId.of(java.util.UUID.randomUUID().toString()), RecordRole.SUMMARY,
-                summary, null, null, coveredThroughSequence, nextSequence(), now);
-        records.add(record);
+        Record record = appendRecord(RecordDraft.builder(RecordRole.SUMMARY, summary)
+                .summaryCoversUpTo(coveredThroughSequence).build(), now);
         pendingEvents.add(new SummarizationCompleted());
     }
 
@@ -348,15 +329,15 @@ public class Session {
     }
 
     public SessionId id() {
-        return id;
+        return header.id();
     }
 
     public SessionId parentSessionId() {
-        return parentSessionId;
+        return header.parentSessionId();
     }
 
     public AgentId agentId() {
-        return agentId;
+        return header.agentId();
     }
 
     public ModelId activeModelId() {
@@ -368,7 +349,7 @@ public class Session {
     }
 
     public long createdDate() {
-        return createdDate;
+        return header.createdDate();
     }
 
     /** 只读视图：调用方不得修改流水（§7.1 规则 5）。 */
@@ -377,6 +358,6 @@ public class Session {
     }
 
     public SystemPromptSnapshot systemPromptSnapshot() {
-        return systemPromptSnapshot;
+        return header.systemPromptSnapshot();
     }
 }

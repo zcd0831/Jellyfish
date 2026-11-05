@@ -1,5 +1,7 @@
 package io.github.zcd0831.jellyfish.infrastructure.file;
 
+import io.github.zcd0831.jellyfish.domain.perception.session.RecordDraft;
+import io.github.zcd0831.jellyfish.domain.perception.session.SessionHeader;
 import io.github.zcd0831.jellyfish.domain.perception.session.Record;
 import io.github.zcd0831.jellyfish.domain.perception.session.RecordRole;
 import io.github.zcd0831.jellyfish.domain.perception.session.Session;
@@ -37,8 +39,11 @@ class RecordAndSnapshotRoundTripTest {
     }
 
     private static Record truncatedToolResult() {
-        return new Record(RecordId.of("r1"), RecordRole.TOOL_RESULT, "半截输出", null, "t1", "m1",
-                new ToolResultPayload(true, "artifact://x"), 0, 1, 1739520600000L);
+        return Record.restore(RecordId
+                .of("r1"), RecordDraft
+                .builder(RecordRole.TOOL_RESULT, "半截输出")
+                .turnId("t1").producerModelId("m1")
+                .toolPayload(new ToolResultPayload(true, "artifact://x")).build(), 1, 1739520600000L);
     }
 
     @Test
@@ -60,9 +65,13 @@ class RecordAndSnapshotRoundTripTest {
     @Test
     void 工具结果没被截断也读回false() {
         FileRecordStore store = store();
-        store.appendAll(SessionId.of("s1"), Collections.singletonList(new Record(RecordId.of("r2"),
-                RecordRole.TOOL_RESULT, "完整", null, "t1", "m1",
-                new ToolResultPayload(false, null), 0, 1, 1739520600000L)));
+        store.appendAll(SessionId
+                .of("s1"), Collections
+                .singletonList(Record
+                .restore(RecordId.of("r2"), RecordDraft
+                .builder(RecordRole.TOOL_RESULT, "完整")
+                .turnId("t1").producerModelId("m1")
+                .toolPayload(new ToolResultPayload(false, null)).build(), 1, 1739520600000L)));
 
         assertTrue(!store.last(SessionId.of("s1"), 1).get(0).toolPayload().isTruncated());
     }
@@ -70,11 +79,13 @@ class RecordAndSnapshotRoundTripTest {
     @Test
     void 技能快照的触发条件要能读回来() {
         FileSessionRepository repo = new FileSessionRepository(DataDirectory.of(tmp.toString()), new JsonCodec());
-        Session session = Session.rehydrate(SessionId.of("s1"), null, AgentId.of("builtin.main"),
-                ModelId.of("m1"), "标题", 1739520600000L, Collections.<Record>emptyList(),
-                new SystemPromptSnapshot("渲染后的提示词", Collections.emptyList(),
+        Session session = Session.rehydrate(SessionHeader
+                .builder(SessionId.of("s1"), AgentId
+                .of("builtin.main"), ModelId
+                .of("m1")).title("标题")
+                .createdDate(1739520600000L).systemPromptSnapshot(new SystemPromptSnapshot("渲染后的提示词", Collections.emptyList(),
                         Collections.singletonList(
-                                new SkillSummarySnapshot("code-review", "代码评审", "当需要评审时"))));
+                                new SkillSummarySnapshot("code-review", "代码评审", "当需要评审时")))).build(), Collections.<Record>emptyList());
 
         repo.save(session);
         SkillSummarySnapshot reloaded = repo.load(SessionId.of("s1")).systemPromptSnapshot().getSkillList().get(0);

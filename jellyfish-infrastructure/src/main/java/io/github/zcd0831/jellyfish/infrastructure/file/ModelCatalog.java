@@ -92,9 +92,10 @@ final class ModelCatalog {
             for (String capability : capabilities) {
                 caps.add(new ModelCapability(capability));
             }
-            return new Model(id == null ? null : ModelId.of(id), ProviderId.of(providerId), modelName,
-                    ModelStatus.valueOf(status),
-                    new ContextLimit(contextLimit.maxInputTokens, contextLimit.maxOutputTokens), caps);
+            return Model.builder(id == null ? null : ModelId.of(id), ProviderId.of(providerId), modelName)
+                    .status(ModelStatus.valueOf(status))
+                    .contextLimit(new ContextLimit(contextLimit.maxInputTokens, contextLimit.maxOutputTokens))
+                    .capabilities(caps).build();
         }
     }
 

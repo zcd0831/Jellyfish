@@ -1,5 +1,6 @@
 package io.github.zcd0831.jellyfish.application.planning;
 
+import io.github.zcd0831.jellyfish.domain.perception.session.SessionHeader;
 import io.github.zcd0831.jellyfish.application.action.ToolExecOutcome;
 import io.github.zcd0831.jellyfish.application.action.port.CatalogRepository;
 import io.github.zcd0831.jellyfish.application.planning.port.PlanRepository;
@@ -43,8 +44,8 @@ class ReplanPlanHandlerTest {
     private final CommitScope commitScope = mock(CommitScope.class);
     private final PolicyRepository policies = mock(PolicyRepository.class);
     private final ExperienceRetriever retriever = mock(ExperienceRetriever.class);
-    private final Session session = Session.create(SessionId.of("s1"), null, AgentId.of("a"),
-            ModelId.of("m1"), 1L, null);
+    private final Session session = Session.create(SessionHeader
+            .builder(SessionId.of("s1"), AgentId.of("a"), ModelId.of("m1")).createdDate(1L).build());
 
     private ReplanPlanHandler handler() {
         when(catalog.agents()).thenReturn(Collections.emptyList());

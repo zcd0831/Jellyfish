@@ -20,18 +20,66 @@ public class AgentDefinition {
     private PromptTemplate basePrompt;
     private AgentStatus status;
 
-    public AgentDefinition(AgentId id, String name, AgentSource source, PromptTemplate basePrompt,
-                           AgentStatus status, List<ToolId> toolIds, List<SkillId> skillIds) {
-        this.id = id;
-        this.name = name;
-        this.source = source;
-        this.basePrompt = basePrompt;
-        this.status = status;
-        if (toolIds != null) {
-            this.toolIds.addAll(toolIds);
+    private AgentDefinition(Builder builder) {
+        this.id = builder.id;
+        this.name = builder.name;
+        this.source = builder.source;
+        this.basePrompt = builder.basePrompt;
+        this.status = builder.status;
+        if (builder.toolIds != null) {
+            this.toolIds.addAll(builder.toolIds);
         }
-        if (skillIds != null) {
-            this.skillIds.addAll(skillIds);
+        if (builder.skillIds != null) {
+            this.skillIds.addAll(builder.skillIds);
+        }
+    }
+
+    /** 身份与来源是必填项；绑定与状态按需链式设置。 */
+    public static Builder builder(AgentId id, String name, AgentSource source) {
+        return new Builder(id, name, source);
+    }
+
+    public static final class Builder {
+
+        private final AgentId id;
+        private final String name;
+        private final AgentSource source;
+        private PromptTemplate basePrompt;
+        private AgentStatus status = AgentStatus.DRAFT;
+        private List<ToolId> toolIds;
+        private List<SkillId> skillIds;
+
+        private Builder(AgentId id, String name, AgentSource source) {
+            if (id == null || source == null) {
+                throw new IllegalArgumentException("代理 id 与来源不能为空");
+            }
+            this.id = id;
+            this.name = name;
+            this.source = source;
+        }
+
+        public Builder basePrompt(PromptTemplate value) {
+            this.basePrompt = value;
+            return this;
+        }
+
+        public Builder status(AgentStatus value) {
+            this.status = value;
+            return this;
+        }
+
+        public Builder toolIds(List<ToolId> value) {
+            this.toolIds = value;
+            return this;
+        }
+
+        public Builder skillIds(List<SkillId> value) {
+            this.skillIds = value;
+            return this;
+        }
+
+        public AgentDefinition build() {
+            return new AgentDefinition(this);
         }
     }
 

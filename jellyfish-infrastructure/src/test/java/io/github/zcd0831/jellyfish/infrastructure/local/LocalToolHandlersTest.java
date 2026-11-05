@@ -1,5 +1,6 @@
 package io.github.zcd0831.jellyfish.infrastructure.local;
 
+import io.github.zcd0831.jellyfish.domain.perception.session.SessionHeader;
 import io.github.zcd0831.jellyfish.application.action.InternalToolHandler;
 import io.github.zcd0831.jellyfish.application.action.InternalToolHandlers;
 import io.github.zcd0831.jellyfish.domain.perception.session.Session;
@@ -257,7 +258,8 @@ class LocalToolHandlersTest {
                 : LocalToolHandlers.all(workspace, new UrlFetcher(), scope)) {
             handlers.put(name(named), handler(named));
         }
-        Session session = Session.create(SessionId.of("s1"), null, AgentId.of("a"), ModelId.of("m1"), 1L, null);
+        Session session = Session.create(SessionHeader
+                .builder(SessionId.of("s1"), AgentId.of("a"), ModelId.of("m1")).createdDate(1L).build());
         Map<String, Object> args = new HashMap<String, Object>();
         args.put("path", "out.md");
 
@@ -284,7 +286,8 @@ class LocalToolHandlersTest {
                 : LocalToolHandlers.all(workspace, new UrlFetcher(), scope)) {
             handlers.put(name(named), handler(named));
         }
-        Session session = Session.create(SessionId.of("s1"), null, AgentId.of("a"), ModelId.of("m1"), 1L, null);
+        Session session = Session.create(SessionHeader
+                .builder(SessionId.of("s1"), AgentId.of("a"), ModelId.of("m1")).createdDate(1L).build());
         scope.allowArtifacts(SessionId.of("s1"), java.util.Collections.singletonList("long.md"));
         Map<String, Object> args = new HashMap<String, Object>();
         args.put("path", "long.md");

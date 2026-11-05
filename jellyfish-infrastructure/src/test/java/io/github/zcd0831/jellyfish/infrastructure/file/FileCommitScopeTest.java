@@ -1,5 +1,7 @@
 package io.github.zcd0831.jellyfish.infrastructure.file;
 
+import io.github.zcd0831.jellyfish.domain.perception.session.RecordDraft;
+import io.github.zcd0831.jellyfish.domain.perception.session.SessionHeader;
 import io.github.zcd0831.jellyfish.domain.perception.session.Record;
 import io.github.zcd0831.jellyfish.domain.perception.session.RecordRole;
 import io.github.zcd0831.jellyfish.domain.perception.session.Session;
@@ -86,8 +88,9 @@ class FileCommitScopeTest {
 
     @Test
     void 提交后既写入流水也替换会话头() {
-        Session session = Session.create(SessionId.of("s1"), null, AgentId.of("a"), ModelId.of("m"), 1L, null);
-        Record record = new Record(RecordId.of("r1"), RecordRole.USER, "你好", null, 1, 2L);
+        Session session = Session.create(SessionHeader
+                .builder(SessionId.of("s1"), AgentId.of("a"), ModelId.of("m")).createdDate(1L).build());
+        Record record = Record.of(RecordId.of("r1"), RecordRole.USER, "你好", 1, 2L);
         session.appendRecord(RecordRole.USER, "你好", null, 2L);
         session.retitle("t");
 
@@ -103,9 +106,10 @@ class FileCommitScopeTest {
 
     @Test
     void 流水的全部字段都经生产写路径落盘() {
-        Record record = new Record(RecordId.of("r1"), RecordRole.TOOL_REQUEST,
-                "{\"callId\":\"c1\",\"name\":\"read_file\",\"arguments\":\"{}\"}", "内部推理", "t1",
-                "m1", null, 0, 1, 2L);
+        Record record = Record.restore(RecordId
+                .of("r1"), RecordDraft
+                .builder(RecordRole.TOOL_REQUEST, "{\"callId\":\"c1\",\"name\":\"read_file\",\"arguments\":\"{}\"}")
+                .reasoning("内部推理").turnId("t1").producerModelId("m1").build(), 1, 2L);
         FileCommitScope scope = new FileCommitScope(dir(), new JsonCodec());
         scope.stageAppend(SessionId.of("s1"), record);
         scope.commit();
@@ -119,8 +123,8 @@ class FileCommitScopeTest {
 
     @Test
     void 摘要覆盖边界也经生产写路径落盘() {
-        Record summary = new Record(RecordId.of("r1"), RecordRole.SUMMARY, "摘要正文", null, null, null, null,
-                7, 1, 2L);
+        Record summary = Record.restore(RecordId
+                .of("r1"), RecordDraft.builder(RecordRole.SUMMARY, "摘要正文").summaryCoversUpTo(7).build(), 1, 2L);
         FileCommitScope scope = new FileCommitScope(dir(), new JsonCodec());
         scope.stageAppend(SessionId.of("s1"), summary);
         scope.commit();
@@ -139,8 +143,9 @@ class FileCommitScopeTest {
 
     @Test
     void 提交按流水到聚合的顺序落盘且每阶段收尾目录() {
-        Session session = Session.create(SessionId.of("s1"), null, AgentId.of("a"), ModelId.of("m"), 1L, null);
-        Record record = new Record(RecordId.of("r1"), RecordRole.USER, "你好", null, 1, 2L);
+        Session session = Session.create(SessionHeader
+                .builder(SessionId.of("s1"), AgentId.of("a"), ModelId.of("m")).createdDate(1L).build());
+        Record record = Record.of(RecordId.of("r1"), RecordRole.USER, "你好", 1, 2L);
 
         List<String> events = new ArrayList<String>();
         AtomicFiles.useSyncForTest(new AtomicFiles.DiskSync() {
@@ -177,7 +182,7 @@ class FileCommitScopeTest {
 
         FileCommitScope scope = new FileCommitScope(dir(), new JsonCodec());
         scope.stageAppend(SessionId.of("s1"),
-                new Record(RecordId.of("r1"), RecordRole.USER, "你好", null, 1, 2L));
+                Record.of(RecordId.of("r1"), RecordRole.USER, "你好", 1, 2L));
         scope.commit();
 
         // 规则出处：09-infrastructure §9.6「流水按段滚动」——写入口唯一，滚动由 RecordStore 决定
@@ -187,6 +192,7 @@ class FileCommitScopeTest {
 
     private void givenSession(String id) {
         new FileSessionRepository(dir(), new JsonCodec())
-                .save(Session.create(SessionId.of(id), null, AgentId.of("a"), ModelId.of("m"), 1L, null));
+                .save(Session
+                        .create(SessionHeader.builder(SessionId.of(id), AgentId.of("a"), ModelId.of("m")).createdDate(1L).build()));
     }
 }

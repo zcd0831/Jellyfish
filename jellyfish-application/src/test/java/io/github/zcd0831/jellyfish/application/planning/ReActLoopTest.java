@@ -1,5 +1,7 @@
 package io.github.zcd0831.jellyfish.application.planning;
 
+import io.github.zcd0831.jellyfish.domain.perception.session.RecordDraft;
+import io.github.zcd0831.jellyfish.domain.perception.session.SessionHeader;
 import io.github.zcd0831.jellyfish.application.action.BudgetService;
 import io.github.zcd0831.jellyfish.application.action.ToolExecOutcome;
 import io.github.zcd0831.jellyfish.application.action.ToolExecutor;
@@ -68,8 +70,9 @@ class ReActLoopTest {
     private Session session() {
         SystemPromptSnapshot snapshot = new SystemPromptSnapshot("系统提示", Collections.emptyList(),
                 Collections.emptyList());
-        Session session = Session.create(SessionId.of("s1"), null, AgentId.of("a"), ModelId.of("m1"), 1L,
-                snapshot);
+        Session session = Session.create(SessionHeader
+                .builder(SessionId.of("s1"), AgentId
+                .of("a"), ModelId.of("m1")).createdDate(1L).systemPromptSnapshot(snapshot).build());
         session.appendRecord(RecordRole.USER, "你好", null, 2L);
         return session;
     }
@@ -238,10 +241,13 @@ class ReActLoopTest {
     @Test
     void 回放时同一轮还原成一条assistant消息且带回reasoning() {
         Session session = session();
-        session.appendRecord(RecordRole.ASSISTANT, "我先看看", null, "t1", "m1", null, 3L);
-        session.appendRecord(RecordRole.TOOL_REQUEST, call("c1", "read_file", "{}"), "先看看目录", "t1", "m1",
-                null, 4L);
-        session.appendRecord(RecordRole.TOOL_RESULT, "文件内容", null, "t1", "m1", null, 5L);
+        session.appendRecord(RecordDraft
+                .builder(RecordRole.ASSISTANT, "我先看看").turnId("t1").producerModelId("m1").build(), 3L);
+        session.appendRecord(RecordDraft
+                .builder(RecordRole.TOOL_REQUEST, call("c1", "read_file", "{}"))
+                .reasoning("先看看目录").turnId("t1").producerModelId("m1").build(), 4L);
+        session.appendRecord(RecordDraft
+                .builder(RecordRole.TOOL_RESULT, "文件内容").turnId("t1").producerModelId("m1").build(), 5L);
         List<ModelInvocationRequest> captured = new ArrayList<ModelInvocationRequest>();
 
         List<ChatMessage> messages = capturedMessages(session, captured);
@@ -259,9 +265,11 @@ class ReActLoopTest {
     @Test
     void 切换模型后旧模型的reasoning不再回放() {
         Session session = session();
-        session.appendRecord(RecordRole.TOOL_REQUEST, call("c1", "read_file", "{}"), "旧模型的推理", "t1", "m1",
-                null, 3L);
-        session.appendRecord(RecordRole.TOOL_RESULT, "文件内容", null, "t1", "m1", null, 4L);
+        session.appendRecord(RecordDraft
+                .builder(RecordRole.TOOL_REQUEST, call("c1", "read_file", "{}"))
+                .reasoning("旧模型的推理").turnId("t1").producerModelId("m1").build(), 3L);
+        session.appendRecord(RecordDraft
+                .builder(RecordRole.TOOL_RESULT, "文件内容").turnId("t1").producerModelId("m1").build(), 4L);
         session.switchModel(ModelId.of("m2"));
         List<ModelInvocationRequest> captured = new ArrayList<ModelInvocationRequest>();
 

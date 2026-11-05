@@ -1,5 +1,7 @@
 package io.github.zcd0831.jellyfish.boot;
 
+import io.github.zcd0831.jellyfish.domain.perception.session.RecordDraft;
+import io.github.zcd0831.jellyfish.domain.perception.session.SessionHeader;
 import io.github.zcd0831.jellyfish.application.action.port.BudgetRepository;
 import io.github.zcd0831.jellyfish.application.memory.port.ReflectionRepository;
 import io.github.zcd0831.jellyfish.application.perception.port.SessionRepository;
@@ -74,8 +76,8 @@ class S4ReconcilerTest {
         records = new FileRecordStore(dir, codec);
         budgets = new FileBudgetRepository(dir, codec);
         reflections = new FileReflectionRepository(dir, codec);
-        Session session = Session.create(SessionId.of("s1"), null, AgentId.of("builtin.main"),
-                ModelId.of("m1"), 1L, null);
+        Session session = Session.create(SessionHeader
+                .builder(SessionId.of("s1"), AgentId.of("builtin.main"), ModelId.of("m1")).createdDate(1L).build());
         sessions.save(session);
         sessionId = session.id();
         reconciler = new StartupReconciler(sessions, plans, reports, records, budgets, reflections,
@@ -150,10 +152,12 @@ class S4ReconcilerTest {
     void 崩溃残留经续跑前对账后会话可续跑() {
         Session crashed = sessions.load(sessionId);
         records.appendAll(sessionId, java.util.Arrays.asList(
-                crashed.appendRecord(RecordRole.USER, "读一下文件", null, "turn-1", null, null, 1L),
-                crashed.appendRecord(RecordRole.ASSISTANT, "我来读", null, "turn-2", "m1", null, 2L),
-                crashed.appendRecord(RecordRole.TOOL_REQUEST, "{\"tool\":\"read_file\"}", null,
-                        "turn-2", "m1", null, 3L)));
+                crashed.appendRecord(RecordDraft.builder(RecordRole.USER, "读一下文件").turnId("turn-1").build(), 1L),
+                crashed.appendRecord(RecordDraft
+                        .builder(RecordRole.ASSISTANT, "我来读").turnId("turn-2").producerModelId("m1").build(), 2L),
+                crashed.appendRecord(RecordDraft
+                        .builder(RecordRole.TOOL_REQUEST, "{\"tool\":\"read_file\"}")
+                        .turnId("turn-2").producerModelId("m1").build(), 3L)));
 
         reconciler.reconcileBeforeRun(sessions.load(sessionId));
 
@@ -161,8 +165,9 @@ class S4ReconcilerTest {
         assertEquals(RecordRole.TOOL_RESULT, tail.get(0).role());
         assertEquals("turn-2", tail.get(0).turnId(), "中止结果挂在原轮上，流水才算闭合");
         // 续跑的第一步：会话带着流水重建，组装上下文不抛；且那条轮仍然完整（ASSISTANT 打头）
-        Session resumed = Session.rehydrate(sessionId, null, AgentId.of("builtin.main"), ModelId.of("m1"),
-                null, 1L, records.last(sessionId, 10), null);
+        Session resumed = Session.rehydrate(SessionHeader
+                .builder(sessionId, AgentId
+                .of("builtin.main"), ModelId.of("m1")).createdDate(1L).build(), records.last(sessionId, 10));
         assertTrue(resumed.buildContextForLlm(text -> text == null ? 0 : text.length(), 100000)
                 .getRecords().size() >= 4);
     }
@@ -199,8 +204,8 @@ class S4ReconcilerTest {
     void 规则3_半截工具调用补中止结果且attempt不结束() {
         planWithRunningStep();
         Session session = sessions.load(sessionId);
-        Record request = session.appendRecord(RecordRole.TOOL_REQUEST, "{}", null,
-                "turn-7", "m1", null, 5L);
+        Record request = session.appendRecord(RecordDraft
+                .builder(RecordRole.TOOL_REQUEST, "{}").turnId("turn-7").producerModelId("m1").build(), 5L);
         records.appendAll(sessionId, java.util.Collections.singletonList(request));
 
         reconciler.reconcileBeforeRun(session);
@@ -226,12 +231,14 @@ class S4ReconcilerTest {
     void 启动不遍历会话_会话级补齐留到续跑前() {
         Session first = sessions.load(sessionId);
         records.appendAll(sessionId, java.util.Collections.singletonList(
-                first.appendRecord(RecordRole.TOOL_REQUEST, "{}", null, "t1", "m1", null, 5L)));
-        Session second = Session.create(SessionId.of("s2"), null, AgentId.of("builtin.main"),
-                ModelId.of("m1"), 2L, null);
+                first.appendRecord(RecordDraft
+                        .builder(RecordRole.TOOL_REQUEST, "{}").turnId("t1").producerModelId("m1").build(), 5L)));
+        Session second = Session.create(SessionHeader
+                .builder(SessionId.of("s2"), AgentId.of("builtin.main"), ModelId.of("m1")).createdDate(2L).build());
         sessions.save(second);
         records.appendAll(second.id(), java.util.Collections.singletonList(
-                second.appendRecord(RecordRole.TOOL_REQUEST, "{}", null, "t2", "m1", null, 6L)));
+                second.appendRecord(RecordDraft
+                        .builder(RecordRole.TOOL_REQUEST, "{}").turnId("t2").producerModelId("m1").build(), 6L)));
 
         reconciler.reconcileStartup();
 

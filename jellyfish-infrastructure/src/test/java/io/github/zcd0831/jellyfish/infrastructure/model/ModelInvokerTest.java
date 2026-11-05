@@ -181,13 +181,17 @@ class ModelInvokerTest {
     // ---------- 夹具 ----------
 
     private static Model model(String id, int maxInput) {
-        return new Model(ModelId.of(id), ProviderId.of("p1"), "model-" + id, ModelStatus.ACTIVE,
-                new ContextLimit(maxInput, 4096), Collections.emptyList());
+        return Model.builder(ModelId
+                .of(id), ProviderId.of("p1"), "model-" + id)
+                .status(ModelStatus.ACTIVE)
+                .contextLimit(new ContextLimit(maxInput, 4096)).capabilities(Collections.emptyList()).build();
     }
 
     private static Provider provider() {
-        return new Provider(ProviderId.of("p1"), "测试供应商", "http://localhost:1/v1", ChatProtocol.OPENAI_CHAT,
-                new ApiCredential("TEST_API_KEY"), ProviderStatus.ACTIVE);
+        return Provider.builder(ProviderId
+                .of("p1"), "测试供应商", "http://localhost:1/v1")
+                .protocol(ChatProtocol.OPENAI_CHAT)
+                .credential(new ApiCredential("TEST_API_KEY")).status(ProviderStatus.ACTIVE).build();
     }
 
     private static RuntimePolicy policyWithFallback(ModelId... fallback) {

@@ -23,9 +23,10 @@ class SystemPromptAssemblerTest {
                 new ToolSchemaSnapshot("read_file", "读文件", "{}", "文件内容"));
         List<SkillSummarySnapshot> skills = Arrays.asList(new SkillSummarySnapshot("code-review", "代码评审", "当需要评审时"));
 
-        SystemPromptSnapshot snapshot = new SystemPromptAssembler().assemble(new AgentSnapshotInput(
-                AgentId.of("builtin.main"), new PromptTemplate("你是 ${role}。", Arrays.asList("role")),
-                values, tools, skills, null));
+        SystemPromptSnapshot snapshot = new SystemPromptAssembler().assemble(AgentSnapshotInput
+                .builder(AgentId.of("builtin.main"))
+                .basePrompt(new PromptTemplate("你是 ${role}。", Arrays
+                .asList("role"))).promptVariables(values).activeTools(tools).activeSkills(skills).build());
 
         assertEquals("你是 审查员。", snapshot.getRenderedPrompt());
         assertEquals(1, snapshot.getToolList().size());
@@ -37,9 +38,9 @@ class SystemPromptAssemblerTest {
         List<ToolSchemaSnapshot> tools = Arrays.asList(
                 new ToolSchemaSnapshot("read_file", "读文件", "{}", "文件内容"));
 
-        List<String> unbound = new SystemPromptAssembler().unboundToolReferences(new AgentSnapshotInput(
-                AgentId.of("builtin.main"), null, null, tools, null,
-                Arrays.asList("read_file", "git_diff")));
+        List<String> unbound = new SystemPromptAssembler().unboundToolReferences(AgentSnapshotInput
+                .builder(AgentId.of("builtin.main"))
+                .activeTools(tools).sopReferencedToolNames(Arrays.asList("read_file", "git_diff")).build());
 
         assertEquals(1, unbound.size());
         assertEquals("git_diff", unbound.get(0));
@@ -48,7 +49,7 @@ class SystemPromptAssemblerTest {
     @Test
     void 无提示词模板时产出空串而不是崩() {
         SystemPromptSnapshot snapshot = new SystemPromptAssembler()
-                .assemble(new AgentSnapshotInput(AgentId.of("a"), null, null, null, null, null));
+                .assemble(AgentSnapshotInput.builder(AgentId.of("a")).build());
 
         assertEquals("", snapshot.getRenderedPrompt());
         assertTrue(snapshot.getToolList().isEmpty());

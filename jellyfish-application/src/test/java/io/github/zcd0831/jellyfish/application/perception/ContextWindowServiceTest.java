@@ -1,5 +1,7 @@
 package io.github.zcd0831.jellyfish.application.perception;
 
+import io.github.zcd0831.jellyfish.domain.perception.session.RecordDraft;
+import io.github.zcd0831.jellyfish.domain.perception.session.SessionHeader;
 import io.github.zcd0831.jellyfish.application.action.BudgetService;
 import io.github.zcd0831.jellyfish.application.action.port.ChatMessage;
 import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationException;
@@ -230,8 +232,9 @@ class ContextWindowServiceTest {
         Session session = sessionWith(6);
         SystemPromptSnapshot snapshot = new SystemPromptSnapshot("快照提示词", Collections.emptyList(),
                 Collections.emptyList());
-        Session withSnapshot = Session.create(SessionId.of("s2"), null, AgentId.of("a"), ModelId.of("m1"), 1L,
-                snapshot);
+        Session withSnapshot = Session.create(SessionHeader
+                .builder(SessionId.of("s2"), AgentId
+                .of("a"), ModelId.of("m1")).createdDate(1L).systemPromptSnapshot(snapshot).build());
         for (int i = 0; i < 6; i++) {
             withSnapshot.appendRecord(RecordRole.USER, "0123456789", null, i);
         }
@@ -283,12 +286,15 @@ class ContextWindowServiceTest {
     @Test
     void 摘要素材不含reasoning() {
         policy = tightPolicy(2, 20);
-        Session session = Session.create(SessionId.of("s1"), null, AgentId.of("a"), ModelId.of("m1"), 1L, null);
-        session.appendRecord(RecordRole.ASSISTANT, "看一下", null, "t1", "m1", null, 1L);
-        session.appendRecord(RecordRole.TOOL_REQUEST,
-                "{\"callId\":\"c1\",\"name\":\"list_dir\",\"arguments\":\"{}\"}", "内部推理过程", "t1", "m1",
-                null, 2L);
-        session.appendRecord(RecordRole.TOOL_RESULT, "0123456789012345678", null, "t1", "m1", null, 3L);
+        Session session = Session.create(SessionHeader
+                .builder(SessionId.of("s1"), AgentId.of("a"), ModelId.of("m1")).createdDate(1L).build());
+        session.appendRecord(RecordDraft
+                .builder(RecordRole.ASSISTANT, "看一下").turnId("t1").producerModelId("m1").build(), 1L);
+        session.appendRecord(RecordDraft
+                .builder(RecordRole.TOOL_REQUEST, "{\"callId\":\"c1\",\"name\":\"list_dir\",\"arguments\":\"{}\"}")
+                .reasoning("内部推理过程").turnId("t1").producerModelId("m1").build(), 2L);
+        session.appendRecord(RecordDraft
+                .builder(RecordRole.TOOL_RESULT, "0123456789012345678").turnId("t1").producerModelId("m1").build(), 3L);
         session.appendRecord(RecordRole.USER, "0123456789", null, 4L);
         session.appendRecord(RecordRole.USER, "0123456789", null, 5L);
 
@@ -320,7 +326,8 @@ class ContextWindowServiceTest {
     }
 
     private static Session sessionWith(int userRecords) {
-        Session session = Session.create(SessionId.of("s1"), null, AgentId.of("a"), ModelId.of("m1"), 1L, null);
+        Session session = Session.create(SessionHeader
+                .builder(SessionId.of("s1"), AgentId.of("a"), ModelId.of("m1")).createdDate(1L).build());
         for (int i = 0; i < userRecords; i++) {
             session.appendRecord(RecordRole.USER, "0123456789", null, i);
         }
@@ -341,9 +348,11 @@ class ContextWindowServiceTest {
     @Test
     void 折叠素材包含运行期注入() {
         policy = tightPolicy(2, 20);
-        Session session = Session.create(SessionId.of("s1"), null, AgentId.of("a"), ModelId.of("m1"), 1L, null);
+        Session session = Session.create(SessionHeader
+                .builder(SessionId.of("s1"), AgentId.of("a"), ModelId.of("m1")).createdDate(1L).build());
         session.appendRecord(RecordRole.USER, "0123456789", null, 0);
-        session.appendRecord(RecordRole.ASSISTANT, "0123456789", null, "t0", "m1", null, 1);
+        session.appendRecord(RecordDraft
+                .builder(RecordRole.ASSISTANT, "0123456789").turnId("t0").producerModelId("m1").build(), 1);
         // 运行期注入自成一条（turnId 为空），与真实注入一致
         session.appendRecord(RecordRole.SYSTEM, "SOP：先读文件再改", null, System.currentTimeMillis());
         session.appendRecord(RecordRole.USER, "0123456789", null, 3);

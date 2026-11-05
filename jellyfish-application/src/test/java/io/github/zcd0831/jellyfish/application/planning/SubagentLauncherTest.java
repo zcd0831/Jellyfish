@@ -1,5 +1,6 @@
 package io.github.zcd0831.jellyfish.application.planning;
 
+import io.github.zcd0831.jellyfish.domain.perception.session.SessionHeader;
 import io.github.zcd0831.jellyfish.application.action.BudgetService;
 import io.github.zcd0831.jellyfish.application.perception.StartSessionUseCase;
 import io.github.zcd0831.jellyfish.application.perception.port.PolicyRepository;
@@ -51,14 +52,16 @@ class SubagentLauncherTest {
     private final SessionCancellations cancellations = new SessionCancellations();
     private final ExecutorService pool = Executors.newFixedThreadPool(2);
 
-    private final Session parent = Session.create(PARENT, null, AgentId.of("a"), ModelId.of("m1"), 1L, null);
+    private final Session parent = Session.create(SessionHeader
+            .builder(PARENT, AgentId.of("a"), ModelId.of("m1")).createdDate(1L).build());
 
     private SubagentLauncher launcher(RuntimePolicy policy) {
         when(policies.load()).thenReturn(policy);
         when(records.last(any(SessionId.class), anyInt())).thenReturn(Collections.emptyList());
         when(sessions.load(any(SessionId.class))).thenAnswer(call -> {
-            Session child = Session.create(call.getArgument(0), PARENT, AgentId.of("a"), ModelId.of("m1"),
-                    1L, null);
+            Session child = Session.create(SessionHeader
+                    .builder(call.getArgument(0), AgentId
+                    .of("a"), ModelId.of("m1")).parentSessionId(PARENT).createdDate(1L).build());
             child.retitle("结论");
             return child;
         });

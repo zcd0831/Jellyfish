@@ -84,9 +84,9 @@ final class AgentCatalog {
         for (String skillId : frontMatter.list("skills")) {
             skillIds.add(SkillId.of(skillId));
         }
-        return new AgentDefinition(AgentId.of(id), frontMatter.get("name"), source,
-                new PromptTemplate(frontMatter.body().trim(), new ArrayList<String>()),
-                status(frontMatter.get("status")), toolIds, skillIds);
+        return AgentDefinition.builder(AgentId.of(id), frontMatter.get("name"), source)
+                .basePrompt(new PromptTemplate(frontMatter.body().trim(), new ArrayList<String>()))
+                .status(status(frontMatter.get("status"))).toolIds(toolIds).skillIds(skillIds).build();
     }
 
     private static AgentStatus status(String raw) {

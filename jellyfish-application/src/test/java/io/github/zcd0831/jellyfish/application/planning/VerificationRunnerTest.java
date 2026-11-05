@@ -1,5 +1,6 @@
 package io.github.zcd0831.jellyfish.application.planning;
 
+import io.github.zcd0831.jellyfish.domain.perception.session.SessionHeader;
 import io.github.zcd0831.jellyfish.application.perception.ForkRunnerProvider;
 import io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner;
 import io.github.zcd0831.jellyfish.application.shared.Answer;
@@ -39,8 +40,8 @@ class VerificationRunnerTest {
     private final InternalSessionRunner forks = mock(InternalSessionRunner.class);
     private final FakeHuman human = new FakeHuman();
 
-    private final Session session = Session.create(SessionId.of("s1"), null, AgentId.of("a"),
-            ModelId.of("m1"), 1L, null);
+    private final Session session = Session.create(SessionHeader
+            .builder(SessionId.of("s1"), AgentId.of("a"), ModelId.of("m1")).createdDate(1L).build());
 
     /** 默认：裁判子会话什么都答不出来（等价于裁判缺失）；需要的用例自己再覆盖。 */
     private VerificationRunner runner(EnvironmentFeedbackVerifier env) {

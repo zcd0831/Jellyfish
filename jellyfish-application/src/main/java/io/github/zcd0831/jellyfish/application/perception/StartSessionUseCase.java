@@ -81,11 +81,16 @@ public final class StartSessionUseCase {
                 freeze(agent));
         Record userRecord = session.appendRecord(RecordRole.USER, firstInput, null, clock.nowMillis());
         Budget budget = Budget.openFor(BudgetId.of(UUID.randomUUID().toString()), sessionId);
-        session.retitle(titleGenerator.generate(session, firstInput));
-
+        // 台账必须先落地再取标题：起标题会调模型、要记账，而 BudgetService.recordUsage 会
+        // 自己 commit 一次——那时台账还没落盘，它会另建一份（新 BudgetId）写进去，
+        // 我们随后又用手里这份覆盖回去，标题的用量就此丢掉（05-action §5.8.5、08 §8.8.3 纪律一）
         commitScope.stageAppend(sessionId, userRecord);
         commitScope.stageReplace(session);
         commitScope.stageReplace(budget);
+        commitScope.commit();
+
+        session.retitle(titleGenerator.generate(session, firstInput));
+        commitScope.stageReplace(session);
         commitScope.commit();
         publishStarted(session);
         return Result.ok(sessionId);

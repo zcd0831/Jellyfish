@@ -27,7 +27,6 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Random;
 
 /**
  * 模型调用的唯一出口：选模型 → 硬校验 → 调用 → 同模型重试 → 备用链降级。
@@ -35,67 +34,30 @@ import java.util.Random;
  */
 public final class ModelInvoker implements ModelInvocationPort {
 
-    private static final int[] BACKOFF_MILLIS = {500, 1500, 4000};
-    private static final long MAX_RETRY_AFTER_SECONDS = 60L;
-
     private final CatalogRepository catalog;
     private final PolicyRepository policyRepository;
     private final ChatTransport transport;
     private final ProgressPort progress;
     private final TokenCounter tokenCounter;
-    /** 协议适配器按 `Provider.protocol` 选择；本期只实现 OPENAI_CHAT。 */
+
     private final ChatCompletionsProtocol openAiProtocol = new ChatCompletionsProtocol();
     private final AnthropicMessagesProtocol anthropicProtocol = new AnthropicMessagesProtocol();
     private final GeminiProtocol geminiProtocol = new GeminiProtocol();
-    private final Random jitter = new Random();
+    private final RetryPolicy retryPolicy = new RetryPolicy();
     private final Sleeper sleeper;
     private final CredentialLookup credentials;
     private final CancellationRegistry cancellations;
 
-    /** 没有登记表的调用（单测、插件自建实例）按「永不终止」处理。 */
-    private static final CancellationRegistry NO_CANCELLATIONS = new CancellationRegistry() {
-        @Override
-        public CancellationToken forSession(io.github.zcd0831.jellyfish.domain.shared.SessionId sessionId) {
-            return CancellationToken.never();
-        }
-    };
-
-    public ModelInvoker(CatalogRepository catalog, PolicyRepository policyRepository, ChatTransport transport,
-                        ProgressPort progress, TokenCounter tokenCounter, CancellationRegistry cancellations) {
-        this(catalog, policyRepository, transport, progress, tokenCounter,
-                new TokenAwareSleeper(),
-                new CredentialLookup() {
-                    @Override
-                    public String lookup(String envName) {
-                        return System.getenv(envName);
-                    }
-                },
-                cancellations);
-    }
-
-    /** 没有会话归属的实例（测试、插件自建）：终止信号一律「永不取消」。 */
-    public ModelInvoker(CatalogRepository catalog, PolicyRepository policyRepository, ChatTransport transport,
-                        ProgressPort progress, TokenCounter tokenCounter) {
-        this(catalog, policyRepository, transport, progress, tokenCounter, NO_CANCELLATIONS);
-    }
-
-    ModelInvoker(CatalogRepository catalog, PolicyRepository policyRepository, ChatTransport transport,
-                 ProgressPort progress, TokenCounter tokenCounter, Sleeper sleeper,
-                 CredentialLookup credentials) {
-        this(catalog, policyRepository, transport, progress, tokenCounter, sleeper, credentials, NO_CANCELLATIONS);
-    }
-
-    ModelInvoker(CatalogRepository catalog, PolicyRepository policyRepository, ChatTransport transport,
-                 ProgressPort progress, TokenCounter tokenCounter, Sleeper sleeper,
-                 CredentialLookup credentials, CancellationRegistry cancellations) {
-        this.catalog = catalog;
-        this.policyRepository = policyRepository;
-        this.transport = transport;
-        this.progress = progress;
-        this.tokenCounter = tokenCounter;
-        this.sleeper = sleeper;
-        this.credentials = credentials;
-        this.cancellations = cancellations;
+    /** 协作者收在 {@link InvokerWiring} 里：生产只有一条装配路径，测试只换两个缝。 */
+    public ModelInvoker(InvokerWiring wiring) {
+        this.catalog = wiring.catalog;
+        this.policyRepository = wiring.policyRepository;
+        this.transport = wiring.transport;
+        this.progress = wiring.progress;
+        this.tokenCounter = wiring.tokenCounter;
+        this.sleeper = wiring.sleeper;
+        this.credentials = wiring.credentials;
+        this.cancellations = wiring.cancellations;
     }
 
     @Override
@@ -200,16 +162,17 @@ public final class ModelInvoker implements ModelInvocationPort {
             token.throwIfCancelled();
             try {
                 return callOnce(request, model, provider, adapter, sink, token);
-            } catch (RetryableFailure e) {
+            } catch (RetryPolicy.RetryableFailure e) {
                 if (token.isCancelled()) {
                     throw new java.util.concurrent.CancellationException("本轮已被终止：不再重试、不降级");
                 }
-                if (attempt >= BACKOFF_MILLIS.length) {
+                if (RetryPolicy.exhausted(attempt)) {
                     throw new ModelInvocationException(ModelError.UNAVAILABLE,
                             "重试用尽（" + model.id().getValue() + "）：" + e.getMessage(), e);
                 }
-                long delay = e.retryAfterMillis() != null ? e.retryAfterMillis() : backoff(attempt);
-                if (e.retryAfterMillis() != null && e.retryAfterMillis() > MAX_RETRY_AFTER_SECONDS * 1000) {
+                long delay = e.retryAfterMillis() != null
+                        ? e.retryAfterMillis().longValue() : retryPolicy.backoff(attempt);
+                if (RetryPolicy.tooLongToWait(e.retryAfterMillis())) {
                     throw new ModelInvocationException(ModelError.UNAVAILABLE,
                             "Retry-After 超过 60s，直接降级（" + model.id().getValue() + "）", e);
                 }
@@ -271,12 +234,12 @@ public final class ModelInvoker implements ModelInvocationPort {
             if (token.isCancelled()) {
                 throw new java.util.concurrent.CancellationException("本轮已被终止：不再重试、不降级");
             }
-            throw new RetryableFailure("流式读取失败：" + e.getMessage(), null, e);
+            throw new RetryPolicy.RetryableFailure("流式读取失败：" + e.getMessage(), null, e);
         }
         if (!accumulator.completed()) {
             // 对端干净关闭（无 [DONE] / message_stop）：半截输出不能当完整响应落盘，按可重试处理
             // 规则出处：04-perception §4.8.1（流式中断 ⇒ 整条 assistant 输出连同 reasoning 都不落）
-            throw new RetryableFailure("流在收尾标记前结束（" + model.id().getValue() + "）", null, null);
+            throw new RetryPolicy.RetryableFailure("流在收尾标记前结束（" + model.id().getValue() + "）", null, null);
         }
         return withUsageFallback(request, model, accumulator.result(model.id()));
     }
@@ -300,7 +263,7 @@ public final class ModelInvoker implements ModelInvocationPort {
             if (token.isCancelled()) {
                 throw new java.util.concurrent.CancellationException("本轮已被终止：不再重试、不降级");
             }
-            throw new RetryableFailure("网络错误：" + e.getMessage(), null, e);
+            throw new RetryPolicy.RetryableFailure("网络错误：" + e.getMessage(), null, e);
         }
     }
 
@@ -317,7 +280,7 @@ public final class ModelInvoker implements ModelInvocationPort {
             return new ModelInvocationException(ModelError.CONTEXT_EXCEEDED, reason + " 上下文超限");
         }
         if (status == 429 || status == 500 || status == 502 || status == 503 || status == 504) {
-            throw new RetryableFailure(reason, retryAfterMillis(response));
+            throw new RetryPolicy.RetryableFailure(reason, RetryPolicy.retryAfterMillis(response));
         }
         return new ModelInvocationException(ModelError.UNAVAILABLE, reason);
     }
@@ -332,24 +295,6 @@ public final class ModelInvoker implements ModelInvocationPort {
                 // Anthropic: "prompt is too long"; Gemini: "input token count exceeds the maximum"
                 || lower.contains("prompt is too long") || lower.contains("input token count")
                 || lower.contains("exceeds the maximum number of tokens");
-    }
-
-    private static Long retryAfterMillis(ChatTransport.Response response) {
-        String header = response.retryAfter();
-        if (header == null || header.trim().isEmpty()) {
-            return null;
-        }
-        try {
-            return Long.parseLong(header.trim()) * 1000L;
-        } catch (NumberFormatException e) {
-            return null;
-        }
-    }
-
-    private long backoff(int attempt) {
-        long base = BACKOFF_MILLIS[Math.min(attempt, BACKOFF_MILLIS.length - 1)];
-        double factor = 0.8 + jitter.nextDouble() * 0.4;   // ±20%
-        return Math.round(base * factor);
     }
 
     /**
@@ -390,63 +335,4 @@ public final class ModelInvoker implements ModelInvocationPort {
         return null;
     }
 
-    /** 可重试的失败：外层据此退避重试，重试用尽再交给备用链。 */
-    private static final class RetryableFailure extends RuntimeException {
-
-        private final Long retryAfterMillis;
-
-        RetryableFailure(String message, Long retryAfterMillis) {
-            super(message);
-            this.retryAfterMillis = retryAfterMillis;
-        }
-
-        RetryableFailure(String message, Long retryAfterMillis, Throwable cause) {
-            super(message, cause);
-            this.retryAfterMillis = retryAfterMillis;
-        }
-
-        Long retryAfterMillis() {
-            return retryAfterMillis;
-        }
-    }
-
-    /** 等待一段退避时间；终止信号应当在 {@code millis} 之内把它唤醒。 */
-    interface Sleeper {
-        void sleep(long millis, CancellationToken token) throws InterruptedException;
-    }
-
-    /** 生产用等待：睡着时挂一个令牌回调，终止一到就醒（Retry-After 可以是 60 秒）。 */
-    static final class TokenAwareSleeper implements Sleeper {
-
-        @Override
-        public void sleep(long millis, CancellationToken token) throws InterruptedException {
-            final Object lock = new Object();
-            Runnable wake = token.onCancel(new Runnable() {
-                @Override
-                public void run() {
-                    synchronized (lock) {
-                        lock.notifyAll();
-                    }
-                }
-            });
-            try {
-                synchronized (lock) {
-                    long deadline = System.currentTimeMillis() + millis;
-                    while (!token.isCancelled()) {
-                        long remaining = deadline - System.currentTimeMillis();
-                        if (remaining <= 0) {
-                            return;
-                        }
-                        lock.wait(remaining);
-                    }
-                }
-            } finally {
-                wake.run();   // 注销回调：长会话里不能无限堆积
-            }
-        }
-    }
-
-    interface CredentialLookup {
-        String lookup(String envName);
-    }
 }

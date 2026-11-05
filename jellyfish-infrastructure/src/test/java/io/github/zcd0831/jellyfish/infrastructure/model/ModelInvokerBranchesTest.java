@@ -80,14 +80,14 @@ class ModelInvokerBranchesTest {
         TokenCounter counter = new TokenCounter() {
             public int count(String systemPrompt, List<ChatMessage> messages, ModelId modelId) { return 1; }
         };
-        return new ModelInvoker(catalog, policies, transport, event -> { }, counter,
-                new ModelInvoker.Sleeper() {
+        return new ModelInvoker(InvokerWiring.of(catalog, policies, transport, event -> { }, counter,
+                new Sleeper() {
                     public void sleep(long millis,
                                       io.github.zcd0831.jellyfish.application.shared.CancellationToken token) { }
                 },
-                new ModelInvoker.CredentialLookup() {
+                new CredentialLookup() {
                     public String lookup(String envName) { return apiKey; }
-                });
+                }));
     }
 
     private static final class Transport implements ChatTransport {

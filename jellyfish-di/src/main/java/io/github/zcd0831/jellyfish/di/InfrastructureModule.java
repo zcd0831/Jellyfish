@@ -48,6 +48,7 @@ import io.github.zcd0831.jellyfish.infrastructure.file.FileSessionRepository;
 import io.github.zcd0831.jellyfish.infrastructure.file.FileSkillSopProvider;
 import io.github.zcd0831.jellyfish.infrastructure.file.JsonCodec;
 import io.github.zcd0831.jellyfish.infrastructure.model.HttpJsonClient;
+import io.github.zcd0831.jellyfish.infrastructure.model.InvokerWiring;
 import io.github.zcd0831.jellyfish.infrastructure.model.ModelInvoker;
 import io.github.zcd0831.jellyfish.infrastructure.time.SystemClock;
 import io.github.zcd0831.jellyfish.infrastructure.tokenizer.CompositeTokenCounter;
@@ -248,7 +249,7 @@ public final class InfrastructureModule {
                                             HttpJsonClient http, ProgressPort progress, TokenCounter counter,
                                             CancellationRegistry cancellations, PortRoutes routes) {
         return routes.resolve("ModelInvocationPort",
-                (ModelInvocationPort) new ModelInvoker(catalog, policies, http, progress, counter, cancellations));
+                (ModelInvocationPort) new ModelInvoker(InvokerWiring.standard(catalog, policies, http, progress, counter, cancellations)));
     }
 
     /** 每次注入一个新的写入作用域：一个事务一个实例。 */

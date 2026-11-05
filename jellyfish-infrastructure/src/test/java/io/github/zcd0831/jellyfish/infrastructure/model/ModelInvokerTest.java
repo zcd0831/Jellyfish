@@ -236,15 +236,15 @@ class ModelInvokerTest {
                 return 42;
             }
         };
-        return new ModelInvoker(catalog, policyRepository, transport, progress, counter,
-                new ModelInvoker.Sleeper() {
+        return new ModelInvoker(InvokerWiring.of(catalog, policyRepository, transport, progress, counter,
+                new Sleeper() {
                     @Override
                     public void sleep(long millis,
                                       io.github.zcd0831.jellyfish.application.shared.CancellationToken token) {
                         sleeps.add(millis);
                     }
                 },
-                new ModelInvoker.CredentialLookup() {
+                new CredentialLookup() {
                     @Override
                     public String lookup(String envName) {
                         return apiKey;
@@ -256,7 +256,7 @@ class ModelInvokerTest {
                             io.github.zcd0831.jellyfish.domain.shared.SessionId sessionId) {
                         return token;
                     }
-                });
+                }));
     }
 
     private static final io.github.zcd0831.jellyfish.domain.shared.SessionId CANCELLED_SESSION =
@@ -459,14 +459,14 @@ class ModelInvokerTest {
             @Override
             public void run() {
                 try {
-                    ModelInvoker invoker = new ModelInvoker(catalog, realPolicy(), transport, progress,
-                            realCounter(), new ModelInvoker.TokenAwareSleeper(),
-                            new ModelInvoker.CredentialLookup() {
+                    ModelInvoker invoker = new ModelInvoker(InvokerWiring.of(catalog, realPolicy(), transport,
+                            progress, realCounter(), new TokenAwareSleeper(),
+                            new CredentialLookup() {
                                 @Override
                                 public String lookup(String envName) {
                                     return "sk-test";
                                 }
-                            }, cancellations);
+                            }, cancellations));
                     invoker.invoke(request(id, "m1", 10));
                 } catch (java.util.concurrent.CancellationException cancelled) {
                     // 期望出口

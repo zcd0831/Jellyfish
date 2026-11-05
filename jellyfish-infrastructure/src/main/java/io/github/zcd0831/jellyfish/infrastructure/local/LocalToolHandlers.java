@@ -50,6 +50,9 @@ public final class LocalToolHandlers {
     /** 等待子进程的分片：终止信号到达后最多这么久就杀进程树。 */
     static final long KILL_POLL_MILLIS = 100;
 
+    /** TERM 之后给多少宽限再上 KILL：够 shell 跑完 trap，又不至于让用户等。 */
+    static final long KILL_GRACE_MILLIS = 500;
+
     private static final List<String> IGNORED_DIRS =
             Arrays.asList(".git", "target", "node_modules", ".idea", ".mvn", "dist", "build");
     private static final java.util.Set<String> BINARY_EXTENSIONS = new java.util.HashSet<String>(Arrays.asList(
@@ -480,16 +483,77 @@ public final class LocalToolHandlers {
     }
 
     /** JDK 8 没有 ProcessHandle.descendants()：先让 pkill 收子进程，再强杀本体。 */
+    /**
+     * 杀整棵进程树：先拍一张"根→子孙"的快照，再<strong>自上而下</strong>发 TERM，宽限后 KILL。
+     * <p>
+     * 两个坑：<br>
+     * ① 只 `pkill -P pid` 打直接子进程，孙进程（脚本自己再起的子进程）会留下来继续跑；<br>
+     * ② 先杀子进程再杀父进程更糟——shell 等到子进程结束会<strong>接着执行下一条命令</strong>
+     * （实测 `sh -c "sleep 2; touch 标记"` 会因此真的把标记写出来）。
+     * 规则出处：08-application §8.9.4.1（内置工具命中令牌即杀进程树）。
+     */
     private static void kill(Process process) {
-        try {
-            long pid = pidOf(process);
-            if (pid > 0) {
-                new ProcessBuilder("pkill", "-TERM", "-P", String.valueOf(pid)).start().waitFor();
+        long pid = pidOf(process);
+        if (pid > 0) {
+            for (long target : treeOf(pid)) {
+                signal(target, "TERM");
             }
-        } catch (Exception ignored) {
-            // pkill 不存在（非 POSIX）时退化为只杀本体
+            if (!exitedWithin(process, KILL_GRACE_MILLIS)) {
+                for (long target : treeOf(pid)) {
+                    signal(target, "KILL");
+                }
+            }
         }
         process.destroyForcibly();
+    }
+
+    /** 根在前、子孙在后：TERM 必须先把父进程打死，否则脚本会继续往下跑。 */
+    private static List<Long> treeOf(long pid) {
+        List<Long> tree = new ArrayList<Long>();
+        tree.add(pid);
+        for (long child : childrenOf(pid)) {
+            tree.addAll(treeOf(child));
+        }
+        return tree;
+    }
+
+    private static void signal(long pid, String signal) {
+        try {
+            new ProcessBuilder("kill", "-" + signal, String.valueOf(pid)).start().waitFor();
+        } catch (Exception ignored) {
+            // 没有 kill 命令（非 POSIX）时由调用方的 destroyForcibly 兜底
+        }
+    }
+
+    private static List<Long> childrenOf(long pid) {
+        List<Long> children = new ArrayList<Long>();
+        try {
+            Process pgrep = new ProcessBuilder("pgrep", "-P", String.valueOf(pid))
+                    .redirectErrorStream(true).start();
+            try (java.io.BufferedReader reader = new java.io.BufferedReader(
+                    new java.io.InputStreamReader(pgrep.getInputStream(), StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    String trimmed = line.trim();
+                    if (trimmed.matches("\\d+")) {
+                        children.add(Long.valueOf(trimmed));
+                    }
+                }
+            }
+            pgrep.waitFor();
+        } catch (Exception ignored) {
+            // pgrep 不可用：退化为只杀本体
+        }
+        return children;
+    }
+
+    private static boolean exitedWithin(Process process, long millis) {
+        try {
+            return process.waitFor(millis, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
     }
 
     private static long pidOf(Process process) {

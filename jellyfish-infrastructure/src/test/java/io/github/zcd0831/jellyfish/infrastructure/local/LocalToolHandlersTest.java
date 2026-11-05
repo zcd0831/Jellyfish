@@ -363,4 +363,25 @@ class LocalToolHandlersTest {
 
         assertTrue(out.contains("unset-in-child"), any + " 不应出现在子进程：" + out);
     }
+    /**
+     * 超时/终止必须杀整棵树：脚本自己起的孙进程不能留下来继续跑。
+     * 判据不用 pgrep（命令行匹配容易被 shell 转义搞出假绿）：让孙进程 2 秒后写一个标记文件，
+     * 杀干净了它就永远写不出来。
+     * 规则出处：08-application §8.9.4.1（内置工具命中令牌即杀进程树）。
+     */
+    @Test
+    void 超时会杀整棵进程树_孙进程不残留() throws Exception {
+        java.nio.file.Path marker = java.nio.file.Files.createTempFile("jellyfish-tree", ".tick");
+        java.nio.file.Files.deleteIfExists(marker);
+        // 外层 sh → 中间 sh → 孙进程（2 秒后写标记）。中间层多留一条 true，
+        // 否则 sh 会把单条命令 exec 成自己，只剩两层，测不出"只杀直接子进程"的漏。
+        Map<String, Object> args = map("command",
+                "sh -c 'sh -c \"sleep 2; touch " + marker + "\"; true' & sleep 300", "timeoutMs", 1500);
+
+        String out = tools.get("run_command").handle(null, args).content();
+
+        assertTrue(out.contains("已终止"), out);
+        Thread.sleep(3000);   // 孙进程若还活着，这段时间足够它写下标记
+        assertTrue(!java.nio.file.Files.exists(marker), "孙进程还在跑，写出了标记 " + marker);
+    }
 }

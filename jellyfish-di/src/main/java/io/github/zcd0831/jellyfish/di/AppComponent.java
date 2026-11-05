@@ -4,10 +4,7 @@ import dagger.Component;
 import io.github.zcd0831.jellyfish.application.action.BudgetService;
 import io.github.zcd0831.jellyfish.application.action.ToolExecutor;
 import io.github.zcd0831.jellyfish.application.action.port.CatalogRepository;
-import io.github.zcd0831.jellyfish.application.action.ManageCatalogUseCase;
 import io.github.zcd0831.jellyfish.application.action.PluginAssembler;
-import io.github.zcd0831.jellyfish.application.perception.AdjustPolicyUseCase;
-import io.github.zcd0831.jellyfish.application.perception.ManageSessionUseCase;
 import io.github.zcd0831.jellyfish.application.perception.StartSessionUseCase;
 import io.github.zcd0831.jellyfish.application.perception.port.PolicyRepository;
 import io.github.zcd0831.jellyfish.application.perception.port.RecordStore;
@@ -23,8 +20,6 @@ import io.github.zcd0831.jellyfish.application.shared.port.ProgressPort;
 import io.github.zcd0831.jellyfish.application.shared.port.SchemaMigrator;
 import io.github.zcd0831.jellyfish.application.shared.port.TokenCounter;
 import io.github.zcd0831.jellyfish.domain.perception.session.SystemPromptAssembler;
-import io.github.zcd0831.jellyfish.infrastructure.file.DataDirectory;
-import io.github.zcd0831.jellyfish.infrastructure.file.JsonCodec;
 import io.github.zcd0831.jellyfish.shell.tui.TuiApp;
 
 import java.util.concurrent.ExecutorService;
@@ -37,10 +32,6 @@ import javax.inject.Singleton;
 @Component(modules = {InfrastructureModule.class, PerceptionModule.class, ActionModule.class,
         PlanningModule.class, MemoryModule.class, PluginModule.class, ShellModule.class})
 public interface AppComponent {
-
-    DataDirectory dataDirectory();
-
-    JsonCodec jsonCodec();
 
     SessionRepository sessionRepository();
 
@@ -66,7 +57,7 @@ public interface AppComponent {
 
     TokenCounter tokenCounter();
 
-    /** 供 boot 的关闭钩子停止子代理池。 */
+    /** 供 boot 的 finally 与关闭钩子停止子代理池（非守护线程，不关进程就退不出去）。 */
     ExecutorService subagentPool();
 
     /** 供 boot 的关闭钩子与外壳发起终止（08-application §8.9.4.1）。 */
@@ -91,12 +82,6 @@ public interface AppComponent {
 
     RunSessionUseCase runSessionUseCase();
 
-    ManageSessionUseCase manageSessionUseCase();
-
-    AdjustPolicyUseCase adjustPolicyUseCase();
-
-    ManageCatalogUseCase manageCatalogUseCase();
-
-    /** 外壳入口：单栏流式 TUI。 */
+    /** 外壳入口：单栏流式 TUI（内部已持有各用例，故用例不再单独导出）。 */
     TuiApp tuiApp();
 }

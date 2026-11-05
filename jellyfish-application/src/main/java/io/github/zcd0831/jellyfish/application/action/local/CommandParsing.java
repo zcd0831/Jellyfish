@@ -231,90 +231,142 @@ public final class CommandParsing {
 
     /** 引号与转义在这里消解；看不懂就明确失败（fail-closed 的前提）。 */
     private static String tokenize(String line, List<String> tokens) {
-        StringBuilder word = new StringBuilder();
-        boolean inWord = false;
-        char quote = 0;
-        for (int i = 0; i < line.length(); i++) {
-            char c = line.charAt(i);
-            if (quote == '\'') {
-                if (c == '\'') {
-                    quote = 0;
-                } else {
-                    word.append(c);
+        return new Tokenizer(line, tokens).run();
+    }
+
+    /**
+     * 三个状态各管一段：单引号里全是字面量、双引号里只有反斜杠转义、其余交给裸词处理。
+     * 拆开是为了每段都短到能一眼看完（原先是 77 行一个大循环）。
+     */
+    private static final class Tokenizer {
+
+        private final String line;
+        private final List<String> tokens;
+        private final StringBuilder word = new StringBuilder();
+        private boolean inWord;
+        private char quote;
+        private int i;
+
+        Tokenizer(String line, List<String> tokens) {
+            this.line = line;
+            this.tokens = tokens;
+        }
+
+        String run() {
+            while (i < line.length()) {
+                char c = line.charAt(i);
+                String failure = step(c);
+                if (failure != null) {
+                    return failure;
                 }
-                continue;
+                i++;
+            }
+            if (quote != 0) {
+                return "引号未闭合";
+            }
+            if (inWord) {
+                tokens.add(word.toString());
+            }
+            return null;
+        }
+
+        /** 按引号态分派：先把"当前在什么引号里"消化掉，再谈别的。 */
+        private String step(char c) {
+            if (quote == '\'') {
+                singleQuoted(c);
+                return null;
             }
             if (quote == '"') {
-                if (c == '"') {
-                    quote = 0;
-                } else if (c == '\\' && i + 1 < line.length()) {
-                    char escaped = line.charAt(i + 1);
-                    i++;
-                    if (escaped != '\n') {
-                        word.append(escaped);
-                    }
-                } else {
-                    word.append(c);
-                }
-                continue;
+                doubleQuoted(c);
+                return null;
             }
+            return bare(c);
+        }
+
+        private void singleQuoted(char c) {
+            if (c == '\'') {
+                quote = 0;
+            } else {
+                word.append(c);
+            }
+        }
+
+        private void doubleQuoted(char c) {
+            if (c == '"') {
+                quote = 0;
+            } else if (c == '\\' && i + 1 < line.length()) {
+                char escaped = line.charAt(++i);
+                if (escaped != '\n') {
+                    word.append(escaped);
+                }
+            } else {
+                word.append(c);
+            }
+        }
+
+        private String bare(char c) {
             if (c == '\\' && i + 1 < line.length()) {
-                char escaped = line.charAt(i + 1);
-                i++;
+                char escaped = line.charAt(++i);
                 if (escaped == '\n') {
-                    continue;   // 续行：反斜杠与换行整对消失，不落进词里（/bin/sh 行为）
+                    return null;   // 续行：反斜杠与换行整对消失，不落进词里（/bin/sh 行为）
                 }
                 word.append(escaped);
                 inWord = true;
-                continue;
+                return null;
             }
             if (c == '\'' || c == '"') {
                 quote = c;
                 inWord = true;
-                continue;
+                return null;
             }
             if (c == '#' && !inWord) {
-                while (i < line.length() && line.charAt(i) != '\n') {
+                // 注释只吃到行尾之前：换行必须留下，它仍是命令分隔符。
+                // 连换行一起吃掉的话，「ls # x⏎rm -rf /」会被并成一段（program=ls，rm 变操作数），
+                // 第二行的删除命令就此躲过判定（05-action §5.8.1 规则 10 的 fail-closed）
+                while (i + 1 < line.length() && line.charAt(i + 1) != '\n') {
                     i++;
                 }
-                continue;
+                return null;
             }
             if (c == '\n') {
-                c = ';';
+                // 换行就是命令分隔符。不能走 operatorAt：它按原始字符查，会把 "\n" 当成操作符 token，
+                // 于是两行命令被并成一段（program 是上一行的危险命令就成了操作数）
+                flush();
+                tokens.add(";");
+                return null;
             }
             if (isOperatorStart(c)) {
-                if (inWord) {
-                    tokens.add(word.toString());
-                    word.setLength(0);
-                    inWord = false;
-                }
-                String operator = operatorAt(line, i);
-                if ("<<".equals(operator)) {
-                    // heredoc 的正文无法与命令区分开：看不懂就问人
-                    return "不支持 heredoc 的命令";
-                }
-                tokens.add(operator);
-                i += operator.length() - 1;
-                continue;
+                flush();
+                return operator(c);
             }
             if (c == ' ' || c == '\t') {
-                if (inWord) {
-                    tokens.add(word.toString());
-                    word.setLength(0);
-                    inWord = false;
-                }
-                continue;
+                flush();
+                return null;
             }
             word.append(c);
             inWord = true;
+            return null;
         }
-        if (quote != 0) {
-            return "引号未闭合";
+
+        private String operator(char c) {
+            String operator = operatorAt(line, i);
+            if ("<<".equals(operator)) {
+                // heredoc 的正文无法与命令区分开：看不懂就问人
+                return "不支持 heredoc 的命令";
+            }
+            tokens.add(operator);
+            i += operator.length() - 1;
+            return null;
         }
-        if (inWord) {
+
+        private void flush() {
+            if (!inWord) {
+                return;
+            }
             tokens.add(word.toString());
+            word.setLength(0);
+            inWord = false;
         }
-        return null;
     }
 
     private static boolean isOperatorStart(char c) {

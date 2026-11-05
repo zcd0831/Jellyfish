@@ -1,6 +1,7 @@
 package io.github.zcd0831.jellyfish.application.action.local;
 
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -87,58 +88,104 @@ public final class CommandRules {
         return Verdict.allow();
     }
 
+    /**
+     * 一步一条规则，按顺序问；第一个"要问人"的赢。拆成表而不是一长串 if：
+     * 加一条规则只加一个条目，也不用再数圈复杂度（05-action §5.8.1 规则 10）。
+     */
+    private interface SegmentCheck {
+        Verdict check(CommandParsing.Segment segment, CommandParsing.Segment upstream);
+    }
+
+    private static final List<SegmentCheck> SEGMENT_CHECKS = Collections.unmodifiableList(Arrays.asList(
+            CommandRules::checkDangerousProgram,
+            CommandRules::checkEscalation,
+            CommandRules::checkDeviceWrites,
+            CommandRules::checkRecursiveOnCriticalDir,
+            CommandRules::checkProcessWide,
+            CommandRules::checkGit,
+            CommandRules::checkIndirectExecution,
+            CommandRules::checkPipedShell,
+            CommandRules::checkSql,
+            CommandRules::checkRemoteWipe,
+            CommandRules::checkSecrets));
+
     private static Verdict checkSegment(CommandParsing.Segment segment, CommandParsing.Segment upstream) {
-        String program = segment.program();
-        if (program.isEmpty()) {
+        if (segment.program().isEmpty()) {
             return Verdict.allow();
         }
-        if (program.startsWith("mkfs") || program.equals("shred") || program.equals("fdisk")
-                || program.equals("shutdown") || program.equals("reboot") || program.equals("halt")) {
+        for (SegmentCheck check : SEGMENT_CHECKS) {
+            Verdict verdict = check.check(segment, upstream);
+            if (!verdict.allowed()) {
+                return verdict;
+            }
+        }
+        return Verdict.allow();
+    }
+
+    /** 磁盘工具与关机：一条命令就能抹掉整块设备或整台机器。 */
+    private static Verdict checkDangerousProgram(CommandParsing.Segment segment, CommandParsing.Segment ignored) {
+        String program = segment.program();
+        if (program.startsWith("mkfs") || DANGEROUS_PROGRAMS.contains(program)) {
             return Verdict.ask("危险命令：" + program);
         }
-        if (program.equals("sudo") || program.equals("su") || program.equals("doas")) {
+        return Verdict.allow();
+    }
+
+    private static Verdict checkEscalation(CommandParsing.Segment segment, CommandParsing.Segment ignored) {
+        String program = segment.program();
+        if (ESCALATORS.contains(program)) {
             return Verdict.ask("提权执行：" + program);
         }
-        if (program.equals("dd") && anyContains(segment.operands(), "of=/dev/")) {
+        return Verdict.allow();
+    }
+
+    /** 写设备文件：`dd of=/dev/...` 与重定向到 `/dev/sd*` 都是原地覆写。 */
+    private static Verdict checkDeviceWrites(CommandParsing.Segment segment, CommandParsing.Segment ignored) {
+        if (segment.is("dd") && anyContains(segment.operands(), "of=/dev/")) {
             return Verdict.ask("原地覆写设备");
         }
         if (anyContains(segment.redirects(), "/dev/sd") || anyContains(segment.redirects(), "/dev/disk")) {
             return Verdict.ask("写入块设备");
         }
-        if (program.equals("chmod") && segment.hasFlag("R") && hasCriticalTarget(segment)) {
+        return Verdict.allow();
+    }
+
+    /** 递归动系统目录或家目录：`rm -rf /`、`chmod -R 777 /etc`。 */
+    private static Verdict checkRecursiveOnCriticalDir(CommandParsing.Segment segment, CommandParsing.Segment ignored) {
+        if (segment.is("chmod") && segment.hasFlag("R") && hasCriticalTarget(segment)) {
             return Verdict.ask("递归改动系统目录权限");
         }
-        if (program.equals("rm") && recursive(segment) && hasCriticalTarget(segment)) {
+        if (segment.is("rm") && recursive(segment) && hasCriticalTarget(segment)) {
             return Verdict.ask("递归删除系统目录或家目录");
         }
-        if (program.equals("kill") && anyContains(segment.operands(), "-1")) {
+        return Verdict.allow();
+    }
+
+    private static Verdict checkProcessWide(CommandParsing.Segment segment, CommandParsing.Segment ignored) {
+        if (segment.is("kill") && anyContains(segment.operands(), "-1")) {
             return Verdict.ask("杀全部进程");
         }
-        if (program.equals("git")) {
-            Verdict git = checkGit(segment);
-            if (!git.allowed()) {
-                return git;
-            }
-        }
-        if (program.equals("find") && (segment.hasFlag("delete") || segment.hasFlag("exec"))) {
+        return Verdict.allow();
+    }
+
+    /** `find -delete/-exec` 与 `xargs rm`：把删除藏进别的命令里。 */
+    private static Verdict checkIndirectExecution(CommandParsing.Segment segment, CommandParsing.Segment ignored) {
+        if (segment.is("find") && (segment.hasFlag("delete") || segment.hasFlag("exec"))) {
             return Verdict.ask("find 直接删除或执行命令");
         }
-        if (program.equals("xargs") && DESTRUCTIVE.contains(segment.firstArgument())) {
+        if (segment.is("xargs") && DESTRUCTIVE.contains(segment.firstArgument())) {
             return Verdict.ask("xargs 派生删除类命令");
         }
-        if (SHELLS.contains(program) && upstream != null && "|".equals(segment.separator())
+        return Verdict.allow();
+    }
+
+    /** `curl ... | sh`：把下载到的内容直接交给 shell。 */
+    private static Verdict checkPipedShell(CommandParsing.Segment segment, CommandParsing.Segment upstream) {
+        if (SHELLS.contains(segment.program()) && upstream != null && "|".equals(segment.separator())
                 && DOWNLOADERS.contains(upstream.program())) {
             return Verdict.ask("把下载到的内容直接交给 shell 执行");
         }
-        Verdict sql = checkSql(segment);
-        if (!sql.allowed()) {
-            return sql;
-        }
-        Verdict remote = checkRemoteWipe(segment);
-        if (!remote.allowed()) {
-            return remote;
-        }
-        return checkSecrets(segment);
+        return Verdict.allow();
     }
 
     /** 函数定义 + 后台执行：这是 fork 炸弹的形状，正常命令不会长这样。 */
@@ -155,7 +202,7 @@ public final class CommandRules {
     }
 
     /** 破坏性 SQL 藏在 `mysql -e '...'` / `psql -c "..."` 的实参里，所以看操作数文本。 */
-    private static Verdict checkSql(CommandParsing.Segment segment) {
+    private static Verdict checkSql(CommandParsing.Segment segment, CommandParsing.Segment ignored) {
         for (String operand : segment.operands()) {
             if (DESTRUCTIVE_SQL.matcher(operand).find()) {
                 return Verdict.ask("破坏性 SQL：" + operand);
@@ -165,10 +212,15 @@ public final class CommandRules {
     }
 
     /** 取值的 git 选项：`-C /repo` 会把子命令顶掉，不能直接用 firstArgument。 */
+    private static final List<String> DANGEROUS_PROGRAMS =
+            Arrays.asList("shred", "fdisk", "shutdown", "reboot", "halt");
+
+    private static final List<String> ESCALATORS = Arrays.asList("sudo", "su", "doas");
+
     private static final List<String> GIT_VALUE_OPTIONS = Arrays.asList(
             "-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path");
 
-    private static Verdict checkGit(CommandParsing.Segment segment) {
+    private static Verdict checkGit(CommandParsing.Segment segment, CommandParsing.Segment ignored) {
         String sub = gitSubcommand(segment);
         if ("push".equals(sub) && (segment.hasFlag("f") || segment.hasFlag("force"))) {
             return Verdict.ask("强制推送会改写远端历史");
@@ -199,7 +251,7 @@ public final class CommandRules {
     }
 
     /** `curl ... | sh` 之外的另一条路：`sh -c "$(curl -s ...)"`。 */
-    private static Verdict checkRemoteWipe(CommandParsing.Segment segment) {
+    private static Verdict checkRemoteWipe(CommandParsing.Segment segment, CommandParsing.Segment ignored) {
         if (!SHELLS.contains(segment.program())) {
             return Verdict.allow();
         }
@@ -215,14 +267,18 @@ public final class CommandRules {
      * 凭据路径：不按"读者白名单"判定 —— `grep -r SECRET ~/.aws/credentials` 就是靠这条逃过去的。
      * 任何命令的操作数里出现凭据路径都停下来问人（绊线是绊线，问一句的代价远低于外泄）。
      */
-    private static Verdict checkSecrets(CommandParsing.Segment segment) {
+    private static Verdict checkSecrets(CommandParsing.Segment segment, CommandParsing.Segment ignored) {
         for (String operand : segment.operands()) {
-            if (operand.contains(".ssh/id_") || operand.contains(".aws/credentials") || operand.endsWith(".env")
-                    || operand.contains(".ssh/id_rsa")) {
+            if (isCredentialPath(operand)) {
                 return Verdict.ask("读写凭据文件：" + operand);
             }
         }
         return Verdict.allow();
+    }
+
+    private static boolean isCredentialPath(String operand) {
+        return operand.contains(".ssh/id_") || operand.contains(".ssh/id_rsa")
+                || operand.contains(".aws/credentials") || operand.endsWith(".env");
     }
 
     /** `sh -c '...'` 与 `eval ...` 的实参是真命令，必须再解析一遍。 */

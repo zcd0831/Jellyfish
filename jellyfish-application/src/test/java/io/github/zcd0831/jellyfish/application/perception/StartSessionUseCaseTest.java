@@ -62,6 +62,7 @@ class StartSessionUseCaseTest {
 
     private StartSessionUseCase useCase() {
         when(clock.nowMillis()).thenReturn(1000L);
+        when(catalog.providers()).thenReturn(Collections.singletonList(provider(ProviderStatus.ACTIVE)));
         when(titles.generate(any(Session.class), anyString())).thenReturn("标题");
         return new StartSessionUseCase(catalog, sessions, budgets, titles, new SystemPromptAssembler(),
                 commitScope, clock, cancellations, eventPublisher);
@@ -71,6 +72,13 @@ class StartSessionUseCaseTest {
         return new AgentDefinition(AgentId.of(id), id, AgentSource.BUILT_IN,
                 new PromptTemplate("提示词", Collections.<String>emptyList()), status,
                 Collections.<ToolId>emptyList(), Collections.emptyList());
+    }
+
+    private static io.github.zcd0831.jellyfish.domain.action.model.Provider provider(ProviderStatus status) {
+        return new io.github.zcd0831.jellyfish.domain.action.model.Provider(
+                io.github.zcd0831.jellyfish.domain.shared.ProviderId.of("p1"), "p1", "http://localhost",
+                io.github.zcd0831.jellyfish.domain.action.model.ChatProtocol.OPENAI_CHAT,
+                new io.github.zcd0831.jellyfish.domain.action.model.ApiCredential("FAKE_KEY"), status);
     }
 
     private static Model model(String id, ModelStatus status) {
@@ -113,6 +121,39 @@ class StartSessionUseCaseTest {
         assertEquals(1, captor.getValue().size());
         assertEquals("session.started",
                 ((io.github.zcd0831.jellyfish.domain.shared.DomainEvent) captor.getValue().get(0)).name());
+    }
+
+    @Test
+    void 弃用的Provider其下模型不被选中() {
+        when(catalog.agents()).thenReturn(Collections.singletonList(agent("builtin.main", AgentStatus.ACTIVE)));
+        when(catalog.models()).thenReturn(Collections.singletonList(model("m1", ModelStatus.ACTIVE)));
+        when(catalog.tools()).thenReturn(Collections.singletonList(tool(ToolStatus.ACTIVE)));
+        when(catalog.skills()).thenReturn(Collections.<SkillDefinition>emptyList());
+        // useCase() 里默认塞的是 ACTIVE 的 Provider，这里要后改（Mockito 后设的桩生效）
+        StartSessionUseCase useCase = useCase();
+        when(catalog.providers()).thenReturn(Collections.singletonList(provider(ProviderStatus.DEPRECATED)));
+
+        // 规则出处：05-action §5.8.2 规则 3（Provider 弃用后其下 Model 不得被选中）
+        Result<SessionId> auto = useCase.start(null, null, "你好");
+        assertFalse(auto.isOk(), "不应退而选中弃用 Provider 下的模型");
+        assertEquals(io.github.zcd0831.jellyfish.domain.perception.session.SessionError.NO_USABLE_MODEL,
+                auto.error().error());
+
+        Result<SessionId> explicit = useCase.start(null, ModelId.of("m1"), "你好");
+        assertFalse(explicit.isOk(), "显式点名也不行");
+    }
+
+    @Test
+    void 模型没有对应Provider即不可选() {
+        when(catalog.agents()).thenReturn(Collections.singletonList(agent("builtin.main", AgentStatus.ACTIVE)));
+        when(catalog.models()).thenReturn(Collections.singletonList(model("m1", ModelStatus.ACTIVE)));
+        when(catalog.tools()).thenReturn(Collections.singletonList(tool(ToolStatus.ACTIVE)));
+        when(catalog.skills()).thenReturn(Collections.<SkillDefinition>emptyList());
+        StartSessionUseCase useCase = useCase();
+        when(catalog.providers()).thenReturn(
+                Collections.<io.github.zcd0831.jellyfish.domain.action.model.Provider>emptyList());
+
+        assertFalse(useCase.start(null, null, "你好").isOk(), "凭据挂在 Provider 上，没有 Provider 调不通");
     }
 
     @Test

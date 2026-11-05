@@ -13,6 +13,7 @@ import io.github.zcd0831.jellyfish.application.shared.port.DomainEventPublisher;
 import io.github.zcd0831.jellyfish.domain.action.agent.AgentDefinition;
 import io.github.zcd0831.jellyfish.domain.action.budget.Budget;
 import io.github.zcd0831.jellyfish.domain.action.model.Model;
+import io.github.zcd0831.jellyfish.domain.action.model.Provider;
 import io.github.zcd0831.jellyfish.domain.action.tool.ToolDefinition;
 import io.github.zcd0831.jellyfish.domain.memory.skill.SkillDefinition;
 import io.github.zcd0831.jellyfish.domain.perception.session.AgentSnapshotInput;
@@ -258,7 +259,7 @@ public final class StartSessionUseCase {
     private Model resolveModel(ModelId requested) {
         Model fallback = null;
         for (Model model : catalog.models()) {
-            if (!model.isCallable()) {
+            if (!selectable(model)) {
                 continue;
             }
             if (requested != null && model.id().equals(requested)) {
@@ -269,6 +270,24 @@ public final class StartSessionUseCase {
             }
         }
         return requested == null ? fallback : null;
+    }
+
+    /**
+     * 能不能被选中开新会话：模型自己 ACTIVE，且它所属的 Provider 也是 ACTIVE。
+     * 规则出处：05-action §5.8.2 规则 3（Provider 弃用后其下 Model 不得被选中）、§5.8.3 规则 1。
+     * <p>
+     * 找不到 Provider 也算不可选：凭据挂在 Provider 上，没有 Provider 的模型调不通（fail-closed）。
+     */
+    private boolean selectable(Model model) {
+        if (!model.isCallable()) {
+            return false;
+        }
+        for (Provider provider : catalog.providers()) {
+            if (provider.id().equals(model.providerId())) {
+                return provider.isActive();
+            }
+        }
+        return false;
     }
 
     /** 供 S3 的子会话创建复用：同一套快照冻结与台账规则。 */

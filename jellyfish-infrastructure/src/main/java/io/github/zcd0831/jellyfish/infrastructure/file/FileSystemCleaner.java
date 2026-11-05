@@ -12,8 +12,6 @@ import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.jar.JarFile;
-import java.util.jar.Manifest;
 
 /**
  * 启动技术清理：只处理**文件层面的残留**，不碰业务语义（业务不一致由 StartupReconciler 负责）。
@@ -33,6 +31,7 @@ public final class FileSystemCleaner {
         List<String> warnings = new ArrayList<String>();
         deleteArchivedSessions(warnings);
         deleteTempFiles(warnings);
+        purgeCache(warnings);
         truncateHalfLines(warnings);
         warnNestedSubDirs(warnings);
         warnPluginIdMismatch(warnings);
@@ -66,6 +65,21 @@ public final class FileSystemCleaner {
             } catch (IOException e) {
                 warnings.add("临时文件删除失败，忽略：" + temp);
             }
+        }
+    }
+
+    /** 09 §9.7：cache/ 启动时视为不可信 ⇒ 整目录清空重建（内容随时可再生成）。 */
+    private void purgeCache(List<String> warnings) {
+        Path cache = dir.cache();
+        if (!Files.isDirectory(cache)) {
+            return;
+        }
+        int before = listDirs(cache).size();
+        try {
+            deleteRecursively(cache);
+            warnings.add("已清空缓存目录（含 " + before + " 个子目录）");
+        } catch (RuntimeException e) {
+            warnings.add("缓存目录清空失败，忽略：" + e.getMessage());
         }
     }
 
@@ -109,31 +123,15 @@ public final class FileSystemCleaner {
         }
         for (Path pluginDir : listDirs(dir.plugins())) {
             String directoryName = pluginDir.getFileName().toString();
-            String declared = declaredPluginId(pluginDir);
-            if (declared == null) {
+            if (io.github.zcd0831.jellyfish.infrastructure.plugin.PluginDirectories.unrecognizable(pluginDir)) {
                 warnings.add("插件目录里没有可识别的 jar，已忽略：" + directoryName);
-            } else if (!declared.equals(directoryName)) {
-                warnings.add("插件目录名与 jar 内 Plugin-Id 不一致，已忽略：" + directoryName + " ≠ " + declared);
+            } else if (io.github.zcd0831.jellyfish.infrastructure.plugin
+                    .PluginDirectories.mismatched(pluginDir)) {
+                warnings.add("插件目录名与 jar 内 Plugin-Id 不一致，已忽略：" + directoryName + " ≠ "
+                        + io.github.zcd0831.jellyfish.infrastructure.plugin.PluginDirectories
+                        .declaredId(pluginDir));
             }
         }
-    }
-
-    private static String declaredPluginId(Path pluginDir) {
-        for (Path jar : walk(pluginDir, ".jar")) {
-            try (JarFile jarFile = new JarFile(jar.toFile())) {
-                Manifest manifest = jarFile.getManifest();
-                if (manifest == null) {
-                    continue;
-                }
-                String id = manifest.getMainAttributes().getValue("Plugin-Id");
-                if (id != null && !id.trim().isEmpty()) {
-                    return id.trim();
-                }
-            } catch (IOException e) {
-                // 坏 jar 交给装载阶段报错，这里只做到"识别不出就不装载"
-            }
-        }
-        return null;
     }
 
     /** 返回 true 表示发生了截断。 */

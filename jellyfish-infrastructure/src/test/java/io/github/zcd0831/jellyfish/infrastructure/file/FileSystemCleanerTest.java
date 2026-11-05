@@ -100,6 +100,35 @@ class FileSystemCleanerTest {
         assertFalse(warnings.toString().contains("Plugin-Id"), warnings.toString());
     }
 
+    @Test
+    void 缓存目录启动时整目录清空() throws Exception {
+        Path cache = dir().cache().resolve("fetch");
+        Files.createDirectories(cache);
+        Files.write(cache.resolve("http-1.bin"), "x".getBytes(StandardCharsets.UTF_8));
+
+        List<String> warnings = new FileSystemCleaner(dir()).clean();
+
+        assertFalse(Files.exists(dir().cache().resolve("fetch")), "缓存被视为不可信，整目录清空");
+        assertTrue(warnings.toString().contains("已清空缓存目录"), warnings.toString());
+    }
+
+    @Test
+    void 插件目录按pluginProperties里的id判定() throws Exception {
+        Path pluginDir = dir().plugins().resolve("sample");
+        Files.createDirectories(pluginDir);
+        writeJarWithPropertiesId(pluginDir.resolve("p.jar"), "other");
+
+        assertTrue(new FileSystemCleaner(dir()).clean().toString().contains("Plugin-Id 不一致"));
+    }
+
+    private static void writeJarWithPropertiesId(Path jar, String pluginId) throws IOException {
+        try (JarOutputStream out = new JarOutputStream(Files.newOutputStream(jar))) {
+            out.putNextEntry(new ZipEntry("plugin.properties"));
+            out.write(("plugin.id=" + pluginId + "\n").getBytes(StandardCharsets.UTF_8));
+            out.closeEntry();
+        }
+    }
+
     private static void writeJarWithPluginId(Path jar, String pluginId) throws IOException {
         Manifest manifest = new Manifest();
         manifest.getMainAttributes().put(Attributes.Name.MANIFEST_VERSION, "1.0");

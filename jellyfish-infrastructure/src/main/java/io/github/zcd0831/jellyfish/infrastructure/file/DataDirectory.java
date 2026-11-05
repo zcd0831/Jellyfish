@@ -67,6 +67,11 @@ public final class DataDirectory {
         return root.resolve("experience");
     }
 
+    /** 缓存目录：内容随时可再生成，启动时整目录清空（09-infrastructure §9.7）。 */
+    public Path cache() {
+        return root.resolve("cache");
+    }
+
     public Path locks() {
         return root.resolve("locks");
     }

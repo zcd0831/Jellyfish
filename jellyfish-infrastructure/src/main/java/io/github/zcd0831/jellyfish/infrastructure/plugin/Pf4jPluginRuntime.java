@@ -127,6 +127,14 @@ public final class Pf4jPluginRuntime implements PluginRuntimePort {
                 if (!Files.isDirectory(pluginDir)) {
                     continue;
                 }
+                // 目录名与 jar 内 id 不一致（或认不出 id）⇒ 整个目录不装载：
+                // 同一 id 落在两个目录里时，卸载只会删掉自己认识的那个（09 §9.7）
+                if (PluginDirectories.mismatched(pluginDir) || PluginDirectories.unrecognizable(pluginDir)) {
+                    io.github.zcd0831.jellyfish.application.shared.TechnicalLog.event("plugin.dir_ignored", 0L,
+                            "dir=" + pluginDir.getFileName(),
+                            "declared=" + PluginDirectories.declaredId(pluginDir));
+                    continue;
+                }
                 for (Path jar : Files.newDirectoryStream(pluginDir, "*.jar")) {
                     if (loadedJars.add(jar.toAbsolutePath().toString())) {
                         manager.loadPlugin(jar);

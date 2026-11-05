@@ -72,6 +72,28 @@ class Pf4jPluginRuntimeTest {
         assertFalse(Files.exists(dir.resolve("disabled.txt")), "关掉 PF4J 状态文件");
     }
 
+    @Test
+    void 目录名与jar内id不一致的插件不装载() throws IOException {
+        Files.createDirectories(dir.resolve("wrong-dir"));
+        writePluginJar(dir.resolve("wrong-dir").resolve(PLUGIN_ID + "-1.0.0.jar"));
+        Pf4jPluginRuntime runtime = new Pf4jPluginRuntime(dir, new JsonCodec(),
+                Collections.<String, Class<?>>emptyMap());
+
+        // 09-infrastructure §9.7：目录名与 jar 内 Plugin-Id 不一致 ⇒ 告警并忽略该目录（不装载）。
+        // 否则同一个 id 落在两个目录里，卸载只会删掉一个，另一个成了漏网残留。
+        assertTrue(runtime.discover().isEmpty(), "不一致的目录不许装进来");
+    }
+
+    @Test
+    void 目录名与jar内id一致的插件照常装载() throws IOException {
+        Files.createDirectories(dir.resolve(PLUGIN_ID));
+        writePluginJar(dir.resolve(PLUGIN_ID).resolve(PLUGIN_ID + "-1.0.0.jar"));
+        Pf4jPluginRuntime runtime = new Pf4jPluginRuntime(dir, new JsonCodec(),
+                Collections.<String, Class<?>>emptyMap());
+
+        assertEquals(1, runtime.discover().size(), "别把正常插件一起挡了");
+    }
+
     private static void writePluginJar(Path jar) throws IOException {
         Manifest manifest = new Manifest();
         Attributes attributes = manifest.getMainAttributes();

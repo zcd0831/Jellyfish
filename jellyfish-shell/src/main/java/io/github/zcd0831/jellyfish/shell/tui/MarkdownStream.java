@@ -34,6 +34,9 @@ final class MarkdownStream {
     private boolean skipQuoteSpace;
     private final MarkdownLink link = new MarkdownLink();
 
+    /** 正在输出"已判定不是表格"的整行：跳过块级判定，避免自我回收。 */
+    private boolean plainLine;
+
     MarkdownStream(boolean color) {
         this(color, 80);
     }
@@ -146,11 +149,18 @@ final class MarkdownStream {
             tables.append(c);
             return;
         }
-        if (lineStart && c == '|') {
+        if (lineStart && !plainLine && c == '|') {
             tables.begin(out);
             return;
         }
         if (lineStart) {
+            if (plainLine) {
+                lineStart = false;
+                acceptInline(c);
+                return;
+            }
+            tables.closeBlockAtLineStart(out);   // 表格块到这一行为止，先吐出来
+            lineStart = true;
             acceptLineStart(c);
             return;
         }
@@ -307,12 +317,21 @@ final class MarkdownStream {
     // ---------- 成行的输出 ----------
 
     /** 非表格行：按行内规则渲染并换行（此时字符是攒着的，可以整行处理）。 */
+    /**
+     * 已经被判定为"不是表格"的一整行：按行内规则渲染自己，但<strong>不能再走块级判定</strong>——
+     * 否则以 `|` 开头的普通文本会被表格缓冲重新收走，这行就消失了。
+     */
     private void emitPlainLine(String raw) {
-        for (int i = 0; i < raw.length(); i++) {
-            accept(raw.charAt(i));
+        plainLine = true;
+        try {
+            for (int i = 0; i < raw.length(); i++) {
+                accept(raw.charAt(i));
+            }
+            out.append('\n');
+        } finally {
+            plainLine = false;
+            resetLine();
         }
-        out.append('\n');
-        resetLine();
     }
 
     // ---------- 未配对的标记 ----------

@@ -38,20 +38,38 @@ final class MarkdownTableBuffer {
         return holdingLine;
     }
 
-    /** 新行到来时要先处理表格（攒行中或已在表里）。 */
+    /** 当前这一行正被表格缓冲攒着（只有这种行才在换行时交给 {@link #onLine}）。 */
     boolean collecting() {
-        return holdingLine || inTable();
+        return holdingLine;
+    }
+
+    /**
+     * 行首遇到非 `|` 字符：说明表格块到此为止，必须<strong>先</strong>把已攒的吐出来，
+     * 否则这一行的字先写进输出，表格反而被排到它后面。
+     */
+    void closeBlockAtLineStart(StringBuilder out) {
+        if (pendingHeader != null) {
+            String header = pendingHeader;
+            pendingHeader = null;
+            renderInto(out);
+            plain.emit(header);
+            return;
+        }
+        renderInto(out);
     }
 
     private boolean inTable() {
         return !tableLines.isEmpty();
     }
 
-    /** 行首遇到 `|`：开始攒这一行。 */
+    /**
+     * 行首遇到 `|`：开始攒这一行（连这个 `|` 一起攒，不能先写出去）。
+     * 先写出去的话，这一行后来判定为表格时素材缺了首列竖线、判定为普通文本时又少一个字符。
+     */
     void begin(StringBuilder out) {
         holdingLine = true;
         rawLine.setLength(0);
-        out.append('|');
+        rawLine.append('|');
     }
 
     void append(char c) {
@@ -99,10 +117,11 @@ final class MarkdownTableBuffer {
 
     /** 收尾：攒着的行与半张表都要吐出来，不能丢（08-application §8.7 不得丢 chunk）。 */
     void drain(StringBuilder out) {
-        renderInto(out);
         if (holdingLine) {
-            plain.emit(takeLine());
+            // 收尾时最后一行还没有换行：先按"一整行"处理，否则表格末行会漏到表外
+            onLine(takeLine(), out);
         }
+        renderInto(out);
         if (pendingHeader != null) {
             String header = pendingHeader;
             pendingHeader = null;

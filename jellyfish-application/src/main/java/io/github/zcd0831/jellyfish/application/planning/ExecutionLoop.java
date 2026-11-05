@@ -264,16 +264,23 @@ public final class ExecutionLoop implements SessionRunner {
                             "第 " + stepProgress(plan, step) + " 步验收通过"));
                 } else {
                     plan.markStepFailed(step.id(), report.id());
-                    commitPlan(plan);
                     publish(report.pullEvents());
                     feedbackFailed(step);
                     reflectIfNeeded(session, plan, step, report.failureReason());
                     progress.emit(ProgressEvent.of(ProgressEvent.Kind.STEP_FINISHED,
                             "第 " + stepProgress(plan, step)
                                     + " 步验收未通过：" + report.outcome()));
-                    if (advanceAfterFailure(session, plan, step,
+                    boolean terminated = advanceAfterFailure(session, plan, step,
                             report.failureReason() == null ? String.valueOf(report.outcome())
-                                    : report.failureReason())) {
+                                    : report.failureReason());
+                    // 判败与随后那一步（重试 / 纠偏 / 终止）是**同一次状态转移**，只提一次：
+                    // 拆成两次提交时，中间那个窗口里盘上是「EXECUTING 但没有当前步」，
+                    // 续跑时外循环只能当自由轮收敛，generate_plan 又因"已有执行中的计划"拒绝，
+                    // 该会话从此再也规划不了（08-application §8.8.2 T7、§8.8.1）
+                    commitPlan(plan);
+                    if (terminated) {
+                        publish(plan.pullEvents());
+                        curate(session, plan);
                         plan = null;
                         deliveryPending = true;   // 终局失败同构：沉淀后补一轮结论交付
                     }
@@ -302,21 +309,16 @@ public final class ExecutionLoop implements SessionRunner {
         RuntimePolicy policy = policies.load();
         if (failedAttempts(step) < policy.maxRetries()) {
             plan.retryStep(step.id());
-            commitPlan(plan);
             return false;
         }
         // 重试用尽：给一次纠偏机会（不占重试名额，上限由重划代次兜住）
         // 规则出处：06-planning §6.8.1 规则 6、约束表
         if (!alreadyCorrected(session, step) && plan.replanGeneration() < policy.maxReplanGeneration()) {
-            injectReplanDirective(session, step, reason);
+            injectReplanDirective(session, step, reason);   // 只 stage，跟计划一起提交
             plan.retryStep(step.id());
-            commitPlan(plan);
             return false;
         }
         plan.terminate("重划用尽：" + reason);
-        commitPlan(plan);
-        publish(plan.pullEvents());
-        curate(session, plan);
         return true;
     }
 
@@ -330,8 +332,7 @@ public final class ExecutionLoop implements SessionRunner {
                 + "\n该步已连续失败 " + failedAttempts(step) + " 次：" + reason
                 + "\n请调用 " + REPLAN_TOOL + " 修正剩余步骤；或换一种做法重做这一步。";
         Record injected = session.appendRecord(RecordRole.SYSTEM, text, null, System.currentTimeMillis());
-        commitScope.stageAppend(session.id(), injected);
-        commitScope.commit();
+        commitScope.stageAppend(session.id(), injected);   // 调用方与计划变更一起提交
     }
 
     private static String correctionMarker(PlanStep step) {

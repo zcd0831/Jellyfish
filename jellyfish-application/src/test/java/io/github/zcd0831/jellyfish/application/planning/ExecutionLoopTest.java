@@ -49,6 +49,8 @@ import java.util.Deque;
 import java.util.EnumSet;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -292,6 +294,46 @@ class ExecutionLoopTest {
         assertEquals(PlanStatus.COMPLETED, plan.status());
         assertEquals(2, plan.steps().get(0).attempts().size(), "失败后应重试同一步");
         verify(feedback).onStepFailed(any());
+    }
+
+    /**
+     * 判败与随后的重试/纠偏/终止必须是**同一次**提交：拆成两次时，中间窗口盘上是
+     * 「EXECUTING 但没有当前步」，续跑时外循环只能当自由轮收敛、generate_plan 又被
+     * 「已有执行中的计划」拒绝 ⇒ 该会话再也规划不了。
+     * 规则出处：08-application §8.8.2 T7（一次状态转移）、§8.8.1（恢复方向单向补齐）。
+     */
+    @Test
+    void 判败与重试只提交一次_盘上永远有当前步() {
+        policy = policy.adjust(Collections.<String, Object>singletonMap("maxRetries", 3));
+        planScript.add(plan(VerificationType.DETERMINISTIC));
+        when(reActLoop.runIteration(any(Session.class), any(), any(ChunkSink.class)))
+                .thenReturn(submitted("做完了"))
+                .thenReturn(submitted("做完了"))
+                .thenReturn(converged());
+        when(verificationRunner.verify(any(Session.class), any(Plan.class), any(), anyInt(), any(), any()))
+                .thenReturn(failed())
+                .thenReturn(passed());
+
+        // 必须"提交那一刻"取快照：捕获引用的话，后续 retryStep 会把已捕获的对象一起改掉
+        final java.util.List<String> written = new java.util.ArrayList<String>();
+        org.mockito.Mockito.doAnswer(invocation -> {
+            Object aggregate = invocation.getArgument(0);
+            if (aggregate instanceof Plan) {
+                Plan snapshot = (Plan) aggregate;
+                written.add(snapshot.status() + "/"
+                        + (snapshot.getCurrentStep() == null ? "无当前步"
+                        : snapshot.getCurrentStep().id().getValue()));
+            }
+            return null;
+        }).when(commitScope).stageReplace(any());
+
+        loop().run(session, ChunkSink.NOOP, NO_CONTEXT);
+
+        for (String state : written) {
+            assertFalse(state.equals(PlanStatus.EXECUTING + "/无当前步"),
+                    "盘上出现 EXECUTING 却没有当前步：判败与重试被拆成了两次提交 " + written);
+        }
+        assertTrue(written.contains(PlanStatus.COMPLETED + "/无当前步"), written.toString());
     }
 
     @Test

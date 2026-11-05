@@ -31,6 +31,7 @@ final class CommandDispatcher {
     private final ManagePluginsUseCase plugins;
     private final CatalogRepository catalog;
     private final SessionCursor cursor;
+    private final PluginCommands pluginCommands;
 
     CommandDispatcher(AnsiRenderer renderer, TurnStats stats, ManageSessionUseCase manageSession,
                       AdjustPolicyUseCase adjustPolicy, SwitchModelUseCase switchModel,
@@ -43,6 +44,7 @@ final class CommandDispatcher {
         this.plugins = plugins;
         this.catalog = catalog;
         this.cursor = cursor;
+        this.pluginCommands = new PluginCommands(renderer, plugins);
         register();
     }
 
@@ -58,9 +60,6 @@ final class CommandDispatcher {
      */
     private SessionId pendingDelete;
 
-    /** 待确认的卸载目标：卸载会摘掉运行期，不可撤销（08-application §8.9.6）。 */
-    private io.github.zcd0831.jellyfish.domain.shared.PluginId pendingUninstall;
-
     /** 命令 → 处理器；缺参数与未知命令都走 {@link #list(String)}（保持原有口径）。 */
     private final Map<String, Handler> handlers = new LinkedHashMap<String, Handler>();
 
@@ -68,7 +67,12 @@ final class CommandDispatcher {
         registerSessionCommands();
         registerModelCommands();
         registerCatalogCommands();
-        registerPluginCommands();
+        handlers.put("/plugins", new Handler() {
+            @Override
+            public void run(String[] parts) {
+                pluginCommands.run(parts);
+            }
+        });
     }
 
     /** 会话类：建/切/归档/删除/终止。 */
@@ -165,98 +169,6 @@ final class CommandDispatcher {
         handlers.put("/skills", listOnly());
     }
 
-    /**
-     * 插件类：装 / 授权 / 收回 / 卸载。「装」与「授权」分开——装只落自己的 plugin.json，
-     * 授权才让它进入世界（08-application §8.9.6）。卸载只是摘掉运行期，目录由用户自己删
-     * （05-action §5.8.6 规则 1，与"删 skills/ 目录即淘汰"同构）。
-     */
-    private void registerPluginCommands() {
-        handlers.put("/plugins", new Handler() {
-            @Override
-            public void run(String[] parts) {
-                if (parts.length == 1) {
-                    list("/plugins");
-                    return;
-                }
-                String action = parts[1];
-                if ("install".equals(action)) {
-                    installPlugin(parts);
-                } else if ("grant".equals(action)) {
-                    grantPlugin(parts);
-                } else if ("revoke".equals(action)) {
-                    revokePlugin(parts);
-                } else if ("uninstall".equals(action)) {
-                    uninstallPlugin(parts);
-                } else if ("help".equals(action)) {
-                    pluginUsage();
-                } else {
-                    renderer.info("未知子命令：" + action);
-                    pluginUsage();
-                }
-            }
-        });
-    }
-
-    private void installPlugin(String[] parts) {
-        if (parts.length < 3) {
-            pluginUsage();
-            return;
-        }
-        io.github.zcd0831.jellyfish.domain.shared.PluginId pluginId =
-                io.github.zcd0831.jellyfish.domain.shared.PluginId.of(parts[2]);
-        boolean trusted = parts.length > 3 && "trusted".equals(parts[3]);
-        print(plugins.install(pluginId, trusted));
-        renderer.info("（已安装：" + pluginId.getValue() + (trusted ? "，已信任" : "，未信任")
-                + "；要生效还需 /plugins grant " + pluginId.getValue() + " tools）");
-    }
-
-    private void grantPlugin(String[] parts) {
-        if (parts.length < 4) {
-            pluginUsage();
-            return;
-        }
-        print(plugins.grant(io.github.zcd0831.jellyfish.domain.shared.PluginId.of(parts[2]), parts[3]));
-        renderer.info("（已授权 " + parts[3] + "，立即生效）");
-    }
-
-    private void revokePlugin(String[] parts) {
-        if (parts.length < 4) {
-            pluginUsage();
-            return;
-        }
-        print(plugins.revoke(io.github.zcd0831.jellyfish.domain.shared.PluginId.of(parts[2]), parts[3]));
-        renderer.info("（已收回 " + parts[3] + "）");
-    }
-
-    /**
-     * 卸载要先确认：摘掉运行期之后插件就没了，要再装得重新 /plugins install。
-     * 与 /delete 同一套二次确认口径（08-application §8.9.4）。
-     */
-    private void uninstallPlugin(String[] parts) {
-        if (parts.length < 3) {
-            pluginUsage();
-            return;
-        }
-        io.github.zcd0831.jellyfish.domain.shared.PluginId target =
-                io.github.zcd0831.jellyfish.domain.shared.PluginId.of(parts[2]);
-        pendingUninstall = target;
-        renderer.info("要卸载插件 " + target.getValue() + "（再输入一次 /plugins uninstall "
-                + target.getValue() + " 确认；目录仍留在 plugins/ 下，由你自己删）");
-    }
-
-    private void confirmUninstall(io.github.zcd0831.jellyfish.domain.shared.PluginId target) {
-        print(plugins.uninstall(target));
-        renderer.info("（已卸载：" + target.getValue() + "）");
-    }
-
-    private void pluginUsage() {
-        renderer.info("/plugins  列出已安装的插件");
-        renderer.info("/plugins install <id> [trusted]      只落安装意图，还没有效果");
-        renderer.info("/plugins grant <id> tools            授权后插件才生效");
-        renderer.info("/plugins revoke <id> tools           收回授权（停用）");
-        renderer.info("/plugins uninstall <id>              摘掉运行期，目录自己删");
-    }
-
     /** 二次确认后的真正删除：只有走到这里才会递归删掉整个会话族。 */
     private void confirmDelete(SessionId target) {
         print(manageSession.delete(target));
@@ -288,15 +200,8 @@ final class CommandDispatcher {
             }
             renderer.info("（已取消删除）");
         }
-        if (pendingUninstall != null) {
-            io.github.zcd0831.jellyfish.domain.shared.PluginId target = pendingUninstall;
-            pendingUninstall = null;
-            if ("/plugins".equals(parts[0]) && parts.length > 2 && "uninstall".equals(parts[1])
-                    && target.getValue().equals(parts[2])) {
-                confirmUninstall(target);
-                return;
-            }
-            renderer.info("（已取消卸载）");
+        if (pluginCommands.confirmIfPending(parts)) {
+            return;
         }
         String name = parts[0];
         if ("/help".equals(name)) {

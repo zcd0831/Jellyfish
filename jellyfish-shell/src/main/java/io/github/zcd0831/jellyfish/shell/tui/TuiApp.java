@@ -69,14 +69,11 @@ public final class TuiApp implements QuestionBroker.Answerer {
 
     private InputMode mode = InputMode.PAUSED;
     private TerminateWatcher watcher;
+    private final EchoControl echo;
     /** 多行草稿：只在输入线程里读写。 */
     private final DraftInput draft = new DraftInput();
-    /** 提问单队列：所有来源排队逐个呈现，受 inputLock 保护（08-application §8.11）。 */
-    private final java.util.ArrayDeque<Pending> questions = new java.util.ArrayDeque<Pending>();
-    /** 队首问题：deliver 解析编号与「其他（自己输入）」时要用到。 */
-    private Question pendingQuestion;
-    /** 已选「其他（自己输入）」：下一行非空文本即答案。 */
-    private boolean awaitingFreeText;
+    /** 提问单队列 + 答案解释：所有来源排队逐个呈现（08-application §8.11）。 */
+    private final QuestionConsole questions;
     private final SessionCursor cursor = new SessionCursor();
     private final CommandDispatcher dispatcher;
     private LineReader reader;
@@ -98,7 +95,20 @@ public final class TuiApp implements QuestionBroker.Answerer {
         this.terminal = terminal;
         this.token = token;
         this.stats = stats;
+        this.echo = new EchoControl(terminal);
         broker.bind(this);
+        this.questions = new QuestionConsole(renderer, inputLock, new QuestionConsole.ModeSink() {
+            @Override
+            public void onQuestion() {
+                mode = InputMode.QUESTION;
+                inputLock.notifyAll();
+            }
+
+            @Override
+            public void onPaused() {
+                mode = InputMode.PAUSED;
+            }
+        });
         this.dispatcher = new CommandDispatcher(renderer, stats, manageSession, adjustPolicy, switchModel,
                 plugins, catalog, cursor);
     }
@@ -129,9 +139,17 @@ public final class TuiApp implements QuestionBroker.Answerer {
         loop();
     }
 
+    /** 提问：整体委托给 {@link QuestionConsole}（单队列 + 答案解释都在那边）。 */
+    @Override
+    public Answer ask(Question question) {
+        return questions.ask(question);
+    }
+
     /** Esc：终止本轮（在途模型调用与工具随之收手；子代理级联终止）。 */
     void onTerminate() {
-        cancelPendingQuestion();
+        synchronized (inputLock) {
+            questions.cancelPending();   // 先把排队的提问叫醒，别让主循环卡在上面
+        }
         token.cancel();
         renderer.info("（已终止本轮：可继续输入，exit 退出）");
     }
@@ -151,7 +169,7 @@ public final class TuiApp implements QuestionBroker.Answerer {
                         while (mode == InputMode.PAUSED) {
                             waitOnLock();
                         }
-                        prompt = mode == InputMode.QUESTION ? questionPrompt() : prompt();
+                        prompt = mode == InputMode.QUESTION ? questions.promptText() : prompt();
                     }
                     String line;
                     gateway.reading(reader);
@@ -204,24 +222,16 @@ public final class TuiApp implements QuestionBroker.Answerer {
     private void deliver(String line) {
         String text = line == null ? "" : line.trim();
         synchronized (inputLock) {
-            Pending current = questions.peekFirst();
-            if (mode == InputMode.QUESTION && current != null) {
+            if (mode == InputMode.QUESTION && questions.hasPending()) {
                 if (isExit(text)) {
                     // 正在等答案时退出：先终止本轮，别让主循环卡在提问上
-                    cancelAllQuestions();
+                    questions.cancelAll();
                     mode = InputMode.PAUSED;
                     token.cancel();
                     commands.offer("exit");
                     return;
                 }
-                Answer chosen = interpret(text);
-                if (chosen == null) {
-                    return;   // 无效回答：不完成提问，重新提示（08-application §8.5）
-                }
-                current.future.complete(chosen);
-                awaitingFreeText = false;
-                // 后面还有提问就由它的 ask() 收尾时接着呈现，这里先让输入线程停下
-                mode = InputMode.PAUSED;
+                questions.offer(text);   // 已交给提问（无效回答由它重新提示）
                 return;
             }
         }
@@ -316,15 +326,15 @@ public final class TuiApp implements QuestionBroker.Answerer {
         token.reset();
         stats.reset();
         renderer.status("思考中…");
-        org.jline.terminal.Attributes original = withoutEcho();
+        org.jline.terminal.Attributes original = echo.off();
         watcher.start();
-        TurnOutput sink = new TurnOutput();
+        TurnSink sink = new TurnSink(renderer);
         Result<RunSessionResult> result;
         try {
             result = runSession.run(cursor.current(), text, sink, token);
         } finally {
             watcher.stop();
-            restore(original);
+            echo.back(original);
         }
         renderer.endTurn();
         if (!result.isOk()) {
@@ -346,158 +356,6 @@ public final class TuiApp implements QuestionBroker.Answerer {
         String summary = stats.summary();
         if (summary != null) {
             renderer.divider(summary);
-        }
-    }
-
-    /** 本轮输出：记住有没有打出过字（取消时据此说清"上面那段没保存"）。 */
-    private final class TurnOutput implements ChunkSink {
-        private boolean started;
-
-        @Override
-        public void accept(String delta) {
-            if (!started) {
-                renderer.status("");
-                renderer.assistantPrefix();
-                started = true;
-            }
-            renderer.append(delta);
-        }
-
-        boolean rendered() {
-            return started;
-        }
-    }
-
-    /**
-     * 提问：在锁内先把问题打出去，再切到"等答案"，输入线程才开始画 `回答>`。
-     * 顺序反了就会出现"提示符在前、问题被顶到下一行"。
-     */
-    @Override
-    public Answer ask(Question question) {
-        Pending mine = new Pending(question);
-        synchronized (inputLock) {
-            // 单队列：后来的排在队尾，等前一个答完才呈现（08-application §8.11）
-            questions.addLast(mine);
-            if (questions.peekFirst() == mine) {
-                present(mine);
-            }
-        }
-        try {
-            return mine.future.get();
-        } catch (InterruptedException interrupted) {
-            Thread.currentThread().interrupt();
-            return Answer.cancelled();
-        } catch (java.util.concurrent.ExecutionException broken) {
-            return Answer.cancelled();
-        } finally {
-            synchronized (inputLock) {
-                questions.remove(mine);
-                Pending next = questions.peekFirst();
-                if (next != null) {
-                    present(next);          // 唤醒下一个提问方，别的来源不必永远等
-                } else {
-                    pendingQuestion = null;
-                    awaitingFreeText = false;
-                    mode = InputMode.PAUSED;
-                }
-            }
-        }
-    }
-
-    /** 呈现队首问题：调用方必须已持 inputLock。 */
-    private void present(Pending entry) {
-        pendingQuestion = entry.question;
-        awaitingFreeText = false;
-        renderer.question(sourceLabel(entry.question.source()), entry.question.prompt(),
-                entry.question.options());
-        mode = InputMode.QUESTION;
-        inputLock.notifyAll();
-    }
-
-    /** 一次提问的登记项。 */
-    private static final class Pending {
-
-        private final Question question;
-        private final CompletableFuture<Answer> future = new CompletableFuture<Answer>();
-
-        Pending(Question question) {
-            this.question = question;
-        }
-    }
-
-    /**
-     * 轮次进行中关掉回显：终端不在 readLine 里，敲键会被 TTY 直接回显到正文中间。
-     * ISIG 不动，Ctrl-C 仍然能到达信号处理器。
-     */
-    private org.jline.terminal.Attributes withoutEcho() {
-        try {
-            org.jline.terminal.Attributes original = terminal.getAttributes();
-            org.jline.terminal.Attributes copy = new org.jline.terminal.Attributes(original);
-            copy.setLocalFlag(org.jline.terminal.Attributes.LocalFlag.ECHO, false);
-            terminal.setAttributes(copy);
-            return original;
-        } catch (RuntimeException unsupported) {
-            return null;
-        }
-    }
-
-    private void restore(org.jline.terminal.Attributes original) {
-        if (original == null) {
-            return;
-        }
-        try {
-            terminal.setAttributes(original);
-        } catch (RuntimeException ignored) {
-            // 恢复失败交给终端自己兜底
-        }
-    }
-
-    /** 等答案时的提示符：选了「其他」就要自由文本，否则提示可选的编号范围。 */
-    private String questionPrompt() {
-        Question question = pendingQuestion;
-        if (question == null || question.options() == null || question.options().isEmpty()) {
-            return "回答（Esc 终止）> ";
-        }
-        if (awaitingFreeText) {
-            return "回答（Esc 终止）> ";
-        }
-        return "回答（1-" + (question.options().size() + 1) + "，Esc 终止）> ";
-    }
-
-    /**
-     * 把一行输入解释成回答；返回 null 表示这行不算回答，要重新提示。
-     * 规则出处：08-application §8.5（带 options 时按编号选，自动追加「其他（自己输入）」）。
-     */
-    private Answer interpret(String text) {
-        Question question = pendingQuestion;
-        ChoiceInput.Result result = ChoiceInput.parse(text,
-                question == null ? null : question.options(), awaitingFreeText);
-        if (result.wantsFreeText) {
-            awaitingFreeText = true;
-            renderer.info("请输入你的回答（Esc 终止）");
-            return null;
-        }
-        if (result.reject != null) {
-            renderer.invalidAnswer(result.reject);
-            return null;
-        }
-        return Answer.answered(result.answer);
-    }
-
-    /** 终止时唤醒阻塞中的提问（Esc 与 exit 共用）。 */
-    private void cancelPendingQuestion() {
-        synchronized (inputLock) {
-            cancelAllQuestions();
-            pendingQuestion = null;
-            awaitingFreeText = false;
-            mode = InputMode.PAUSED;
-        }
-    }
-
-    /** 把排队的提问全部取消：只取消队首会把后排永久留在 future 上。调用方已持锁。 */
-    private void cancelAllQuestions() {
-        while (!questions.isEmpty()) {
-            questions.pollFirst().future.complete(Answer.cancelled());
         }
     }
 
@@ -537,18 +395,4 @@ public final class TuiApp implements QuestionBroker.Answerer {
         }
     }
 
-    private static String sourceLabel(Question.Source source) {
-        switch (source) {
-            case SUBAGENT:
-                return "子代理";
-            case VERIFICATION:
-                return "验收";
-            case APPROVAL:
-                return "放行审批";
-            case BUDGET:
-                return "预算预警";
-            default:
-                return "会话";
-        }
-    }
 }

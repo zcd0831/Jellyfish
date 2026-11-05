@@ -510,4 +510,31 @@ class ModelInvokerTest {
         };
     }
 
+    /**
+     * 对端在流中途干净关闭（没有 [DONE]）不能当成功：半截输出不落盘，按可重试处理。
+     * 规则出处：04-perception §4.8.1（流式中断 ⇒ 整条输出连同 reasoning 都不落）。
+     */
+    @Test
+    void 流没有收尾标记不当成功() {
+        FakeCatalog catalog = new FakeCatalog();
+        catalog.models.add(model("m1", 1000));
+        catalog.providers.add(provider());
+        transport.streamWith(Arrays.asList("{\"choices\":[{\"delta\":{\"content\":\"半截\"}}]}"));
+        final StringBuilder seen = new StringBuilder();
+
+        try {
+            invoker(catalog, policyWithFallback(), "sk-test").invokeStreaming(request("m1", 10),
+                    new ChunkSink() {
+                        @Override
+                        public void accept(String delta) {
+                            seen.append(delta);
+                        }
+                    });
+            org.junit.jupiter.api.Assertions.fail("流没读完不能成功返回");
+        } catch (io.github.zcd0831.jellyfish.application.action.port.ModelInvocationException expected) {
+            assertEquals(ModelError.UNAVAILABLE, expected.error(), expected.getMessage());
+        }
+        org.junit.jupiter.api.Assertions.assertFalse(sleeps.isEmpty(), "被当成网络中断，要进入重试");
+    }
+
 }

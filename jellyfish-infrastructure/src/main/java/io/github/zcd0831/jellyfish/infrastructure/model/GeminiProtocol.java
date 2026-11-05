@@ -198,12 +198,14 @@ public final class GeminiProtocol implements ChatProtocolAdapter {
         private final List<ToolCall> calls = new ArrayList<ToolCall>();
         private ModelUsage usage;
         private String lastDelta;
+        private boolean completed;
         private String lastName;
         private String lastArguments;
 
         @Override
         public boolean accept(String data) {
             if ("[DONE]".equals(data)) {
+                completed = true;
                 return false;
             }
             JsonNode root = read(data);
@@ -234,6 +236,11 @@ public final class GeminiProtocol implements ChatProtocolAdapter {
 
         private boolean sameAsLast(ToolCall call) {
             return call.name().equals(lastName) && call.argumentsJson().equals(lastArguments);
+        }
+
+        @Override
+        public boolean completed() {
+            return completed;
         }
 
         @Override

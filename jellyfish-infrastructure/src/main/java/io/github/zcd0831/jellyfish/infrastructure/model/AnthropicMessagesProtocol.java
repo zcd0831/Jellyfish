@@ -226,6 +226,7 @@ public final class AnthropicMessagesProtocol implements ChatProtocolAdapter {
         private long outputTokens;
         private boolean hasUsage;
         private String lastDelta;
+        private boolean completed;
 
         @Override
         public boolean accept(String data) {
@@ -276,6 +277,7 @@ public final class AnthropicMessagesProtocol implements ChatProtocolAdapter {
                     hasUsage = true;
                 }
             } else if ("message_stop".equals(type)) {
+                completed = true;
                 return false;
             }
             return true;
@@ -287,6 +289,11 @@ public final class AnthropicMessagesProtocol implements ChatProtocolAdapter {
             }
             text.append(piece);
             lastDelta = piece;
+        }
+
+        @Override
+        public boolean completed() {
+            return completed;
         }
 
         @Override

@@ -36,6 +36,12 @@ public interface ChatProtocolAdapter {
         /** 当前 chunk 的文本增量；仅供外壳打字机效果。 */
         String lastDelta();
 
+        /**
+         * 是否读到了收尾标记（`[DONE]` / `message_stop`）。
+         * 没读到说明流在中途断掉——半截输出不能当完整响应落盘（04-perception §4.8.1）。
+         */
+        boolean completed();
+
         ModelInvocationResult result(ModelId servedModelId);
     }
 }

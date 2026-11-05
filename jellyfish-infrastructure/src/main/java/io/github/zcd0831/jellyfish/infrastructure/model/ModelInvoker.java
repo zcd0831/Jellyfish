@@ -273,6 +273,11 @@ public final class ModelInvoker implements ModelInvocationPort {
             }
             throw new RetryableFailure("流式读取失败：" + e.getMessage(), null, e);
         }
+        if (!accumulator.completed()) {
+            // 对端干净关闭（无 [DONE] / message_stop）：半截输出不能当完整响应落盘，按可重试处理
+            // 规则出处：04-perception §4.8.1（流式中断 ⇒ 整条 assistant 输出连同 reasoning 都不落）
+            throw new RetryableFailure("流在收尾标记前结束（" + model.id().getValue() + "）", null, null);
+        }
         return withUsageFallback(request, model, accumulator.result(model.id()));
     }
 

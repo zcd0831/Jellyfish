@@ -181,11 +181,13 @@ public final class ChatCompletionsProtocol implements ChatProtocolAdapter {
         private final Map<Integer, CallBuilder> calls = new LinkedHashMap<>();
         private ModelUsage usage;
         private String lastDelta;
+        private boolean completed;
 
         /** 返回 false 表示这是最后一条（`[DONE]`）。 */
         @Override
         public boolean accept(String data) {
             if ("[DONE]".equals(data)) {
+                completed = true;
                 return false;
             }
             JsonNode chunk = read(data);
@@ -220,6 +222,11 @@ public final class ChatCompletionsProtocol implements ChatProtocolAdapter {
         }
 
         /** 当前这条 chunk 的文本增量；仅供外壳打字机效果，不回灌给模型。 */
+        @Override
+        public boolean completed() {
+            return completed;
+        }
+
         @Override
         public String lastDelta() {
             return lastDelta;

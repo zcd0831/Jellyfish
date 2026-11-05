@@ -52,6 +52,12 @@ final class CommandDispatcher {
         void run(String[] parts);
     }
 
+    /**
+     * 待确认的删除目标：`/delete` 是递归删掉整个会话族、无法撤销，
+     * 所以外壳要先二次确认（08-application §8.9.4「需外壳先做二次确认」）。
+     */
+    private SessionId pendingDelete;
+
     /** 命令 → 处理器；缺参数与未知命令都走 {@link #list(String)}（保持原有口径）。 */
     private final Map<String, Handler> handlers = new LinkedHashMap<String, Handler>();
 
@@ -99,8 +105,13 @@ final class CommandDispatcher {
         handlers.put("/delete", new Handler() {
             @Override
             public void run(String[] parts) {
-                print(manageSession.delete(cursor.current()));
-                cursor.clear();
+                SessionId target = cursor.current();
+                if (target == null) {
+                    return;
+                }
+                renderer.info("要删除会话 " + target.getValue() + "（含它的全部子会话），此操作不可撤销。"
+                        + "\n再输入一次 /delete 确认，输入其它内容即取消。");
+                pendingDelete = target;
             }
         });
         handlers.put("/cancel", new Handler() {
@@ -151,6 +162,15 @@ final class CommandDispatcher {
         handlers.put("/plugins", listOnly());
     }
 
+    /** 二次确认后的真正删除：只有走到这里才会递归删掉整个会话族。 */
+    private void confirmDelete(SessionId target) {
+        print(manageSession.delete(target));
+        if (target.equals(cursor.current())) {
+            cursor.clear();
+        }
+        renderer.info("（已删除：" + target.getValue() + " 及其子会话）");
+    }
+
     /** 目录类命令：只读地列出当前目录内容。 */
     private Handler listOnly() {
         return new Handler() {
@@ -164,6 +184,15 @@ final class CommandDispatcher {
     /** 处理一行 `/` 命令；返回后调用方继续读下一行。 */
     void command(String line) {
         String[] parts = line.split("\\s+");
+        if (pendingDelete != null) {
+            SessionId target = pendingDelete;
+            pendingDelete = null;
+            if ("/delete".equals(parts[0])) {
+                confirmDelete(target);
+                return;
+            }
+            renderer.info("（已取消删除）");
+        }
         String name = parts[0];
         if ("/help".equals(name)) {
             renderer.info("/sessions /open <id> /new /archive /delete /cancel [id] /policy k=v "

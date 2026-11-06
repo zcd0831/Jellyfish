@@ -28,6 +28,9 @@ final class CommandToolHandler {
     static final long KILL_POLL_MILLIS = 100;
     /** TERM 之后给多少宽限再上 KILL：够 shell 跑完 trap，又不至于让用户等。 */
     static final long KILL_GRACE_MILLIS = 500;
+    /** 补扫轮数：快照之后脚本仍可能 fork，扫一次会偶发漏杀。 */
+    static final int SWEEP_ROUNDS = 6;
+    static final long SWEEP_PAUSE_MILLIS = 60;
 
     private CommandToolHandler() {
     }
@@ -107,39 +110,71 @@ final class CommandToolHandler {
         return thread;
     }
 
-    /** JDK 8 没有 ProcessHandle.descendants()：先让 pkill 收子进程，再强杀本体。 */
     /**
-     * 杀整棵进程树：先拍一张"根→子孙"的快照，再<strong>自上而下</strong>发 TERM，宽限后 KILL。
+     * 杀整棵进程树：先拍"根→子孙"快照并**从根往下**发 TERM，再反复扫几轮补上"快照之后才 fork 出来的"子孙。
      * <p>
-     * 两个坑：<br>
-     * ① 只 `pkill -P pid` 打直接子进程，孙进程（脚本自己再起的子进程）会留下来继续跑；<br>
+     * 三个坑：<br>
+     * ① 只 `pkill -P pid` 打直接子进程，孙进程会留下来继续跑；<br>
      * ② 先杀子进程再杀父进程更糟——shell 等到子进程结束会<strong>接着执行下一条命令</strong>
-     * （实测 `sh -c "sleep 2; touch 标记"` 会因此真的把标记写出来）。
+     * （实测 `sh -c "sleep 2; touch 标记"` 会因此真的把标记写出来）；<br>
+     * ③ 只扫一次也不够：快照与发信号之间脚本仍可能 fork（实测偶发漏杀，孙进程写出了标记）。
+     * 所以按"根先死 + 多轮补扫"来收：根一死就没有"接着跑下一条"的机会，剩下的只是把
+     * 快照之后冒出来的子孙找出来打死。
      * 规则出处：08-application §8.9.4.1（内置工具命中令牌即杀进程树）。
      */
     private static void kill(Process process) {
         long pid = pidOf(process);
-        if (pid > 0) {
-            for (long target : treeOf(pid)) {
-                signal(target, "TERM");
+        if (pid <= 0) {
+            process.destroyForcibly();
+            return;
+        }
+        List<Long> known = new ArrayList<Long>();   // 父在前、子在后
+        collectTree(pid, known);
+        // 根先死：它一旦有权继续，就会接着执行下一条命令（那正是"标记还是被写出来"的来源）
+        signal(pid, "TERM");
+        for (int round = 0; round < SWEEP_ROUNDS; round++) {
+            boolean grown = collectNewDescendants(known);
+            for (long each : known) {
+                signal(each, round == 0 ? "TERM" : "KILL");
             }
-            if (!exitedWithin(process, KILL_GRACE_MILLIS)) {
-                for (long target : treeOf(pid)) {
-                    signal(target, "KILL");
-                }
+            if (!grown && exitedWithin(process, KILL_GRACE_MILLIS)) {
+                break;
             }
+            pause(SWEEP_PAUSE_MILLIS);
+        }
+        for (long each : known) {
+            signal(each, "KILL");   // 收尾一律 KILL：TERM 被忽略的进程不能留
         }
         process.destroyForcibly();
     }
 
-    /** 根在前、子孙在后：TERM 必须先把父进程打死，否则脚本会继续往下跑。 */
-    private static List<Long> treeOf(long pid) {
-        List<Long> tree = new ArrayList<Long>();
-        tree.add(pid);
-        for (long child : childrenOf(pid)) {
-            tree.addAll(treeOf(child));
+    /** 把 known 里每个进程新出现的子孙追加进去（保持"父在前"的顺序），返回是否长出了新 pid。 */
+    private static boolean collectNewDescendants(List<Long> known) {
+        boolean grown = false;
+        for (long each : new ArrayList<Long>(known)) {
+            for (long child : childrenOf(each)) {
+                if (!known.contains(child)) {
+                    known.add(child);
+                    grown = true;
+                }
+            }
         }
-        return tree;
+        return grown;
+    }
+
+    private static void pause(long millis) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private static void collectTree(long pid, List<Long> into) {
+        into.add(pid);
+        for (long child : childrenOf(pid)) {
+            collectTree(child, into);
+        }
     }
 
     private static void signal(long pid, String signal) {

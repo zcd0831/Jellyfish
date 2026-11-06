@@ -336,6 +336,54 @@ class ExecutionLoopTest {
     }
 
     /**
+     * 计划播报按 planId 去重：一次 run 里同一个计划只播报一次（重划不改 planId，只发 PLAN_REPLAN）。
+     * 规则出处：08-application §8.6 约定 2。
+     */
+    @Test
+    void 同一计划一次run里只播报一次() {
+        policy = policy.adjust(Collections.<String, Object>singletonMap("maxRetries", 3));
+        planScript.add(plan(VerificationType.DETERMINISTIC));
+        // 判败 → 重试 ⇒ 第二轮会重新读到同一个计划（重读是必须的：重划用另一个实例）
+        when(reActLoop.runIteration(any(Session.class), any(), any(ChunkSink.class)))
+                .thenReturn(submitted("第一次"))
+                .thenReturn(submitted("第二次"))
+                .thenReturn(converged());
+        when(verificationRunner.verify(any(Session.class), any(Plan.class), any(), anyInt(), any(), any()))
+                .thenReturn(failed())
+                .thenReturn(passed());
+        when(plans.findRunning(SessionId.of("s1"))).thenAnswer(invocation -> planScript.isEmpty()
+                ? Collections.<Plan>emptyList() : Collections.singletonList(planScript.peek()));
+
+        loop().run(session, ChunkSink.NOOP, NO_CONTEXT);
+
+        int created = 0;
+        for (io.github.zcd0831.jellyfish.application.shared.ProgressEvent event : progressEvents) {
+            if (event.kind() == io.github.zcd0831.jellyfish.application.shared.ProgressEvent.Kind.PLAN_CREATED) {
+                created++;
+            }
+        }
+        assertEquals(1, created, "同一个 planId 只该播报一次：实际 " + created);
+    }
+
+    /**
+     * 终止是终态：内循环抛 CancellationException 时必须上抛（不能当成"模型不可用"静默收敛），
+     * 也不会走到验证 / 判败。
+     * 规则出处：06-planning §6.8.1 规则 9、08-application §8.9.4.1。
+     */
+    @Test
+    void 内循环被终止时上抛且不判败() {
+        planScript.add(plan(VerificationType.DETERMINISTIC));
+        when(reActLoop.runIteration(any(Session.class), any(), any(ChunkSink.class)))
+                .thenThrow(new java.util.concurrent.CancellationException("用户按了 Esc"));
+
+        assertThrows(java.util.concurrent.CancellationException.class,
+                () -> loop().run(session, ChunkSink.NOOP, NO_CONTEXT));
+        verify(verificationRunner, never()).verify(any(Session.class), any(Plan.class), any(), anyInt(),
+                any(), any());
+        verify(commitScope, never()).stageFact(any());
+    }
+
+    /**
      * 降级换了模型必须让用户看见：内循环只改会话状态，播报在外循环。
      * 规则出处：08-application §8.6（MODEL_SWITCHED 属阶段类事件）。
      */

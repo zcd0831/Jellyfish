@@ -8,13 +8,9 @@ import io.github.zcd0831.jellyfish.application.action.SessionToolScope;
 import io.github.zcd0831.jellyfish.application.memory.StepTrace;
 import io.github.zcd0831.jellyfish.application.memory.port.ReflectionRepository;
 import io.github.zcd0831.jellyfish.application.action.port.CatalogRepository;
-import io.github.zcd0831.jellyfish.application.action.port.ChatMessage;
-import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationRequest;
-import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationResult;
 import io.github.zcd0831.jellyfish.application.perception.port.PolicyRepository;
 import io.github.zcd0831.jellyfish.application.planning.port.PlanRepository;
 import io.github.zcd0831.jellyfish.application.shared.ChunkSink;
-import io.github.zcd0831.jellyfish.application.shared.Json;
 import io.github.zcd0831.jellyfish.application.shared.ProgressEvent;
 import io.github.zcd0831.jellyfish.application.shared.port.CancellationRegistry;
 import io.github.zcd0831.jellyfish.application.shared.port.CommitScope;
@@ -28,10 +24,8 @@ import io.github.zcd0831.jellyfish.domain.perception.session.Session;
 import io.github.zcd0831.jellyfish.domain.planning.plan.Attempt;
 import io.github.zcd0831.jellyfish.domain.planning.plan.AttemptOutcome;
 import io.github.zcd0831.jellyfish.domain.planning.plan.Plan;
-import io.github.zcd0831.jellyfish.domain.planning.plan.PlanCreationException;
 import io.github.zcd0831.jellyfish.domain.planning.plan.PlanFactory;
 import io.github.zcd0831.jellyfish.domain.planning.plan.PlanStatus;
-import io.github.zcd0831.jellyfish.domain.planning.plan.PlanStep;
 import io.github.zcd0831.jellyfish.domain.memory.reflection.Reflection;
 import io.github.zcd0831.jellyfish.domain.planning.plan.PlanStep;
 import io.github.zcd0831.jellyfish.domain.planning.plan.StepStatus;
@@ -41,7 +35,6 @@ import io.github.zcd0831.jellyfish.domain.shared.DomainEvent;
 import io.github.zcd0831.jellyfish.domain.shared.ExperienceId;
 import io.github.zcd0831.jellyfish.domain.shared.PlanId;
 import io.github.zcd0831.jellyfish.domain.shared.AgentId;
-import io.github.zcd0831.jellyfish.domain.shared.SessionId;
 import io.github.zcd0831.jellyfish.domain.shared.SkillId;
 import io.github.zcd0831.jellyfish.domain.shared.StepId;
 import io.github.zcd0831.jellyfish.domain.shared.ToolId;
@@ -343,6 +336,11 @@ public final class ExecutionLoop implements SessionRunner {
         return "[重划纠偏 step=" + step.id().getValue() + "]";
     }
 
+    /** 经验注入的标记：与纠偏标记同为"可推导状态"的去重键，集中在一处便于一起改。 */
+    private static String experienceMarker(PlanStep step) {
+        return "[经验注入 step=" + step.id().getValue() + "]";
+    }
+
     /** 去重靠流水本身：每个 step 最多一次纠偏（06-planning §6.8.1 规则 6）。 */
     private static boolean alreadyCorrected(Session session, PlanStep step) {
         String marker = correctionMarker(step);
@@ -364,7 +362,7 @@ public final class ExecutionLoop implements SessionRunner {
         if (ids.isEmpty() || alreadyInjected(session, step)) {
             return;
         }
-        StringBuilder text = new StringBuilder("[经验注入 step=").append(step.id().getValue()).append(']');
+        StringBuilder text = new StringBuilder(experienceMarker(step));
         int limit = policies.load().toolResultTruncateLength();
         for (ExperienceId id : ids) {
             java.util.Optional<io.github.zcd0831.jellyfish.domain.memory.experience.Experience> found =
@@ -394,7 +392,7 @@ public final class ExecutionLoop implements SessionRunner {
      * 去重靠流水本身：标记是"可推导状态"，不落库。
      */
     private static boolean alreadyInjected(Session session, PlanStep step) {
-        String marker = "[经验注入 step=" + step.id().getValue() + "]";
+        String marker = experienceMarker(step);
         for (Record record : session.records()) {
             if (record.role() == RecordRole.SYSTEM && record.content() != null
                     && record.content().startsWith(marker)) {
@@ -511,8 +509,8 @@ public final class ExecutionLoop implements SessionRunner {
     }
 
     private String reflectionOf(Attempt attempt) {
-        return reflections.get(attempt.reflectionId()).isPresent()
-                ? reflections.get(attempt.reflectionId()).get().conclusion() : null;
+        java.util.Optional<Reflection> found = reflections.get(attempt.reflectionId());
+        return found.isPresent() ? found.get().conclusion() : null;
     }
 
     /**
@@ -572,14 +570,6 @@ public final class ExecutionLoop implements SessionRunner {
         return plan.status() == PlanStatus.EXECUTING ? plan : null;
     }
 
-    private java.util.Set<ToolId> boundTools(Session session) {
-        for (AgentDefinition agent : catalog.agents()) {
-            if (agent.id().equals(session.agentId())) {
-                return new java.util.LinkedHashSet<ToolId>(agent.listBoundToolIds());
-            }
-        }
-        return Collections.emptySet();
-    }
 
     /**
      * 降级换模型必须让用户看见：内循环只改会话状态，播报统一在外循环（08-application §8.6 阶段类）。

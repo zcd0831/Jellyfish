@@ -167,6 +167,7 @@ public final class ExecutionLoop implements SessionRunner {
                 // 交付轮不挂任何工具：白名单置空，不改 tools 快照（06-planning §6.9.1）
                 scope.restrict(session.id(), Collections.<ToolId>emptySet());
             }
+            io.github.zcd0831.jellyfish.domain.shared.ModelId modelBefore = session.activeModelId();
             IterationResult iteration;
             try {
                 iteration = reActLoop.runIteration(session, step, sink);
@@ -182,6 +183,8 @@ public final class ExecutionLoop implements SessionRunner {
                     scope.clear(session.id());
                 }
             }
+
+            announceDowngrade(session, modelBefore);
 
             // 重划由模型在内循环里调 replan_plan 发起：外循环只按“代次变化”重读实例、
             // 重分配经验并播报。规则出处：06-planning §6.8.1 规则 6
@@ -576,6 +579,18 @@ public final class ExecutionLoop implements SessionRunner {
             }
         }
         return Collections.emptySet();
+    }
+
+    /**
+     * 降级换模型必须让用户看见：内循环只改会话状态，播报统一在外循环（08-application §8.6 阶段类）。
+     */
+    private void announceDowngrade(Session session, io.github.zcd0831.jellyfish.domain.shared.ModelId before) {
+        io.github.zcd0831.jellyfish.domain.shared.ModelId now = session.activeModelId();
+        if (before.equals(now)) {
+            return;
+        }
+        progress.emit(ProgressEvent.of(ProgressEvent.Kind.MODEL_SWITCHED,
+                "模型降级：" + before.getValue() + " → " + now.getValue()));
     }
 
     private void commitPlan(Plan plan) {

@@ -49,6 +49,8 @@ public final class ReActLoop {
     private static final String LOAD_SKILL = "load_skill";
     /** 环境故障/取消时，给未闭合的工具调用补的中止事实。 */
     private static final String ABORTED_TOOL_RESULT = "（本轮中止：模型不可用或用户取消，工具结果未回灌）";
+    /** 结论交付轮没有当前 step，`submit_step` 无处可提交（06-planning §6.9.1 关键分支）。 */
+    private static final String NO_STEP_TO_SUBMIT = "当前没有可提交的步骤：本轮的提交无处可去，直接说结论即可";
 
     private final ModelInvocationPort model;
     private final ToolExecutor toolExecutor;
@@ -131,15 +133,14 @@ public final class ReActLoop {
                     String reasoning = (text == null && first) ? result.reasoning() : null;
                     first = false;
                     if (SUBMIT_STEP.equals(call.name())) {
-                        submittedSummary = summaryOf(call);
-                        submittedArtifacts = artifactsOf(call);
-                        submit(session, call, reasoning, turnId, producer, pending);
+                        submit(session, step, call, reasoning, turnId, producer, pending);
+                        if (step != null) {
+                            submittedSummary = summaryOf(call);
+                            submittedArtifacts = artifactsOf(call);
+                        }
                         continue;
                     }
-                    if (LOAD_SKILL.equals(call.name())) {
-                        recordSkillUse(call, usedSkills);
-                    }
-                    executeTool(session, call, reasoning, turnId, producer, pending);
+                    executeTool(session, call, reasoning, turnId, producer, pending, usedSkills);
                 }
                 if (submittedSummary != null) {
                     return IterationResult.submitted(submittedSummary, submittedArtifacts, round, usedSkills);
@@ -190,15 +191,26 @@ public final class ReActLoop {
                 : session.systemPromptSnapshot().getToolList();
     }
 
-    /** submit_step 只登记，不执行：真正的判定在外循环的验证链（06-planning §6.8.2）。 */
-    private void submit(Session session, ToolCall call, String reasoning, String turnId,
+    /**
+     * submit_step 只登记，不执行：真正的判定在外循环的验证链（06-planning §6.8.2）。
+     * <p>没有当前 step 时（结论交付轮）提交无处可去：**回落成失败结果**，别让模型以为交上去了
+     * （06-planning §6.9.1 关键分支：交付轮 `submit_step` 不可用）。
+     */
+    private void submit(Session session, PlanStep step, ToolCall call, String reasoning, String turnId,
                         String producer, List<ToolCall> pending) {
+        appendToolRound(session, call, reasoning, turnId, producer, pending,
+                step == null ? NO_STEP_TO_SUBMIT : "已登记，等待验收");
+    }
+
+    /** 一次工具往返：请求先落盘，结果紧随其后（两者共享 turnId，06-planning §6.8.1 规则 11）。 */
+    private void appendToolRound(Session session, ToolCall call, String reasoning, String turnId,
+                                 String producer, List<ToolCall> pending, String resultText) {
         Record request = session.appendRecord(RecordDraft.builder(RecordRole.TOOL_REQUEST, describe(call))
                 .reasoning(reasoning).turnId(turnId).producerModelId(producer).build(),
                 System.currentTimeMillis());
         commitAppend(session, request);
         pending.add(call);
-        Record result = session.appendRecord(RecordDraft.builder(RecordRole.TOOL_RESULT, "已登记，等待验收")
+        Record result = session.appendRecord(RecordDraft.builder(RecordRole.TOOL_RESULT, resultText)
                 .turnId(turnId).producerModelId(producer).build(), System.currentTimeMillis());
         pending.remove(call);
         commitAppend(session, result);
@@ -233,7 +245,7 @@ public final class ReActLoop {
     }
 
     private void executeTool(Session session, ToolCall call, String reasoning, String turnId,
-                             String producer, List<ToolCall> pending) {
+                             String producer, List<ToolCall> pending, List<SkillId> usedSkills) {
         Record request = session.appendRecord(RecordDraft.builder(RecordRole.TOOL_REQUEST, describe(call))
                 .reasoning(reasoning).turnId(turnId).producerModelId(producer).build(),
                 System.currentTimeMillis());
@@ -254,6 +266,8 @@ public final class ReActLoop {
             Record injected = session.appendRecord(RecordRole.SYSTEM, outcome.content(), null,
                     System.currentTimeMillis());
             commitAppend(session, injected);
+            // 只有真的注入了 SOP 才算"这次用过这个技能"（07-memory §7.8.3）
+            recordSkillUse(call, usedSkills);
         }
     }
 

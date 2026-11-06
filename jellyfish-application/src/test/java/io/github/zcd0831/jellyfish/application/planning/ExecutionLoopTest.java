@@ -336,6 +336,28 @@ class ExecutionLoopTest {
     }
 
     /**
+     * 降级换了模型必须让用户看见：内循环只改会话状态，播报在外循环。
+     * 规则出处：08-application §8.6（MODEL_SWITCHED 属阶段类事件）。
+     */
+    @Test
+    void 降级换模型时播报模型已切换() {
+        when(reActLoop.runIteration(any(Session.class), any(), any(ChunkSink.class))).thenAnswer(call -> {
+            session.switchModel(ModelId.of("m2"));   // 模型端口降级到备用链
+            return converged();
+        });
+
+        loop().run(session, ChunkSink.NOOP, NO_CONTEXT);
+
+        boolean announced = false;
+        for (io.github.zcd0831.jellyfish.application.shared.ProgressEvent event : progressEvents) {
+            if (event.kind() == io.github.zcd0831.jellyfish.application.shared.ProgressEvent.Kind.MODEL_SWITCHED) {
+                announced = event.message().contains("m1") && event.message().contains("m2");
+            }
+        }
+        assertTrue(announced, "降级要播报（带上旧模型与新模型）：" + progressEvents);
+    }
+
+    /**
      * 反思分支也不许自己提交一次：判败 → 反思 → 重试必须落在同一次提交里。
      * 反思自己 commit 时，盘上会出现「EXECUTING 但没有当前步」，崩溃续跑会把"本该重试"判成计划失败。
      * 规则出处：06-planning §6.8.1「无当前步即终结」、08-application §8.8.2 T7。

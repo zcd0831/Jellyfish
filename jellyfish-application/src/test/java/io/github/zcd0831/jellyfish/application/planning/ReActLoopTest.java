@@ -132,7 +132,7 @@ class ReActLoopTest {
                 Collections.singletonList(new ToolCall("c1", "submit_step", "{\"summary\":\"做完了\"}")),
                 ModelId.of("m1")));
 
-        IterationResult result = loop(RuntimePolicy.defaults()).runIteration(session, null, null);
+        IterationResult result = loop(RuntimePolicy.defaults()).runIteration(session, step(), null);
 
         assertTrue(result.submitted());
         assertEquals("做完了", result.submittedSummary());
@@ -143,10 +143,46 @@ class ReActLoopTest {
         when(model.invoke(any(ModelInvocationRequest.class))).thenReturn(reply(null,
                 Collections.singletonList(new ToolCall("c1", "submit_step", "{}")), ModelId.of("m1")));
 
-        IterationResult result = loop(RuntimePolicy.defaults()).runIteration(session(), null, null);
+        IterationResult result = loop(RuntimePolicy.defaults()).runIteration(session(), step(), null);
 
         assertTrue(result.submitted());
         assertEquals("", result.submittedSummary());
+    }
+
+    /**
+     * 结论交付轮没有当前 step：`submit_step` 无处可去，必须回落成失败结果，
+     * 不能让模型以为交上去了（06-planning §6.9.1 关键分支）。
+     */
+    @Test
+    void 无当前步骤时的submit_step回落为失败结果() {
+        Session session = session();
+        when(model.invoke(any(ModelInvocationRequest.class)))
+                .thenReturn(reply(null, Collections.singletonList(
+                                new ToolCall("c1", "submit_step", "{\"summary\":\"做完了\"}")),
+                        ModelId.of("m1")))
+                .thenReturn(reply("结论", Collections.<ToolCall>emptyList(), ModelId.of("m1")));
+
+        IterationResult result = loop(RuntimePolicy.defaults()).runIteration(session, null, null);
+
+        assertFalse(result.submitted(), "没有当前 step 就不算提交成功");
+        assertTrue(recordText(session).contains("当前没有可提交的步骤"), recordText(session));
+        assertFalse(recordText(session).contains("已登记，等待验收"), "不能告诉模型交上去了");
+    }
+
+    private static PlanStep step() {
+        return PlanSteps.draft(StepId.of("p1"), 1, "做事", "目标", "期望", "标准",
+                Collections.<io.github.zcd0831.jellyfish.domain.planning.verification.VerificationType>emptySet());
+    }
+
+    /** 流水里全部记录的正文，用来断言工具往返的文案。 */
+    private static String recordText(Session session) {
+        StringBuilder text = new StringBuilder();
+        for (Record record : session.records()) {
+            if (record.content() != null) {
+                text.append(record.content()).append('\n');
+            }
+        }
+        return text.toString();
     }
 
     @Test

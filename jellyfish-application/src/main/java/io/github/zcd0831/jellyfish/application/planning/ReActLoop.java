@@ -80,76 +80,147 @@ public final class ReActLoop {
      */
     public IterationResult runIteration(Session session, PlanStep step, ChunkSink sink) {
         RuntimePolicy policy = policies.load();
-        List<SkillId> usedSkills = new ArrayList<SkillId>();
-        // 已落 TOOL_REQUEST、尚未落 TOOL_RESULT 的调用：环境故障/取消时必须补成"中止结果"，
-        // 否则流水留下未闭合的工具请求，下一次重建请求必然非法（06-planning §6.8.1 规则 9）。
-        List<ToolCall> pending = new ArrayList<ToolCall>();
-        String currentTurnId = null;
-        String currentProducer = null;
+        ToolTurn turn = new ToolTurn();
         try {
             for (int round = 1; round <= policy.maxReActRounds(); round++) {
-                // 折叠挂在每次请求前、消息每轮重建：否则一轮内多次工具调用会把请求撑爆（04-perception 规则 18）
-                contextWindow.ensureWithinLimit(session);
-                ContextWindow window = contextWindow.currentWindow(session);
-                List<ChatMessage> messages = ConversationMessages.of(window, session.activeModelId());
-                appendStepNote(step, messages);
-                ModelInvocationResult result;
-                try {
-                    result = invoke(session, window, messages, sink);
-                } catch (ModelInvocationException exceeded) {
-                    // 请求超限：在发起请求处强制折叠一次后重试这次请求（04-perception §4.9.2 规则 10）
-                    if (exceeded.error() != ModelError.CONTEXT_EXCEEDED) {
-                        throw exceeded;
-                    }
-                    contextWindow.forceCollapse(session);
-                    window = contextWindow.currentWindow(session);
-                    messages = ConversationMessages.of(window, session.activeModelId());
-                    appendStepNote(step, messages);
-                    // 同一轮只折一次：如仍然超限就上抛（04-perception §4.9.2 规则 10）
-                    result = invoke(session, window, messages, sink);
-                }
-                syncModel(session, result.servedModelId());
-                if (result.usage() != null && contextWindow.recordTurnUsage(session, result.usage())) {
-                    askContinue();
-                }
-                String turnId = UUID.randomUUID().toString();
-                String producer = producerOf(session, result);
-                currentTurnId = turnId;
-                currentProducer = producer;
-                String text = emptyToNull(result.text());
-                if (text != null) {
-                    Record record = session.appendRecord(RecordDraft.builder(RecordRole.ASSISTANT, text)
-                            .reasoning(result.reasoning()).turnId(turnId).producerModelId(producer).build(),
-                            System.currentTimeMillis());
-                    commitAppend(session, record);
-                }
+                ModelInvocationResult result = requestModel(session, step, sink);
+                recordResponse(session, result, turn);
                 if (result.toolCalls().isEmpty()) {
-                    return IterationResult.converged(round, usedSkills);
+                    return IterationResult.converged(round, turn.usedSkills());
                 }
-                String submittedSummary = null;
-                List<String> submittedArtifacts = Collections.<String>emptyList();
-                boolean first = true;
-                for (ToolCall call : result.toolCalls()) {
-                    String reasoning = (text == null && first) ? result.reasoning() : null;
-                    first = false;
-                    if (SUBMIT_STEP.equals(call.name())) {
-                        submit(session, step, call, reasoning, turnId, producer, pending);
-                        if (step != null) {
-                            submittedSummary = summaryOf(call);
-                            submittedArtifacts = artifactsOf(call);
-                        }
-                        continue;
-                    }
-                    executeTool(session, call, reasoning, turnId, producer, pending, usedSkills);
-                }
-                if (submittedSummary != null) {
-                    return IterationResult.submitted(submittedSummary, submittedArtifacts, round, usedSkills);
+                Submission submission = dispatchToolCalls(session, step, result, turn);
+                if (submission != null) {
+                    return IterationResult.submitted(submission.summary(), submission.artifacts(), round,
+                            turn.usedSkills());
                 }
             }
-            return IterationResult.notConverged(policy.maxReActRounds(), usedSkills);
+            return IterationResult.notConverged(policy.maxReActRounds(), turn.usedSkills());
         } catch (RuntimeException failure) {
-            closePendingToolCalls(session, pending, currentTurnId, currentProducer);
+            // 环境故障/终止：先把未闭合的工具调用补成中止事实，再原样上抛（不含副作用）
+            closePendingToolCalls(session, turn.pending(), turn.currentTurnId(), turn.currentProducer());
             throw failure;
+        }
+    }
+
+    /**
+     * 一次模型请求：折叠判定 → 按最新窗口重建 messages → 调模型（可流式）。
+     * 请求超限时在发起处强制折叠一次再重试这一次请求（04-perception §4.9.2 规则 10）。
+     */
+    private ModelInvocationResult requestModel(Session session, PlanStep step, ChunkSink sink) {
+        // 折叠挂在每次请求前、消息每轮重建：否则一轮内多次工具调用会把请求撑爆（04-perception 规则 18）
+        contextWindow.ensureWithinLimit(session);
+        ContextWindow window = contextWindow.currentWindow(session);
+        List<ChatMessage> messages = ConversationMessages.of(window, session.activeModelId());
+        appendStepNote(step, messages);
+        try {
+            return invoke(session, window, messages, sink);
+        } catch (ModelInvocationException exceeded) {
+            if (exceeded.error() != ModelError.CONTEXT_EXCEEDED) {
+                throw exceeded;
+            }
+            contextWindow.forceCollapse(session);
+            window = contextWindow.currentWindow(session);
+            messages = ConversationMessages.of(window, session.activeModelId());
+            appendStepNote(step, messages);
+            // 同一轮只折一次：如仍然超限就上抛（04-perception §4.9.2 规则 10）
+            return invoke(session, window, messages, sink);
+        }
+    }
+
+    /**
+     * 一次响应的落盘：降级换模型 → 用量预警 → 一条 assistant 消息（content + 全部 tool_calls 共享 turnId）。
+     * 规则出处：04-perception §4.8.1 规则 9/14/17、05-action §5.4.4。
+     */
+    private void recordResponse(Session session, ModelInvocationResult result, ToolTurn turn) {
+        syncModel(session, result.servedModelId());
+        if (result.usage() != null && contextWindow.recordTurnUsage(session, result.usage())) {
+            askContinue();
+        }
+        String turnId = UUID.randomUUID().toString();
+        String producer = producerOf(session, result);
+        turn.begin(turnId, producer, emptyToNull(result.text()));
+        if (turn.text() != null) {
+            Record record = session.appendRecord(RecordDraft.builder(RecordRole.ASSISTANT, turn.text())
+                    .reasoning(result.reasoning()).turnId(turnId).producerModelId(producer).build(),
+                    System.currentTimeMillis());
+            commitAppend(session, record);
+        }
+    }
+
+    /** 逐个调用分发：`submit_step` 只登记、`load_skill` 另注一份 SOP、其余交给执行器。 */
+    private Submission dispatchToolCalls(Session session, PlanStep step, ModelInvocationResult result,
+                                         ToolTurn turn) {
+        String submittedSummary = null;
+        List<String> submittedArtifacts = Collections.<String>emptyList();
+        boolean first = true;
+        for (ToolCall call : result.toolCalls()) {
+            String reasoning = (turn.text() == null && first) ? result.reasoning() : null;
+            first = false;
+            if (SUBMIT_STEP.equals(call.name())) {
+                submit(session, step, call, reasoning, turn);
+                if (step != null) {
+                    submittedSummary = summaryOf(call);
+                    submittedArtifacts = artifactsOf(call);
+                }
+                continue;
+            }
+            executeTool(session, call, reasoning, turn, turn.usedSkills());
+        }
+        return submittedSummary == null ? null : new Submission(submittedSummary, submittedArtifacts);
+    }
+
+    /** 一次提交（`submit_step` 的登记内容）+ 本轮工具往返的进行中状态。 */
+    private static final class Submission {
+        private final String summary;
+        private final List<String> artifacts;
+
+        private Submission(String summary, List<String> artifacts) {
+            this.summary = summary;
+            this.artifacts = artifacts;
+        }
+
+        String summary() {
+            return summary;
+        }
+
+        List<String> artifacts() {
+            return artifacts;
+        }
+    }
+
+    /** 一次内循环里跨轮次的进行中状态：谁用过、哪些调用还没闭合、当前轮次的坐标。 */
+    private static final class ToolTurn {
+        private final List<SkillId> usedSkills = new ArrayList<SkillId>();
+        /** 已落 TOOL_REQUEST、尚未落 TOOL_RESULT 的调用：环境故障/取消时必须补成"中止结果"。 */
+        private final List<ToolCall> pending = new ArrayList<ToolCall>();
+        private String turnId;
+        private String producer;
+        private String text;
+
+        void begin(String turnId, String producer, String text) {
+            this.turnId = turnId;
+            this.producer = producer;
+            this.text = text;
+        }
+
+        List<SkillId> usedSkills() {
+            return usedSkills;
+        }
+
+        List<ToolCall> pending() {
+            return pending;
+        }
+
+        String currentTurnId() {
+            return turnId;
+        }
+
+        String currentProducer() {
+            return producer;
+        }
+
+        String text() {
+            return text;
         }
     }
 
@@ -196,23 +267,23 @@ public final class ReActLoop {
      * <p>没有当前 step 时（结论交付轮）提交无处可去：**回落成失败结果**，别让模型以为交上去了
      * （06-planning §6.9.1 关键分支：交付轮 `submit_step` 不可用）。
      */
-    private void submit(Session session, PlanStep step, ToolCall call, String reasoning, String turnId,
-                        String producer, List<ToolCall> pending) {
-        appendToolRound(session, call, reasoning, turnId, producer, pending,
+    private void submit(Session session, PlanStep step, ToolCall call, String reasoning, ToolTurn turn) {
+        appendToolRound(session, call, reasoning, turn,
                 step == null ? NO_STEP_TO_SUBMIT : "已登记，等待验收");
     }
 
     /** 一次工具往返：请求先落盘，结果紧随其后（两者共享 turnId，06-planning §6.8.1 规则 11）。 */
-    private void appendToolRound(Session session, ToolCall call, String reasoning, String turnId,
-                                 String producer, List<ToolCall> pending, String resultText) {
+    private void appendToolRound(Session session, ToolCall call, String reasoning, ToolTurn turn,
+                                 String resultText) {
         Record request = session.appendRecord(RecordDraft.builder(RecordRole.TOOL_REQUEST, describe(call))
-                .reasoning(reasoning).turnId(turnId).producerModelId(producer).build(),
-                System.currentTimeMillis());
+                .reasoning(reasoning).turnId(turn.currentTurnId())
+                .producerModelId(turn.currentProducer()).build(), System.currentTimeMillis());
         commitAppend(session, request);
-        pending.add(call);
+        turn.pending().add(call);
         Record result = session.appendRecord(RecordDraft.builder(RecordRole.TOOL_RESULT, resultText)
-                .turnId(turnId).producerModelId(producer).build(), System.currentTimeMillis());
-        pending.remove(call);
+                .turnId(turn.currentTurnId()).producerModelId(turn.currentProducer()).build(),
+                System.currentTimeMillis());
+        turn.pending().remove(call);
         commitAppend(session, result);
     }
 
@@ -244,22 +315,22 @@ public final class ReActLoop {
         }
     }
 
-    private void executeTool(Session session, ToolCall call, String reasoning, String turnId,
-                             String producer, List<ToolCall> pending, List<SkillId> usedSkills) {
+    private void executeTool(Session session, ToolCall call, String reasoning, ToolTurn turn,
+                             List<SkillId> usedSkills) {
         Record request = session.appendRecord(RecordDraft.builder(RecordRole.TOOL_REQUEST, describe(call))
-                .reasoning(reasoning).turnId(turnId).producerModelId(producer).build(),
-                System.currentTimeMillis());
+                .reasoning(reasoning).turnId(turn.currentTurnId())
+                .producerModelId(turn.currentProducer()).build(), System.currentTimeMillis());
         commitAppend(session, request);
-        pending.add(call);
+        turn.pending().add(call);
 
         Map<String, Object> args = Json.parseObject(call.argumentsJson());
         ToolExecOutcome outcome = toolExecutor.execute(session, call.name(), args, request.id());
 
         Record result = session.appendRecord(RecordDraft.builder(RecordRole.TOOL_RESULT, outcome.content())
-                .turnId(turnId).producerModelId(producer)
+                .turnId(turn.currentTurnId()).producerModelId(turn.currentProducer())
                 .toolPayload(new ToolResultPayload(outcome.isTruncated(), outcome.resourceUri())).build(),
                 System.currentTimeMillis());
-        pending.remove(call);
+        turn.pending().remove(call);
         commitAppend(session, result);
         if (LOAD_SKILL.equals(call.name())) {
             // SOP 注入为 SYSTEM 记录：与普通记录同受覆盖边界约束（规则 10）

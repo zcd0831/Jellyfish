@@ -178,6 +178,24 @@ class PlanTest {
         assertEquals(StepStatus.RUNNING, plan.steps().get(0).status(), "反思不改变步骤状态");
     }
 
+    /**
+     * 终态不再接受任何写入：反思与技能痕迹和状态迁移一样只收 EXECUTING 的计划，
+     * 否则"计划已判失败"之后还能挂上新事实，沉淀出来的东西与终态对不上。
+     * 规则出处：06-planning §6.6「固化」。
+     */
+    @Test
+    void 终态计划不接受反思与技能痕迹() {
+        Plan plan = plan(1);
+        Attempt attempt = plan.beginCurrentStep();
+        plan.markStepFailed(StepId.of("step1"), null);
+        plan.terminate("重划用尽");
+
+        assertThrows(DomainInvariantViolation.class, () -> plan.recordReflection(StepId.of("step1"),
+                attempt.attemptNo(), io.github.zcd0831.jellyfish.domain.shared.ReflectionId.of("rfl1")));
+        assertThrows(DomainInvariantViolation.class, () -> plan.recordSkillUsage(StepId.of("step1"),
+                attempt.attemptNo(), io.github.zcd0831.jellyfish.domain.shared.SkillId.of("s1")));
+    }
+
     @Test
     void 终结后不可再推进() {
         Plan plan = plan(1);

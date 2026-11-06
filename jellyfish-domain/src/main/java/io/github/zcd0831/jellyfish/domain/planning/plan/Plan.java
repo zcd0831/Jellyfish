@@ -134,7 +134,9 @@ public class Plan {
     }
 
     /** 反思挂到指定 attempt：只写引用，不改结局、不消耗重试。 */
+    /** 反思回挂：只有执行中的计划才收新事实（终态不再变更，06-planning §7.1 规则 4）。 */
     public void recordReflection(StepId stepId, int attemptNo, io.github.zcd0831.jellyfish.domain.shared.ReflectionId reflectionId) {
+        requireExecuting();
         PlanStep step = requireStep(stepId);
         for (Attempt attempt : step.attempts()) {
             if (attempt.attemptNo() == attemptNo) {
@@ -147,6 +149,7 @@ public class Plan {
 
     /** 技能使用痕迹：只写引用，供计划完结时判定"要不要改进"（07-memory §7.9.6）。 */
     public void recordSkillUsage(StepId stepId, int attemptNo, SkillId skillId) {
+        requireExecuting();
         PlanStep step = requireStep(stepId);
         for (Attempt attempt : step.attempts()) {
             if (attempt.attemptNo() == attemptNo) {
@@ -242,7 +245,7 @@ public class Plan {
     }
 
     private void requireExecuting() {
-        if (status != PlanStatus.EXECUTING && status != PlanStatus.REPLANNING) {
+        if (status != PlanStatus.EXECUTING) {
             throw new DomainInvariantViolation("计划不在执行态：" + status);
         }
     }

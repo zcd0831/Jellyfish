@@ -56,7 +56,7 @@ public final class FilePlanRepository implements PlanRepository {
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir, "*.json")) {
             for (Path file : stream) {
                 Plan plan = codec.read(read(file), PlanDto.class).toDomain();
-                if (plan.status() == PlanStatus.EXECUTING || plan.status() == PlanStatus.REPLANNING) {
+                if (plan.status() == PlanStatus.EXECUTING) {
                     out.add(plan);
                 }
             }

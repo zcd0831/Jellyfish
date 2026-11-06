@@ -116,21 +116,39 @@ class S4LoopTest {
         plans = new FilePlanRepository(dir, codec);
         PlanFactory planFactory = new PlanFactory();
         FakeHuman human = new FakeHuman();
+        SessionCancellations cancellations = new SessionCancellations();
+        SessionToolScope scope = new SessionToolScope();
+        // 计划处理器与内循环互相依赖（处理器要工具、工具要分配器、分配器要执行点）：
+        // 分配器的执行点用持有者延后填，测试装配顺序就不用扭曲
+        final java.util.concurrent.atomic.AtomicReference<
+                io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner> forks =
+                new java.util.concurrent.atomic.AtomicReference<
+                        io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner>();
         ToolExecutor toolExecutor = new ToolExecutor(catalog, new HttpToolAdapter(), new FileArtifactStore(dir),
                 human, policies, new InternalToolHandlers(Collections.singletonList(
                 new InternalToolHandlers.NamedHandler("generate_plan",
                         new GeneratePlanHandler(planFactory, plans, catalog, new FileCommitScope(dir, codec),
-                                publisher)))), event -> { }, new SessionToolScope());
+                                publisher, LoopSupport.assigner(dir, codec, catalog, policies, model,
+                                        new io.github.zcd0831.jellyfish.application.perception.ForkRunnerProvider() {
+                                            @Override
+                                            public io.github.zcd0831.jellyfish.application.perception
+                                                    .InternalSessionRunner get() {
+                                                return forks.get();
+                                            }
+                                        }))))),
+                event -> { }, scope);
         ReActLoop reActLoop = new ReActLoop(model, toolExecutor, budgetService, contextWindow, policies,
                 new FileCommitScope(dir, codec), human);
         VerificationRunner verificationRunner = new VerificationRunner(LoopSupport.noForks(), human,
                 EnvironmentFeedbackVerifier.NOT_CONFIGURED);
-        SessionCancellations cancellations = new SessionCancellations();
         startSession = new StartSessionUseCase(StartSessionDeps.builder()
                 .catalog(catalog).sessions(sessions).budgets(budgets)
                 .titleGenerator(new SessionTitleGenerator(model, budgetService))
                 .assembler(new SystemPromptAssembler()).commitScope(new FileCommitScope(dir, codec))
                 .clock(new SystemClock()).cancellations(cancellations).eventPublisher(publisher).build());
+        forks.set(new io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner(startSession,
+                sessions, reActLoop, scope, new FileCommitScope(dir, codec),
+                () -> System.currentTimeMillis(), cancellations, budgetService));
         ExecutionLoop executionLoop = LoopSupport.build(dir, codec, model, policies, catalog, budgetService,
                 contextWindow, reActLoop, verificationRunner, plans, publisher, announced::add, startSession,
                 sessions, records, cancellations, new RunSessionProvider() {

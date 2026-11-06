@@ -60,6 +60,26 @@ final class LoopSupport {
         };
     }
 
+    /**
+     * 计划处理器用的经验分配器：端到端用例的数据目录里通常没有经验，
+     * {@code retrieveAndAssign} 会直接返回空分配，不会去 fork 任何子会话。
+     */
+    static io.github.zcd0831.jellyfish.application.planning.ExperienceAssigner assigner(
+            DataDirectory dir, JsonCodec codec, CatalogRepository catalog, PolicyRepository policies,
+            ModelInvocationPort model) {
+        return assigner(dir, codec, catalog, policies, model, noForks());
+    }
+
+    /** 需要真的让检索代理跑起来（分配经验）的用例走这条：执行点由调用方给。 */
+    static io.github.zcd0831.jellyfish.application.planning.ExperienceAssigner assigner(
+            DataDirectory dir, JsonCodec codec, CatalogRepository catalog, PolicyRepository policies,
+            ModelInvocationPort model,
+            io.github.zcd0831.jellyfish.application.perception.ForkRunnerProvider forks) {
+        return new io.github.zcd0831.jellyfish.application.planning.ExperienceAssigner(
+                new ExperienceRetriever(new FileExperienceRepository(dir, codec), catalog, policies,
+                        text -> text == null ? 0 : text.length(), forks, model));
+    }
+
     static ExecutionLoop build(final DataDirectory dir, JsonCodec codec, ModelInvocationPort model,
                                PolicyRepository policies, CatalogRepository catalog,
                                BudgetService budgetService, ContextWindowService contextWindow,
@@ -77,8 +97,6 @@ final class LoopSupport {
                 new io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner(startSession, sessions,
                         reActLoop, scope, new FileCommitScope(dir, codec),
                         () -> System.currentTimeMillis(), cancellations, budgetService);
-        ExperienceRetriever retriever = new ExperienceRetriever(experiences, catalog, policies,
-                text -> text == null ? 0 : text.length(), forksOf(forks), model);
         ExperienceFeedbackService feedback = new ExperienceFeedbackService(experiences, policies,
                 new FileCommitScope(dir, codec), publisher);
         ExperienceDistillationService distillation = new ExperienceDistillationService(experiences, policies,
@@ -92,6 +110,6 @@ final class LoopSupport {
                 budgetService, policies, progress, pool, cancellations);
         return new ExecutionLoop(reActLoop, verificationRunner, plans, new PlanFactory(), catalog,
                 policies, new FileCommitScope(dir, codec), publisher, progress, cancellations,
-                retriever, feedback, curator, reflections, experiences, scope, forks);
+                feedback, curator, reflections, experiences, scope, forks);
     }
 }

@@ -3,7 +3,6 @@ package io.github.zcd0831.jellyfish.application.planning;
 import io.github.zcd0831.jellyfish.application.action.InternalToolHandler;
 import io.github.zcd0831.jellyfish.application.action.ToolExecOutcome;
 import io.github.zcd0831.jellyfish.application.action.port.CatalogRepository;
-import io.github.zcd0831.jellyfish.application.memory.ExperienceRetriever;
 import io.github.zcd0831.jellyfish.application.memory.RetrievalInput;
 import io.github.zcd0831.jellyfish.application.memory.StepBrief;
 import io.github.zcd0831.jellyfish.application.perception.port.PolicyRepository;
@@ -39,17 +38,17 @@ public final class ReplanPlanHandler implements InternalToolHandler {
     private final CatalogRepository catalog;
     private final CommitScope commitScope;
     private final PolicyRepository policies;
-    private final ExperienceRetriever experienceRetriever;
+    private final ExperienceAssigner experienceAssigner;
 
     public ReplanPlanHandler(PlanFactory planFactory, PlanRepository plans, CatalogRepository catalog,
                              CommitScope commitScope, PolicyRepository policies,
-                             ExperienceRetriever experienceRetriever) {
+                             ExperienceAssigner experienceAssigner) {
         this.planFactory = planFactory;
         this.plans = plans;
         this.catalog = catalog;
         this.commitScope = commitScope;
         this.policies = policies;
-        this.experienceRetriever = experienceRetriever;
+        this.experienceAssigner = experienceAssigner;
     }
 
     @Override
@@ -72,29 +71,13 @@ public final class ReplanPlanHandler implements InternalToolHandler {
         }
         plan.applyReplan(draft.steps());
         // 新尾部立刻分配经验：留给外循环的话，取消/异常会让它永远拿不到经验（06-planning §6.8.1 规则 6/9）
-        assignExperiences(session, plan);
+        experienceAssigner.assign(session, plan);
         commitScope.stageReplace(plan);
         commitScope.commit();
         return ToolExecOutcome.plain("计划已重划（第 " + plan.replanGeneration() + " 代）：剩余 "
                 + pendingSteps(plan) + " 步");
     }
 
-    private void assignExperiences(Session session, Plan plan) {
-        List<StepBrief> briefs = new ArrayList<StepBrief>();
-        for (PlanStep step : plan.steps()) {
-            if (step.status() == StepStatus.PENDING) {
-                briefs.add(new StepBrief(step.id(), step.description()));
-            }
-        }
-        if (briefs.isEmpty()) {
-            return;
-        }
-        Map<StepId, List<ExperienceId>> assignment = experienceRetriever.retrieveAndAssign(session,
-                new RetrievalInput(plan.id(), briefs));
-        for (Map.Entry<StepId, List<ExperienceId>> entry : assignment.entrySet()) {
-            plan.assignExperiences(entry.getKey(), entry.getValue());
-        }
-    }
 
     private Plan runningPlan(Session session) {
         List<Plan> running = plans.findRunning(session.id());

@@ -114,7 +114,7 @@ class ExecutionLoopTest {
         return new ExecutionLoop(reActLoop, verificationRunner, plans,
                 new io.github.zcd0831.jellyfish.domain.planning.plan.PlanFactory(),
                 catalog, policies, commitScope, events -> { }, progressEvents::add, cancellations,
-                retriever, feedback, curator, reflections, experiences, scope, forks);
+                feedback, curator, reflections, experiences, scope, forks);
     }
 
     /** 默认实现不读上下文（依赖由构造器注入），所以这里给空值即可。 */

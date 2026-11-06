@@ -115,7 +115,9 @@ class S2AcceptanceTest {
                 new FileArtifactStore(dir), human, policies,
                 new InternalToolHandlers(Collections.singletonList(new InternalToolHandlers.NamedHandler(
                         "generate_plan", new GeneratePlanHandler(planFactory, plans, catalog,
-                        new FileCommitScope(dir, codec), publisher)))), event -> { }, new SessionToolScope());
+                        new FileCommitScope(dir, codec), publisher,
+                        LoopSupport.assigner(dir, codec, catalog, policies, model))))),
+                event -> { }, new SessionToolScope());
         ReActLoop reActLoop = new ReActLoop(model, toolExecutor, budgetService, contextWindow, policies,
                 new FileCommitScope(dir, codec), human);
         VerificationRunner verificationRunner = new VerificationRunner(LoopSupport.noForks(), human,
@@ -146,7 +148,7 @@ class S2AcceptanceTest {
                         new FileCommitScope(dir, codec));
         ExecutionLoop executionLoop = new ExecutionLoop(reActLoop, verificationRunner, plans,
                 planFactory, catalog, policies, new FileCommitScope(dir, codec), publisher, event -> { },
-                cancellations, retriever, feedback, curator, reflections, experiences,
+                cancellations, feedback, curator, reflections, experiences,
                 new SessionToolScope(),
                 new io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner(
                         startSession, sessions, reActLoop, new SessionToolScope(),

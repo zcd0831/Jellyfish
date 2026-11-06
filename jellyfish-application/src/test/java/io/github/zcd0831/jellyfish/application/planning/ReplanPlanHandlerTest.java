@@ -51,7 +51,8 @@ class ReplanPlanHandlerTest {
         when(catalog.agents()).thenReturn(Collections.emptyList());
         when(policies.load()).thenReturn(RuntimePolicy.defaults());
         when(retriever.retrieveAndAssign(any(Session.class), any())).thenReturn(Collections.emptyMap());
-        return new ReplanPlanHandler(new PlanFactory(), plans, catalog, commitScope, policies, retriever);
+        return new ReplanPlanHandler(new PlanFactory(), plans, catalog, commitScope, policies,
+                new ExperienceAssigner(retriever));
     }
 
     private static Plan plan() {

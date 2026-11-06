@@ -33,14 +33,17 @@ public final class GeneratePlanHandler implements InternalToolHandler {
     private final CatalogRepository catalog;
     private final CommitScope commitScope;
     private final DomainEventPublisher eventPublisher;
+    private final ExperienceAssigner experienceAssigner;
 
     public GeneratePlanHandler(PlanFactory planFactory, PlanRepository plans, CatalogRepository catalog,
-                               CommitScope commitScope, DomainEventPublisher eventPublisher) {
+                               CommitScope commitScope, DomainEventPublisher eventPublisher,
+                               ExperienceAssigner experienceAssigner) {
         this.planFactory = planFactory;
         this.plans = plans;
         this.catalog = catalog;
         this.commitScope = commitScope;
         this.eventPublisher = eventPublisher;
+        this.experienceAssigner = experienceAssigner;
     }
 
     @Override
@@ -59,6 +62,9 @@ public final class GeneratePlanHandler implements InternalToolHandler {
         } catch (PlanCreationException rejected) {
             return ToolExecOutcome.plain("计划被拒绝：" + rejected.getMessage());
         }
+        // 分配与落盘同一次提交：拆开就会在"计划已存在、经验还是空"之间留窗口，
+        // 同一次响应里再出错或被终止，这个计划永远拿不到经验（06-planning §6.8.1 规则 6、§6.9.4）
+        experienceAssigner.assign(session, plan);
         commitScope.stageReplace(plan);
         commitScope.commit();
         eventPublisher.publishAfterCommit(new ArrayList<DomainEvent>(plan.pullEvents()));

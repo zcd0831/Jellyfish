@@ -3,10 +3,7 @@ package io.github.zcd0831.jellyfish.application.planning;
 import io.github.zcd0831.jellyfish.application.memory.DistillationInput;
 import io.github.zcd0831.jellyfish.application.memory.PlanCompletionCurator;
 import io.github.zcd0831.jellyfish.application.memory.ExperienceFeedbackService;
-import io.github.zcd0831.jellyfish.application.memory.ExperienceRetriever;
 import io.github.zcd0831.jellyfish.application.memory.FeedbackInput;
-import io.github.zcd0831.jellyfish.application.memory.RetrievalInput;
-import io.github.zcd0831.jellyfish.application.memory.StepBrief;
 import io.github.zcd0831.jellyfish.application.action.SessionToolScope;
 import io.github.zcd0831.jellyfish.application.memory.StepTrace;
 import io.github.zcd0831.jellyfish.application.memory.port.ReflectionRepository;
@@ -41,9 +38,9 @@ import io.github.zcd0831.jellyfish.domain.planning.plan.StepStatus;
 import io.github.zcd0831.jellyfish.domain.planning.verification.VerificationOutcome;
 import io.github.zcd0831.jellyfish.domain.planning.verification.VerificationReport;
 import io.github.zcd0831.jellyfish.domain.shared.DomainEvent;
+import io.github.zcd0831.jellyfish.domain.shared.ExperienceId;
 import io.github.zcd0831.jellyfish.domain.shared.PlanId;
 import io.github.zcd0831.jellyfish.domain.shared.AgentId;
-import io.github.zcd0831.jellyfish.domain.shared.ExperienceId;
 import io.github.zcd0831.jellyfish.domain.shared.SessionId;
 import io.github.zcd0831.jellyfish.domain.shared.SkillId;
 import io.github.zcd0831.jellyfish.domain.shared.StepId;
@@ -75,7 +72,6 @@ public final class ExecutionLoop implements SessionRunner {
     private final DomainEventPublisher eventPublisher;
     private final ProgressPort progress;
     private final CancellationRegistry cancellations;
-    private final ExperienceRetriever experienceRetriever;
     private final ExperienceFeedbackService experienceFeedback;
     private final PlanCompletionCurator planCompletionCurator;
     private final ReflectionRepository reflections;
@@ -87,7 +83,6 @@ public final class ExecutionLoop implements SessionRunner {
                          VerificationRunner verificationRunner, PlanRepository plans, PlanFactory planFactory,
                          CatalogRepository catalog, PolicyRepository policies, CommitScope commitScope,
                          DomainEventPublisher eventPublisher, ProgressPort progress, CancellationRegistry cancellations,
-                         ExperienceRetriever experienceRetriever,
                          ExperienceFeedbackService experienceFeedback,
                          PlanCompletionCurator planCompletionCurator,
                          ReflectionRepository reflections,
@@ -104,7 +99,6 @@ public final class ExecutionLoop implements SessionRunner {
         this.eventPublisher = eventPublisher;
         this.progress = progress;
         this.cancellations = cancellations;
-        this.experienceRetriever = experienceRetriever;
         this.experienceFeedback = experienceFeedback;
         this.planCompletionCurator = planCompletionCurator;
         this.reflections = reflections;
@@ -200,8 +194,9 @@ public final class ExecutionLoop implements SessionRunner {
                     }
                 }
             } else if (plan == null && replanned != null) {
-                plan = replanned;   // 自由内循环里 generate_plan 诞生了新计划（03-overview §3.7）
-                assignExperiences(session, plan);
+                // 自由内循环里 generate_plan 诞生了新计划（03-overview §3.7）：
+                // 经验在处理器里已与计划同一次提交分配好，这里只接手（06-planning §6.8.1 规则 6）
+                plan = replanned;
             }
 
             // 技能使用痕迹落在 attempt 上：改进判定要“这次用过的技能”
@@ -339,26 +334,6 @@ public final class ExecutionLoop implements SessionRunner {
             }
         }
         return false;
-    }
-    /**
-     * 计划诞生 / 重划：检索经验并交给 Plan 自己改状态（记忆只返回分配结果）。
-     */
-    private void assignExperiences(Session session, Plan plan) {
-        List<StepBrief> briefs = new ArrayList<StepBrief>();
-        for (PlanStep step : plan.steps()) {
-            if (step.status() == StepStatus.PENDING) {
-                briefs.add(new StepBrief(step.id(), step.description()));
-            }
-        }
-        if (briefs.isEmpty()) {
-            return;
-        }
-        Map<StepId, List<ExperienceId>> assignment = experienceRetriever.retrieveAndAssign(session,
-                new RetrievalInput(plan.id(), briefs));
-        for (Map.Entry<StepId, List<ExperienceId>> entry : assignment.entrySet()) {
-            plan.assignExperiences(entry.getKey(), entry.getValue());
-        }
-        commitPlan(plan);
     }
 
     /**

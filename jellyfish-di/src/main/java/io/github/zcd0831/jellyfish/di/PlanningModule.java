@@ -26,6 +26,7 @@ import io.github.zcd0831.jellyfish.application.perception.port.SessionRepository
 import io.github.zcd0831.jellyfish.application.planning.ExecutionLoop;
 import io.github.zcd0831.jellyfish.application.action.ToolInvoker;
 import io.github.zcd0831.jellyfish.application.planning.SessionRunner;
+import io.github.zcd0831.jellyfish.application.planning.ExperienceAssigner;
 import io.github.zcd0831.jellyfish.application.planning.ReActLoop;
 import io.github.zcd0831.jellyfish.application.planning.EnvironmentFeedbackVerifier;
 import io.github.zcd0831.jellyfish.application.action.SessionToolScope;
@@ -81,8 +82,16 @@ public final class PlanningModule {
     @Singleton
     GeneratePlanHandler generatePlanHandler(PlanFactory planFactory, PlanRepository plans,
                                             CatalogRepository catalog, CommitScope commitScope,
-                                            DomainEventPublisher publisher) {
-        return new GeneratePlanHandler(planFactory, plans, catalog, commitScope, publisher);
+                                            DomainEventPublisher publisher,
+                                            ExperienceAssigner experienceAssigner) {
+        return new GeneratePlanHandler(planFactory, plans, catalog, commitScope, publisher, experienceAssigner);
+    }
+
+    /** 经验分配只有一条实现：两个计划处理器共用（与计划落盘同一次提交）。 */
+    @Provides
+    @Singleton
+    ExperienceAssigner experienceAssigner(ExperienceRetriever experienceRetriever) {
+        return new ExperienceAssigner(experienceRetriever);
     }
 
     @Provides
@@ -101,8 +110,8 @@ public final class PlanningModule {
     @Singleton
     ReplanPlanHandler replanPlanHandler(PlanFactory planFactory, PlanRepository plans,
                                         CatalogRepository catalog, CommitScope commitScope,
-                                        PolicyRepository policies, ExperienceRetriever experienceRetriever) {
-        return new ReplanPlanHandler(planFactory, plans, catalog, commitScope, policies, experienceRetriever);
+                                        PolicyRepository policies, ExperienceAssigner experienceAssigner) {
+        return new ReplanPlanHandler(planFactory, plans, catalog, commitScope, policies, experienceAssigner);
     }
 
     @Provides
@@ -184,7 +193,6 @@ public final class PlanningModule {
                                 VerificationRunner verificationRunner, PlanRepository plans,
                                 PlanFactory planFactory, CatalogRepository catalog, PolicyRepository policies,
                                 CommitScope commitScope, DomainEventPublisher publisher, ProgressPort progress,
-                                ExperienceRetriever experienceRetriever,
                                 ExperienceFeedbackService experienceFeedback,
                                 PlanCompletionCurator planCompletionCurator,
                                 ReflectionRepository reflections, ExperienceRepository experiences,
@@ -193,7 +201,7 @@ public final class PlanningModule {
                                 io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner forks) {
         return new ExecutionLoop(reActLoop, verificationRunner, plans, planFactory, catalog,
                 policies, commitScope, publisher, progress, cancellationRegistry,
-                experienceRetriever, experienceFeedback, planCompletionCurator, reflections, experiences,
+                experienceFeedback, planCompletionCurator, reflections, experiences,
                 scope, forks);
     }
 

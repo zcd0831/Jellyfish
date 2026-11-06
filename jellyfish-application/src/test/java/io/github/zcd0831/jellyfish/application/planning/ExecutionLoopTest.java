@@ -335,6 +335,111 @@ class ExecutionLoopTest {
         assertTrue(written.contains(PlanStatus.COMPLETED + "/无当前步"), written.toString());
     }
 
+    /**
+     * 反思分支也不许自己提交一次：判败 → 反思 → 重试必须落在同一次提交里。
+     * 反思自己 commit 时，盘上会出现「EXECUTING 但没有当前步」，崩溃续跑会把"本该重试"判成计划失败。
+     * 规则出处：06-planning §6.8.1「无当前步即终结」、08-application §8.8.2 T7。
+     */
+    @Test
+    void 开反思时判败与推进仍然只提交一次() {
+        policy = policy.adjust(new java.util.LinkedHashMap<String, Object>() {{
+            put("maxRetries", 3);
+            put("reflectionThreshold", 1);
+        }});
+        planScript.add(plan(VerificationType.DETERMINISTIC));
+        when(reActLoop.runIteration(any(Session.class), any(), any(ChunkSink.class)))
+                .thenReturn(submitted("第一次"))
+                .thenReturn(submitted("第二次"))
+                .thenReturn(converged());
+        when(verificationRunner.verify(any(Session.class), any(Plan.class), any(), anyInt(), any(), any()))
+                .thenReturn(failed())
+                .thenReturn(passed());
+        when(catalog.agents()).thenReturn(Collections.singletonList(reflectAgent()));
+        when(forks.run(any(Session.class), any())).thenReturn("下次先读文件");
+        final java.util.List<String> written = new java.util.ArrayList<String>();
+        org.mockito.Mockito.doAnswer(invocation -> {
+            Object aggregate = invocation.getArgument(0);
+            if (aggregate instanceof Plan) {
+                Plan snapshot = (Plan) aggregate;
+                written.add(snapshot.status() + "/" + (snapshot.getCurrentStep() == null ? "无当前步"
+                        : snapshot.getCurrentStep().id().getValue()));
+            }
+            return null;
+        }).when(commitScope).stageReplace(any());
+
+        loop().run(session, ChunkSink.NOOP, NO_CONTEXT);
+
+        for (String state : written) {
+            assertFalse(state.equals(PlanStatus.EXECUTING + "/无当前步"),
+                    "反思自己 commit 了一次，盘上出现 EXECUTING 却没有当前步：" + written);
+        }
+        assertTrue(written.contains(PlanStatus.COMPLETED + "/无当前步"), written.toString());
+    }
+
+    /**
+     * 事件在提交之后发：否则订阅方看到「步骤失败」时，盘上可能还没有这次判败。
+     * 这里盯的是"报告事实落盘 + 提交 + 事件"这三步的相对顺序，不是随便一次 commit。
+     * 规则出处：08-application §8.8.3 纪律 2。
+     */
+    @Test
+    void 判败事件在报告事实提交之后才发出() {
+        final java.util.List<String> order = new java.util.ArrayList<String>();
+        org.mockito.Mockito.doAnswer(invocation -> {
+            order.add("stageFact");
+            return null;
+        }).when(commitScope).stageFact(any());
+        org.mockito.Mockito.doAnswer(invocation -> {
+            order.add("commit");
+            return null;
+        }).when(commitScope).commit();
+        ExecutionLoop loop = new ExecutionLoop(reActLoop, verificationRunner, plans,
+                new io.github.zcd0831.jellyfish.domain.planning.plan.PlanFactory(), catalog, policies, commitScope,
+                events -> order.add("publish"), progressEvents::add, cancellations,
+                feedback, curator, reflections, experiences, scope, forks);
+        policy = policy.adjust(Collections.<String, Object>singletonMap("maxRetries", 3));
+        final Plan running = plan(VerificationType.DETERMINISTIC);
+        planScript.add(running);
+        when(plans.findRunning(SessionId.of("s1"))).thenReturn(Collections.singletonList(running));
+        when(reActLoop.runIteration(any(Session.class), any(), any(ChunkSink.class)))
+                .thenReturn(submitted("第一次"))
+                .thenReturn(converged());
+        when(verificationRunner.verify(any(Session.class), any(Plan.class), any(), anyInt(), any(), any()))
+                .thenReturn(failed());
+
+        loop.run(session, ChunkSink.NOOP, NO_CONTEXT);
+
+        int staged = order.indexOf("stageFact");
+        assertTrue(staged >= 0, "报告事实要落盘：" + order);
+        assertEquals(3, order.size() - staged > 2 ? 3 : order.size() - staged, order.toString());
+        assertEquals("stageFact", order.get(staged), order.toString());
+        assertEquals("commit", order.get(staged + 1), "事实之后必须紧接提交：" + order);
+        assertEquals("publish", order.get(staged + 2), "事件要在提交之后发：" + order);
+    }
+
+    /**
+     * 「EXECUTING 但没有当前步」由外循环自己收口，不押在启动对账上：
+     * 否则同一次进程内这一轮就只会当自由轮收敛，计划永远挂在盘上。
+     * 规则出处：06-planning §6.8.1「无当前步即终结」。
+     */
+    @Test
+    void 计划无当前步时由外循环判失败并补交付轮() {
+        Plan stuck = plan(VerificationType.DETERMINISTIC);
+        stuck.beginCurrentStep();
+        stuck.markStepFailed(StepId.of("step1"), VerificationReportId.of("r1"));   // 步已终结，计划还 EXECUTING
+        planScript.add(stuck);
+        when(plans.load(any(PlanId.class))).thenReturn(stuck);
+        when(reActLoop.runIteration(any(Session.class), any(), any(ChunkSink.class))).thenReturn(converged());
+
+        RunOutcome outcome = loop().run(session, ChunkSink.NOOP, NO_CONTEXT);
+
+        assertEquals(RunOutcome.CONVERGED, outcome);
+        assertEquals(PlanStatus.FAILED, stuck.status(), "无当前步要收敛为失败，而不是留在 EXECUTING");
+        assertNotNull(stuck.terminationReason(), "终止原因要落盘，续跑时才知道为什么停");
+        verify(reActLoop, times(1)).runIteration(any(Session.class), org.mockito.ArgumentMatchers.isNull(),
+                any(ChunkSink.class));   // 只跑交付轮（无 step）
+        verify(curator).curate(any(Session.class), any(io.github.zcd0831.jellyfish.application.memory.DistillationInput.class));
+    }
+
     @Test
     void 重试用尽先注入纠偏指令_模型重划成功后继续执行() {
         policy = policy.adjust(new java.util.LinkedHashMap<String, Object>() {{

@@ -61,6 +61,8 @@ public final class ExecutionLoop implements SessionRunner {
 
     private static final AgentId REFLECT_AGENT = AgentId.of("builtin.reflect");
     private static final String REPLAN_TOOL = "replan_plan";
+    /** 步骤都终结了、计划还挂在 EXECUTING：外循环自己收口（06-planning §6.8.1「无当前步即终结」）。 */
+    private static final String NO_EXECUTABLE_STEP = "所有步骤已终结，没有可执行的步骤";
 
     private final ReActLoop reActLoop;
     private final VerificationRunner verificationRunner;
@@ -131,6 +133,15 @@ public final class ExecutionLoop implements SessionRunner {
             Plan current = runningPlan(session);
             if (current != null) {
                 plan = current;
+            }
+            if (plan != null && plan.failIfNoCurrentStep(NO_EXECUTABLE_STEP)) {
+                // 无当前步即终结：外循环推进中由外循环收口，与启动对账同一口径、幂等
+                // 规则出处：06-planning §6.8.1「无当前步即终结」
+                commitPlan(plan);
+                curate(session, plan);
+                plan = null;
+                deliveryPending = true;
+                continue;
             }
             boolean deliveryRound = deliveryPending && plan == null;
             deliveryPending = false;
@@ -244,25 +255,30 @@ public final class ExecutionLoop implements SessionRunner {
                 if (report.outcome() == VerificationOutcome.PASSED) {
                     plan.markStepSucceeded(step.id(), iteration.submittedSummary(), report.id());
                     commitPlan(plan);
+                    publish(report.pullEvents());   // 事件在提交后发（08-application §8.8.3 纪律 2）
                     feedbackSucceeded(step);
                     progress.emit(ProgressEvent.of(ProgressEvent.Kind.STEP_FINISHED,
-                            "第 " + stepProgress(plan, step) + " 步验收通过"));
+                            "第 " + stepProgress(plan, step) + " 步完成"));
                 } else {
+                    String reason = report.failureReason() == null ? String.valueOf(report.outcome())
+                            : report.failureReason();
                     plan.markStepFailed(step.id(), report.id());
-                    publish(report.pullEvents());
                     feedbackFailed(step);
-                    reflectIfNeeded(session, plan, step, report.failureReason());
+                    // 反思只 stage：事实、计划与随后的重试/纠偏/终止**同一次提交**。
+                    // 它若自己 commit 一次，就把"判败但还没推进"的非法窗口重新打开（§8.8.2 T7）
+                    Reflection reflection = reflectIfNeeded(session, plan, step, reason);
                     progress.emit(ProgressEvent.of(ProgressEvent.Kind.STEP_FINISHED,
-                            "第 " + stepProgress(plan, step)
-                                    + " 步验收未通过：" + report.outcome()));
-                    boolean terminated = advanceAfterFailure(session, plan, step,
-                            report.failureReason() == null ? String.valueOf(report.outcome())
-                                    : report.failureReason());
+                            "第 " + stepProgress(plan, step) + " 步失败：" + reason));
+                    boolean terminated = advanceAfterFailure(session, plan, step, reason);
                     // 判败与随后那一步（重试 / 纠偏 / 终止）是**同一次状态转移**，只提一次：
                     // 拆成两次提交时，中间那个窗口里盘上是「EXECUTING 但没有当前步」，
                     // 续跑时外循环只能当自由轮收敛，generate_plan 又因"已有执行中的计划"拒绝，
                     // 该会话从此再也规划不了（08-application §8.8.2 T7、§8.8.1）
                     commitPlan(plan);
+                    publish(report.pullEvents());
+                    if (reflection != null) {
+                        publish(reflection.pullEvents());
+                    }
                     if (terminated) {
                         publish(plan.pullEvents());
                         curate(session, plan);
@@ -404,22 +420,20 @@ public final class ExecutionLoop implements SessionRunner {
      * 达反思阈值时跑内置反思子代理（按文档是子代理，不是进程内调用），结论落 Reflection 并回注。
      * 规则出处：07-memory §7.8.2、§7.9.1 回注。
      */
-    private void reflectIfNeeded(Session session, Plan plan, PlanStep step, String failureReason) {
+    private Reflection reflectIfNeeded(Session session, Plan plan, PlanStep step, String failureReason) {
         int failed = failedAttempts(step);
         if (!policies.load().needsReflection(failed)) {
-            return;
+            return null;
         }
         String conclusion = reflect(session, step, failureReason);
         if (conclusion == null) {
-            return;
+            return null;
         }
         Reflection reflection = Reflection.record(plan.id(), step.id(), failedIn(step), conclusion,
                 System.currentTimeMillis());
         commitScope.stageFact(reflection);
         plan.recordReflection(step.id(), reflection.attemptNo(), reflection.id());
-        commitScope.stageReplace(plan);
-        commitScope.commit();
-        publish(reflection.pullEvents());
+        return reflection;   // 提交与事件发布交给调用方那一次
     }
 
     /**

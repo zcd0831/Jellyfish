@@ -2,7 +2,6 @@ package io.github.zcd0831.jellyfish.application.planning;
 
 import io.github.zcd0831.jellyfish.domain.perception.session.RecordDraft;
 import io.github.zcd0831.jellyfish.domain.perception.session.SessionHeader;
-import io.github.zcd0831.jellyfish.application.action.BudgetService;
 import io.github.zcd0831.jellyfish.application.action.ToolExecOutcome;
 import io.github.zcd0831.jellyfish.application.action.ToolExecutor;
 import io.github.zcd0831.jellyfish.application.action.port.ChatMessage;
@@ -61,7 +60,6 @@ class ReActLoopTest {
 
     private final ModelInvocationPort model = mock(ModelInvocationPort.class);
     private final ToolExecutor toolExecutor = mock(ToolExecutor.class);
-    private final BudgetService budget = mock(BudgetService.class);
     private final ContextWindowService contextWindow = mock(ContextWindowService.class);
     private final PolicyRepository policies = mock(PolicyRepository.class);
     private final CommitScope commitScope = mock(CommitScope.class);
@@ -81,8 +79,7 @@ class ReActLoopTest {
         when(policies.load()).thenReturn(policy);
         when(contextWindow.currentWindow(any(Session.class))).thenReturn(new ContextWindow(
                 new ArrayList<Record>(), new ContextUsage(10, 1000, 0, 0, 0)));
-        when(budget.recordUsage(any(Session.class), any())).thenReturn(false);
-        return new ReActLoop(model, toolExecutor, budget, contextWindow, policies, commitScope, human);
+        return new ReActLoop(model, toolExecutor, contextWindow, policies, commitScope, human);
     }
 
     private static ModelInvocationResult reply(String text, List<ToolCall> calls, ModelId served) {

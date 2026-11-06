@@ -160,7 +160,7 @@ public final class PlanningModule {
     ReActLoop reActLoop(ModelInvocationPort model, ToolExecutor toolExecutor, BudgetService budgetService,
                         ContextWindowService contextWindow, PolicyRepository policies,
                         CommitScope commitScope, HumanInteractionPort human) {
-        return new ReActLoop(model, toolExecutor, budgetService, contextWindow, policies, commitScope, human);
+        return new ReActLoop(model, toolExecutor, contextWindow, policies, commitScope, human);
     }
 
     @Provides

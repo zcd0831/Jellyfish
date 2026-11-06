@@ -104,7 +104,7 @@ class S1AcceptanceTest {
         ToolExecutor toolExecutor = new ToolExecutor(catalog, new HttpToolAdapter(),
                 new io.github.zcd0831.jellyfish.infrastructure.file.FileArtifactStore(dir), human, policies,
                 io.github.zcd0831.jellyfish.application.action.InternalToolHandlers.empty(), event -> { }, new SessionToolScope());
-        ReActLoop reActLoop = new ReActLoop(model, toolExecutor, budgetService, contextWindow, policies,
+        ReActLoop reActLoop = new ReActLoop(model, toolExecutor, contextWindow, policies,
                 new FileCommitScope(dir, codec), human);
         final io.github.zcd0831.jellyfish.application.planning.port.PlanRepository plans =
                 new io.github.zcd0831.jellyfish.infrastructure.file.FilePlanRepository(dir, codec);

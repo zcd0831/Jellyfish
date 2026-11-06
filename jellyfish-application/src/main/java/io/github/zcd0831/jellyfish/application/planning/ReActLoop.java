@@ -1,6 +1,5 @@
 package io.github.zcd0831.jellyfish.application.planning;
 
-import io.github.zcd0831.jellyfish.application.action.BudgetService;
 import io.github.zcd0831.jellyfish.application.action.ToolExecOutcome;
 import io.github.zcd0831.jellyfish.application.action.ToolExecutor;
 import io.github.zcd0831.jellyfish.application.action.port.ChatMessage;
@@ -54,18 +53,15 @@ public final class ReActLoop {
 
     private final ModelInvocationPort model;
     private final ToolExecutor toolExecutor;
-    private final BudgetService budgetService;
     private final ContextWindowService contextWindow;
     private final PolicyRepository policies;
     private final CommitScope commitScope;
     private final HumanInteractionPort human;
 
-    public ReActLoop(ModelInvocationPort model, ToolExecutor toolExecutor, BudgetService budgetService,
-                     ContextWindowService contextWindow, PolicyRepository policies, CommitScope commitScope,
-                     HumanInteractionPort human) {
+    public ReActLoop(ModelInvocationPort model, ToolExecutor toolExecutor, ContextWindowService contextWindow,
+                     PolicyRepository policies, CommitScope commitScope, HumanInteractionPort human) {
         this.model = model;
         this.toolExecutor = toolExecutor;
-        this.budgetService = budgetService;
         this.contextWindow = contextWindow;
         this.policies = policies;
         this.commitScope = commitScope;

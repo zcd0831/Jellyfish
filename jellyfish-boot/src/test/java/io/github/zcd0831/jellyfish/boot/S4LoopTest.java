@@ -137,7 +137,7 @@ class S4LoopTest {
                                             }
                                         }))))),
                 event -> { }, scope);
-        ReActLoop reActLoop = new ReActLoop(model, toolExecutor, budgetService, contextWindow, policies,
+        ReActLoop reActLoop = new ReActLoop(model, toolExecutor, contextWindow, policies,
                 new FileCommitScope(dir, codec), human);
         VerificationRunner verificationRunner = new VerificationRunner(LoopSupport.noForks(), human,
                 EnvironmentFeedbackVerifier.NOT_CONFIGURED);

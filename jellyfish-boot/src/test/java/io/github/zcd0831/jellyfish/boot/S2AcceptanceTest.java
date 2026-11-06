@@ -118,7 +118,7 @@ class S2AcceptanceTest {
                         new FileCommitScope(dir, codec), publisher,
                         LoopSupport.assigner(dir, codec, catalog, policies, model))))),
                 event -> { }, new SessionToolScope());
-        ReActLoop reActLoop = new ReActLoop(model, toolExecutor, budgetService, contextWindow, policies,
+        ReActLoop reActLoop = new ReActLoop(model, toolExecutor, contextWindow, policies,
                 new FileCommitScope(dir, codec), human);
         VerificationRunner verificationRunner = new VerificationRunner(LoopSupport.noForks(), human,
                 EnvironmentFeedbackVerifier.NOT_CONFIGURED);

@@ -54,20 +54,28 @@ public final class Main {
             }
         }, "jellyfish-shutdown"));
 
-        component.instanceLock().acquire();
-        int exitCode;
-        try {
-            exitCode = guarded(new Runnable() {
-                @Override
-                public void run() {
-                    startup(component, dir, options);
-                }
-            }, dir.logs(), dir.root().toString());
-        } finally {
-            component.instanceLock().release();
-        }
+        int exitCode = withInstanceLock(component.instanceLock(), new Runnable() {
+            @Override
+            public void run() {
+                startup(component, dir, options);
+            }
+        }, dir);
         if (exitCode != 0) {
             System.exit(exitCode);
+        }
+    }
+
+    /**
+     * 单实例锁的获取与释放：跑完必须还锁，否则下次启动会被自己挡住。
+     * 单独抽出来是为了让"异常退出也还锁"这条能被测到（{@code Main} 本身起真实终端，测不动）。
+     */
+    static int withInstanceLock(io.github.zcd0831.jellyfish.application.shared.port.InstanceLock lock,
+                                Runnable body, DataDirectory dir) {
+        lock.acquire();
+        try {
+            return guarded(body, dir.logs(), dir.root().toString());
+        } finally {
+            lock.release();
         }
     }
 

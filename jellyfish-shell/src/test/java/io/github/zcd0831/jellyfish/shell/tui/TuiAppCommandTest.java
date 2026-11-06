@@ -39,6 +39,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -162,6 +163,48 @@ class TuiAppCommandTest {
         app("/help\nexit\n").run();
 
         assertTrue(screen().contains("/cancel"), "/help 与补全都从 Commands.NAMES 取，必须列出 /cancel：" + screen());
+    }
+
+    /**
+     * `/help` 是命令面的唯一说明书：清单里少一条，用户就永远不知道有这条命令。
+     * 这里逐条比对 `Commands.NAMES`，而不是硬编码几个命令名——砍掉帮助行必须红。
+     * 规则出处：09-infrastructure §9.10（命令面清单化）。
+     */
+    @Test
+    void help列出清单里的每一条命令() throws Exception {
+        app("/help\nexit\n").run();
+
+        String printed = screen();
+        for (String name : Commands.NAMES) {
+            assertTrue(printed.contains(name), "/help 漏了 " + name + "：" + printed);
+        }
+    }
+
+    /**
+     * 没有会话时会话类命令必须被挡在用例之外：`/model m1` 不该悄悄切到一个不存在的会话上。
+     * 规则出处：08-application §8.9.4.2（外壳只调用例，不在外壳里造状态）。
+     */
+    @Test
+    void 无会话时切换模型被拒且不调用用例() throws Exception {
+        app("/model m1\nexit\n").run();
+
+        verify(switchModel, never()).switchTo(any(SessionId.class), any(ModelId.class));
+        assertTrue(screen().contains("还没有会话"), "要明确告诉用户先开会话：" + screen());
+    }
+
+    /**
+     * 用例失败必须上屏：错误被吞掉时用户只会看到"命令没反应"。
+     * 规则出处：09-infrastructure §9.9（错误文案来自 messages.properties）。
+     */
+    @Test
+    void 用例失败时错误文案上屏() throws Exception {
+        when(manageSession.list()).thenReturn(Result.<List<SessionSummary>>fail(
+                io.github.zcd0831.jellyfish.application.shared.UseCaseError.of(
+                        () -> "S_NOT_FOUND", "会话已被删除", null)));
+
+        app("/sessions\nexit\n").run();
+
+        assertTrue(screen().contains("会话不存在"), "失败要有可读文案，不能静默：" + screen());
     }
 
     /** 终止入口：`/cancel` 取消当前会话，`/cancel <id>` 取消指定会话（08-application §8.9.4）。 */

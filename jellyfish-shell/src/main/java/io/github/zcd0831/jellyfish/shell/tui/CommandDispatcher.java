@@ -205,8 +205,7 @@ final class CommandDispatcher {
         }
         String name = parts[0];
         if ("/help".equals(name)) {
-            renderer.info("/sessions /open <id> /new /archive /delete /cancel [id] /policy k=v "
-                    + "/model <id> /tools /agents /models /providers /skills /plugins /exit");
+            renderer.info(Commands.helpLine());
             return;
         }
         if (cursor.current() == null && Commands.needsSession(name)) {

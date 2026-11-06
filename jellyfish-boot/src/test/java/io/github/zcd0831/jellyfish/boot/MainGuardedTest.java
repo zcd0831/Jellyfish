@@ -2,6 +2,7 @@ package io.github.zcd0831.jellyfish.boot;
 
 import io.github.zcd0831.jellyfish.application.shared.TechnicalLog;
 import io.github.zcd0831.jellyfish.domain.shared.DomainInvariantViolation;
+import io.github.zcd0831.jellyfish.infrastructure.file.DataDirectory;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -109,6 +110,54 @@ class MainGuardedTest {
         assertEquals(1, events.size(), "上抛之前也要留证");
         assertTrue(events.get(0).contains("fatal.fatal_error"), events.get(0));
         assertTrue(onlyCrashFile().getFileName().toString().startsWith("crash-"));
+    }
+
+    /**
+     * 单实例锁：正常退出与异常退出都必须还锁。少了 finally，第二次启动就会被上一次的
+     * 残留锁挡在门外——而这条以前没有任何用例守着（R10 阻断 7 的 V4 实验：删掉 release 全绿）。
+     * 规则出处：Jellyfish/AGENTS.md「一个数据目录只允许一个实例」。
+     */
+    @Test
+    void 正常退出还锁() throws IOException {
+        final boolean[] released = new boolean[1];
+
+        assertEquals(0, Main.withInstanceLock(lock(released), new Runnable() {
+            @Override
+            public void run() {
+                // 什么都不做
+            }
+        }, DataDirectory.of(tmp.toString())));
+
+        assertTrue(released[0], "跑完不还锁，下次启动会被自己挡住");
+    }
+
+    @Test
+    void 违反不变量也要还锁() throws IOException {
+        installCollector();
+        final boolean[] released = new boolean[1];
+
+        assertEquals(1, Main.withInstanceLock(lock(released), new Runnable() {
+            @Override
+            public void run() {
+                throw new DomainInvariantViolation("计划已终止，不能再推进");
+            }
+        }, DataDirectory.of(tmp.toString())));
+
+        assertTrue(released[0], "异常路径同样要还锁，否则崩溃一次就再也起不来");
+    }
+
+    private static io.github.zcd0831.jellyfish.application.shared.port.InstanceLock lock(final boolean[] released) {
+        return new io.github.zcd0831.jellyfish.application.shared.port.InstanceLock() {
+            @Override
+            public void acquire() {
+                // 本用例只关心释放
+            }
+
+            @Override
+            public void release() {
+                released[0] = true;
+            }
+        };
     }
 
     private Path onlyCrashFile() throws IOException {

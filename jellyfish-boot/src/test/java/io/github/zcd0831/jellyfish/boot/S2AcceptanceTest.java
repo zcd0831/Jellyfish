@@ -146,14 +146,20 @@ class S2AcceptanceTest {
                                 new FileCommitScope(dir, codec), () -> System.currentTimeMillis(),
                                 cancellations, budgetService),
                         new FileCommitScope(dir, codec));
-        ExecutionLoop executionLoop = new ExecutionLoop(reActLoop, verificationRunner, plans,
-                planFactory, catalog, policies, new FileCommitScope(dir, codec), publisher, event -> { },
-                cancellations, feedback, curator, reflections, experiences,
-                new SessionToolScope(),
-                new io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner(
+        ExecutionLoop executionLoop = io.github.zcd0831.jellyfish.application.planning.ExecutionLoopDeps
+                .builder()
+                .reActLoop(reActLoop).verificationRunner(verificationRunner).plans(plans)
+                .planFactory(planFactory).catalog(catalog).policies(policies)
+                .commitScope(new FileCommitScope(dir, codec)).eventPublisher(event -> { })
+                .progress(event -> { }).cancellations(cancellations)
+                .experienceFeedback(feedback).planCompletionCurator(curator)
+                .reflections(reflections).experiences(experiences)
+                .scope(new SessionToolScope())
+                .forks(new io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner(
                         startSession, sessions, reActLoop, new SessionToolScope(),
                         new FileCommitScope(dir, codec), () -> System.currentTimeMillis(), cancellations,
-                        budgetService));
+                        budgetService))
+                .build();
         runSession = new RunSessionUseCase(sessions, records, new FileCommitScope(dir, codec), publisher,
                 executionLoop, model, toolExecutor, human, event -> { }, plans, contextWindow,
                 cancellations, session -> { });

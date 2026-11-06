@@ -24,6 +24,7 @@ import io.github.zcd0831.jellyfish.application.perception.port.PolicyRepository;
 import io.github.zcd0831.jellyfish.application.perception.port.RecordStore;
 import io.github.zcd0831.jellyfish.application.perception.port.SessionRepository;
 import io.github.zcd0831.jellyfish.application.planning.ExecutionLoop;
+import io.github.zcd0831.jellyfish.application.planning.ExecutionLoopDeps;
 import io.github.zcd0831.jellyfish.application.action.ToolInvoker;
 import io.github.zcd0831.jellyfish.application.planning.SessionRunner;
 import io.github.zcd0831.jellyfish.application.planning.ExperienceAssigner;
@@ -199,10 +200,15 @@ public final class PlanningModule {
                                 SessionToolScope scope,
                                 CancellationRegistry cancellationRegistry,
                                 io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner forks) {
-        return new ExecutionLoop(reActLoop, verificationRunner, plans, planFactory, catalog,
-                policies, commitScope, publisher, progress, cancellationRegistry,
-                experienceFeedback, planCompletionCurator, reflections, experiences,
-                scope, forks);
+        return ExecutionLoopDeps.builder()
+                .reActLoop(reActLoop).verificationRunner(verificationRunner)
+                .plans(plans).planFactory(planFactory).catalog(catalog).policies(policies)
+                .commitScope(commitScope).eventPublisher(publisher).progress(progress)
+                .cancellations(cancellationRegistry)
+                .experienceFeedback(experienceFeedback).planCompletionCurator(planCompletionCurator)
+                .reflections(reflections).experiences(experiences)
+                .scope(scope).forks(forks)
+                .build();
     }
 
     /** 零插件时就是默认编排；插件装上后由路由接管。 */

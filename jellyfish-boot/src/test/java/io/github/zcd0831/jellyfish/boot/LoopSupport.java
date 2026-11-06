@@ -108,8 +108,12 @@ final class LoopSupport {
         ExecutorService pool = Executors.newFixedThreadPool(2);
         SubagentLauncher launcher = new SubagentLauncher(startSession, runSession, sessions, records,
                 budgetService, policies, progress, pool, cancellations);
-        return new ExecutionLoop(reActLoop, verificationRunner, plans, new PlanFactory(), catalog,
-                policies, new FileCommitScope(dir, codec), publisher, progress, cancellations,
-                feedback, curator, reflections, experiences, scope, forks);
+        return io.github.zcd0831.jellyfish.application.planning.ExecutionLoopDeps.builder()
+                .reActLoop(reActLoop).verificationRunner(verificationRunner).plans(plans)
+                .planFactory(new PlanFactory()).catalog(catalog).policies(policies)
+                .commitScope(new FileCommitScope(dir, codec)).eventPublisher(publisher).progress(progress)
+                .cancellations(cancellations).experienceFeedback(feedback).planCompletionCurator(curator)
+                .reflections(reflections).experiences(experiences).scope(scope).forks(forks)
+                .build();
     }
 }

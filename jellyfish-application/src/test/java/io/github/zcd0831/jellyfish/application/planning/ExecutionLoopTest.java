@@ -111,10 +111,14 @@ class ExecutionLoopTest {
         when(plans.findRunning(SessionId.of("s1"))).thenAnswer(
                 invocation -> planScript.isEmpty() ? Collections.<Plan>emptyList()
                         : Collections.singletonList(planScript.peek()));
-        return new ExecutionLoop(reActLoop, verificationRunner, plans,
-                new io.github.zcd0831.jellyfish.domain.planning.plan.PlanFactory(),
-                catalog, policies, commitScope, events -> { }, progressEvents::add, cancellations,
-                feedback, curator, reflections, experiences, scope, forks);
+        return ExecutionLoopDeps.builder()
+                .reActLoop(reActLoop).verificationRunner(verificationRunner).plans(plans)
+                .planFactory(new io.github.zcd0831.jellyfish.domain.planning.plan.PlanFactory())
+                .catalog(catalog).policies(policies).commitScope(commitScope)
+                .eventPublisher(events -> { }).progress(progressEvents::add).cancellations(cancellations)
+                .experienceFeedback(feedback).planCompletionCurator(curator)
+                .reflections(reflections).experiences(experiences).scope(scope).forks(forks)
+                .build();
     }
 
     /** 默认实现不读上下文（依赖由构造器注入），所以这里给空值即可。 */
@@ -462,10 +466,14 @@ class ExecutionLoopTest {
             order.add("commit");
             return null;
         }).when(commitScope).commit();
-        ExecutionLoop loop = new ExecutionLoop(reActLoop, verificationRunner, plans,
-                new io.github.zcd0831.jellyfish.domain.planning.plan.PlanFactory(), catalog, policies, commitScope,
-                events -> order.add("publish"), progressEvents::add, cancellations,
-                feedback, curator, reflections, experiences, scope, forks);
+        ExecutionLoop loop = ExecutionLoopDeps.builder()
+                .reActLoop(reActLoop).verificationRunner(verificationRunner).plans(plans)
+                .planFactory(new io.github.zcd0831.jellyfish.domain.planning.plan.PlanFactory())
+                .catalog(catalog).policies(policies).commitScope(commitScope)
+                .eventPublisher(events -> order.add("publish")).progress(progressEvents::add)
+                .cancellations(cancellations).experienceFeedback(feedback).planCompletionCurator(curator)
+                .reflections(reflections).experiences(experiences).scope(scope).forks(forks)
+                .build();
         policy = policy.adjust(Collections.<String, Object>singletonMap("maxRetries", 3));
         final Plan running = plan(VerificationType.DETERMINISTIC);
         planScript.add(running);

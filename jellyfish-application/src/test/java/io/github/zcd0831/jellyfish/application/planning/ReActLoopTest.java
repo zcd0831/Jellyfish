@@ -454,6 +454,26 @@ class ReActLoopTest {
         assertEquals("注入内容", messages.get(messages.size() - 1).content());
     }
 
+    /**
+     * 技能不可用 ≠ 用过这个技能：没拿到 SOP 就不注入 SYSTEM、也不计入 usedSkillIds。
+     * 改进判定的证据是"拿到了流程正文"，不是"模型调过这个工具"（07-memory §7.8.3、§7.9.4）。
+     */
+    @Test
+    void load_skill取不到SOP时既不注入也不记成用过() {
+        Session session = session();
+        when(toolExecutor.execute(any(Session.class), anyString(), any(Map.class), any(RecordId.class)))
+                .thenReturn(ToolExecOutcome.plain("技能不可用：s"));
+        when(model.invoke(any(ModelInvocationRequest.class)))
+                .thenReturn(reply(null, Collections.singletonList(new ToolCall("c1", "load_skill",
+                        "{\"skillName\":\"s\"}")), ModelId.of("m1")))
+                .thenReturn(reply("完成", Collections.<ToolCall>emptyList(), ModelId.of("m1")));
+
+        IterationResult result = loop(RuntimePolicy.defaults()).runIteration(session, step(), null);
+
+        assertTrue(result.usedSkillIds().isEmpty(), "拿不到正文的加载不能算用过：" + result.usedSkillIds());
+        assertFalse(recordText(session).contains("SOP"), "不该注入一条'不可用'当 SOP：" + recordText(session));
+    }
+
     @Test
     void 当前步骤以瞬时尾部消息送达且不落流水() {
         Session session = session();

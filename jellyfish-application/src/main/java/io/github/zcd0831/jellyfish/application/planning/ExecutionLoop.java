@@ -75,7 +75,6 @@ public final class ExecutionLoop implements SessionRunner {
                 deps.require(deps.reflections(), "reflections"),
                 deps.require(deps.commitScope(), "commitScope"));
         this.injector = new StepContextInjector(
-                deps.require(deps.policies(), "policies"),
                 deps.require(deps.experiences(), "experiences"),
                 deps.require(deps.commitScope(), "commitScope"));
         this.reflection = new FailureReflection(

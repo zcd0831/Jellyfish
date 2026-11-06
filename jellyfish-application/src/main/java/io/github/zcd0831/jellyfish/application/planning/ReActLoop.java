@@ -332,12 +332,12 @@ public final class ReActLoop {
                 System.currentTimeMillis());
         turn.pending().remove(call);
         commitAppend(session, result);
-        if (LOAD_SKILL.equals(call.name())) {
+        if (LOAD_SKILL.equals(call.name()) && !LoadSkillHandler.unavailable(outcome)) {
             // SOP 注入为 SYSTEM 记录：与普通记录同受覆盖边界约束（规则 10）
             Record injected = session.appendRecord(RecordRole.SYSTEM, outcome.content(), null,
                     System.currentTimeMillis());
             commitAppend(session, injected);
-            // 只有真的注入了 SOP 才算"这次用过这个技能"（07-memory §7.8.3）
+            // 只有真的注入了 SOP 才算"这次用过这个技能"：拿不到正文的加载不算（07-memory §7.8.3、§7.9.4）
             recordSkillUse(call, usedSkills);
         }
     }

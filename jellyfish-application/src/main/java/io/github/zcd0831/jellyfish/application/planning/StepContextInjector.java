@@ -1,7 +1,6 @@
 package io.github.zcd0831.jellyfish.application.planning;
 
 import io.github.zcd0831.jellyfish.application.memory.port.ExperienceRepository;
-import io.github.zcd0831.jellyfish.application.perception.port.PolicyRepository;
 import io.github.zcd0831.jellyfish.application.shared.port.CommitScope;
 import io.github.zcd0831.jellyfish.domain.perception.session.Record;
 import io.github.zcd0831.jellyfish.domain.perception.session.RecordRole;
@@ -21,12 +20,10 @@ final class StepContextInjector {
 
     private static final String REPLAN_TOOL = "replan_plan";
 
-    private final PolicyRepository policies;
     private final ExperienceRepository experiences;
     private final CommitScope commitScope;
 
-    StepContextInjector(PolicyRepository policies, ExperienceRepository experiences, CommitScope commitScope) {
-        this.policies = policies;
+    StepContextInjector(ExperienceRepository experiences, CommitScope commitScope) {
         this.experiences = experiences;
         this.commitScope = commitScope;
     }
@@ -38,7 +35,8 @@ final class StepContextInjector {
             return;
         }
         StringBuilder text = new StringBuilder(PlanProgress.experienceMarker(step));
-        int limit = policies.load().toolResultTruncateLength();
+        // 条数由 experienceTopN 天然有界，不再二次截断：以前借 toolResultTruncateLength
+        // （工具结果长度）当注入上限，调工具阈值会顺带改掉经验注入的内容（07-memory §7.9.1）
         for (ExperienceId id : ids) {
             java.util.Optional<io.github.zcd0831.jellyfish.domain.memory.experience.Experience> found =
                     experiences.find(id);
@@ -49,10 +47,6 @@ final class StepContextInjector {
             text.append("\n- 适用场景：").append(experience.applicableScenario())
                     .append("｜教训：").append(experience.lesson().getInstruction())
                     .append("｜期望：").append(experience.lesson().getExpectedOutcome());
-            if (text.length() > limit) {
-                text.append("\n（已截断）");
-                break;
-            }
         }
         if (text.indexOf("\n") < 0) {
             return;   // 一条可用经验都没有，不写空记录

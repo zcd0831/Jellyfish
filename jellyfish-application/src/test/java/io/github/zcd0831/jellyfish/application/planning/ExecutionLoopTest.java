@@ -340,6 +340,40 @@ class ExecutionLoopTest {
     }
 
     /**
+     * 经验注入不按工具结果阈值截断：条数由 experienceTopN 天然有界，
+     * 借用 `toolResultTruncateLength` 会让"调工具阈值"顺带改掉注入内容（07-memory §7.9.1）。
+     */
+    @Test
+    void 经验注入不按工具阈值截断() {
+        policy = policy.adjust(Collections.<String, Object>singletonMap("toolResultTruncateLength", 40));
+        final Plan plan = plan(VerificationType.DETERMINISTIC);
+        plan.assignExperiences(StepId.of("step1"), java.util.Arrays.asList(
+                io.github.zcd0831.jellyfish.domain.shared.ExperienceId.of("e1"),
+                io.github.zcd0831.jellyfish.domain.shared.ExperienceId.of("e2"),
+                io.github.zcd0831.jellyfish.domain.shared.ExperienceId.of("e3")));
+        planScript.add(plan);
+        when(experiences.find(any())).thenAnswer(invocation -> java.util.Optional.of(
+                io.github.zcd0831.jellyfish.domain.memory.experience.Experience.create(
+                        invocation.getArgument(0), "场景",
+                        new io.github.zcd0831.jellyfish.domain.memory.experience.LessonLearned(
+                                "教训正文要够长够长够长", "期望"),
+                        0.5, 1L, null)));
+        when(reActLoop.runIteration(any(Session.class), any(), any(ChunkSink.class))).thenReturn(converged());
+
+        loop().run(session, ChunkSink.NOOP, NO_CONTEXT);
+
+        String injected = null;
+        for (io.github.zcd0831.jellyfish.domain.perception.session.Record record : session.records()) {
+            if (record.content() != null && record.content().startsWith("[经验注入 step=")) {
+                injected = record.content();
+            }
+        }
+        assertNotNull(injected, "经验要注入");
+        assertFalse(injected.contains("（已截断）"), "不该按工具结果阈值截断经验注入：" + injected);
+        assertTrue(injected.contains("教训正文要够长够长够长"), injected);
+    }
+
+    /**
      * 计划播报按 planId 去重：一次 run 里同一个计划只播报一次（重划不改 planId，只发 PLAN_REPLAN）。
      * 规则出处：08-application §8.6 约定 2。
      */

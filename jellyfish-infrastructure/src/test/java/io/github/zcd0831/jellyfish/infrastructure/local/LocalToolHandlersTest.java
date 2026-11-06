@@ -387,15 +387,17 @@ class LocalToolHandlersTest {
     void 超时会杀整棵进程树_孙进程不残留() throws Exception {
         java.nio.file.Path marker = java.nio.file.Files.createTempFile("jellyfish-tree", ".tick");
         java.nio.file.Files.deleteIfExists(marker);
-        // 外层 sh → 中间 sh → 孙进程（2 秒后写标记）。中间层多留一条 true，
+        // 外层 sh → 中间 sh → 孙进程（4 秒后写标记）。中间层多留一条 true，
         // 否则 sh 会把单条命令 exec 成自己，只剩两层，测不出"只杀直接子进程"的漏。
+        // 留 4 秒而不是 2 秒：超时在 1.5s，杀树要起进程（机器忙时几百毫秒），
+        // 时间窗太窄会让"杀得慢一点"看起来像"漏杀"，那是两条完全不同的结论。
         Map<String, Object> args = map("command",
-                "sh -c 'sh -c \"sleep 2; touch " + marker + "\"; true' & sleep 300", "timeoutMs", 1500);
+                "sh -c 'sh -c \"sleep 4; touch " + marker + "\"; true' & sleep 300", "timeoutMs", 1500);
 
         String out = tools.get("run_command").handle(null, args).content();
 
         assertTrue(out.contains("已终止"), out);
-        Thread.sleep(3000);   // 孙进程若还活着，这段时间足够它写下标记
+        Thread.sleep(4500);   // 孙进程若还活着，这段时间足够它写下标记
         assertTrue(!java.nio.file.Files.exists(marker), "孙进程还在跑，写出了标记 " + marker);
     }
 }

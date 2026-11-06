@@ -131,20 +131,18 @@ final class CommandToolHandler {
         List<Long> known = new ArrayList<Long>();   // 父在前、子在后
         collectTree(pid, known);
         // 根先死：它一旦有权继续，就会接着执行下一条命令（那正是"标记还是被写出来"的来源）
-        signal(pid, "TERM");
+        signal(java.util.Collections.singletonList(pid), "TERM");
         for (int round = 0; round < SWEEP_ROUNDS; round++) {
             boolean grown = collectNewDescendants(known);
-            for (long each : known) {
-                signal(each, round == 0 ? "TERM" : "KILL");
-            }
+            // 一次 kill 打一串 pid（仍然父在前）：每个 pid 单独起进程的话，机器一忙，
+            // 杀完半棵树就可能已经过去几百毫秒，来不及拦住孙进程手里的 sleep
+            signal(known, round == 0 ? "TERM" : "KILL");
             if (!grown && exitedWithin(process, KILL_GRACE_MILLIS)) {
                 break;
             }
             pause(SWEEP_PAUSE_MILLIS);
         }
-        for (long each : known) {
-            signal(each, "KILL");   // 收尾一律 KILL：TERM 被忽略的进程不能留
-        }
+        signal(known, "KILL");   // 收尾一律 KILL：TERM 被忽略的进程不能留
         process.destroyForcibly();
     }
 
@@ -177,9 +175,19 @@ final class CommandToolHandler {
         }
     }
 
-    private static void signal(long pid, String signal) {
+    /** 一条 `kill` 打一串 pid（顺序保留，父仍在子前）：起进程本身有成本，忙时这个成本会误事。 */
+    private static void signal(List<Long> pids, String signal) {
+        if (pids.isEmpty()) {
+            return;
+        }
+        List<String> command = new ArrayList<String>();
+        command.add("kill");
+        command.add("-" + signal);
+        for (long pid : pids) {
+            command.add(String.valueOf(pid));
+        }
         try {
-            new ProcessBuilder("kill", "-" + signal, String.valueOf(pid)).start().waitFor();
+            new ProcessBuilder(command).start().waitFor();
         } catch (Exception ignored) {
             // 没有 kill 命令（非 POSIX）时由调用方的 destroyForcibly 兜底
         }

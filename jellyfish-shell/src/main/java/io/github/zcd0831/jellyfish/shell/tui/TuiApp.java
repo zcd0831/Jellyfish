@@ -45,8 +45,6 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public final class TuiApp implements QuestionBroker.Answerer {
 
-    /** 回放条数：约 30 轮对话，再多也没人看。 */
-    private static final int REPLAY_RECORDS = 100;
     private enum InputMode {
         PROMPT, PAUSED, QUESTION
     }

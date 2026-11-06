@@ -144,9 +144,9 @@ class S2AcceptanceTest {
                                 new FileCommitScope(dir, codec), () -> System.currentTimeMillis(),
                                 cancellations, budgetService),
                         new FileCommitScope(dir, codec));
-        ExecutionLoop executionLoop = new ExecutionLoop(contextWindow, reActLoop, verificationRunner, plans,
+        ExecutionLoop executionLoop = new ExecutionLoop(reActLoop, verificationRunner, plans,
                 planFactory, catalog, policies, new FileCommitScope(dir, codec), publisher, event -> { },
-                cancellations, model, budgetService, retriever, feedback, curator, reflections, experiences,
+                cancellations, retriever, feedback, curator, reflections, experiences,
                 new SessionToolScope(),
                 new io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner(
                         startSession, sessions, reActLoop, new SessionToolScope(),

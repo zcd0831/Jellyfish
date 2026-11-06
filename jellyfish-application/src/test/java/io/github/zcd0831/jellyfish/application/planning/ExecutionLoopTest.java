@@ -68,15 +68,12 @@ import static org.mockito.Mockito.when;
 /** 三条出口 + 重试 / 重划 / 终止 / 请求超限补折 / 反思。规则出处：08-application §8.9.1、§8.10。 */
 class ExecutionLoopTest {
 
-    private final ContextWindowService contextWindow = mock(ContextWindowService.class);
     private final ReActLoop reActLoop = mock(ReActLoop.class);
     private final VerificationRunner verificationRunner = mock(VerificationRunner.class);
     private final PlanRepository plans = mock(PlanRepository.class);
     private final CatalogRepository catalog = mock(CatalogRepository.class);
     private final PolicyRepository policies = mock(PolicyRepository.class);
     private final CommitScope commitScope = mock(CommitScope.class);
-    private final ModelInvocationPort model = mock(ModelInvocationPort.class);
-    private final BudgetService budget = mock(BudgetService.class);
     private final ExperienceRetriever retriever = mock(ExperienceRetriever.class);
     private final ExperienceFeedbackService feedback = mock(ExperienceFeedbackService.class);
     private final PlanCompletionCurator curator = mock(PlanCompletionCurator.class);
@@ -114,8 +111,9 @@ class ExecutionLoopTest {
         when(plans.findRunning(SessionId.of("s1"))).thenAnswer(
                 invocation -> planScript.isEmpty() ? Collections.<Plan>emptyList()
                         : Collections.singletonList(planScript.peek()));
-        return new ExecutionLoop(contextWindow, reActLoop, verificationRunner, plans, new io.github.zcd0831.jellyfish.domain.planning.plan.PlanFactory(),
-                catalog, policies, commitScope, events -> { }, progressEvents::add, cancellations, model, budget,
+        return new ExecutionLoop(reActLoop, verificationRunner, plans,
+                new io.github.zcd0831.jellyfish.domain.planning.plan.PlanFactory(),
+                catalog, policies, commitScope, events -> { }, progressEvents::add, cancellations,
                 retriever, feedback, curator, reflections, experiences, scope, forks);
     }
 

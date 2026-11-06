@@ -1,6 +1,5 @@
 package io.github.zcd0831.jellyfish.application.planning;
 
-import io.github.zcd0831.jellyfish.application.action.BudgetService;
 import io.github.zcd0831.jellyfish.application.memory.DistillationInput;
 import io.github.zcd0831.jellyfish.application.memory.PlanCompletionCurator;
 import io.github.zcd0831.jellyfish.application.memory.ExperienceFeedbackService;
@@ -13,10 +12,8 @@ import io.github.zcd0831.jellyfish.application.memory.StepTrace;
 import io.github.zcd0831.jellyfish.application.memory.port.ReflectionRepository;
 import io.github.zcd0831.jellyfish.application.action.port.CatalogRepository;
 import io.github.zcd0831.jellyfish.application.action.port.ChatMessage;
-import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationPort;
 import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationRequest;
 import io.github.zcd0831.jellyfish.application.action.port.ModelInvocationResult;
-import io.github.zcd0831.jellyfish.application.perception.ContextWindowService;
 import io.github.zcd0831.jellyfish.application.perception.port.PolicyRepository;
 import io.github.zcd0831.jellyfish.application.planning.port.PlanRepository;
 import io.github.zcd0831.jellyfish.application.shared.ChunkSink;
@@ -68,7 +65,6 @@ public final class ExecutionLoop implements SessionRunner {
     private static final AgentId REFLECT_AGENT = AgentId.of("builtin.reflect");
     private static final String REPLAN_TOOL = "replan_plan";
 
-    private final ContextWindowService contextWindow;
     private final ReActLoop reActLoop;
     private final VerificationRunner verificationRunner;
     private final PlanRepository plans;
@@ -79,8 +75,6 @@ public final class ExecutionLoop implements SessionRunner {
     private final DomainEventPublisher eventPublisher;
     private final ProgressPort progress;
     private final CancellationRegistry cancellations;
-    private final ModelInvocationPort model;
-    private final BudgetService budgetService;
     private final ExperienceRetriever experienceRetriever;
     private final ExperienceFeedbackService experienceFeedback;
     private final PlanCompletionCurator planCompletionCurator;
@@ -89,19 +83,17 @@ public final class ExecutionLoop implements SessionRunner {
     private final SessionToolScope scope;
     private final io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner forks;
 
-    public ExecutionLoop(ContextWindowService contextWindow, ReActLoop reActLoop,
+    public ExecutionLoop(ReActLoop reActLoop,
                          VerificationRunner verificationRunner, PlanRepository plans, PlanFactory planFactory,
                          CatalogRepository catalog, PolicyRepository policies, CommitScope commitScope,
                          DomainEventPublisher eventPublisher, ProgressPort progress, CancellationRegistry cancellations,
-                         ModelInvocationPort model,
-                         BudgetService budgetService, ExperienceRetriever experienceRetriever,
+                         ExperienceRetriever experienceRetriever,
                          ExperienceFeedbackService experienceFeedback,
                          PlanCompletionCurator planCompletionCurator,
                          ReflectionRepository reflections,
                          io.github.zcd0831.jellyfish.application.memory.port.ExperienceRepository experiences,
                          SessionToolScope scope,
                          io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner forks) {
-        this.contextWindow = contextWindow;
         this.reActLoop = reActLoop;
         this.verificationRunner = verificationRunner;
         this.plans = plans;
@@ -112,8 +104,6 @@ public final class ExecutionLoop implements SessionRunner {
         this.eventPublisher = eventPublisher;
         this.progress = progress;
         this.cancellations = cancellations;
-        this.model = model;
-        this.budgetService = budgetService;
         this.experienceRetriever = experienceRetriever;
         this.experienceFeedback = experienceFeedback;
         this.planCompletionCurator = planCompletionCurator;

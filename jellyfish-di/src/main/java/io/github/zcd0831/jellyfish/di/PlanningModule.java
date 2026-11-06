@@ -180,11 +180,10 @@ public final class PlanningModule {
 
     @Provides
     @Singleton
-    ExecutionLoop executionLoop(ContextWindowService contextWindow, ReActLoop reActLoop,
+    ExecutionLoop executionLoop(ReActLoop reActLoop,
                                 VerificationRunner verificationRunner, PlanRepository plans,
                                 PlanFactory planFactory, CatalogRepository catalog, PolicyRepository policies,
                                 CommitScope commitScope, DomainEventPublisher publisher, ProgressPort progress,
-                                ModelInvocationPort model, BudgetService budgetService,
                                 ExperienceRetriever experienceRetriever,
                                 ExperienceFeedbackService experienceFeedback,
                                 PlanCompletionCurator planCompletionCurator,
@@ -192,8 +191,8 @@ public final class PlanningModule {
                                 SessionToolScope scope,
                                 CancellationRegistry cancellationRegistry,
                                 io.github.zcd0831.jellyfish.application.perception.InternalSessionRunner forks) {
-        return new ExecutionLoop(contextWindow, reActLoop, verificationRunner, plans, planFactory, catalog,
-                policies, commitScope, publisher, progress, cancellationRegistry, model, budgetService,
+        return new ExecutionLoop(reActLoop, verificationRunner, plans, planFactory, catalog,
+                policies, commitScope, publisher, progress, cancellationRegistry,
                 experienceRetriever, experienceFeedback, planCompletionCurator, reflections, experiences,
                 scope, forks);
     }

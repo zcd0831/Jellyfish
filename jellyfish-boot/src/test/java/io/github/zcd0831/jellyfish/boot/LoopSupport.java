@@ -90,8 +90,8 @@ final class LoopSupport {
         ExecutorService pool = Executors.newFixedThreadPool(2);
         SubagentLauncher launcher = new SubagentLauncher(startSession, runSession, sessions, records,
                 budgetService, policies, progress, pool, cancellations);
-        return new ExecutionLoop(contextWindow, reActLoop, verificationRunner, plans, new PlanFactory(), catalog,
-                policies, new FileCommitScope(dir, codec), publisher, progress, cancellations, model, budgetService,
+        return new ExecutionLoop(reActLoop, verificationRunner, plans, new PlanFactory(), catalog,
+                policies, new FileCommitScope(dir, codec), publisher, progress, cancellations,
                 retriever, feedback, curator, reflections, experiences, scope, forks);
     }
 }

@@ -11,21 +11,14 @@ import io.github.zcd0831.jellyfish.application.shared.port.DomainEventPublisher;
 import io.github.zcd0831.jellyfish.application.shared.port.ProgressPort;
 import io.github.zcd0831.jellyfish.domain.memory.reflection.Reflection;
 import io.github.zcd0831.jellyfish.domain.perception.policy.RuntimePolicy;
-import io.github.zcd0831.jellyfish.domain.perception.session.Record;
-import io.github.zcd0831.jellyfish.domain.perception.session.RecordRole;
 import io.github.zcd0831.jellyfish.domain.perception.session.Session;
-import io.github.zcd0831.jellyfish.domain.planning.plan.Attempt;
 import io.github.zcd0831.jellyfish.domain.planning.plan.Plan;
-import io.github.zcd0831.jellyfish.domain.planning.plan.PlanFactory;
 import io.github.zcd0831.jellyfish.domain.planning.plan.PlanStatus;
 import io.github.zcd0831.jellyfish.domain.planning.plan.PlanStep;
 import io.github.zcd0831.jellyfish.domain.planning.verification.VerificationOutcome;
 import io.github.zcd0831.jellyfish.domain.planning.verification.VerificationReport;
-import io.github.zcd0831.jellyfish.domain.shared.AgentId;
 import io.github.zcd0831.jellyfish.domain.shared.DomainEvent;
-import io.github.zcd0831.jellyfish.domain.shared.ExperienceId;
 import io.github.zcd0831.jellyfish.domain.shared.ModelId;
-import io.github.zcd0831.jellyfish.domain.shared.SkillId;
 import io.github.zcd0831.jellyfish.domain.shared.ToolId;
 
 import java.util.ArrayList;
@@ -40,15 +33,12 @@ import java.util.List;
  */
 public final class ExecutionLoop implements SessionRunner {
 
-    private static final AgentId REFLECT_AGENT = AgentId.of("builtin.reflect");
-    private static final String REPLAN_TOOL = "replan_plan";
     /** 步骤都终结了、计划还挂在 EXECUTING：外循环自己收口（06-planning §6.8.1「无当前步即终结」）。 */
     private static final String NO_EXECUTABLE_STEP = "所有步骤已终结，没有可执行的步骤";
 
     private final ReActLoop reActLoop;
     private final VerificationRunner verificationRunner;
     private final PlanRepository plans;
-    private final PlanFactory planFactory;
     private final PolicyRepository policies;
     private final CommitScope commitScope;
     private final DomainEventPublisher eventPublisher;
@@ -63,7 +53,6 @@ public final class ExecutionLoop implements SessionRunner {
         this.reActLoop = deps.require(deps.reActLoop(), "reActLoop");
         this.verificationRunner = deps.require(deps.verificationRunner(), "verificationRunner");
         this.plans = deps.require(deps.plans(), "plans");
-        this.planFactory = deps.require(deps.planFactory(), "planFactory");
         this.policies = deps.require(deps.policies(), "policies");
         this.commitScope = deps.require(deps.commitScope(), "commitScope");
         this.eventPublisher = deps.require(deps.eventPublisher(), "eventPublisher");

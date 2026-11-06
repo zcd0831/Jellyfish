@@ -15,7 +15,6 @@ import io.github.zcd0831.jellyfish.application.shared.port.CancellationRegistry;
 import io.github.zcd0831.jellyfish.application.shared.port.ProgressPort;
 import io.github.zcd0831.jellyfish.application.shared.port.TokenCounter;
 import io.github.zcd0831.jellyfish.domain.action.model.ApiCredential;
-import io.github.zcd0831.jellyfish.domain.action.model.ChatProtocol;
 import io.github.zcd0831.jellyfish.domain.action.model.Model;
 import io.github.zcd0831.jellyfish.domain.action.model.ModelError;
 import io.github.zcd0831.jellyfish.domain.action.model.Provider;
@@ -40,9 +39,7 @@ public final class ModelInvoker implements ModelInvocationPort {
     private final ProgressPort progress;
     private final TokenCounter tokenCounter;
 
-    private final ChatCompletionsProtocol openAiProtocol = new ChatCompletionsProtocol();
-    private final AnthropicMessagesProtocol anthropicProtocol = new AnthropicMessagesProtocol();
-    private final GeminiProtocol geminiProtocol = new GeminiProtocol();
+    private final ProtocolRegistry protocols = new ProtocolRegistry();
     private final RetryPolicy retryPolicy = new RetryPolicy();
     private final Sleeper sleeper;
     private final CredentialLookup credentials;
@@ -110,7 +107,7 @@ public final class ModelInvoker implements ModelInvocationPort {
             if (provider == null || !provider.isActive()) {
                 continue;
             }
-            ChatProtocolAdapter adapter = adapterFor(provider);
+            ChatProtocolAdapter adapter = protocols.of(provider);
             if (adapter == null) {
                 ModelCallLog.unavailable(modelId.getValue(), ModelError.UNAVAILABLE.code());
                 lastFailure = new ModelInvocationException(ModelError.UNAVAILABLE,
@@ -139,20 +136,6 @@ public final class ModelInvoker implements ModelInvocationPort {
             throw new ModelInvocationException(ModelError.CONTEXT_EXCEEDED,
                     "请求超限：估算 " + estimatedPromptTokens + " > 上限 " + maxInput + "（" + model.id().getValue() + "）");
         }
-    }
-
-    /** 协议 → 适配器；未实现的协议返回 null，由调用方按"不可用"降级。 */
-    private ChatProtocolAdapter adapterFor(Provider provider) {
-        if (provider.protocol() == ChatProtocol.OPENAI_CHAT) {
-            return openAiProtocol;
-        }
-        if (provider.protocol() == ChatProtocol.ANTHROPIC_MESSAGES) {
-            return anthropicProtocol;
-        }
-        if (provider.protocol() == ChatProtocol.GEMINI) {
-            return geminiProtocol;
-        }
-        return null;
     }
 
     private ModelInvocationResult callWithRetry(ModelInvocationRequest request, Model model, Provider provider,
